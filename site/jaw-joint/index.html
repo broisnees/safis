@@ -3160,6 +3160,99 @@ window.TMJ = (() => {
 <p>With the mouth closed, the condyle now presses on the <span class="c-purple">retrodiscal tissue</span>, the part with the nerves, instead of on the disc. As it starts to slide, it runs into the thick back band of the disc and pushes it ahead, until it pops over the band onto the thin middle. That jump is the click. From then on the joint works normally, until near the end of closing, when the disc slips forward off the condyle again with a second, usually softer click.</p>
 
 <p>The two clicks happen at different openings: the opening click comes later than the closing one. Clinicians call this <em>disc displacement with reduction</em>, because the disc is out of place but returns, or <em>reduces</em>, every time the mouth opens. On its own and without pain, it's common and usually left alone.</p>
+
+<h2>Locked shut</h2>
+
+<p>Sometimes the clicking stops, and not because the joint got better. If the disc stays in front of the condyle all the time, it becomes a doorstop. Try to open this jaw as far as the other one:</p>
+
+<figure class="demo" id="closedlock" aria-label="Side cut through a jaw joint whose disc stays in front of the condyle. The condyle can turn but can't slide past the bunched-up disc, so opening stops at about 27 millimeters."></figure>
+<script>
+{
+  const WIN = [-26, 34, -28, 9];
+  const U_LOCK = 27;
+  // A folded disc lets the condyle creep only a little way forward.
+  const xdRest = TMJ.contactX(TMJ.C0) + 6.8, xBlock = 1.6;
+  let st = null, actual = 0;
+  demo("closedlock", {
+    aspect: w => (w < 560 ? 1.05 : 1.6),
+    controls: [{ key: "open", label: "Try to open", min: 0, max: 50, step: 0.5, value: 0, unit: "mm", color: "red" }],
+    status: (s, v) => `${actual.toFixed(0)} mm open${v.open > U_LOCK + 0.5 ? ", blocked by the disc" : ""}`,
+    draw(g, s, v) {
+      actual = Math.min(v.open, U_LOCK);
+      const C = TMJ.at(Math.min(TMJ.slideX(actual), xBlock));
+      const push = Math.min(1, Math.max(0, (v.open - U_LOCK) / 12));
+      st = { C, th: TMJ.solveTheta(C, actual), xd: Math.max(xdRest, C[0] + 8.0) + 0.6 * push, bunch: 0.25 + 0.55 * push };
+      const P = g.fit(WIN[0], WIN[1], WIN[2], WIN[3], { pad: 8 });
+      TMJ.drawSection(g, P, st, { disc: true, soft: true, hinge: actual > 0 });
+      if (push > 0) {
+        const a = P([st.C[0] + 5.5, st.C[1] + 2]);
+        g.arrow([a[0] - 10, a[1] + 10], [a[0] + 14, a[1] - 6], { stroke: "red", width: 2.5 });
+        g.label("blocked", [a[0] + 30, a[1] - 22], { color: "red", size: 12 });
+      }
+      g.callouts([
+        { at: P([st.xd - 4.0, TMJ.boneY(st.xd - 4.0) - 1.6]), text: "bunched-up disc", color: "blue" },
+        { at: P(TMJ.pose(st, [-3.9, -12])), text: "condyle" },
+      ], { split: P([2, 0])[0] });
+    },
+  });
+}
+</script>
+
+<p>The condyle can still turn, so the mouth opens a little, but it can't slide past the <span class="c-blue">disc</span>, which bunches up against the eminence. Opening stops at around 25 to 30 mm, roughly the end of the hinge phase. Clinicians call this a <em>closed lock</em>, or disc displacement without reduction.</p>
+
+<p>Because the jaw has a joint on each side, a lock on one side also bends the opening. Here are both joints from the front with the left one locked. The midline of the upper teeth is marked with a dashed line:</p>
+
+<figure class="demo" id="deviate" aria-label="The lower jaw seen from the front with both joints. With the left joint locked, opening swings the chin toward the left, away from the dashed midline."></figure>
+<script>
+{
+  const scene = E3.scene({ shadow: { opacity: 0.1 } });
+  for (const side of [1, -1]) scene.add(TMJ.socketMesh(-12, 20), { material: "bone", position: [side * 50, 0, 0], name: "socket" });
+  scene.add(TMJ.teethMesh(false), { material: "enamel" });
+  const jaw = scene.add(TMJ.mandibleMesh(), { material: "bone" });
+  jaw.add(TMJ.teethMesh(true), { material: "enamel" });
+  const xBlock = 1.6;
+  const UP = [0, TMJ.INCISOR[1], TMJ.INCISOR[2]];
+  let shift = 0, actual = 0;
+  const pose = (xl, xr, u) => {
+    const CL = TMJ.at(xl), CR = TMJ.at(xr);
+    let lo = 0, hi = 1.2;
+    for (let i = 0; i < 36; i++) {
+      const mid = (lo + hi) / 2, p = E3.m4.apply(TMJ.mandibleMatrix(CL, CR, mid), TMJ.INCISOR);
+      if (E3.v3.dist(p, UP) < u) lo = mid; else hi = mid;
+    }
+    return TMJ.mandibleMatrix(CL, CR, (lo + hi) / 2);
+  };
+  demo("deviate", {
+    aspect: w => (w < 560 ? 1 : 1.6),
+    orbit: { yaw: 0, pitch: 0.12, minYaw: -1.2, maxYaw: 1.2, minPitch: -0.4, maxPitch: 0.9 },
+    controls: [
+      { key: "open", label: "Opening", min: 0, max: 45, step: 0.5, value: 0, unit: "mm" },
+      { key: "locked", label: "Left joint locked", type: "toggle", value: true, color: "red" },
+    ],
+    status: (s, v) => `${actual.toFixed(0)} mm open · chin ${Math.abs(shift).toFixed(1)} mm ${shift > 0.05 ? "to the left" : shift < -0.05 ? "to the right" : "on the midline"}`,
+    draw(g, s, v) {
+      actual = v.locked ? Math.min(v.open, 34) : v.open;
+      // With one side stuck, the free condyle slides further to make up the opening.
+      const free = TMJ.slideX(actual);
+      const xr = v.locked ? Math.min(TMJ.X_FULL, free * 1.6) : free, xl = v.locked ? Math.min(free, xBlock) : free;
+      jaw.matrix = pose(xl, xr, actual);
+      const tip = E3.m4.apply(jaw.matrix, TMJ.INCISOR);
+      shift = tip[0];
+      const view = g.render3d(scene, { ...s.view, fov: 24, target: [0, -35, 20] });
+      const a = view.project([0, 20, 86]), b = view.project([0, -110, 86]);
+      g.line(a, b, { stroke: "muted", width: 1, dash: [5, 5] });
+      const t = view.project(tip);
+      g.circle(t, 4.5, { fill: Math.abs(shift) > 0.5 ? "red" : "ink", stroke: "panel", width: 1.5 });
+      g.callouts([
+        { at: view.project([50, 6, 0]), text: v.locked ? "left joint: locked" : "left joint", color: v.locked ? "red" : "ink", side: "right" },
+        { at: view.project([-50, 6, 0]), text: "right joint", side: "left" },
+      ]);
+    },
+  });
+}
+</script>
+
+<p>The right condyle slides forward normally while the left one stays in its socket, so the jaw swings around the stuck side and the chin moves toward it, here by about 4 mm to the left. A jaw that opens to one side, together with a limited opening, is one of the things clinicians look for when they suspect a closed lock. (The figure is seen from the front, so the patient's left is on your right.)</p>
 <!-- explainer:article:end -->
 </article>
 </main>
