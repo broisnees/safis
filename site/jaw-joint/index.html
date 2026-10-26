@@ -3047,6 +3047,39 @@ window.TMJ = (() => {
 <p>The disc is thickest at the back, about 3 mm in the <em>posterior band</em>, and thinnest in the middle, about 1 mm in the <em>intermediate zone</em>. It splits the joint into two compartments, each sealed and filled with lubricating fluid. The lower one, between the condyle and the disc, handles the turning. The upper one, between the disc and the bone, handles the sliding.</p>
 
 <p>The <span class="c-purple">retrodiscal tissue</span> behind the disc is the opposite of the disc's middle: soft, full of blood vessels and nerves, and painful when squeezed. The <span class="c-red">lateral pterygoid</span> has two heads. The lower one pulls the condyle forward when you open; the upper one attaches to the front of the disc and the condyle and steadies them when you clench. The ear canal sits just behind the joint, which is one reason jaw pain is often felt as ear pain.</p>
+
+<h2>A disc that rides along</h2>
+
+<p>The joint only works if the thin middle of the disc stays between the two curved bone surfaces, where the gap is narrowest. Here is the same side cut as before, now with the disc and the soft tissue around it. Open the mouth again and watch the <span class="c-blue">disc</span>:</p>
+
+<figure class="demo" id="ride" aria-label="Side cut through the jaw joint with the blue disc, purple retrodiscal tissue behind it, and the red lateral pterygoid in front. As the mouth opens, the disc slides forward with the condyle and turns backward on top of it."></figure>
+<script>
+{
+  const WIN = [-26, 34, -28, 9];
+  let st = null;
+  demo("ride", {
+    aspect: w => (w < 560 ? 1.05 : 1.6),
+    controls: [{ key: "open", label: "Opening", min: 0, max: 50, step: 0.5, value: 0, unit: "mm" }],
+    status: (s, v) => `disc middle ${(st.xd - TMJ.contactX(TMJ.C0)).toFixed(1)} mm forward of where it started`,
+    draw(g, s, v) {
+      st = TMJ.healthy(v.open);
+      st.xd = TMJ.contactX(st.C);
+      const P = g.fit(WIN[0], WIN[1], WIN[2], WIN[3], { pad: 8 });
+      TMJ.drawSection(g, P, st, { disc: true, soft: true, hinge: v.open > 0, slide: v.open > TMJ.U_HINGE });
+      g.callouts([
+        { at: P([st.xd - 4.3, TMJ.boneY(st.xd - 4.3) - 1.3]), text: "posterior band", color: "blue" },
+        { at: P([st.xd + 3.2, TMJ.boneY(st.xd + 3.2) - 0.8]), text: "anterior band", color: "blue" },
+        { at: P([-11, -8]), text: "retrodiscal tissue", color: "purple" },
+        { at: P([33, -15.6]), text: "lateral pterygoid", color: "red" },
+      ], { split: P([4, 0])[0] });
+    },
+  });
+}
+</script>
+
+<p>As the condyle slides forward, the disc slides with it. It also turns backward on top of the condyle, so that by full opening the thick back band sits behind the condyle instead of on top of it, and the thin middle is still in the narrowest part of the gap. The <span class="c-orange">orange</span> line marks the surface where the turning happens and the <span class="c-green">green</span> line the surface where the sliding happens.</p>
+
+<p>Behind the disc, the <span class="c-purple">retrodiscal tissue</span> stretches and fills the space the condyle leaves behind, its blood vessels swelling to take up the room. Its upper layer is elastic and helps pull the disc back as you close. In front, the lower head of the <span class="c-red">lateral pterygoid</span> shortens as it pulls the condyle forward.</p>
 <!-- explainer:article:end -->
 </article>
 </main>
