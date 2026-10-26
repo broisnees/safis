@@ -2904,6 +2904,62 @@ window.TMJ = (() => {
 </script>
 
 <p>For the first part of the opening the jaw swings like a door on a hinge. Then the whole jaw starts moving forward as well: the rounded top of each side of the jaw, the <strong>condyle</strong>, leaves its socket and slides down a bump of bone in front of it. That forward slide is what you felt under your finger.</p>
+
+<h2>A hinge and a slide</h2>
+
+<p>To see what happens inside, it helps to slice through one joint from back to front and look at it from the side, with the face to the right. Bone that the slice cuts through is hatched. Open the mouth with the slider and watch the condyle:</p>
+
+<figure class="demo" id="motion" aria-label="Side cut through the jaw joint. The condyle sits in the socket under the temporal bone; as the mouth opens it first turns in place, then slides forward and down the bump in front. A small drawing of the whole jaw and a plot of forward travel sit on the right."></figure>
+<script>
+{
+  const WIN = [-26, 30, -30, 9];
+  let st = { ...TMJ.healthy(0), xd: 0 };
+  demo("motion", {
+    aspect: w => (w < 560 ? 0.78 : 1.45),
+    controls: [{ key: "open", label: "Opening", min: 0, max: 50, step: 0.5, value: 0, unit: "mm" }],
+    status: (s, v) => `turned ${(st.th * 180 / Math.PI).toFixed(1)}° · slid ${(st.C[0] - TMJ.C0[0]).toFixed(1)} mm`,
+    draw(g, s, v) {
+      st = { ...TMJ.healthy(v.open), xd: 0 };
+      const narrow = g.w < 560;
+      const main = narrow ? [0, 0, g.w, g.h * 0.62] : [0, 0, g.w * 0.68, g.h];
+      const side = narrow ? [0, g.h * 0.62, g.w, g.h * 0.38] : [g.w * 0.68, 0, g.w * 0.32, g.h];
+      const P = g.fit(WIN[0], WIN[1], WIN[2], WIN[3], { box: main, pad: 8 });
+      const sliding = v.open > TMJ.U_HINGE;
+      TMJ.drawSection(g, P, st, { rest: sliding, hinge: v.open > 0, box: main });
+      // The condyle center's path, and how far it has come.
+      const path = [];
+      for (let x = 0; x <= TMJ.X_FULL + 0.01; x += 0.5) path.push(P(TMJ.at(x)));
+      g.path(path, { stroke: "green", width: 1, dash: [3, 4] });
+      if (sliding) g.arrow(P(TMJ.C0), P(st.C), { stroke: "green", width: 2.5, head: 9 });
+      g.circle(P(st.C), 3, { fill: "ink" });
+      g.callouts([
+        { at: P([-1, 0.9]), text: "socket (fossa)", color: "brass" },
+        { at: P([11.4, -7.2]), text: "articular eminence", color: "brass" },
+        { at: P(TMJ.pose(st, [-3.9, -12])), text: "condyle" },
+        { at: P([-20.5, -10.1]), text: "ear canal", color: "muted" },
+      ], { split: P([2, 0])[0] });
+      // Overview of the whole jaw and the plot of forward travel.
+      const half = narrow ? [side[0], side[1], side[2] / 2, side[3]] : [side[0], side[1], side[2], side[3] * 0.48];
+      const plotBox = narrow ? [side[0] + side[2] / 2, side[1], side[2] / 2, side[3]] : [side[0], side[1] + side[3] * 0.5, side[2], side[3] * 0.5];
+      TMJ.drawMini(g, half, st, WIN);
+      const Q = g.fit(0, 50, 0, 12, { box: plotBox, uniform: false, pad: 26 });
+      g.rect(Q([0, 12])[0], Q([0, 12])[1], Q([TMJ.U_HINGE, 0])[0] - Q([0, 0])[0], Q([0, 0])[1] - Q([0, 12])[1], { fill: g.rgba("orange", 0.08) });
+      g.rect(Q([TMJ.U_HINGE, 12])[0], Q([0, 12])[1], Q([50, 0])[0] - Q([TMJ.U_HINGE, 0])[0], Q([0, 0])[1] - Q([0, 12])[1], { fill: g.rgba("green", 0.08) });
+      g.axes(Q, { x: [0, 50], y: [0, 12], xTicks: [0, 25, 50], yTicks: [0, 10], xLabel: "opening, mm", yLabel: "slid, mm" });
+      const curve = [];
+      for (let u = 0; u <= 50; u += 1) curve.push(Q([u, TMJ.slideX(u)]));
+      g.path(curve, { stroke: "ink", width: 1.5 });
+      g.circle(Q([v.open, TMJ.slideX(v.open)]), 4, { fill: sliding ? "green" : "orange" });
+      g.text("hinge", Q([TMJ.U_HINGE / 2, 11]), { size: 10.5, weight: 600, caps: true, tracking: 0.8, color: "orange" });
+      g.text("slide", Q([36, 11]), { size: 10.5, weight: 600, caps: true, tracking: 0.8, color: "green" });
+    },
+  });
+}
+</script>
+
+<p>For roughly the first 20 mm of opening, measured between the front teeth, the condyle stays in its socket, the <em>fossa</em>, and only turns (<span class="c-orange">orange</span>). Past that it starts to slide forward and down the <em>articular eminence</em> (<span class="c-green">green</span>), and it keeps turning as it goes. At full opening, usually 40 to 55 mm in adults, it sits close to the top of the eminence.</p>
+
+<p>Turning alone can't open the mouth very far. The front teeth are about 10 cm from the joint, so the 13° the jaw turns in the hinge phase moves them only about 22 mm apart. The slide adds the rest, and because the eminence slopes downward, it also lowers the whole jaw. The plot on the right shows the two phases: flat while the jaw only turns, then climbing.</p>
 <!-- explainer:article:end -->
 </article>
 </main>
