@@ -649,7 +649,113 @@
     merge: mergeMeshes,
   };
 
+  // ---------- materials ----------
+  const MATERIALS = {
+    porcelain: { color: "#f1efe9" },
+    paper: { color: "#f7f5ef" },
+    bone: { color: "#ede2c9" },
+    enamel: { color: "#f8f5ed" },
+    cartilage: { color: "#d5e4ea" },
+    muscle: { color: "#dc8c80" },
+    tendon: { color: "#eee1c0" },
+    tissue: { color: "#f0c5ba" },
+    fat: { color: "#f2e0a6" },
+    nerve: { color: "#ecd067" },
+    artery: { color: "#d8645c" },
+    vein: { color: "#7896c8" },
+    brass: { color: "#d1a650", metal: true },
+    gold: { color: "#e0b94f", metal: true },
+    copper: { color: "#cf8a5c", metal: true },
+    steel: { color: "#bfc3ca", metal: true },
+    graphite: { color: "#4a4a50" },
+    glass: { color: "#dfe8ee", opacity: 0.28 },
+    water: { color: "#a8cbe6", opacity: 0.45 },
+  };
+  const ACCENTS = ["red", "orange", "green", "blue", "purple"];
+
+  const hexRgb = hex => {
+    const h = String(hex).replace("#", "");
+    const n = parseInt(h.length === 3 ? h.split("").map(c => c + c).join("") : h, 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  };
+  const mixRgb = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+
+  function resolveMaterial(node) {
+    let m = node.material;
+    if (typeof m === "string") m = MATERIALS[m] ?? (ACCENTS.includes(m) ? { color: m } : { color: m });
+    m = { ...MATERIALS.porcelain, ...(m || {}) };
+    let color = node.color ?? m.color;
+    let rgb;
+    const pal = window.palette || {};
+    if (ACCENTS.includes(color)) rgb = mixRgb(hexRgb(pal[color] || "#888888"), [1, 1, 1], 0.42);
+    else if (MATERIALS[color]) rgb = hexRgb(MATERIALS[color].color);
+    else if (/^#/.test(color)) rgb = hexRgb(color);
+    else if (pal[color]) rgb = hexRgb(pal[color]);
+    else rgb = hexRgb(MATERIALS.porcelain.color);
+    return { rgb, metal: !!m.metal, opacity: node.opacity < 1 ? node.opacity : m.opacity ?? 1 };
+  }
+
+  // ---------- scene graph ----------
+  class Node {
+    constructor(meshArg = null, o = {}) {
+      this.mesh = meshArg;
+      this.children = [];
+      this.parent = null;
+      this.name = "";
+      this.position = [0, 0, 0];
+      this.rotation = [0, 0, 0];
+      this.scale = 1;
+      this.pivot = null;
+      this.matrix = null;
+      this.material = "porcelain";
+      this.color = null;
+      this.opacity = 1;
+      this.visible = true;
+      this.cut = true;
+      this.highlight = false;
+      this.pickable = true;
+      this.set(o);
+    }
+    set(o = {}) {
+      for (const [k, v] of Object.entries(o)) if (k !== "parent") this[k] = v;
+      return this;
+    }
+    add(child, o) {
+      const node = child instanceof Node ? child.set(o) : new Node(child, o);
+      if (node.parent) node.parent.children.splice(node.parent.children.indexOf(node), 1);
+      node.parent = this;
+      this.children.push(node);
+      return node;
+    }
+    group(o) { return this.add(null, o); }
+    local() { return this.matrix ?? m4.compose(this.position, this.rotation, this.scale, this.pivot); }
+    world() { return this.parent ? m4.multiply(this.parent.world(), this.local()) : this.local(); }
+    // A point in this node's local coordinates, in world coordinates.
+    toWorld(p) { return m4.apply(this.world(), p); }
+    find(name) {
+      if (this.name === name) return this;
+      for (const c of this.children) { const f = c.find(name); if (f) return f; }
+      return null;
+    }
+    traverse(fn) { fn(this); for (const c of this.children) c.traverse(fn); }
+  }
+
+  class Scene extends Node {
+    constructor(o = {}) {
+      super(null, {});
+      this.cutPlane = null;    // [nx, ny, nz, d]: removes points where n·p > d
+      this.shadow = true;      // soft contact shadow under the scene
+      this.light = "camera";   // "camera" (studio light that follows the view) or a world direction
+      this.lighting = "soft";  // "soft" porcelain shading, or "sun" for a hard day/night terminator
+      this.ink = 1;            // outline weight multiplier
+      this.set(o);
+    }
+  }
+
   window.E3 = {
     v3, m4, mesh, smooth, triangulate, inset,
+    scene: o => new Scene(o),
+    node: (m, o) => new Node(m, o),
+    Node, Scene, MATERIALS,
   };
 })();
