@@ -802,6 +802,152 @@
   addEventListener("error", e => errors.push({ demo: null, phase: "page", message: e.message }));
   addEventListener("unhandledrejection", e => errors.push({ demo: null, phase: "page", message: String(e.reason) }));
 
+  // ---------- Self-check (used by scripts/verify.mjs, or open the page with ?check) ----------
+  function snapshot(d) {
+    render(d);
+    const data = new Uint32Array(d.ctx.getImageData(0, 0, d.canvas.width, d.canvas.height).data.buffer);
+    let hash = 2166136261, varied = false;
+    const first = data[0];
+    for (let i = 0; i < data.length; i++) {
+      hash = Math.imul(hash ^ data[i], 16777619);
+      if (data[i] !== first) varied = true;
+    }
+    return { hash: hash >>> 0, varied };
+  }
+
+  function saveState(d) { return { s: clone(d.s), v: { ...d.v } }; }
+  function restoreState(d, saved) {
+    for (const k of Object.keys(d.s)) delete d.s[k];
+    Object.assign(d.s, clone(saved.s));
+    for (const [k, val] of Object.entries(saved.v)) { d.v[k] = val; syncInput(d, k); }
+    d.dirty = true;
+  }
+  function runSteps(d, n) {
+    for (let i = 0; i < n && !d.broken; i++) guard(d, "step", () => d.spec.step(1 / 60, d.s, d.v, d.handle));
+  }
+  function probe(d, key, value, saved) {
+    restoreState(d, saved);
+    setControl(d, key, value);
+    if (d.spec.step) runSteps(d, 20);
+    return snapshot(d).hash;
+  }
+
+  function checkDemo(d) {
+    const { spec } = d;
+    const r = { id: d.id, summary: "", errors: [], warnings: [] };
+    const own = () => errors.filter(e => e.demo === d.id).map(e => `${e.phase}() threw: ${e.message}`);
+    if (!d.el.getAttribute("aria-label")) r.warnings.push("the <figure> has no aria-label describing what it shows");
+    resize(d);
+    const n = (spec.controls ?? []).length;
+    r.summary = `${d.w}x${d.h}, ${n} control${n === 1 ? "" : "s"}` +
+      (spec.step ? ", animated" : "") + (spec.drag ? ", draggable" : "") + (spec.orbit ? ", orbit" : "") + (spec.hover ? ", hover" : "");
+    if (!d.w || !d.h) { r.errors.push("canvas has zero size"); return r; }
+    if (!d.broken) {
+      const base = snapshot(d);
+      if (!d.broken && !base.varied) r.errors.push("canvas is blank after draw()");
+    }
+    if (!d.broken) {
+      const saved = saveState(d);
+      // Probe from a fresh state when there is one, so an animation that has
+      // already finished (a ball that landed) doesn't look broken.
+      const fresh = typeof spec.state === "function"
+        ? { s: Object.assign(initialState(spec), d.s.view ? { view: clone(d.s.view) } : {}), v: saved.v }
+        : saved;
+      for (const c of spec.controls ?? []) {
+        if (c.type === "button" || d.broken) continue;
+        const values = c.type === "toggle" ? [false, true] : [c.min, (c.min + c.max) / 2, c.max];
+        const hashes = new Set(values.map(x => probe(d, c.key, x, fresh)));
+        if (!d.broken && hashes.size === 1) r.warnings.push(`moving "${c.label ?? c.key}" across its range doesn't change the figure`);
+      }
+      // A figure with autoplay: false only moves when the reader starts it (a button), so idling is fine.
+      if (spec.step && spec.autoplay !== false && !d.broken) {
+        restoreState(d, fresh);
+        const before = snapshot(d).hash;
+        runSteps(d, 40);
+        if (!d.broken && snapshot(d).hash === before) r.warnings.push("the animation runs but nothing moves in its first 40 frames");
+      }
+      if (spec.orbit && !d.broken) {
+        restoreState(d, saved);
+        const before = snapshot(d).hash;
+        d.s.view.yaw += 0.5;
+        if (!d.broken && snapshot(d).hash === before) r.warnings.push("turning the view doesn't change the figure (is draw() using s.view?)");
+      }
+      restoreState(d, saved);
+      render(d);
+    }
+    r.errors.push(...own());
+    return r;
+  }
+
+  function check() {
+    const report = { errors: [], warnings: [], demos: [] };
+    const live = new Set(demos.map(d => d.el));
+    document.querySelectorAll("figure.demo").forEach(f => {
+      if (!live.has(f)) report.errors.push(`<figure id="${f.id}"> has no demo() attached, so it renders empty`);
+    });
+    const text = [document.title, document.querySelector('meta[name="description"]')?.content ?? "", document.body.innerText];
+    if (text.some(t => t.includes("{{"))) report.errors.push("template placeholders (names in double curly braces) are still on the page");
+    if (document.getElementById("example-cube")) report.warnings.push("the template's example figure (#example-cube) is still on the page");
+    const ids = new Set(demos.map(d => d.id));
+    for (const e of errors) if (!ids.has(e.demo)) report.errors.push(`${e.phase}: ${e.message}`);
+    for (const d of demos) report.demos.push(checkDemo(d));
+    report.ok = !report.errors.length && report.demos.every(r => !r.errors.length);
+    return report;
+  }
+
+  // Exploration support for scripts/explore.mjs: describe a figure and drive its controls.
+  function describe(id) {
+    const d = demos.find(x => x.id === id);
+    if (!d) return null;
+    return {
+      id: d.id,
+      controls: (d.spec.controls ?? []).map(c => ({ key: c.key, label: c.label ?? c.key, type: c.type ?? "slider", min: c.min, max: c.max, value: d.v[c.key] })),
+      stepped: !!d.spec.step,
+      animated: !!d.spec.step, orbit: !!d.spec.orbit, drag: !!d.spec.drag,
+    };
+  }
+  function drive(id, action) {
+    const d = demos.find(x => x.id === id);
+    if (!d) return false;
+    if (action.reset) {
+      if (typeof d.spec.state === "function") d.handle.reset();
+      if (d.s.view && d.view0) Object.assign(d.s.view, d.view0);
+      d.spin = null;
+    }
+    if (action.set) for (const [k, v] of Object.entries(action.set)) setControl(d, k, v);
+    if (action.view && d.s.view) Object.assign(d.s.view, action.view);
+    if (action.viewDelta && d.s.view && d.view0) {
+      d.s.view.yaw = clampYaw(d, d.view0.yaw + action.viewDelta[0]);
+      d.s.view.pitch = clampPitch(d, d.view0.pitch + action.viewDelta[1]);
+    }
+    if (action.press) {
+      const c = (d.spec.controls ?? []).find(x => x.type === "button" && x.label === action.press);
+      if (c) guard(d, "action", () => c.action?.(d.s, d.v, d.handle));
+    }
+    if (action.steps && d.spec.step) runSteps(d, action.steps);
+    if (action.play !== undefined) d.handle.play(action.play);
+    render(d);
+    return true;
+  }
+
+  function showReport(report) {
+    const lines = [`Self-check: ${report.ok ? "PASS" : "FAIL"}`];
+    for (const e of report.errors) lines.push(`ERROR ${e}`);
+    for (const w of report.warnings) lines.push(`warn  ${w}`);
+    for (const r of report.demos) {
+      lines.push(`${r.errors.length ? "ERROR" : r.warnings.length ? "warn " : "ok   "} #${r.id}  ${r.summary}`);
+      for (const e of r.errors) lines.push(`        ${e}`);
+      for (const w of r.warnings) lines.push(`        ${w}`);
+    }
+    const box = document.createElement("pre");
+    box.className = "check-report";
+    box.textContent = lines.join("\n");
+    document.body.prepend(box);
+  }
+  if (new URLSearchParams(location.search).has("check")) {
+    addEventListener("load", () => requestAnimationFrame(() => showReport(check())));
+  }
+
   Object.assign(window, { demo, palette, rgba, clamp, lerp, smoothstep, TAU });
-  window.__explainer = { ids: () => demos.map(d => d.id), version: 2 };
+  window.__explainer = { check, describe, drive, ids: () => demos.map(d => d.id), version: 2 };
 })();
