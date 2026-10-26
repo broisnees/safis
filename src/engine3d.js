@@ -1325,13 +1325,58 @@ void main() {
     };
   }
 
+  // ---------- chemistry ----------
+  // Covalent radius (Å) for bond lengths and ball sizes, van der Waals radius for space-filling,
+  // and a color that reads well in the porcelain style.
+  const ELEMENTS = {
+    H: { cov: 0.31, vdw: 1.2, color: "#f5f3ee" }, C: { cov: 0.76, vdw: 1.7, color: "#5b5b61" },
+    N: { cov: 0.71, vdw: 1.55, color: "#7d9bd8" }, O: { cov: 0.66, vdw: 1.52, color: "#e07a6e" },
+    F: { cov: 0.57, vdw: 1.47, color: "#9fd18f" }, Cl: { cov: 1.02, vdw: 1.75, color: "#8fcf7c" },
+    Br: { cov: 1.2, vdw: 1.85, color: "#b7685a" }, I: { cov: 1.39, vdw: 1.98, color: "#9a6fbf" },
+    S: { cov: 1.05, vdw: 1.8, color: "#ead36a" }, P: { cov: 1.07, vdw: 1.8, color: "#ec9f5a" },
+    Na: { cov: 1.66, vdw: 2.27, color: "#b49be0" }, K: { cov: 2.03, vdw: 2.75, color: "#a58ad6" },
+    Mg: { cov: 1.41, vdw: 1.73, color: "#9fcf86" }, Ca: { cov: 1.76, vdw: 2.31, color: "#c9c9c0" },
+    Fe: { cov: 1.32, vdw: 2.0, color: "#d0874f" }, Zn: { cov: 1.22, vdw: 1.39, color: "#9ea7c4" },
+    Cu: { cov: 1.32, vdw: 1.4, color: "#cf8a5c" }, Si: { cov: 1.11, vdw: 2.1, color: "#d8c49a" },
+    Li: { cov: 1.28, vdw: 1.82, color: "#c79be0" }, He: { cov: 0.28, vdw: 1.4, color: "#dff3f3" },
+  };
+
+  // atoms: [["O", [x, y, z]], ...] in ångström; bonds: [[i, j, order], ...].
+  // style: "ball" (ball-and-stick) or "space" (space-filling).
+  function molecule(atoms, bonds = [], { style = "ball", scale = 1, name = "molecule" } = {}) {
+    const g = new Node(null, { name });
+    const cache = new Map();
+    const sphereFor = r => { const k = r.toFixed(3); if (!cache.has(k)) cache.set(k, mesh.sphere(r, { segments: 20 })); return cache.get(k); };
+    atoms.forEach(([el, pos], i) => {
+      const e = ELEMENTS[el] || { cov: 0.75, vdw: 1.7, color: "#cccccc" };
+      const r = (style === "space" ? e.vdw : Math.max(0.22, e.cov * 0.42)) * scale;
+      g.add(sphereFor(r), { position: v3.scale(pos, scale), color: e.color, name: `${el}${i + 1}`, data: { atom: i, element: el } });
+    });
+    if (style !== "space") {
+      for (const [i, j, order = 1] of bonds) {
+        const a = v3.scale(atoms[i][1], scale), b = v3.scale(atoms[j][1], scale);
+        const dir = v3.sub(b, a), len = v3.len(dir);
+        const side = v3.norm(v3.cross(dir, Math.abs(dir[1]) < 0.9 * len ? [0, 1, 0] : [1, 0, 0]));
+        const r = 0.09 * scale * (order > 1 ? 0.75 : 1);
+        const offsets = order === 1 ? [0] : order === 2 ? [-0.11, 0.11] : [-0.18, 0, 0.18];
+        for (const off of offsets) {
+          const sh = v3.scale(side, off * scale);
+          const m = mesh.transform(mesh.cylinder(r, len, { segments: 14 }),
+            m4.multiply(m4.translation(v3.add(v3.lerp(a, b, 0.5), sh)), m4.alignY(dir)));
+          g.add(m, { material: "porcelain", name: `bond ${i + 1}-${j + 1}`, data: { bond: [i, j, order] } });
+        }
+      }
+    }
+    return g;
+  }
+
   window.E3 = {
     v3, m4, mesh, smooth, triangulate, inset,
     scene: o => new Scene(o),
     node: (m, o) => new Node(m, o),
     Node, Scene,
     render,
-    MATERIALS,
+    molecule, ELEMENTS, MATERIALS,
     get canvas() { return R && R.canvas; },
     available() { try { renderer(); return true; } catch { return false; } },
   };
