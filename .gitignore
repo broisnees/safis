@@ -1,0 +1,7 @@
+# Local Claude Code session files; only the project skill link is shared.
+.claude/*
+!.claude/skills/
+
+node_modules/
+*.log
+.DS_Store
