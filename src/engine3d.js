@@ -752,10 +752,587 @@
     }
   }
 
+  // ---------- WebGL renderer ----------
+  const VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+uniform mat4 uModel, uViewProj;
+uniform mat3 uNormalMat;
+out vec3 vWorld; out vec3 vNormal;
+void main() {
+  vec4 w = uModel * vec4(aPos, 1.0);
+  vWorld = w.xyz;
+  vNormal = uNormalMat * aNormal;
+  gl_Position = uViewProj * w;
+}`;
+
+  const FS_MAIN = `#version 300 es
+precision highp float;
+in vec3 vWorld; in vec3 vNormal;
+uniform vec3 uColor; uniform float uMetal; uniform vec3 uLight; uniform vec3 uEye;
+uniform vec4 uCut; uniform float uCutOn; uniform float uId; uniform vec3 uHighlight; uniform float uHighlightOn;
+uniform float uSun; uniform float uHatch; uniform mat4 uViewProj;
+layout(location=0) out vec4 oColor;
+layout(location=1) out vec4 oNormal;
+void main() {
+  if (uCutOn > 0.5 && dot(vWorld, uCut.xyz) > uCut.w) discard;
+  if (!gl_FrontFacing) {
+    if (uCutOn < 0.5) discard;
+    // Looking into a cut solid: this back face stands in for the section face. Its depth
+    // stays where it is (so nearer surfaces still win); only the hatch is laid out on the
+    // cut plane, where the view ray crosses it, so the lines stay straight and steady.
+    vec3 dir = vWorld - uEye;
+    float t = (uCut.w - dot(uEye, uCut.xyz)) / dot(dir, uCut.xyz);
+    vec3 p = uEye + dir * t;
+    vec3 n = uCut.xyz;
+    vec3 a = normalize(cross(n, abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 b = cross(n, a);
+    float u = dot(p, normalize(a + b));
+    float fw = max(fwidth(u), 1e-6);
+    float d = abs(fract(u / uHatch + 0.5) - 0.5) * uHatch / fw;
+    float line = 1.0 - smoothstep(0.35, 1.1, d);
+    vec3 cap = uColor * 0.93;
+    oColor = vec4(mix(cap, uColor * 0.5, line * 0.75), 1.0);
+    oNormal = vec4(n * 0.5 + 0.5, uId);
+    return;
+  }
+  vec3 N = normalize(vNormal);
+  vec3 V = normalize(uEye - vWorld);
+  float ndl = dot(N, uLight);
+  vec3 col;
+  if (uSun > 0.5) {
+    float lit = smoothstep(-0.05, 0.25, ndl);
+    col = uColor * (0.12 + 0.95 * lit * (0.55 + 0.45 * max(ndl, 0.0)));
+  } else {
+    float wrap = clamp((ndl + 0.5) / 1.5, 0.0, 1.0);
+    wrap = wrap * wrap * (3.0 - 2.0 * wrap);
+    vec3 cool = uColor * vec3(0.84, 0.86, 0.90);
+    col = mix(cool, uColor, wrap);
+    col *= 0.92 + 0.08 * (0.5 + 0.5 * N.y);
+  }
+  vec3 H = normalize(uLight + V);
+  float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
+  if (uMetal > 0.5) {
+    float env = smoothstep(-0.4, 0.8, reflect(-V, N).y);
+    float spec = pow(max(dot(N, H), 0.0), 50.0);
+    col = uColor * (0.62 + 0.38 * clamp(ndl * 0.5 + 0.5, 0.0, 1.0)) * (0.78 + 0.32 * env) + vec3(1.0, 0.97, 0.9) * spec * 0.55;
+  } else if (uSun < 0.5) {
+    col += vec3(pow(max(dot(N, H), 0.0), 40.0) * 0.06);
+    col = mix(col, vec3(1.0), fres * 0.10);
+  }
+  if (uHighlightOn > 0.5) col = mix(col, uHighlight, 0.38);
+  oColor = vec4(col, 1.0);
+  oNormal = vec4(N * 0.5 + 0.5, uId);
+}`;
+
+  const FS_GHOST = `#version 300 es
+precision highp float;
+in vec3 vWorld; in vec3 vNormal;
+uniform vec3 uColor; uniform vec3 uEye; uniform vec3 uLight; uniform float uOpacity;
+uniform vec4 uCut; uniform float uCutOn;
+layout(location=0) out vec4 oColor;
+void main() {
+  if (uCutOn > 0.5 && dot(vWorld, uCut.xyz) > uCut.w) discard;
+  vec3 N = normalize(vNormal);
+  if (!gl_FrontFacing) N = -N;
+  vec3 V = normalize(uEye - vWorld);
+  float facing = abs(dot(N, V));
+  float rim = pow(1.0 - facing, 2.2);
+  float a = clamp(uOpacity * (0.30 + 1.6 * rim), 0.0, 0.9);
+  vec3 col = uColor * (0.85 + 0.15 * clamp(dot(N, uLight), 0.0, 1.0));
+  col = mix(col, col * 0.55, rim * 0.6);
+  oColor = vec4(col * a, a);
+}`;
+
+  const VS_SHADOW = `#version 300 es
+uniform mat4 uViewProj; uniform vec3 uCenter; uniform vec2 uRadii;
+out vec2 vUv;
+void main() {
+  vec2 c = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1)) * 2.0 - 1.0;
+  vUv = c;
+  gl_Position = uViewProj * vec4(uCenter + vec3(c.x * uRadii.x, 0.0, c.y * uRadii.y), 1.0);
+}`;
+  const FS_SHADOW = `#version 300 es
+precision highp float;
+in vec2 vUv; uniform float uOpacity;
+layout(location=0) out vec4 oColor;
+void main() {
+  float d = length(vUv);
+  float a = uOpacity * pow(1.0 - smoothstep(0.0, 1.0, d), 1.7);
+  oColor = vec4(0.0, 0.0, 0.0, a);
+}`;
+
+  const VS_FULL = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+  // Composite: ink outlines from depth, normal, and part-id discontinuities, then a box
+  // filter over uSS x uSS render pixels per output pixel (the engine supersamples itself).
+  const FS_COMPOSITE = `#version 300 es
+precision highp float;
+uniform sampler2D uColor; uniform sampler2D uNormal; uniform sampler2D uDepth;
+uniform vec2 uInvSize; uniform float uStep; uniform vec2 uNearFar; uniform float uOrtho; uniform float uInk;
+uniform int uSS;
+out vec4 o;
+float lin(float d) {
+  if (uOrtho > 0.5) return uNearFar.x + d * (uNearFar.y - uNearFar.x);
+  float z = d * 2.0 - 1.0;
+  return 2.0 * uNearFar.x * uNearFar.y / (uNearFar.y + uNearFar.x - z * (uNearFar.y - uNearFar.x));
+}
+vec4 shade(vec2 px) {
+  vec4 c0 = texture(uColor, px * uInvSize);
+  vec4 n0 = texture(uNormal, px * uInvSize);
+  float d0 = lin(texture(uDepth, px * uInvSize).r);
+  bool bg0 = n0.a < 0.5 / 255.0;
+  float edge = 0.0;
+  float inkDepth = bg0 ? 1e20 : d0;
+  vec3 inkSrc = bg0 ? vec3(0.45) : c0.rgb / max(c0.a, 1e-3);
+  const vec2 offs[8] = vec2[8](vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0, -1),
+                               vec2(0.71, 0.71), vec2(-0.71, 0.71), vec2(0.71, -0.71), vec2(-0.71, -0.71));
+  for (int i = 0; i < 8; i++) {
+    vec2 q = (px + offs[i] * uStep) * uInvSize;
+    vec4 n1 = texture(uNormal, q);
+    bool bg1 = n1.a < 0.5 / 255.0;
+    float d1 = lin(texture(uDepth, q).r);
+    float e = 0.0;
+    if (bg0 != bg1) e = 1.0;
+    else if (!bg0) {
+      if (abs(n0.a - n1.a) > 0.5 / 255.0) e = 0.85;
+      float dd = abs(d0 - d1) / max(min(d0, d1), 1e-4);
+      e = max(e, smoothstep(0.012, 0.035, dd) * 0.85);
+      float nd = 1.0 - dot(n0.xyz * 2.0 - 1.0, n1.xyz * 2.0 - 1.0);
+      e = max(e, smoothstep(0.10, 0.32, nd) * 0.5);
+    }
+    if (e > 0.0 && !bg1 && d1 < inkDepth) {
+      vec4 c1 = texture(uColor, q);
+      inkDepth = d1;
+      inkSrc = c1.rgb / max(c1.a, 1e-3);
+    }
+    edge = max(edge, e);
+  }
+  // Ink is a darker shade of the surface it outlines, so colored parts get colored lines.
+  vec3 ink = pow(inkSrc, vec3(1.35)) * 0.40;
+  float a = clamp(edge * uInk, 0.0, 1.0);
+  return vec4(ink * a, a) + c0 * (1.0 - a);
+}
+void main() {
+  vec2 base = floor(gl_FragCoord.xy) * float(uSS);
+  vec4 sum = vec4(0.0);
+  for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
+    if (i < uSS && j < uSS) sum += shade(base + vec2(float(i), float(j)) + 0.5);
+  }
+  o = sum / float(uSS * uSS);
+}`;
+
+  let R = null;
+  function compile(gl, vs, fs) {
+    const make = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader: ${gl.getShaderInfoLog(s)}`);
+      return s;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, make(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, make(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`program: ${gl.getProgramInfoLog(p)}`);
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) {
+      const name = gl.getActiveUniform(p, i).name;
+      u[name] = gl.getUniformLocation(p, name);
+    }
+    return { p, u };
+  }
+
+  // One WebGL context serves every figure. It renders into an OffscreenCanvas and each
+  // frame is handed over with transferToImageBitmap(), which is exact; reading a shared
+  // WebGL canvas with drawImage() can return a stale buffer in some browsers.
+  function renderer() {
+    if (R) return R;
+    const offscreen = typeof OffscreenCanvas !== "undefined";
+    const canvas = offscreen ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+    const gl = canvas.getContext("webgl2", { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: !offscreen, depth: true });
+    if (!gl) throw new Error("this figure needs WebGL 2, which this browser doesn't provide");
+    R = {
+      canvas, gl, offscreen, fw: 0, fh: 0,
+      main: compile(gl, VS, FS_MAIN),
+      ghost: compile(gl, VS, FS_GHOST),
+      shadow: compile(gl, VS_SHADOW, FS_SHADOW),
+      composite: compile(gl, VS_FULL, FS_COMPOSITE),
+      empty: gl.createVertexArray(),
+    };
+    canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); R = null; });
+    return R;
+  }
+
+  function targets(w, h) {
+    const { gl } = R;
+    if (R.fbo && R.fw >= w && R.fh >= h) return;
+    const fw = Math.max(w, R.fw), fh = Math.max(h, R.fh);
+    if (R.fbo) { gl.deleteFramebuffer(R.fbo); [R.tColor, R.tNormal, R.tDepth].forEach(t => gl.deleteTexture(t)); }
+    const tex = (internal, format, type) => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, internal, fw, fh, 0, format, type, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    R.tColor = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    R.tNormal = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    R.tDepth = tex(gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT);
+    R.fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, R.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, R.tColor, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, R.tNormal, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, R.tDepth, 0);
+    R.fw = fw;
+    R.fh = fh;
+    R.canvas.width = fw;
+    R.canvas.height = fh;
+  }
+
+  function upload(m) {
+    const { gl } = R;
+    if (m._gpu && m._gpu.gl === gl && m._gpu.version === m.version) return m._gpu;
+    if (m._gpu && m._gpu.gl === gl) { gl.deleteVertexArray(m._gpu.vao); m._gpu.buffers.forEach(b => gl.deleteBuffer(b)); }
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const buf = (target, data) => { const b = gl.createBuffer(); gl.bindBuffer(target, b); gl.bufferData(target, data, gl.STATIC_DRAW); return b; };
+    const bp = buf(gl.ARRAY_BUFFER, m.positions);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const bn = buf(gl.ARRAY_BUFFER, m.normals);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    const bi = buf(gl.ELEMENT_ARRAY_BUFFER, m.indices);
+    gl.bindVertexArray(null);
+    m._gpu = { gl, vao, buffers: [bp, bn, bi], count: m.indices.length, version: m.version };
+    return m._gpu;
+  }
+
+  // Collects visible mesh nodes with world matrices and world-space bounds.
+  function collect(scene) {
+    const items = [];
+    const walk = (node, parentM) => {
+      if (!node.visible) return;
+      const world = m4.multiply(parentM, node.local());
+      if (node.mesh && node.mesh.indices.length) {
+        const b = node.mesh.bounds;
+        const c = m4.apply(world, b.center);
+        const sx = Math.hypot(world[0], world[1], world[2]), sy = Math.hypot(world[4], world[5], world[6]), sz = Math.hypot(world[8], world[9], world[10]);
+        items.push({ node, world, center: c, radius: b.radius * Math.max(sx, sy, sz) });
+      }
+      for (const c of node.children) walk(c, world);
+    };
+    walk(scene, m4.identity());
+    return items;
+  }
+
+  function sceneBounds(items) {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const it of items) {
+      const b = it.node.mesh.bounds;
+      for (let i = 0; i < 8; i++) {
+        const p = m4.apply(it.world, [i & 1 ? b.max[0] : b.min[0], i & 2 ? b.max[1] : b.min[1], i & 4 ? b.max[2] : b.min[2]]);
+        for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], p[k]); max[k] = Math.max(max[k], p[k]); }
+      }
+    }
+    if (!items.length) return { min: [-1, -1, -1], max: [1, 1, 1], center: [0, 0, 0], radius: 1 };
+    const center = v3.lerp(min, max, 0.5);
+    return { min, max, center, radius: Math.max(1e-3, v3.dist(min, max) / 2) };
+  }
+
+  const orbitDir = (yaw, pitch) => [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
+
+  // Frames the scene's bounding box as seen from one direction: centers it and
+  // finds the distance (or ortho half-height) at which it fills `margin` of the view.
+  function frameFit(bounds, dir, fov, aspect, margin, fixedTarget) {
+    const z = v3.norm(dir);
+    let x = v3.cross([0, 1, 0], z);
+    if (v3.len(x) < 1e-6) x = v3.cross([0, 0, 1], z);
+    x = v3.norm(x);
+    const y = v3.cross(z, x);
+    const corners = [];
+    for (let i = 0; i < 8; i++) corners.push([i & 1 ? bounds.max[0] : bounds.min[0], i & 2 ? bounds.max[1] : bounds.min[1], i & 4 ? bounds.max[2] : bounds.min[2]]);
+    let target = fixedTarget;
+    if (!target) {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const c of corners) {
+        const r = v3.sub(c, bounds.center), px = v3.dot(r, x), py = v3.dot(r, y);
+        x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+      }
+      target = v3.add(bounds.center, v3.add(v3.scale(x, (x0 + x1) / 2), v3.scale(y, (y0 + y1) / 2)));
+    }
+    const t = Math.tan(fov / 2);
+    let distance = 0, half = 0;
+    for (const c of corners) {
+      const r = v3.sub(c, target), vx = Math.abs(v3.dot(r, x)), vy = Math.abs(v3.dot(r, y)), vz = v3.dot(r, z);
+      half = Math.max(half, vy / margin, vx / (aspect * margin));
+      if (fov > 0) distance = Math.max(distance, vz + vx / (t * aspect * margin), vz + vy / (t * margin));
+    }
+    if (!(fov > 0)) distance = bounds.radius * 4;
+    return { target, distance: Math.max(distance, bounds.radius * 0.5), half: Math.max(half, 1e-3) };
+  }
+
+  // Camera from orbit angles. yaw/pitch match g.view3d: positive pitch looks from above.
+  // Unless distance (and target) are given, the scene is framed once from the first
+  // view and that framing is kept, so turning the view doesn't make it zoom in and out.
+  function camera(cam, scene, bounds, aspect) {
+    const fovDeg = cam.fov ?? 28;
+    const fov = (fovDeg * Math.PI) / 180;
+    const yaw = cam.yaw ?? -0.6, pitch = cam.pitch ?? 0.4;
+    const dir = orbitDir(yaw, pitch);
+    const margin = cam.margin ?? 0.86;
+    let target = cam.target, distance = cam.distance, half = cam.half;
+    if (distance == null || target == null || (!(fov > 0) && half == null)) {
+      const key = `${aspect.toFixed(2)}|${fovDeg}|${margin}|${cam.target ? cam.target.join(",") : "auto"}`;
+      if (cam.fit === "always" || !scene._fit || scene._fit.key !== key) {
+        scene._fit = { key, ...frameFit(bounds, cam.fitFrom ? orbitDir(cam.fitFrom.yaw, cam.fitFrom.pitch) : dir, fov, aspect, margin, cam.target) };
+      }
+      target = target ?? scene._fit.target;
+      distance = distance ?? scene._fit.distance;
+      half = half ?? scene._fit.half;
+    }
+    const zoom = cam.zoom ?? 1;
+    if (fov > 0) distance /= zoom;
+    const eye = v3.add(target, v3.scale(dir, distance));
+    const view = m4.lookAt(eye, target, [0, 1, 0]);
+    const reach = v3.dist(target, bounds.center) + bounds.radius;
+    const near = Math.max(distance - reach * 1.5, distance * 0.02), far = distance + reach * 1.5;
+    let proj, worldPerPx;
+    if (fov > 0) {
+      proj = m4.perspective(fov, aspect, near, far);
+      worldPerPx = 2 * distance * Math.tan(fov / 2);
+    } else {
+      const hh = half / zoom;
+      proj = m4.ortho(-hh * aspect, hh * aspect, -hh, hh, near, far);
+      worldPerPx = 2 * hh;
+    }
+    return { eye, target, view, proj, vp: m4.multiply(proj, view), near, far, ortho: !(fov > 0), worldPerPx, distance };
+  }
+
+  function lightDir(scene, cam) {
+    if (Array.isArray(scene.light)) return v3.norm(scene.light);
+    const inv = m4.invert(cam.view);
+    return v3.norm(m4.applyDir(inv, [-0.45, 0.75, 0.55]));
+  }
+
+  // Renders the scene into the shared WebGL canvas; returns a view for projection and picking.
+  // outScale: output pixels per CSS pixel (the screen's density). ss: supersampling
+  // factor (1 to 3); the frame is rendered ss times larger and filtered down in the
+  // composite pass, so the result can be copied to the page 1:1 with no resampling.
+  function render(scene, cam = {}, cssW, cssH, outScale = 1, ss = 2) {
+    renderer();
+    const { gl } = R;
+    ss = Math.max(1, Math.min(3, Math.round(ss)));
+    const Wo = Math.max(1, Math.round(cssW * outScale)), Ho = Math.max(1, Math.round(cssH * outScale));
+    const W = Wo * ss, H = Ho * ss, scale = outScale * ss;
+    targets(W, H);
+    const items = collect(scene);
+    const bounds = sceneBounds(items);
+    const C = camera(cam, scene, bounds, cssW / cssH);
+    const L = lightDir(scene, C);
+    const cut = scene.cutPlane ? (Array.isArray(scene.cutPlane) ? scene.cutPlane : [...scene.cutPlane.normal, scene.cutPlane.offset ?? 0]) : null;
+    const cutN = cut ? v3.norm(cut.slice(0, 3)) : null;
+    const cutV = cut ? [...cutN, cut[3] / v3.len(cut.slice(0, 3))] : [0, 1, 0, 1e9];
+    const hatch = (C.worldPerPx / cssH) * 7;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, R.fbo);
+    gl.viewport(0, 0, W, H);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+    gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 0]);
+    gl.clearBufferfv(gl.DEPTH, 0, [1]);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    const mats = new Map();
+    const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node))); return m; };
+    const pal = window.palette || {};
+    const hiDefault = hexRgb(pal.orange || "#d9800f");
+
+    // Opaque pass
+    const { main } = R;
+    gl.useProgram(main.p);
+    gl.uniformMatrix4fv(main.u.uViewProj, false, C.vp);
+    gl.uniform3fv(main.u.uLight, L);
+    gl.uniform3fv(main.u.uEye, C.eye);
+    gl.uniform4fv(main.u.uCut, cutV);
+    gl.uniform1f(main.u.uSun, scene.lighting === "sun" ? 1 : 0);
+    gl.uniform1f(main.u.uHatch, hatch);
+    const opaque = items.filter(it => matOf(it).opacity >= 0.999);
+    opaque.forEach((it, i) => {
+      const m = matOf(it), g = upload(it.node.mesh);
+      it.id = (i % 254) + 1;
+      const cutOn = cut && it.node.cut ? 1 : 0;
+      if (cutOn) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
+      gl.uniformMatrix4fv(main.u.uModel, false, it.world);
+      gl.uniformMatrix3fv(main.u.uNormalMat, false, m4.normalMatrix(it.world));
+      gl.uniform3fv(main.u.uColor, m.rgb);
+      gl.uniform1f(main.u.uMetal, m.metal ? 1 : 0);
+      gl.uniform1f(main.u.uId, it.id / 255);
+      gl.uniform1f(main.u.uCutOn, cutOn);
+      const hl = it.node.highlight;
+      gl.uniform1f(main.u.uHighlightOn, hl ? 1 : 0);
+      gl.uniform3fv(main.u.uHighlight, typeof hl === "string" ? hexRgb(pal[hl] || hl) : hiDefault);
+      gl.bindVertexArray(g.vao);
+      gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
+    });
+    gl.bindVertexArray(null);
+    gl.disable(gl.CULL_FACE);
+
+    // Ground shadow and see-through parts only touch the color buffer.
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    if (scene.shadow && items.length) {
+      const s = typeof scene.shadow === "object" ? scene.shadow : {};
+      const ext = [(bounds.max[0] - bounds.min[0]) / 2, (bounds.max[2] - bounds.min[2]) / 2];
+      const k = s.scale ?? 1.25;
+      gl.useProgram(R.shadow.p);
+      gl.uniformMatrix4fv(R.shadow.u.uViewProj, false, C.vp);
+      gl.uniform3fv(R.shadow.u.uCenter, [bounds.center[0], s.y ?? bounds.min[1] - bounds.radius * 0.01, bounds.center[2]]);
+      gl.uniform2fv(R.shadow.u.uRadii, [Math.max(ext[0], ext[1] * 0.35) * k, Math.max(ext[1], ext[0] * 0.35) * k]);
+      gl.uniform1f(R.shadow.u.uOpacity, s.opacity ?? 0.16);
+      gl.bindVertexArray(R.empty);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    const ghosts = items.filter(it => matOf(it).opacity < 0.999)
+      .sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
+    if (ghosts.length) {
+      const { ghost } = R;
+      gl.useProgram(ghost.p);
+      gl.uniformMatrix4fv(ghost.u.uViewProj, false, C.vp);
+      gl.uniform3fv(ghost.u.uEye, C.eye);
+      gl.uniform3fv(ghost.u.uLight, L);
+      gl.uniform4fv(ghost.u.uCut, cutV);
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      for (const it of ghosts) {
+        const m = matOf(it), g = upload(it.node.mesh);
+        gl.uniformMatrix4fv(ghost.u.uModel, false, it.world);
+        gl.uniformMatrix3fv(ghost.u.uNormalMat, false, m4.normalMatrix(it.world));
+        gl.uniform3fv(ghost.u.uColor, m.rgb);
+        gl.uniform1f(ghost.u.uOpacity, m.opacity);
+        gl.uniform1f(ghost.u.uCutOn, cut && it.node.cut ? 1 : 0);
+        gl.bindVertexArray(g.vao);
+        gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
+      }
+      gl.disable(gl.CULL_FACE);
+      gl.bindVertexArray(null);
+    }
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    // Composite with ink outlines into the canvas.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, R.fw, R.fh);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.viewport(0, 0, Wo, Ho);
+    gl.disable(gl.DEPTH_TEST);
+    const cp = R.composite;
+    gl.useProgram(cp.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.tColor); gl.uniform1i(cp.u.uColor, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, R.tNormal); gl.uniform1i(cp.u.uNormal, 1);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, R.tDepth); gl.uniform1i(cp.u.uDepth, 2);
+    gl.uniform2fv(cp.u.uInvSize, [1 / R.fw, 1 / R.fh]);
+    gl.uniform1f(cp.u.uStep, Math.max(0.75, 0.62 * scale * (scene.ink ?? 1)));
+    gl.uniform2fv(cp.u.uNearFar, [C.near, C.far]);
+    gl.uniform1f(cp.u.uOrtho, C.ortho ? 1 : 0);
+    gl.uniform1f(cp.u.uInk, scene.ink === 0 ? 0 : 0.9);
+    gl.uniform1i(cp.u.uSS, ss);
+    gl.bindVertexArray(R.empty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0);
+
+    const image = R.offscreen ? R.canvas.transferToImageBitmap() : R.canvas;
+    return makeView(scene, items, C, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.fh - Ho, sw: Wo, sh: Ho });
+  }
+
+  function makeView(scene, items, C, w, h, cut, source) {
+    const invVP = m4.invert(C.vp);
+    const project = p => {
+      const q = m4.project(C.vp, p);
+      return [(q[0] * 0.5 + 0.5) * w, (1 - (q[1] * 0.5 + 0.5)) * h, q[3]];
+    };
+    const ray = ([x, y]) => {
+      const nx = (x / w) * 2 - 1, ny = 1 - (y / h) * 2;
+      const a = m4.project(invVP, [nx, ny, -1]), b = m4.project(invVP, [nx, ny, 1]);
+      return { origin: a.slice(0, 3), dir: v3.norm(v3.sub(b.slice(0, 3), a.slice(0, 3))) };
+    };
+    function pick(p, { ghosts = false } = {}) {
+      const { origin, dir } = ray(p);
+      let best = null;
+      for (const it of items) {
+        const node = it.node;
+        if (!node.pickable) continue;
+        const mat = resolveMaterial(node);
+        if (!ghosts && mat.opacity < 0.5) continue;
+        // bounding sphere
+        const oc = v3.sub(origin, it.center), bq = v3.dot(oc, dir), cq = v3.dot(oc, oc) - it.radius * it.radius;
+        if (bq * bq - cq < 0) continue;
+        const inv = m4.invert(it.world);
+        const o = m4.apply(inv, origin), d = m4.applyDir(inv, dir);
+        const P = node.mesh.positions, I = node.mesh.indices;
+        for (let t = 0; t < I.length; t += 3) {
+          const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+          const e1 = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]];
+          const e2 = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
+          const pv = v3.cross(d, e2), det = v3.dot(e1, pv);
+          if (Math.abs(det) < 1e-12) continue;
+          const tv = [o[0] - P[a], o[1] - P[a + 1], o[2] - P[a + 2]];
+          const u = v3.dot(tv, pv) / det;
+          if (u < 0 || u > 1) continue;
+          const qv = v3.cross(tv, e1), v = v3.dot(d, qv) / det;
+          if (v < 0 || u + v > 1) continue;
+          const tt = v3.dot(e2, qv) / det;
+          if (tt <= 0) continue;
+          const local = v3.add(o, v3.scale(d, tt));
+          const world = m4.apply(it.world, local);
+          if (cut && node.cut && v3.dot(world, cut.slice(0, 3)) > cut[3]) continue;
+          const dist = v3.dist(world, origin);
+          if (!best || dist < best.distance) best = { node, point: world, distance: dist };
+        }
+      }
+      return best;
+    }
+    return {
+      project,
+      ray,
+      pick,
+      // True when something opaque sits between the camera and p.
+      hidden(p) {
+        const s = project(p), hit = pick([s[0], s[1]]);
+        return !!hit && hit.distance < v3.dist(ray([s[0], s[1]]).origin, p) - 1e-3 * C.distance;
+      },
+      eye: C.eye,
+      target: C.target,
+      width: w,
+      height: h,
+      source,
+    };
+  }
+
   window.E3 = {
     v3, m4, mesh, smooth, triangulate, inset,
     scene: o => new Scene(o),
     node: (m, o) => new Node(m, o),
-    Node, Scene, MATERIALS,
+    Node, Scene,
+    render,
+    MATERIALS,
+    get canvas() { return R && R.canvas; },
+    available() { try { renderer(); return true; } catch { return false; } },
   };
 })();
