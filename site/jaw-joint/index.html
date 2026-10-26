@@ -3253,6 +3253,77 @@ window.TMJ = (() => {
 </script>
 
 <p>The right condyle slides forward normally while the left one stays in its socket, so the jaw swings around the stuck side and the chin moves toward it, here by about 4 mm to the left. A jaw that opens to one side, together with a limited opening, is one of the things clinicians look for when they suspect a closed lock. (The figure is seen from the front, so the patient's left is on your right.)</p>
+
+<h2>Locked open</h2>
+
+<p>The opposite problem happens at the far end of the range. With a very wide yawn or a long dental appointment, the condyle can travel all the way over the top of the eminence. Open past the normal range, then try to close:</p>
+
+<figure class="demo" id="openlock" aria-label="Side cut through a jaw joint opened past its normal range. The condyle passes over the top of the eminence and gets stuck in front of it, so the mouth can't close until the condyle is pushed down and back."></figure>
+<script>
+{
+  const WIN = [-26, 34, -28, 9];
+  const X_OVER = 12.8, X_STUCK = 14.2, U_STUCK = 37;
+  let st = null, actual = 0;
+  demo("openlock", {
+    aspect: w => (w < 560 ? 1.05 : 1.6),
+    autoplay: false,
+    playButton: false,
+    state: () => ({ stuck: false, t: -1 }),
+    controls: [
+      { key: "open", label: "Opening", min: 0, max: 60, step: 0.5, value: 0, unit: "mm" },
+      { label: "Push down and back", type: "button", action: (s, v, fig) => { if (s.stuck && s.t < 0) { s.t = 0; fig.play(true); } } },
+    ],
+    change(key, s, v) {
+      if (key === "open" && !s.stuck && TMJ.slideX(v.open) > X_OVER) s.stuck = true;
+    },
+    step(dt, s, v, fig) {
+      if (s.t < 0) return;
+      s.t += dt / 2.2;
+      if (s.t >= 1) { s.t = -1; s.stuck = false; fig.play(false); fig.set("open", 0); }
+    },
+    status: (s, v) => (s.t >= 0 ? "pushing the condyle down and back" : s.stuck ? `stuck open at ${actual.toFixed(0)} mm` : `${actual.toFixed(0)} mm open`),
+    draw(g, s, v) {
+      const P = g.fit(WIN[0], WIN[1], WIN[2], WIN[3], { pad: 8 });
+      if (s.t >= 0) {
+        // Down below the crest, then back over it into the socket.
+        const t = s.t, ease = x => x * x * (3 - 2 * x);
+        const a = TMJ.at(X_STUCK), down = [X_STUCK, a[1] - 4.2];
+        let C;
+        if (t < 0.35) { const k = ease(t / 0.35); C = [a[0], a[1] + (down[1] - a[1]) * k]; }
+        else {
+          const k = ease((t - 0.35) / 0.65), x = X_STUCK + (TMJ.C0[0] - X_STUCK) * k;
+          C = [x, Math.min(TMJ.hang(x), down[1] + (TMJ.C0[1] - down[1]) * k)];
+        }
+        actual = U_STUCK * (1 - ease(t));
+        st = { C, th: TMJ.solveTheta(C, Math.max(actual, TMJ.opening(C, 0) + 0.1)) };
+      } else if (s.stuck) {
+        actual = Math.max(v.open, U_STUCK);
+        const C = TMJ.at(X_STUCK);
+        st = { C, th: TMJ.solveTheta(C, actual) };
+      } else {
+        actual = v.open;
+        const C = TMJ.at(TMJ.slideX(v.open));
+        st = { C, th: TMJ.solveTheta(C, v.open) };
+      }
+      st.xd = TMJ.contactX(st.C);
+      TMJ.drawSection(g, P, st, { disc: true, rest: true });
+      if (s.stuck && s.t < 0) {
+        const c = P([TMJ.at(X_STUCK)[0] - 2, TMJ.at(X_STUCK)[1] + 9.5]);
+        g.label("stuck in front of the eminence", [c[0] + 20, c[1] - 20], { color: "red", size: 12 });
+        g.arrow(P([X_STUCK + 1.5, TMJ.at(X_STUCK)[1] - 9]), P([X_STUCK + 1.5, TMJ.at(X_STUCK)[1] - 3.5]), { stroke: "red", width: 2.5 });
+      }
+      g.callouts([
+        { at: P([11, -7.4]), text: "top of the eminence", color: "brass" },
+        { at: P(TMJ.pose(st, [-3.9, -12])), text: "condyle" },
+      ], { split: P([4, 0])[0] });
+    },
+  });
+}
+</script>
+
+<p>Once the condyle is in front of the eminence, the muscles that close the mouth pull it up against the front slope of the bump (<span class="c-red">red arrow</span>), and that holds it there. The harder you try to close, the more firmly it's held. The mouth stays stuck open. This is a dislocation of the jaw, sometimes called an <em>open lock</em>.</p>
+
+<p>To put it back, a clinician presses down on the back teeth, which moves the condyle down below the top of the eminence, and then guides the jaw backward so the condyle slides into its socket. The button above does the same two moves.</p>
 <!-- explainer:article:end -->
 </article>
 </main>
