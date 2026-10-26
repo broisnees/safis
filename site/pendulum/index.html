@@ -1,0 +1,2965 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How a Pendulum Keeps Time</title>
+<meta name="description" content="Why a swinging weight keeps such a steady beat, and how a clock turns that beat into seconds.">
+<meta name="explainer:category" content="Physics">
+<!-- explainer:runtime:start v2 -->
+<style>
+/* Porcelain: paper-white pages, objects drawn like glazed porcelain with
+   graphite outlines, one brass accent. Every color lives here; figure code
+   asks for colors by name ("blue", "ink"), and prose uses .c-blue, so a word
+   and the thing it names always match, in light and dark mode. */
+:root {
+  --bg: #f8f7f3;
+  --panel: #f8f7f3;
+  --ink: #1d1d20;
+  --muted: #696864;
+  --faint: #d8d5cd;
+  --grid: #e8e5dd;
+  --brass: #94661c;
+  --red: #c0392b;
+  --orange: #a95b00;
+  --green: #237a4b;
+  --blue: #2b5fb4;
+  --purple: #7444b8;
+  --font-text: "Inter", "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --measure: 40rem;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131315;
+    --panel: #131315;
+    --ink: #ecebe6;
+    --muted: #a3a29c;
+    --faint: #3a3a3f;
+    --grid: #232327;
+    --brass: #dcae62;
+    --red: #ff7a6b;
+    --orange: #f2a447;
+    --green: #5cc98b;
+    --blue: #7eaaff;
+    --purple: #bf98ff;
+    color-scheme: dark;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-text);
+  font-size: 17px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* Layout: optional site index on the left, article in the middle, figure notes in the right margin. */
+.page { position: relative; padding: 0 16px; }
+main { max-width: var(--measure); margin: 0 auto; padding: 72px 0 112px; }
+.toc { display: none; }
+@media (min-width: 1280px) {
+  .page.has-toc { display: grid; grid-template-columns: 232px 1fr; }
+  .page.has-toc main { margin: 0 auto; transform: translateX(-60px); }
+  .toc {
+    display: block;
+    position: sticky; top: 0; align-self: start;
+    max-height: 100vh; overflow-y: auto;
+    padding: 56px 8px 40px 8px;
+    font-size: 14px; line-height: 1.5;
+  }
+}
+.toc a { color: var(--muted); text-decoration: none; display: block; padding: 3px 0 3px 14px; border-left: 1px solid var(--faint); }
+.toc a:hover { color: var(--ink); }
+.toc a[aria-current="page"] { color: var(--ink); border-left: 2px solid var(--brass); padding-left: 13px; font-weight: 500; }
+.toc .site { display: block; border: 0; padding: 0; margin-bottom: 28px; color: var(--ink); font-weight: 600; letter-spacing: -0.01em; }
+.toc h2 { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 600; margin: 22px 0 6px; }
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.backlink { display: inline-block; margin-bottom: 28px; font-size: 14px; color: var(--muted); text-decoration: none; }
+.backlink:hover { color: var(--ink); }
+@media (min-width: 1280px) { .has-toc .backlink { display: none; } }
+
+/* Masthead */
+.kicker { font: 600 12px/1 var(--font-text); letter-spacing: 0.14em; text-transform: uppercase; color: var(--brass); margin: 0 0 18px; }
+h1 { font-size: clamp(2.1rem, 5.6vw, 3rem); line-height: 1.06; letter-spacing: -0.03em; font-weight: 650; margin: 0 0 18px; text-wrap: balance; }
+.dek { font-family: var(--font-serif); font-style: italic; font-size: 1.32rem; line-height: 1.45; color: var(--muted); margin: 0 0 48px; text-wrap: pretty; }
+
+/* Article */
+article { counter-reset: section; }
+article h2 {
+  font-size: 1.45rem; line-height: 1.2; letter-spacing: -0.018em; font-weight: 640;
+  margin: 72px 0 16px; text-wrap: balance;
+}
+article h2:not(.plain)::before {
+  counter-increment: section;
+  content: counter(section, decimal-leading-zero);
+  display: block; margin-bottom: 8px;
+  font: 500 12px/1 var(--font-mono); letter-spacing: 0.1em; color: var(--brass);
+}
+article h3 { font-size: 1.08rem; font-weight: 640; margin: 36px 0 8px; }
+p, li { text-wrap: pretty; }
+p { margin: 0 0 20px; }
+ul, ol { padding-left: 1.3em; margin: 0 0 20px; }
+a { color: var(--ink); text-decoration-color: var(--brass); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { color: var(--brass); }
+strong { font-weight: 620; }
+em { font-style: italic; }
+var, .math { font-family: var(--font-serif); font-style: italic; font-size: 1.08em; }
+.eq { font-family: var(--font-serif); font-size: 1.2em; text-align: center; margin: 28px 0; overflow-x: auto; }
+.aside { font-family: var(--font-serif); font-style: italic; color: var(--brass); }
+.note {
+  font-size: 0.92rem; color: var(--muted);
+  border-left: 2px solid var(--faint); padding: 2px 0 2px 16px; margin: 24px 0;
+}
+kbd {
+  font: 500 11.5px/1 var(--font-mono);
+  padding: 3px 6px; border-radius: 5px;
+  border: 1px solid var(--faint); border-bottom-width: 2px;
+  background: var(--bg); color: var(--ink);
+}
+
+/* Words colored to match a figure, and inline chips for visual equations. */
+.c-red { color: var(--red); font-weight: 600; }
+.c-orange { color: var(--orange); font-weight: 600; }
+.c-green { color: var(--green); font-weight: 600; }
+.c-blue { color: var(--blue); font-weight: 600; }
+.c-purple { color: var(--purple); font-weight: 600; }
+.c-brass { color: var(--brass); font-weight: 600; }
+.c-muted { color: var(--muted); font-weight: 600; }
+.chip {
+  display: inline-block; min-width: 1.5em; padding: 0 0.42em; border-radius: 0.38em;
+  font: 600 0.82em/1.55 var(--font-text); text-align: center; vertical-align: 0.08em;
+  color: #1d1d20; background: color-mix(in srgb, var(--c, var(--faint)) 32%, white);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c, var(--faint)) 70%, transparent);
+}
+.chip.red { --c: var(--red); } .chip.orange { --c: var(--orange); } .chip.green { --c: var(--green); }
+.chip.blue { --c: var(--blue); } .chip.purple { --c: var(--purple); } .chip.brass { --c: var(--brass); }
+
+/* Figures. The runtime fills each <figure class="demo"> with a stage, notes, and controls. */
+figure.demo { position: relative; margin: 36px 0 40px; }
+figure.demo.wide { width: min(calc(100vw - 32px), 60rem); margin-left: 50%; transform: translateX(-50%); }
+.stage { position: relative; border-radius: 10px; outline: none; }
+.stage:focus-visible { box-shadow: 0 0 0 2px var(--brass); }
+.stage canvas { display: block; width: 100%; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.stage canvas.draggable { touch-action: none; }
+.stage canvas.grabbing { cursor: grabbing !important; }
+.stage .tools { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 6px; }
+.icon-btn {
+  width: 30px; height: 30px; padding: 0;
+  display: grid; place-items: center;
+  border: 1px solid var(--faint); border-radius: 50%;
+  background: color-mix(in srgb, var(--bg) 88%, transparent); color: var(--muted);
+  cursor: pointer;
+}
+.icon-btn:hover { color: var(--ink); border-color: var(--muted); }
+.icon-btn svg { width: 13px; height: 13px; fill: currentColor; }
+.icon-btn[data-state="playing"] .i-play, .icon-btn[data-state="paused"] .i-pause { display: none; }
+.stage .badge {
+  position: absolute; right: 8px; bottom: 8px; width: 16px; height: 16px;
+  border: 1px solid var(--faint); border-radius: 50%; pointer-events: none;
+  display: grid; place-items: center; color: var(--muted); opacity: 0.6;
+}
+.stage .badge::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+:is(.icon-btn, .btn):focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+
+.side { font-size: 13px; line-height: 1.5; color: var(--muted); margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.side .hint { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.side .status { color: var(--ink); font: 500 12.5px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; }
+.side:empty { display: none; }
+@media (min-width: 1280px) {
+  figure.demo:not(.wide) .side {
+    position: absolute; top: 4px; left: calc(100% + 36px); width: 190px;
+    margin: 0; display: grid; gap: 8px;
+  }
+}
+
+.controls { margin-top: 14px; display: grid; gap: 2px; }
+.ctl {
+  --c: var(--ink);
+  display: grid; grid-template-columns: minmax(5rem, 7.5rem) 1fr 5.2rem;
+  align-items: center; gap: 14px; min-height: 34px;
+}
+.ctl .name { font: 600 11px/1.2 var(--font-text); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.ctl output { font: 500 13px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); text-align: right; white-space: nowrap; }
+.ctl.toggle { grid-template-columns: auto 1fr; gap: 10px; cursor: pointer; }
+.ctl.toggle span { font-size: 14px; color: var(--muted); }
+.ctl input[type="checkbox"] { accent-color: var(--c); width: 17px; height: 17px; margin: 0; }
+.buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.btn {
+  font: 500 14px/1 var(--font-text); min-height: 34px; padding: 8px 14px;
+  border: 1px solid var(--faint); border-radius: 999px;
+  background: transparent; color: var(--ink); cursor: pointer;
+}
+.btn:hover { border-color: var(--ink); }
+
+input[type="range"] {
+  --p: 50%;
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 30px; margin: 0; background: transparent; cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px; border-radius: 1px;
+  background: linear-gradient(to right, var(--c) var(--p), var(--faint) var(--p));
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 18px; height: 18px; margin-top: -8px;
+  border-radius: 50%; background: var(--bg); border: 2px solid var(--c);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+input[type="range"]::-moz-range-track { height: 2px; background: var(--faint); }
+input[type="range"]::-moz-range-progress { height: 2px; background: var(--c); }
+input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--bg); border: 2px solid var(--c); }
+input[type="range"]:focus-visible { outline: 2px solid var(--c); outline-offset: 3px; border-radius: 4px; }
+
+figcaption { font-size: 14.5px; line-height: 1.55; color: var(--muted); margin-top: 12px; }
+figcaption em, .demo-caption em { font-family: var(--font-serif); font-size: 1.06em; color: var(--brass); }
+.demo-error { color: var(--red); font: 13px/1.4 var(--font-mono); margin: 8px 0 0; }
+
+.refs { padding-left: 0; list-style: none; }
+.refs li { margin-bottom: 10px; padding-left: 16px; border-left: 1px solid var(--faint); }
+footer.colophon { margin-top: 88px; padding-top: 20px; border-top: 1px solid var(--faint); font-size: 13.5px; color: var(--muted); }
+.check-report {
+  position: fixed; inset: 0 0 auto 0; z-index: 10;
+  max-height: 60vh; overflow: auto; margin: 0; padding: 12px 16px;
+  background: var(--bg); color: var(--ink); border-bottom: 2px solid var(--faint);
+  font: 12.5px/1.5 var(--font-mono); white-space: pre-wrap;
+}
+
+@media (max-width: 560px) {
+  body { font-size: 16.5px; }
+  main { padding-top: 44px; }
+  .ctl { grid-template-columns: 4.6rem 1fr 4.4rem; gap: 10px; }
+}
+</style>
+<script>
+/* E3: a small WebGL2 engine for explainer figures.
+   Surfaces are shaded like matte porcelain and outlined in ink, the way a
+   technical illustration is drawn. It does section cuts with hatched caps,
+   see-through parts, a soft ground shadow, and CPU picking.
+   Reference: references/engine3d.md in the skill. */
+(() => {
+  "use strict";
+
+  // ---------- vectors and matrices (column-major, like WebGL) ----------
+  const v3 = {
+    add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+    sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+    scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+    dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+    cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+    len: a => Math.hypot(a[0], a[1], a[2]),
+    norm: a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+    lerp: (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t],
+    dist: (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]),
+  };
+
+  const m4 = {
+    identity: () => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+    multiply(a, b) {
+      const o = new Float32Array(16);
+      for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+        o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+      }
+      return o;
+    },
+    translation: ([x, y, z]) => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]),
+    scaling: ([x, y, z]) => new Float32Array([x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1]),
+    rotationX(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]); },
+    rotationY(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]); },
+    rotationZ(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); },
+    rotationAxis(axis, a) {
+      const [x, y, z] = v3.norm(axis), c = Math.cos(a), s = Math.sin(a), t = 1 - c;
+      return new Float32Array([
+        t * x * x + c, t * x * y + s * z, t * x * z - s * y, 0,
+        t * x * y - s * z, t * y * y + c, t * y * z + s * x, 0,
+        t * x * z + s * y, t * y * z - s * x, t * z * z + c, 0,
+        0, 0, 0, 1,
+      ]);
+    },
+    // Rotates +y onto dir (for arrows, cylinders between two points).
+    alignY(dir) {
+      const d = v3.norm(dir);
+      const axis = v3.cross([0, 1, 0], d);
+      const s = v3.len(axis), c = d[1];
+      if (s < 1e-8) return c > 0 ? m4.identity() : m4.rotationX(Math.PI);
+      return m4.rotationAxis(axis, Math.atan2(s, c));
+    },
+    invert(m) {
+      const [a00, a01, a02, a03, a10, a11, a12, a13, a20, a21, a22, a23, a30, a31, a32, a33] = m;
+      const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10, b02 = a00 * a13 - a03 * a10;
+      const b03 = a01 * a12 - a02 * a11, b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12;
+      const b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30, b08 = a20 * a33 - a23 * a30;
+      const b09 = a21 * a32 - a22 * a31, b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+      let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+      if (!det) return m4.identity();
+      det = 1 / det;
+      return new Float32Array([
+        (a11 * b11 - a12 * b10 + a13 * b09) * det, (a02 * b10 - a01 * b11 - a03 * b09) * det,
+        (a31 * b05 - a32 * b04 + a33 * b03) * det, (a22 * b04 - a21 * b05 - a23 * b03) * det,
+        (a12 * b08 - a10 * b11 - a13 * b07) * det, (a00 * b11 - a02 * b08 + a03 * b07) * det,
+        (a32 * b02 - a30 * b05 - a33 * b01) * det, (a20 * b05 - a22 * b02 + a23 * b01) * det,
+        (a10 * b10 - a11 * b08 + a13 * b06) * det, (a01 * b08 - a00 * b10 - a03 * b06) * det,
+        (a30 * b04 - a31 * b02 + a33 * b00) * det, (a21 * b02 - a20 * b04 - a23 * b00) * det,
+        (a11 * b07 - a10 * b09 - a12 * b06) * det, (a00 * b09 - a01 * b07 + a02 * b06) * det,
+        (a31 * b01 - a30 * b03 - a32 * b00) * det, (a20 * b03 - a21 * b01 + a22 * b00) * det,
+      ]);
+    },
+    // Upper 3x3 of the inverse transpose, for transforming normals.
+    normalMatrix(m) {
+      const i = m4.invert(m);
+      return new Float32Array([i[0], i[4], i[8], i[1], i[5], i[9], i[2], i[6], i[10]]);
+    },
+    perspective(fovy, aspect, near, far) {
+      const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+      return new Float32Array([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0]);
+    },
+    ortho(l, r, b, t, n, f) {
+      return new Float32Array([2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0,
+        -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1]);
+    },
+    lookAt(eye, target, up) {
+      const z = v3.norm(v3.sub(eye, target));
+      let x = v3.cross(up, z);
+      if (v3.len(x) < 1e-6) x = v3.cross([0, 0, 1], z);
+      x = v3.norm(x);
+      const y = v3.cross(z, x);
+      return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
+        -v3.dot(x, eye), -v3.dot(y, eye), -v3.dot(z, eye), 1]);
+    },
+    apply: (m, p) => [
+      m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+      m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+      m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14],
+    ],
+    applyDir: (m, d) => [
+      m[0] * d[0] + m[4] * d[1] + m[8] * d[2],
+      m[1] * d[0] + m[5] * d[1] + m[9] * d[2],
+      m[2] * d[0] + m[6] * d[1] + m[10] * d[2],
+    ],
+    project(m, p) {
+      const x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+      const y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+      const z = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
+      const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+      return [x / w, y / w, z / w, w];
+    },
+    // position, rotation [x, y, z] (applied X, then Y, then Z), scale, optional pivot
+    compose(position, rotation, scale, pivot) {
+      let m = m4.translation(position);
+      if (pivot) m = m4.multiply(m, m4.translation(pivot));
+      if (rotation[2]) m = m4.multiply(m, m4.rotationZ(rotation[2]));
+      if (rotation[1]) m = m4.multiply(m, m4.rotationY(rotation[1]));
+      if (rotation[0]) m = m4.multiply(m, m4.rotationX(rotation[0]));
+      const s = typeof scale === "number" ? [scale, scale, scale] : scale;
+      if (s[0] !== 1 || s[1] !== 1 || s[2] !== 1) m = m4.multiply(m, m4.scaling(s));
+      if (pivot) m = m4.multiply(m, m4.translation(v3.scale(pivot, -1)));
+      return m;
+    },
+  };
+
+  // ---------- 2D polygon helpers and triangulation ----------
+  const area2 = pts => { let a = 0; for (let i = 0, n = pts.length; i < n; i++) { const p = pts[i], q = pts[(i + 1) % n]; a += p[0] * q[1] - q[0] * p[1]; } return a / 2; };
+  const cross2 = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const samePt = (a, b) => Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
+  function inTri(p, a, b, c) {
+    const d1 = cross2(a, b, p), d2 = cross2(b, c, p), d3 = cross2(c, a, p);
+    const neg = d1 < -1e-12 || d2 < -1e-12 || d3 < -1e-12, pos = d1 > 1e-12 || d2 > 1e-12 || d3 > 1e-12;
+    return !(neg && pos);
+  }
+
+  // Joins a clockwise hole into a counterclockwise outline through a mutually visible pair of vertices.
+  function bridge(poly, hole) {
+    let mi = 0;
+    for (let i = 1; i < hole.length; i++) if (hole[i][0] > hole[mi][0]) mi = i;
+    const M = hole[mi];
+    let best = Infinity, bi = -1;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      if ((a[1] > M[1]) === (b[1] > M[1])) continue;
+      const x = a[0] + (M[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]);
+      if (x >= M[0] - 1e-9 && x - M[0] < best) { best = x - M[0]; bi = a[0] > b[0] ? i : (i + 1) % poly.length; }
+    }
+    if (bi < 0) return poly;
+    const I = [M[0] + best, M[1]], P = poly[bi];
+    let pick = bi, bestAngle = Infinity;
+    for (let i = 0; i < poly.length; i++) {
+      if (i === bi) continue;
+      const q = poly[i], prev = poly[(i - 1 + poly.length) % poly.length], next = poly[(i + 1) % poly.length];
+      if (cross2(prev, q, next) >= 0) continue; // only reflex vertices can block the bridge
+      if (!inTri(q, M, I, P)) continue;
+      const angle = Math.abs(Math.atan2(q[1] - M[1], q[0] - M[0]));
+      if (angle < bestAngle) { bestAngle = angle; pick = i; }
+    }
+    const out = poly.slice(0, pick + 1);
+    for (let k = 0; k <= hole.length; k++) out.push(hole[(mi + k) % hole.length]);
+    out.push(poly[pick], ...poly.slice(pick + 1));
+    return out;
+  }
+
+  // Ear clipping. Returns triangles [[a, b, c], ...] wound counterclockwise.
+  function triangulate(outer, holes = []) {
+    let poly = area2(outer) < 0 ? outer.slice().reverse() : outer.slice();
+    const hs = holes.map(h => (area2(h) > 0 ? h.slice().reverse() : h.slice()));
+    hs.sort((a, b) => Math.max(...b.map(p => p[0])) - Math.max(...a.map(p => p[0])));
+    for (const h of hs) poly = bridge(poly, h);
+    const idx = poly.map((_, i) => i);
+    const tris = [];
+    let guard = 0;
+    while (idx.length > 3 && guard++ < 100000) {
+      let clipped = false;
+      for (let k = 0; k < idx.length; k++) {
+        const i0 = idx[(k - 1 + idx.length) % idx.length], i1 = idx[k], i2 = idx[(k + 1) % idx.length];
+        const a = poly[i0], b = poly[i1], c = poly[i2];
+        if (cross2(a, b, c) <= 1e-12) continue;
+        let ear = true;
+        for (const j of idx) {
+          if (j === i0 || j === i1 || j === i2) continue;
+          const p = poly[j];
+          if (samePt(p, a) || samePt(p, b) || samePt(p, c)) continue;
+          if (inTri(p, a, b, c)) { ear = false; break; }
+        }
+        if (!ear) continue;
+        tris.push([a, b, c]);
+        idx.splice(k, 1);
+        clipped = true;
+        break;
+      }
+      if (!clipped) {
+        // Degenerate input: drop the flattest vertex and keep going.
+        let worst = 0, wv = Infinity;
+        for (let k = 0; k < idx.length; k++) {
+          const v = Math.abs(cross2(poly[idx[(k - 1 + idx.length) % idx.length]], poly[idx[k]], poly[idx[(k + 1) % idx.length]]));
+          if (v < wv) { wv = v; worst = k; }
+        }
+        idx.splice(worst, 1);
+      }
+    }
+    if (idx.length === 3 && cross2(poly[idx[0]], poly[idx[1]], poly[idx[2]]) > 1e-12) tris.push(idx.map(i => poly[i]));
+    return tris;
+  }
+
+  // Moves each vertex of a closed polygon by d along its inward miter (positive d shrinks a CCW outline).
+  function inset(pts, d) {
+    if (!d) return pts.map(p => p.slice());
+    const n = pts.length, ccw = area2(pts) > 0 ? 1 : -1;
+    return pts.map((p, i) => {
+      const a = pts[(i - 1 + n) % n], b = pts[(i + 1) % n];
+      const e0 = v2norm([p[0] - a[0], p[1] - a[1]]), e1 = v2norm([b[0] - p[0], b[1] - p[1]]);
+      const n0 = [-e0[1] * ccw, e0[0] * ccw], n1 = [-e1[1] * ccw, e1[0] * ccw];
+      const m = v2norm([n0[0] + n1[0], n0[1] + n1[1]]);
+      const cos = m[0] * n0[0] + m[1] * n0[1];
+      const len = d / Math.max(cos, 0.4);
+      return [p[0] + m[0] * len, p[1] + m[1] * len];
+    });
+  }
+  function v2norm(v) { const l = Math.hypot(v[0], v[1]) || 1; return [v[0] / l, v[1] / l]; }
+
+  // Catmull-Rom resampling of a 2D or 3D polyline (closed or open), for smooth outlines.
+  function smooth(points, { closed = false, steps = 8 } = {}) {
+    const n = points.length, out = [];
+    const get = i => points[closed ? (i + n) % n : Math.max(0, Math.min(n - 1, i))];
+    const last = closed ? n : n - 1;
+    for (let i = 0; i < last; i++) {
+      const p0 = get(i - 1), p1 = get(i), p2 = get(i + 1), p3 = get(i + 2);
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps, t2 = t * t, t3 = t2 * t;
+        out.push(p1.map((_, k) => 0.5 * (2 * p1[k] + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3)));
+      }
+    }
+    if (!closed) out.push(points[n - 1].slice());
+    return out;
+  }
+
+  // ---------- meshes ----------
+  // Builders collect a triangle soup; finish() welds it and computes normals,
+  // keeping edges sharper than `crease` degrees hard.
+  class Soup {
+    constructor() { this.p = []; }
+    tri(a, b, c) { this.p.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]); }
+    quad(a, b, c, d) { this.tri(a, b, c); this.tri(a, c, d); }
+  }
+
+  function finish(soup, { crease = 35, closed = false } = {}) {
+    let p = soup.p;
+    const nt = p.length / 9;
+    if (closed && nt) {
+      let vol = 0;
+      for (let t = 0; t < nt; t++) {
+        const o = t * 9;
+        vol += p[o] * (p[o + 4] * p[o + 8] - p[o + 5] * p[o + 7]) - p[o + 1] * (p[o + 3] * p[o + 8] - p[o + 5] * p[o + 6]) + p[o + 2] * (p[o + 3] * p[o + 7] - p[o + 4] * p[o + 6]);
+      }
+      if (vol < 0) {
+        p = p.slice();
+        for (let t = 0; t < nt; t++) for (let k = 0; k < 3; k++) { const o = t * 9; const tmp = p[o + 3 + k]; p[o + 3 + k] = p[o + 6 + k]; p[o + 6 + k] = tmp; }
+      }
+    }
+    const fn = new Float64Array(nt * 3), fu = new Float64Array(nt * 3);
+    for (let t = 0; t < nt; t++) {
+      const o = t * 9;
+      const ux = p[o + 3] - p[o], uy = p[o + 4] - p[o + 1], uz = p[o + 5] - p[o + 2];
+      const vx = p[o + 6] - p[o], vy = p[o + 7] - p[o + 1], vz = p[o + 8] - p[o + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      fn[t * 3] = nx; fn[t * 3 + 1] = ny; fn[t * 3 + 2] = nz;
+      const l = Math.hypot(nx, ny, nz) || 1;
+      fu[t * 3] = nx / l; fu[t * 3 + 1] = ny / l; fu[t * 3 + 2] = nz / l;
+    }
+    const q = v => Math.round(v * 1e4);
+    const key = c => `${q(p[c * 3])},${q(p[c * 3 + 1])},${q(p[c * 3 + 2])}`;
+    const groups = new Map();
+    for (let c = 0; c < nt * 3; c++) {
+      const k = key(c);
+      let g = groups.get(k);
+      if (!g) groups.set(k, (g = []));
+      g.push(c);
+    }
+    const cosC = Math.cos((crease * Math.PI) / 180);
+    const positions = [], normals = [], indices = [], vmap = new Map();
+    for (let c = 0; c < nt * 3; c++) {
+      const f = (c / 3) | 0;
+      let nx = 0, ny = 0, nz = 0;
+      for (const d of groups.get(key(c))) {
+        const g = (d / 3) | 0;
+        if (fu[f * 3] * fu[g * 3] + fu[f * 3 + 1] * fu[g * 3 + 1] + fu[f * 3 + 2] * fu[g * 3 + 2] >= cosC) {
+          nx += fn[g * 3]; ny += fn[g * 3 + 1]; nz += fn[g * 3 + 2];
+        }
+      }
+      let l = Math.hypot(nx, ny, nz);
+      if (l < 1e-12) { nx = fu[f * 3]; ny = fu[f * 3 + 1]; nz = fu[f * 3 + 2]; l = Math.hypot(nx, ny, nz) || 1; }
+      nx /= l; ny /= l; nz /= l;
+      const vk = `${key(c)}|${Math.round(nx * 1000)},${Math.round(ny * 1000)},${Math.round(nz * 1000)}`;
+      let vi = vmap.get(vk);
+      if (vi === undefined) {
+        vi = positions.length / 3;
+        vmap.set(vk, vi);
+        positions.push(p[c * 3], p[c * 3 + 1], p[c * 3 + 2]);
+        normals.push(nx, ny, nz);
+      }
+      indices.push(vi);
+    }
+    return makeMesh(new Float32Array(positions), new Float32Array(normals), new Uint32Array(indices));
+  }
+
+  function makeMesh(positions, normals, indices) {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < positions.length; i += 3) for (let k = 0; k < 3; k++) {
+      if (positions[i + k] < min[k]) min[k] = positions[i + k];
+      if (positions[i + k] > max[k]) max[k] = positions[i + k];
+    }
+    if (!positions.length) { min.fill(0); max.fill(0); }
+    const center = v3.lerp(min, max, 0.5);
+    let radius = 0;
+    for (let i = 0; i < positions.length; i += 3) radius = Math.max(radius, v3.dist(center, [positions[i], positions[i + 1], positions[i + 2]]));
+    return { positions, normals, indices, bounds: { min, max, center, radius }, version: 0, isMesh: true };
+  }
+
+  function transformMesh(mesh, m) {
+    const nm = m4.normalMatrix(m);
+    const pos = new Float32Array(mesh.positions.length), nor = new Float32Array(mesh.normals.length);
+    for (let i = 0; i < pos.length; i += 3) {
+      const p = m4.apply(m, [mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]]);
+      const n = mesh.normals;
+      const q = v3.norm([nm[0] * n[i] + nm[3] * n[i + 1] + nm[6] * n[i + 2], nm[1] * n[i] + nm[4] * n[i + 1] + nm[7] * n[i + 2], nm[2] * n[i] + nm[5] * n[i + 1] + nm[8] * n[i + 2]]);
+      pos.set(p, i);
+      nor.set(q, i);
+    }
+    return makeMesh(pos, nor, mesh.indices.slice());
+  }
+
+  function mergeMeshes(...meshes) {
+    meshes = meshes.flat();
+    let nv = 0, ni = 0;
+    for (const m of meshes) { nv += m.positions.length; ni += m.indices.length; }
+    const pos = new Float32Array(nv), nor = new Float32Array(nv), idx = new Uint32Array(ni);
+    let vo = 0, io = 0;
+    for (const m of meshes) {
+      pos.set(m.positions, vo);
+      nor.set(m.normals, vo);
+      const base = vo / 3;
+      for (let i = 0; i < m.indices.length; i++) idx[io + i] = m.indices[i] + base;
+      vo += m.positions.length;
+      io += m.indices.length;
+    }
+    return makeMesh(pos, nor, idx);
+  }
+
+  function grid(soup, rows, cols, at, { wrapCols = false } = {}) {
+    const cc = wrapCols ? cols : cols - 1;
+    for (let i = 0; i < rows - 1; i++) for (let j = 0; j < cc; j++) {
+      const j1 = (j + 1) % cols;
+      soup.quad(at(i, j), at(i + 1, j), at(i + 1, j1), at(i, j1));
+    }
+  }
+
+  const mesh = {
+    box(w, h, d, { round = 0, segments = 4 } = {}) {
+      const hx = w / 2, hy = h / 2, hz = d / 2;
+      const r = Math.min(round, hx, hy, hz);
+      const half = [hx, hy, hz], inner = [hx - r, hy - r, hz - r];
+      const samples = k => {
+        if (r <= 0) return [-half[k], half[k]];
+        const s = [];
+        for (let i = segments; i >= 1; i--) s.push(-(inner[k] + r * Math.tan((i / segments) * Math.PI / 4)));
+        if (inner[k] > 1e-9) s.push(-inner[k], inner[k]); else s.push(0);
+        for (let i = 1; i <= segments; i++) s.push(inner[k] + r * Math.tan((i / segments) * Math.PI / 4));
+        return s;
+      };
+      const soup = new Soup();
+      for (let axis = 0; axis < 3; axis++) for (const sign of [1, -1]) {
+        const u = (axis + 1) % 3, v = (axis + 2) % 3;
+        const su = samples(u), sv = samples(v);
+        const at = (i, j) => {
+          const pt = [0, 0, 0];
+          pt[axis] = sign * half[axis];
+          pt[u] = su[i];
+          pt[v] = sign > 0 ? sv[j] : -sv[j];
+          if (r <= 0) return pt;
+          const c = pt.map((x, k) => Math.max(-inner[k], Math.min(inner[k], x)));
+          const n = v3.norm(v3.sub(pt, c));
+          return v3.add(c, v3.scale(n, r));
+        };
+        grid(soup, su.length, sv.length, at);
+      }
+      return finish(soup, { crease: r > 0 ? 50 : 30, closed: true });
+    },
+
+    ellipsoid(rx, ry = rx, rz = rx, { segments = 28 } = {}) {
+      const soup = new Soup(), rows = segments + 1, cols = segments * 2;
+      const at = (i, j) => {
+        const th = (i / segments) * Math.PI, ph = (j / cols) * Math.PI * 2;
+        return [rx * Math.sin(th) * Math.cos(ph), ry * Math.cos(th), rz * Math.sin(th) * Math.sin(ph)];
+      };
+      grid(soup, rows, cols, at, { wrapCols: true });
+      return finish(soup, { crease: 80, closed: true });
+    },
+    sphere(r, o) { return mesh.ellipsoid(r, r, r, o); },
+
+    // Along y, centered on the origin. r2 = 0 makes a cone.
+    cylinder(r, h, { r2 = r, segments = 36, caps = true } = {}) {
+      const soup = new Soup(), y0 = -h / 2, y1 = h / 2;
+      const ring = (rad, y) => Array.from({ length: segments }, (_, j) => {
+        const a = (j / segments) * Math.PI * 2;
+        return [rad * Math.cos(a), y, -rad * Math.sin(a)];
+      });
+      const b = ring(r, y0), t = ring(r2, y1);
+      for (let j = 0; j < segments; j++) {
+        const k = (j + 1) % segments;
+        soup.quad(b[j], b[k], t[k], t[j]);
+      }
+      if (caps) {
+        for (let j = 0; j < segments; j++) {
+          const k = (j + 1) % segments;
+          if (r > 0) soup.tri([0, y0, 0], b[k], b[j]);
+          if (r2 > 0) soup.tri([0, y1, 0], t[j], t[k]);
+        }
+      }
+      return finish(soup, { crease: 40, closed: caps });
+    },
+
+    // Around y, in the xz plane.
+    torus(R, r, { segments = 64, tube = 18, arc = Math.PI * 2 } = {}) {
+      const soup = new Soup(), full = arc >= Math.PI * 2 - 1e-6;
+      const cols = full ? segments : segments + 1;
+      const at = (i, j) => {
+        const a = (j / segments) * arc, b = (i / tube) * Math.PI * 2;
+        const rr = R + r * Math.cos(b);
+        return [rr * Math.cos(a), r * Math.sin(b), -rr * Math.sin(a)];
+      };
+      for (let i = 0; i < tube; i++) for (let j = 0; j < (full ? segments : segments); j++) {
+        const j1 = full ? (j + 1) % segments : j + 1;
+        soup.quad(at(i, j), at(i, j1), at(i + 1, j1), at(i + 1, j));
+      }
+      return finish(soup, { crease: 60, closed: full });
+    },
+
+    // Revolves a profile [[radius, y], ...] around y.
+    lathe(profile, { segments = 48, crease = 35 } = {}) {
+      const soup = new Soup(), n = profile.length;
+      const at = (i, j) => {
+        const a = (j / segments) * Math.PI * 2, [r, y] = profile[i];
+        return [r * Math.cos(a), y, -r * Math.sin(a)];
+      };
+      for (let i = 0; i < n - 1; i++) for (let j = 0; j < segments; j++) {
+        const j1 = (j + 1) % segments;
+        soup.quad(at(i, j), at(i, j1), at(i + 1, j1), at(i + 1, j));
+      }
+      const closed = profile[0][0] === 0 && profile[n - 1][0] === 0;
+      return finish(soup, { crease, closed });
+    },
+
+    // Extrudes a 2D outline (xy) along z, centered. Optional rounded bevel and holes.
+    extrude(shape, depth, { bevel = 0, bevelSegments = 3, holes = [] } = {}) {
+      const outer = area2(shape) < 0 ? shape.slice().reverse() : shape.slice();
+      const hs = holes.map(h => (area2(h) > 0 ? h.slice().reverse() : h.slice()));
+      const b = Math.min(bevel, depth / 2 - 1e-6);
+      const layers = [];
+      if (b > 0) {
+        for (let k = bevelSegments; k >= 0; k--) {
+          const a = (k / bevelSegments) * Math.PI / 2;
+          layers.push({ inset: b * (1 - Math.cos(a)), z: -(depth / 2 - b) - b * Math.sin(a) });
+        }
+        for (let k = 0; k <= bevelSegments; k++) {
+          const a = (k / bevelSegments) * Math.PI / 2;
+          layers.push({ inset: b * (1 - Math.cos(a)), z: depth / 2 - b + b * Math.sin(a) });
+        }
+      } else {
+        layers.push({ inset: 0, z: -depth / 2 }, { inset: 0, z: depth / 2 });
+      }
+      const soup = new Soup();
+      const loops = [outer, ...hs];
+      for (const loop of loops) {
+        const rings = layers.map(L => inset(loop, L.inset).map(p => [p[0], p[1], L.z]));
+        for (let k = 0; k < rings.length - 1; k++) {
+          const A = rings[k], B = rings[k + 1], n = loop.length;
+          for (let i = 0; i < n; i++) {
+            const i1 = (i + 1) % n;
+            soup.quad(A[i], A[i1], B[i1], B[i]);
+          }
+        }
+      }
+      const capInset = b;
+      const capOuter = inset(outer, capInset), capHoles = hs.map(h => inset(h, capInset));
+      const tris = triangulate(capOuter, capHoles);
+      for (const [p, q, r] of tris) {
+        soup.tri([p[0], p[1], depth / 2], [q[0], q[1], depth / 2], [r[0], r[1], depth / 2]);
+        soup.tri([p[0], p[1], -depth / 2], [r[0], r[1], -depth / 2], [q[0], q[1], -depth / 2]);
+      }
+      return finish(soup, { crease: 35, closed: true });
+    },
+
+    // Sweeps a 2D cross-section along a 3D path. section: [[x, y], ...] or (t, i) => [[x, y], ...]
+    // with the same point count everywhere. x maps to the side vector, y to the up vector.
+    sweep(path, section, { closed = false, caps = true, up = null, crease = 50 } = {}) {
+      const n = path.length;
+      const T = path.map((_, i) => {
+        const a = path[closed ? (i - 1 + n) % n : Math.max(0, i - 1)];
+        const b = path[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
+        return v3.norm(v3.sub(b, a));
+      });
+      const Nn = [], Bn = [];
+      if (up) {
+        for (let i = 0; i < n; i++) {
+          let B = v3.sub(up, v3.scale(T[i], v3.dot(up, T[i])));
+          if (v3.len(B) < 1e-6) B = Bn[i - 1] || [1, 0, 0];
+          B = v3.norm(B);
+          Bn.push(B);
+          Nn.push(v3.norm(v3.cross(B, T[i])));
+        }
+      } else {
+        let N0 = v3.cross(T[0], Math.abs(T[0][1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]);
+        let N = v3.norm(N0);
+        for (let i = 0; i < n; i++) {
+          if (i > 0) {
+            N = v3.sub(N, v3.scale(T[i], v3.dot(N, T[i])));
+            N = v3.len(N) < 1e-6 ? Nn[i - 1] : v3.norm(N);
+          }
+          Nn.push(N);
+          Bn.push(v3.norm(v3.cross(T[i], N)));
+        }
+      }
+      const sec = i => (typeof section === "function" ? section(n > 1 ? i / (n - 1) : 0, i) : section);
+      const rings = path.map((P, i) => sec(i).map(([x, y]) => v3.add(P, v3.add(v3.scale(Nn[i], x), v3.scale(Bn[i], y)))));
+      const m = rings[0].length;
+      // Orient side quads so normals point away from the path.
+      const probe = () => {
+        const a = rings[0][0], b = rings[0][1 % m], c = rings[1][1 % m];
+        const nrm = v3.cross(v3.sub(b, a), v3.sub(c, a));
+        const s0 = sec(0), cx = s0.reduce((s, p) => s + p[0], 0) / m, cy = s0.reduce((s, p) => s + p[1], 0) / m;
+        const center = v3.add(path[0], v3.add(v3.scale(Nn[0], cx), v3.scale(Bn[0], cy)));
+        return v3.dot(nrm, v3.sub(a, center)) >= 0;
+      };
+      const flip = n > 1 && !probe();
+      const soup = new Soup();
+      const segs = closed ? n : n - 1;
+      for (let i = 0; i < segs; i++) {
+        const A = rings[i], B = rings[(i + 1) % n];
+        for (let j = 0; j < m; j++) {
+          const j1 = (j + 1) % m;
+          if (flip) soup.quad(A[j], B[j], B[j1], A[j1]);
+          else soup.quad(A[j], A[j1], B[j1], B[j]);
+        }
+      }
+      if (caps && !closed) {
+        for (const [i, dir] of [[0, -1], [n - 1, 1]]) {
+          const tris = triangulate(sec(i));
+          for (const tri of tris) {
+            const pts = tri.map(([x, y]) => v3.add(path[i], v3.add(v3.scale(Nn[i], x), v3.scale(Bn[i], y))));
+            const nrm = v3.cross(v3.sub(pts[1], pts[0]), v3.sub(pts[2], pts[0]));
+            if (v3.dot(nrm, T[i]) * dir >= 0) soup.tri(pts[0], pts[1], pts[2]);
+            else soup.tri(pts[0], pts[2], pts[1]);
+          }
+        }
+      }
+      return finish(soup, { crease, closed: closed || caps });
+    },
+
+    // A tube of radius r (number or t => number) along a path.
+    tube(path, r, { segments = 18, closed = false, caps = true } = {}) {
+      const radius = typeof r === "function" ? r : () => r;
+      const circle = t => Array.from({ length: segments }, (_, j) => {
+        const a = (j / segments) * Math.PI * 2, rr = Math.max(1e-4, radius(t));
+        return [rr * Math.cos(a), rr * Math.sin(a)];
+      });
+      return mesh.sweep(path, circle, { closed, caps, crease: 70 });
+    },
+
+    helix(radius, pitch, turns, wire, { segments = 24 } = {}) {
+      const steps = Math.max(12, Math.round(turns * 36)), path = [];
+      for (let i = 0; i <= steps; i++) {
+        const a = (i / steps) * turns * Math.PI * 2;
+        path.push([radius * Math.cos(a), (i / steps) * turns * pitch - (turns * pitch) / 2, -radius * Math.sin(a)]);
+      }
+      return mesh.tube(path, wire, { segments });
+    },
+
+    // A spur gear lying in the xz plane (axis along y).
+    gear({ teeth = 20, module = 1, thickness = 2, hole = 0, spokes = 0, rim = null, bevel = 0 } = {}) {
+      const rp = (teeth * module) / 2, ra = rp + module, rr = Math.max(rp - 1.25 * module, module * 0.5);
+      const P = (Math.PI * 2) / teeth, pts = [];
+      const polar = (r, a) => [r * Math.cos(a), r * Math.sin(a)];
+      for (let k = 0; k < teeth; k++) {
+        const c = k * P;
+        pts.push(polar(rr, c - 0.5 * P), polar(rr, c - 0.3 * P), polar(rp, c - 0.22 * P), polar(ra, c - 0.13 * P),
+          polar(ra, c), polar(ra, c + 0.13 * P), polar(rp, c + 0.22 * P), polar(rr, c + 0.3 * P));
+      }
+      const holes = [];
+      const circle = (r, n = 32) => Array.from({ length: n }, (_, i) => polar(r, (i / n) * Math.PI * 2));
+      if (hole > 0) holes.push(circle(hole));
+      if (spokes > 0) {
+        const rimW = rim ?? module * 2.2, rOut = rr - rimW, rIn = Math.max(hole * 2.2, rp * 0.28);
+        const spokeAng = Math.min(0.5, (module * 1.6) / ((rOut + rIn) / 2));
+        for (let s = 0; s < spokes; s++) {
+          const a0 = (s / spokes) * Math.PI * 2 + spokeAng / 2, a1 = ((s + 1) / spokes) * Math.PI * 2 - spokeAng / 2;
+          if (rOut <= rIn || a1 <= a0) continue;
+          const win = [];
+          for (let i = 0; i <= 12; i++) win.push(polar(rOut, a0 + ((a1 - a0) * i) / 12));
+          for (let i = 12; i >= 0; i--) win.push(polar(rIn, a0 + ((a1 - a0) * i) / 12));
+          holes.push(win);
+        }
+      }
+      const m = mesh.extrude(pts, thickness, { holes, bevel });
+      return transformMesh(m, m4.rotationX(-Math.PI / 2));
+    },
+
+    // A straight arrow from a to b (world units), shaft plus cone head.
+    arrow(a, b, { radius = null, head = null, headRadius = null, segments = 20 } = {}) {
+      const len = v3.dist(a, b);
+      const r = radius ?? len * 0.03, hl = Math.min(head ?? r * 5, len * 0.6), hr = headRadius ?? r * 2.4;
+      const shaft = transformMesh(mesh.cylinder(r, len - hl, { segments }), m4.translation([0, (len - hl) / 2, 0]));
+      const tip = transformMesh(mesh.cylinder(hr, hl, { r2: 0, segments }), m4.translation([0, len - hl / 2, 0]));
+      const m = m4.multiply(m4.translation(a), m4.alignY(v3.sub(b, a)));
+      return transformMesh(mergeMeshes(shaft, tip), m);
+    },
+
+    // A curved arrow around the y axis, from angle a0 to a1 (radians, counterclockwise seen from +y).
+    arcArrow(radius, a0, a1, { tube = null, head = null, y = 0, segments = 40 } = {}) {
+      const r = tube ?? radius * 0.06, hl = head ?? r * 5, dir = Math.sign(a1 - a0) || 1;
+      const headAng = Math.min(Math.abs(a1 - a0) * 0.5, hl / radius);
+      const end = a1 - dir * headAng, path = [];
+      for (let i = 0; i <= segments; i++) {
+        const a = a0 + ((end - a0) * i) / segments;
+        path.push([radius * Math.cos(a), y, -radius * Math.sin(a)]);
+      }
+      const body = mesh.tube(path, r, { segments: 16 });
+      const p1 = [radius * Math.cos(a1), y, -radius * Math.sin(a1)];
+      const p0 = [radius * Math.cos(end), y, -radius * Math.sin(end)];
+      const cone = transformMesh(mesh.cylinder(r * 2.4, v3.dist(p0, p1), { r2: 0, segments: 20 }),
+        m4.multiply(m4.multiply(m4.translation(v3.lerp(p0, p1, 0.5)), m4.alignY(v3.sub(p1, p0))), m4.identity()));
+      return mergeMeshes(body, cone);
+    },
+
+    plane(w, d) {
+      const soup = new Soup(), x = w / 2, z = d / 2;
+      soup.quad([-x, 0, z], [x, 0, z], [x, 0, -z], [-x, 0, -z]);
+      return finish(soup, { crease: 10 });
+    },
+
+    custom(positions, indices, { crease = 35 } = {}) {
+      const soup = new Soup();
+      for (let i = 0; i < indices.length; i += 3) soup.tri(positions[indices[i]], positions[indices[i + 1]], positions[indices[i + 2]]);
+      return finish(soup, { crease });
+    },
+
+    transform: transformMesh,
+    merge: mergeMeshes,
+  };
+
+  // ---------- materials ----------
+  const MATERIALS = {
+    porcelain: { color: "#f1efe9" },
+    paper: { color: "#f7f5ef" },
+    bone: { color: "#ede2c9" },
+    enamel: { color: "#f8f5ed" },
+    cartilage: { color: "#d5e4ea" },
+    muscle: { color: "#dc8c80" },
+    tendon: { color: "#eee1c0" },
+    tissue: { color: "#f0c5ba" },
+    fat: { color: "#f2e0a6" },
+    nerve: { color: "#ecd067" },
+    artery: { color: "#d8645c" },
+    vein: { color: "#7896c8" },
+    brass: { color: "#d1a650", metal: true },
+    gold: { color: "#e0b94f", metal: true },
+    copper: { color: "#cf8a5c", metal: true },
+    steel: { color: "#bfc3ca", metal: true },
+    graphite: { color: "#4a4a50" },
+    glass: { color: "#dfe8ee", opacity: 0.28 },
+    water: { color: "#a8cbe6", opacity: 0.45 },
+  };
+  const ACCENTS = ["red", "orange", "green", "blue", "purple"];
+
+  const hexRgb = hex => {
+    const h = String(hex).replace("#", "");
+    const n = parseInt(h.length === 3 ? h.split("").map(c => c + c).join("") : h, 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  };
+  const mixRgb = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+
+  function resolveMaterial(node) {
+    let m = node.material;
+    if (typeof m === "string") m = MATERIALS[m] ?? (ACCENTS.includes(m) ? { color: m } : { color: m });
+    m = { ...MATERIALS.porcelain, ...(m || {}) };
+    let color = node.color ?? m.color;
+    let rgb;
+    const pal = window.palette || {};
+    if (ACCENTS.includes(color)) rgb = mixRgb(hexRgb(pal[color] || "#888888"), [1, 1, 1], 0.42);
+    else if (MATERIALS[color]) rgb = hexRgb(MATERIALS[color].color);
+    else if (/^#/.test(color)) rgb = hexRgb(color);
+    else if (pal[color]) rgb = hexRgb(pal[color]);
+    else rgb = hexRgb(MATERIALS.porcelain.color);
+    return { rgb, metal: !!m.metal, opacity: node.opacity < 1 ? node.opacity : m.opacity ?? 1 };
+  }
+
+  // ---------- scene graph ----------
+  class Node {
+    constructor(meshArg = null, o = {}) {
+      this.mesh = meshArg;
+      this.children = [];
+      this.parent = null;
+      this.name = "";
+      this.position = [0, 0, 0];
+      this.rotation = [0, 0, 0];
+      this.scale = 1;
+      this.pivot = null;
+      this.matrix = null;
+      this.material = "porcelain";
+      this.color = null;
+      this.opacity = 1;
+      this.visible = true;
+      this.cut = true;
+      this.highlight = false;
+      this.pickable = true;
+      this.set(o);
+    }
+    set(o = {}) {
+      for (const [k, v] of Object.entries(o)) if (k !== "parent") this[k] = v;
+      return this;
+    }
+    add(child, o) {
+      const node = child instanceof Node ? child.set(o) : new Node(child, o);
+      if (node.parent) node.parent.children.splice(node.parent.children.indexOf(node), 1);
+      node.parent = this;
+      this.children.push(node);
+      return node;
+    }
+    group(o) { return this.add(null, o); }
+    local() { return this.matrix ?? m4.compose(this.position, this.rotation, this.scale, this.pivot); }
+    world() { return this.parent ? m4.multiply(this.parent.world(), this.local()) : this.local(); }
+    // A point in this node's local coordinates, in world coordinates.
+    toWorld(p) { return m4.apply(this.world(), p); }
+    find(name) {
+      if (this.name === name) return this;
+      for (const c of this.children) { const f = c.find(name); if (f) return f; }
+      return null;
+    }
+    traverse(fn) { fn(this); for (const c of this.children) c.traverse(fn); }
+  }
+
+  class Scene extends Node {
+    constructor(o = {}) {
+      super(null, {});
+      this.cutPlane = null;    // [nx, ny, nz, d]: removes points where n·p > d
+      this.shadow = true;      // soft contact shadow under the scene
+      this.light = "camera";   // "camera" (studio light that follows the view) or a world direction
+      this.lighting = "soft";  // "soft" porcelain shading, or "sun" for a hard day/night terminator
+      this.ink = 1;            // outline weight multiplier
+      this.set(o);
+    }
+  }
+
+  // ---------- WebGL renderer ----------
+  const VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+uniform mat4 uModel, uViewProj;
+uniform mat3 uNormalMat;
+out vec3 vWorld; out vec3 vNormal;
+void main() {
+  vec4 w = uModel * vec4(aPos, 1.0);
+  vWorld = w.xyz;
+  vNormal = uNormalMat * aNormal;
+  gl_Position = uViewProj * w;
+}`;
+
+  const FS_MAIN = `#version 300 es
+precision highp float;
+in vec3 vWorld; in vec3 vNormal;
+uniform vec3 uColor; uniform float uMetal; uniform vec3 uLight; uniform vec3 uEye;
+uniform vec4 uCut; uniform float uCutOn; uniform float uId; uniform vec3 uHighlight; uniform float uHighlightOn;
+uniform float uSun; uniform float uHatch; uniform mat4 uViewProj;
+layout(location=0) out vec4 oColor;
+layout(location=1) out vec4 oNormal;
+void main() {
+  if (uCutOn > 0.5 && dot(vWorld, uCut.xyz) > uCut.w) discard;
+  if (!gl_FrontFacing) {
+    if (uCutOn < 0.5) discard;
+    // Looking into a cut solid: this back face stands in for the section face. Its depth
+    // stays where it is (so nearer surfaces still win); only the hatch is laid out on the
+    // cut plane, where the view ray crosses it, so the lines stay straight and steady.
+    vec3 dir = vWorld - uEye;
+    float t = (uCut.w - dot(uEye, uCut.xyz)) / dot(dir, uCut.xyz);
+    vec3 p = uEye + dir * t;
+    vec3 n = uCut.xyz;
+    vec3 a = normalize(cross(n, abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 b = cross(n, a);
+    float u = dot(p, normalize(a + b));
+    float fw = max(fwidth(u), 1e-6);
+    float d = abs(fract(u / uHatch + 0.5) - 0.5) * uHatch / fw;
+    float line = 1.0 - smoothstep(0.35, 1.1, d);
+    vec3 cap = uColor * 0.93;
+    oColor = vec4(mix(cap, uColor * 0.5, line * 0.75), 1.0);
+    oNormal = vec4(n * 0.5 + 0.5, uId);
+    return;
+  }
+  vec3 N = normalize(vNormal);
+  vec3 V = normalize(uEye - vWorld);
+  float ndl = dot(N, uLight);
+  vec3 col;
+  if (uSun > 0.5) {
+    float lit = smoothstep(-0.05, 0.25, ndl);
+    col = uColor * (0.12 + 0.95 * lit * (0.55 + 0.45 * max(ndl, 0.0)));
+  } else {
+    float wrap = clamp((ndl + 0.5) / 1.5, 0.0, 1.0);
+    wrap = wrap * wrap * (3.0 - 2.0 * wrap);
+    vec3 cool = uColor * vec3(0.84, 0.86, 0.90);
+    col = mix(cool, uColor, wrap);
+    col *= 0.92 + 0.08 * (0.5 + 0.5 * N.y);
+  }
+  vec3 H = normalize(uLight + V);
+  float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
+  if (uMetal > 0.5) {
+    float env = smoothstep(-0.4, 0.8, reflect(-V, N).y);
+    float spec = pow(max(dot(N, H), 0.0), 50.0);
+    col = uColor * (0.62 + 0.38 * clamp(ndl * 0.5 + 0.5, 0.0, 1.0)) * (0.78 + 0.32 * env) + vec3(1.0, 0.97, 0.9) * spec * 0.55;
+  } else if (uSun < 0.5) {
+    col += vec3(pow(max(dot(N, H), 0.0), 40.0) * 0.06);
+    col = mix(col, vec3(1.0), fres * 0.10);
+  }
+  if (uHighlightOn > 0.5) col = mix(col, uHighlight, 0.38);
+  oColor = vec4(col, 1.0);
+  oNormal = vec4(N * 0.5 + 0.5, uId);
+}`;
+
+  const FS_GHOST = `#version 300 es
+precision highp float;
+in vec3 vWorld; in vec3 vNormal;
+uniform vec3 uColor; uniform vec3 uEye; uniform vec3 uLight; uniform float uOpacity;
+uniform vec4 uCut; uniform float uCutOn;
+layout(location=0) out vec4 oColor;
+void main() {
+  if (uCutOn > 0.5 && dot(vWorld, uCut.xyz) > uCut.w) discard;
+  vec3 N = normalize(vNormal);
+  if (!gl_FrontFacing) N = -N;
+  vec3 V = normalize(uEye - vWorld);
+  float facing = abs(dot(N, V));
+  float rim = pow(1.0 - facing, 2.2);
+  float a = clamp(uOpacity * (0.30 + 1.6 * rim), 0.0, 0.9);
+  vec3 col = uColor * (0.85 + 0.15 * clamp(dot(N, uLight), 0.0, 1.0));
+  col = mix(col, col * 0.55, rim * 0.6);
+  oColor = vec4(col * a, a);
+}`;
+
+  const VS_SHADOW = `#version 300 es
+uniform mat4 uViewProj; uniform vec3 uCenter; uniform vec2 uRadii;
+out vec2 vUv;
+void main() {
+  vec2 c = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1)) * 2.0 - 1.0;
+  vUv = c;
+  gl_Position = uViewProj * vec4(uCenter + vec3(c.x * uRadii.x, 0.0, c.y * uRadii.y), 1.0);
+}`;
+  const FS_SHADOW = `#version 300 es
+precision highp float;
+in vec2 vUv; uniform float uOpacity;
+layout(location=0) out vec4 oColor;
+void main() {
+  float d = length(vUv);
+  float a = uOpacity * pow(1.0 - smoothstep(0.0, 1.0, d), 1.7);
+  oColor = vec4(0.0, 0.0, 0.0, a);
+}`;
+
+  const VS_FULL = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+  // Composite: ink outlines from depth, normal, and part-id discontinuities, then a box
+  // filter over uSS x uSS render pixels per output pixel (the engine supersamples itself).
+  const FS_COMPOSITE = `#version 300 es
+precision highp float;
+uniform sampler2D uColor; uniform sampler2D uNormal; uniform sampler2D uDepth;
+uniform vec2 uInvSize; uniform float uStep; uniform vec2 uNearFar; uniform float uOrtho; uniform float uInk;
+uniform int uSS;
+out vec4 o;
+float lin(float d) {
+  if (uOrtho > 0.5) return uNearFar.x + d * (uNearFar.y - uNearFar.x);
+  float z = d * 2.0 - 1.0;
+  return 2.0 * uNearFar.x * uNearFar.y / (uNearFar.y + uNearFar.x - z * (uNearFar.y - uNearFar.x));
+}
+vec4 shade(vec2 px) {
+  vec4 c0 = texture(uColor, px * uInvSize);
+  vec4 n0 = texture(uNormal, px * uInvSize);
+  float d0 = lin(texture(uDepth, px * uInvSize).r);
+  bool bg0 = n0.a < 0.5 / 255.0;
+  float edge = 0.0;
+  float inkDepth = bg0 ? 1e20 : d0;
+  vec3 inkSrc = bg0 ? vec3(0.45) : c0.rgb / max(c0.a, 1e-3);
+  const vec2 offs[8] = vec2[8](vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0, -1),
+                               vec2(0.71, 0.71), vec2(-0.71, 0.71), vec2(0.71, -0.71), vec2(-0.71, -0.71));
+  for (int i = 0; i < 8; i++) {
+    vec2 q = (px + offs[i] * uStep) * uInvSize;
+    vec4 n1 = texture(uNormal, q);
+    bool bg1 = n1.a < 0.5 / 255.0;
+    float d1 = lin(texture(uDepth, q).r);
+    float e = 0.0;
+    if (bg0 != bg1) e = 1.0;
+    else if (!bg0) {
+      if (abs(n0.a - n1.a) > 0.5 / 255.0) e = 0.85;
+      float dd = abs(d0 - d1) / max(min(d0, d1), 1e-4);
+      e = max(e, smoothstep(0.012, 0.035, dd) * 0.85);
+      float nd = 1.0 - dot(n0.xyz * 2.0 - 1.0, n1.xyz * 2.0 - 1.0);
+      e = max(e, smoothstep(0.10, 0.32, nd) * 0.5);
+    }
+    if (e > 0.0 && !bg1 && d1 < inkDepth) {
+      vec4 c1 = texture(uColor, q);
+      inkDepth = d1;
+      inkSrc = c1.rgb / max(c1.a, 1e-3);
+    }
+    edge = max(edge, e);
+  }
+  // Ink is a darker shade of the surface it outlines, so colored parts get colored lines.
+  vec3 ink = pow(inkSrc, vec3(1.35)) * 0.40;
+  float a = clamp(edge * uInk, 0.0, 1.0);
+  return vec4(ink * a, a) + c0 * (1.0 - a);
+}
+void main() {
+  vec2 base = floor(gl_FragCoord.xy) * float(uSS);
+  vec4 sum = vec4(0.0);
+  for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
+    if (i < uSS && j < uSS) sum += shade(base + vec2(float(i), float(j)) + 0.5);
+  }
+  o = sum / float(uSS * uSS);
+}`;
+
+  let R = null;
+  function compile(gl, vs, fs) {
+    const make = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader: ${gl.getShaderInfoLog(s)}`);
+      return s;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, make(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, make(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`program: ${gl.getProgramInfoLog(p)}`);
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) {
+      const name = gl.getActiveUniform(p, i).name;
+      u[name] = gl.getUniformLocation(p, name);
+    }
+    return { p, u };
+  }
+
+  // One WebGL context serves every figure. It renders into an OffscreenCanvas and each
+  // frame is handed over with transferToImageBitmap(), which is exact; reading a shared
+  // WebGL canvas with drawImage() can return a stale buffer in some browsers.
+  function renderer() {
+    if (R) return R;
+    const offscreen = typeof OffscreenCanvas !== "undefined";
+    const canvas = offscreen ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+    const gl = canvas.getContext("webgl2", { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: !offscreen, depth: true });
+    if (!gl) throw new Error("this figure needs WebGL 2, which this browser doesn't provide");
+    R = {
+      canvas, gl, offscreen, fw: 0, fh: 0,
+      main: compile(gl, VS, FS_MAIN),
+      ghost: compile(gl, VS, FS_GHOST),
+      shadow: compile(gl, VS_SHADOW, FS_SHADOW),
+      composite: compile(gl, VS_FULL, FS_COMPOSITE),
+      empty: gl.createVertexArray(),
+    };
+    canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); R = null; });
+    return R;
+  }
+
+  function targets(w, h) {
+    const { gl } = R;
+    if (R.fbo && R.fw >= w && R.fh >= h) return;
+    const fw = Math.max(w, R.fw), fh = Math.max(h, R.fh);
+    if (R.fbo) { gl.deleteFramebuffer(R.fbo); [R.tColor, R.tNormal, R.tDepth].forEach(t => gl.deleteTexture(t)); }
+    const tex = (internal, format, type) => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, internal, fw, fh, 0, format, type, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    R.tColor = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    R.tNormal = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    R.tDepth = tex(gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT);
+    R.fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, R.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, R.tColor, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, R.tNormal, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, R.tDepth, 0);
+    R.fw = fw;
+    R.fh = fh;
+    R.canvas.width = fw;
+    R.canvas.height = fh;
+  }
+
+  function upload(m) {
+    const { gl } = R;
+    if (m._gpu && m._gpu.gl === gl && m._gpu.version === m.version) return m._gpu;
+    if (m._gpu && m._gpu.gl === gl) { gl.deleteVertexArray(m._gpu.vao); m._gpu.buffers.forEach(b => gl.deleteBuffer(b)); }
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const buf = (target, data) => { const b = gl.createBuffer(); gl.bindBuffer(target, b); gl.bufferData(target, data, gl.STATIC_DRAW); return b; };
+    const bp = buf(gl.ARRAY_BUFFER, m.positions);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const bn = buf(gl.ARRAY_BUFFER, m.normals);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    const bi = buf(gl.ELEMENT_ARRAY_BUFFER, m.indices);
+    gl.bindVertexArray(null);
+    m._gpu = { gl, vao, buffers: [bp, bn, bi], count: m.indices.length, version: m.version };
+    return m._gpu;
+  }
+
+  // Collects visible mesh nodes with world matrices and world-space bounds.
+  function collect(scene) {
+    const items = [];
+    const walk = (node, parentM) => {
+      if (!node.visible) return;
+      const world = m4.multiply(parentM, node.local());
+      if (node.mesh && node.mesh.indices.length) {
+        const b = node.mesh.bounds;
+        const c = m4.apply(world, b.center);
+        const sx = Math.hypot(world[0], world[1], world[2]), sy = Math.hypot(world[4], world[5], world[6]), sz = Math.hypot(world[8], world[9], world[10]);
+        items.push({ node, world, center: c, radius: b.radius * Math.max(sx, sy, sz) });
+      }
+      for (const c of node.children) walk(c, world);
+    };
+    walk(scene, m4.identity());
+    return items;
+  }
+
+  function sceneBounds(items) {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const it of items) {
+      const b = it.node.mesh.bounds;
+      for (let i = 0; i < 8; i++) {
+        const p = m4.apply(it.world, [i & 1 ? b.max[0] : b.min[0], i & 2 ? b.max[1] : b.min[1], i & 4 ? b.max[2] : b.min[2]]);
+        for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], p[k]); max[k] = Math.max(max[k], p[k]); }
+      }
+    }
+    if (!items.length) return { min: [-1, -1, -1], max: [1, 1, 1], center: [0, 0, 0], radius: 1 };
+    const center = v3.lerp(min, max, 0.5);
+    return { min, max, center, radius: Math.max(1e-3, v3.dist(min, max) / 2) };
+  }
+
+  const orbitDir = (yaw, pitch) => [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
+
+  // Frames the scene's bounding box as seen from one direction: centers it and
+  // finds the distance (or ortho half-height) at which it fills `margin` of the view.
+  function frameFit(bounds, dir, fov, aspect, margin, fixedTarget) {
+    const z = v3.norm(dir);
+    let x = v3.cross([0, 1, 0], z);
+    if (v3.len(x) < 1e-6) x = v3.cross([0, 0, 1], z);
+    x = v3.norm(x);
+    const y = v3.cross(z, x);
+    const corners = [];
+    for (let i = 0; i < 8; i++) corners.push([i & 1 ? bounds.max[0] : bounds.min[0], i & 2 ? bounds.max[1] : bounds.min[1], i & 4 ? bounds.max[2] : bounds.min[2]]);
+    let target = fixedTarget;
+    if (!target) {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const c of corners) {
+        const r = v3.sub(c, bounds.center), px = v3.dot(r, x), py = v3.dot(r, y);
+        x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+      }
+      target = v3.add(bounds.center, v3.add(v3.scale(x, (x0 + x1) / 2), v3.scale(y, (y0 + y1) / 2)));
+    }
+    const t = Math.tan(fov / 2);
+    let distance = 0, half = 0;
+    for (const c of corners) {
+      const r = v3.sub(c, target), vx = Math.abs(v3.dot(r, x)), vy = Math.abs(v3.dot(r, y)), vz = v3.dot(r, z);
+      half = Math.max(half, vy / margin, vx / (aspect * margin));
+      if (fov > 0) distance = Math.max(distance, vz + vx / (t * aspect * margin), vz + vy / (t * margin));
+    }
+    if (!(fov > 0)) distance = bounds.radius * 4;
+    return { target, distance: Math.max(distance, bounds.radius * 0.5), half: Math.max(half, 1e-3) };
+  }
+
+  // Camera from orbit angles. yaw/pitch match g.view3d: positive pitch looks from above.
+  // Unless distance (and target) are given, the scene is framed once from the first
+  // view and that framing is kept, so turning the view doesn't make it zoom in and out.
+  function camera(cam, scene, bounds, aspect) {
+    const fovDeg = cam.fov ?? 28;
+    const fov = (fovDeg * Math.PI) / 180;
+    const yaw = cam.yaw ?? -0.6, pitch = cam.pitch ?? 0.4;
+    const dir = orbitDir(yaw, pitch);
+    const margin = cam.margin ?? 0.86;
+    let target = cam.target, distance = cam.distance, half = cam.half;
+    if (distance == null || target == null || (!(fov > 0) && half == null)) {
+      const key = `${aspect.toFixed(2)}|${fovDeg}|${margin}|${cam.target ? cam.target.join(",") : "auto"}`;
+      if (cam.fit === "always" || !scene._fit || scene._fit.key !== key) {
+        scene._fit = { key, ...frameFit(bounds, cam.fitFrom ? orbitDir(cam.fitFrom.yaw, cam.fitFrom.pitch) : dir, fov, aspect, margin, cam.target) };
+      }
+      target = target ?? scene._fit.target;
+      distance = distance ?? scene._fit.distance;
+      half = half ?? scene._fit.half;
+    }
+    const zoom = cam.zoom ?? 1;
+    if (fov > 0) distance /= zoom;
+    const eye = v3.add(target, v3.scale(dir, distance));
+    const view = m4.lookAt(eye, target, [0, 1, 0]);
+    const reach = v3.dist(target, bounds.center) + bounds.radius;
+    const near = Math.max(distance - reach * 1.5, distance * 0.02), far = distance + reach * 1.5;
+    let proj, worldPerPx;
+    if (fov > 0) {
+      proj = m4.perspective(fov, aspect, near, far);
+      worldPerPx = 2 * distance * Math.tan(fov / 2);
+    } else {
+      const hh = half / zoom;
+      proj = m4.ortho(-hh * aspect, hh * aspect, -hh, hh, near, far);
+      worldPerPx = 2 * hh;
+    }
+    return { eye, target, view, proj, vp: m4.multiply(proj, view), near, far, ortho: !(fov > 0), worldPerPx, distance };
+  }
+
+  function lightDir(scene, cam) {
+    if (Array.isArray(scene.light)) return v3.norm(scene.light);
+    const inv = m4.invert(cam.view);
+    return v3.norm(m4.applyDir(inv, [-0.45, 0.75, 0.55]));
+  }
+
+  // Renders the scene into the shared WebGL canvas; returns a view for projection and picking.
+  // outScale: output pixels per CSS pixel (the screen's density). ss: supersampling
+  // factor (1 to 3); the frame is rendered ss times larger and filtered down in the
+  // composite pass, so the result can be copied to the page 1:1 with no resampling.
+  function render(scene, cam = {}, cssW, cssH, outScale = 1, ss = 2) {
+    renderer();
+    const { gl } = R;
+    ss = Math.max(1, Math.min(3, Math.round(ss)));
+    const Wo = Math.max(1, Math.round(cssW * outScale)), Ho = Math.max(1, Math.round(cssH * outScale));
+    const W = Wo * ss, H = Ho * ss, scale = outScale * ss;
+    targets(W, H);
+    const items = collect(scene);
+    const bounds = sceneBounds(items);
+    const C = camera(cam, scene, bounds, cssW / cssH);
+    const L = lightDir(scene, C);
+    const cut = scene.cutPlane ? (Array.isArray(scene.cutPlane) ? scene.cutPlane : [...scene.cutPlane.normal, scene.cutPlane.offset ?? 0]) : null;
+    const cutN = cut ? v3.norm(cut.slice(0, 3)) : null;
+    const cutV = cut ? [...cutN, cut[3] / v3.len(cut.slice(0, 3))] : [0, 1, 0, 1e9];
+    const hatch = (C.worldPerPx / cssH) * 7;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, R.fbo);
+    gl.viewport(0, 0, W, H);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+    gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 0]);
+    gl.clearBufferfv(gl.DEPTH, 0, [1]);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    const mats = new Map();
+    const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node))); return m; };
+    const pal = window.palette || {};
+    const hiDefault = hexRgb(pal.orange || "#d9800f");
+
+    // Opaque pass
+    const { main } = R;
+    gl.useProgram(main.p);
+    gl.uniformMatrix4fv(main.u.uViewProj, false, C.vp);
+    gl.uniform3fv(main.u.uLight, L);
+    gl.uniform3fv(main.u.uEye, C.eye);
+    gl.uniform4fv(main.u.uCut, cutV);
+    gl.uniform1f(main.u.uSun, scene.lighting === "sun" ? 1 : 0);
+    gl.uniform1f(main.u.uHatch, hatch);
+    const opaque = items.filter(it => matOf(it).opacity >= 0.999);
+    opaque.forEach((it, i) => {
+      const m = matOf(it), g = upload(it.node.mesh);
+      it.id = (i % 254) + 1;
+      const cutOn = cut && it.node.cut ? 1 : 0;
+      if (cutOn) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
+      gl.uniformMatrix4fv(main.u.uModel, false, it.world);
+      gl.uniformMatrix3fv(main.u.uNormalMat, false, m4.normalMatrix(it.world));
+      gl.uniform3fv(main.u.uColor, m.rgb);
+      gl.uniform1f(main.u.uMetal, m.metal ? 1 : 0);
+      gl.uniform1f(main.u.uId, it.id / 255);
+      gl.uniform1f(main.u.uCutOn, cutOn);
+      const hl = it.node.highlight;
+      gl.uniform1f(main.u.uHighlightOn, hl ? 1 : 0);
+      gl.uniform3fv(main.u.uHighlight, typeof hl === "string" ? hexRgb(pal[hl] || hl) : hiDefault);
+      gl.bindVertexArray(g.vao);
+      gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
+    });
+    gl.bindVertexArray(null);
+    gl.disable(gl.CULL_FACE);
+
+    // Ground shadow and see-through parts only touch the color buffer.
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    if (scene.shadow && items.length) {
+      const s = typeof scene.shadow === "object" ? scene.shadow : {};
+      const ext = [(bounds.max[0] - bounds.min[0]) / 2, (bounds.max[2] - bounds.min[2]) / 2];
+      const k = s.scale ?? 1.25;
+      gl.useProgram(R.shadow.p);
+      gl.uniformMatrix4fv(R.shadow.u.uViewProj, false, C.vp);
+      gl.uniform3fv(R.shadow.u.uCenter, [bounds.center[0], s.y ?? bounds.min[1] - bounds.radius * 0.01, bounds.center[2]]);
+      gl.uniform2fv(R.shadow.u.uRadii, [Math.max(ext[0], ext[1] * 0.35) * k, Math.max(ext[1], ext[0] * 0.35) * k]);
+      gl.uniform1f(R.shadow.u.uOpacity, s.opacity ?? 0.16);
+      gl.bindVertexArray(R.empty);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    const ghosts = items.filter(it => matOf(it).opacity < 0.999)
+      .sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
+    if (ghosts.length) {
+      const { ghost } = R;
+      gl.useProgram(ghost.p);
+      gl.uniformMatrix4fv(ghost.u.uViewProj, false, C.vp);
+      gl.uniform3fv(ghost.u.uEye, C.eye);
+      gl.uniform3fv(ghost.u.uLight, L);
+      gl.uniform4fv(ghost.u.uCut, cutV);
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      for (const it of ghosts) {
+        const m = matOf(it), g = upload(it.node.mesh);
+        gl.uniformMatrix4fv(ghost.u.uModel, false, it.world);
+        gl.uniformMatrix3fv(ghost.u.uNormalMat, false, m4.normalMatrix(it.world));
+        gl.uniform3fv(ghost.u.uColor, m.rgb);
+        gl.uniform1f(ghost.u.uOpacity, m.opacity);
+        gl.uniform1f(ghost.u.uCutOn, cut && it.node.cut ? 1 : 0);
+        gl.bindVertexArray(g.vao);
+        gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
+      }
+      gl.disable(gl.CULL_FACE);
+      gl.bindVertexArray(null);
+    }
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    // Composite with ink outlines into the canvas.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, R.fw, R.fh);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.viewport(0, 0, Wo, Ho);
+    gl.disable(gl.DEPTH_TEST);
+    const cp = R.composite;
+    gl.useProgram(cp.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.tColor); gl.uniform1i(cp.u.uColor, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, R.tNormal); gl.uniform1i(cp.u.uNormal, 1);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, R.tDepth); gl.uniform1i(cp.u.uDepth, 2);
+    gl.uniform2fv(cp.u.uInvSize, [1 / R.fw, 1 / R.fh]);
+    gl.uniform1f(cp.u.uStep, Math.max(0.75, 0.62 * scale * (scene.ink ?? 1)));
+    gl.uniform2fv(cp.u.uNearFar, [C.near, C.far]);
+    gl.uniform1f(cp.u.uOrtho, C.ortho ? 1 : 0);
+    gl.uniform1f(cp.u.uInk, scene.ink === 0 ? 0 : 0.9);
+    gl.uniform1i(cp.u.uSS, ss);
+    gl.bindVertexArray(R.empty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0);
+
+    const image = R.offscreen ? R.canvas.transferToImageBitmap() : R.canvas;
+    return makeView(scene, items, C, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.fh - Ho, sw: Wo, sh: Ho });
+  }
+
+  function makeView(scene, items, C, w, h, cut, source) {
+    const invVP = m4.invert(C.vp);
+    const project = p => {
+      const q = m4.project(C.vp, p);
+      return [(q[0] * 0.5 + 0.5) * w, (1 - (q[1] * 0.5 + 0.5)) * h, q[3]];
+    };
+    const ray = ([x, y]) => {
+      const nx = (x / w) * 2 - 1, ny = 1 - (y / h) * 2;
+      const a = m4.project(invVP, [nx, ny, -1]), b = m4.project(invVP, [nx, ny, 1]);
+      return { origin: a.slice(0, 3), dir: v3.norm(v3.sub(b.slice(0, 3), a.slice(0, 3))) };
+    };
+    function pick(p, { ghosts = false } = {}) {
+      const { origin, dir } = ray(p);
+      let best = null;
+      for (const it of items) {
+        const node = it.node;
+        if (!node.pickable) continue;
+        const mat = resolveMaterial(node);
+        if (!ghosts && mat.opacity < 0.5) continue;
+        // bounding sphere
+        const oc = v3.sub(origin, it.center), bq = v3.dot(oc, dir), cq = v3.dot(oc, oc) - it.radius * it.radius;
+        if (bq * bq - cq < 0) continue;
+        const inv = m4.invert(it.world);
+        const o = m4.apply(inv, origin), d = m4.applyDir(inv, dir);
+        const P = node.mesh.positions, I = node.mesh.indices;
+        for (let t = 0; t < I.length; t += 3) {
+          const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+          const e1 = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]];
+          const e2 = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
+          const pv = v3.cross(d, e2), det = v3.dot(e1, pv);
+          if (Math.abs(det) < 1e-12) continue;
+          const tv = [o[0] - P[a], o[1] - P[a + 1], o[2] - P[a + 2]];
+          const u = v3.dot(tv, pv) / det;
+          if (u < 0 || u > 1) continue;
+          const qv = v3.cross(tv, e1), v = v3.dot(d, qv) / det;
+          if (v < 0 || u + v > 1) continue;
+          const tt = v3.dot(e2, qv) / det;
+          if (tt <= 0) continue;
+          const local = v3.add(o, v3.scale(d, tt));
+          const world = m4.apply(it.world, local);
+          if (cut && node.cut && v3.dot(world, cut.slice(0, 3)) > cut[3]) continue;
+          const dist = v3.dist(world, origin);
+          if (!best || dist < best.distance) best = { node, point: world, distance: dist };
+        }
+      }
+      return best;
+    }
+    return {
+      project,
+      ray,
+      pick,
+      // True when something opaque sits between the camera and p.
+      hidden(p) {
+        const s = project(p), hit = pick([s[0], s[1]]);
+        return !!hit && hit.distance < v3.dist(ray([s[0], s[1]]).origin, p) - 1e-3 * C.distance;
+      },
+      eye: C.eye,
+      target: C.target,
+      width: w,
+      height: h,
+      source,
+    };
+  }
+
+  // ---------- chemistry ----------
+  // Covalent radius (Å) for bond lengths and ball sizes, van der Waals radius for space-filling,
+  // and a color that reads well in the porcelain style.
+  const ELEMENTS = {
+    H: { cov: 0.31, vdw: 1.2, color: "#f5f3ee" }, C: { cov: 0.76, vdw: 1.7, color: "#5b5b61" },
+    N: { cov: 0.71, vdw: 1.55, color: "#7d9bd8" }, O: { cov: 0.66, vdw: 1.52, color: "#e07a6e" },
+    F: { cov: 0.57, vdw: 1.47, color: "#9fd18f" }, Cl: { cov: 1.02, vdw: 1.75, color: "#8fcf7c" },
+    Br: { cov: 1.2, vdw: 1.85, color: "#b7685a" }, I: { cov: 1.39, vdw: 1.98, color: "#9a6fbf" },
+    S: { cov: 1.05, vdw: 1.8, color: "#ead36a" }, P: { cov: 1.07, vdw: 1.8, color: "#ec9f5a" },
+    Na: { cov: 1.66, vdw: 2.27, color: "#b49be0" }, K: { cov: 2.03, vdw: 2.75, color: "#a58ad6" },
+    Mg: { cov: 1.41, vdw: 1.73, color: "#9fcf86" }, Ca: { cov: 1.76, vdw: 2.31, color: "#c9c9c0" },
+    Fe: { cov: 1.32, vdw: 2.0, color: "#d0874f" }, Zn: { cov: 1.22, vdw: 1.39, color: "#9ea7c4" },
+    Cu: { cov: 1.32, vdw: 1.4, color: "#cf8a5c" }, Si: { cov: 1.11, vdw: 2.1, color: "#d8c49a" },
+    Li: { cov: 1.28, vdw: 1.82, color: "#c79be0" }, He: { cov: 0.28, vdw: 1.4, color: "#dff3f3" },
+  };
+
+  // atoms: [["O", [x, y, z]], ...] in ångström; bonds: [[i, j, order], ...].
+  // style: "ball" (ball-and-stick) or "space" (space-filling).
+  function molecule(atoms, bonds = [], { style = "ball", scale = 1, name = "molecule" } = {}) {
+    const g = new Node(null, { name });
+    const cache = new Map();
+    const sphereFor = r => { const k = r.toFixed(3); if (!cache.has(k)) cache.set(k, mesh.sphere(r, { segments: 20 })); return cache.get(k); };
+    atoms.forEach(([el, pos], i) => {
+      const e = ELEMENTS[el] || { cov: 0.75, vdw: 1.7, color: "#cccccc" };
+      const r = (style === "space" ? e.vdw : Math.max(0.22, e.cov * 0.42)) * scale;
+      g.add(sphereFor(r), { position: v3.scale(pos, scale), color: e.color, name: `${el}${i + 1}`, data: { atom: i, element: el } });
+    });
+    if (style !== "space") {
+      for (const [i, j, order = 1] of bonds) {
+        const a = v3.scale(atoms[i][1], scale), b = v3.scale(atoms[j][1], scale);
+        const dir = v3.sub(b, a), len = v3.len(dir);
+        const side = v3.norm(v3.cross(dir, Math.abs(dir[1]) < 0.9 * len ? [0, 1, 0] : [1, 0, 0]));
+        const r = 0.09 * scale * (order > 1 ? 0.75 : 1);
+        const offsets = order === 1 ? [0] : order === 2 ? [-0.11, 0.11] : [-0.18, 0, 0.18];
+        for (const off of offsets) {
+          const sh = v3.scale(side, off * scale);
+          const m = mesh.transform(mesh.cylinder(r, len, { segments: 14 }),
+            m4.multiply(m4.translation(v3.add(v3.lerp(a, b, 0.5), sh)), m4.alignY(dir)));
+          g.add(m, { material: "porcelain", name: `bond ${i + 1}-${j + 1}`, data: { bond: [i, j, order] } });
+        }
+      }
+    }
+    return g;
+  }
+
+  window.E3 = {
+    v3, m4, mesh, smooth, triangulate, inset,
+    scene: o => new Scene(o),
+    node: (m, o) => new Node(m, o),
+    Node, Scene,
+    render,
+    molecule, ELEMENTS, MATERIALS,
+    get canvas() { return R && R.canvas; },
+    available() { try { renderer(); return true; } catch { return false; } },
+  };
+})();
+</script>
+<script>
+/* Explainer runtime. demo(id, spec) turns <figure class="demo" id="..."> into a
+   live figure. Reference: references/runtime.md in the skill. */
+(() => {
+  "use strict";
+  const root = document.documentElement;
+  const NAMES = ["bg", "panel", "ink", "muted", "faint", "grid", "brass", "red", "orange", "green", "blue", "purple"];
+  const palette = {};
+  const demos = [];
+  const byEl = new Map();
+  const errors = [];
+  const motionQuery = matchMedia("(prefers-reduced-motion: reduce)");
+  const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+  let fontText = "sans-serif", fontMono = "monospace", fontSerif = "serif";
+
+  const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  const TAU = Math.PI * 2;
+
+  function readTheme() {
+    const cs = getComputedStyle(root);
+    for (const n of NAMES) palette[n] = cs.getPropertyValue("--" + n).trim();
+    fontText = cs.getPropertyValue("--font-text").trim() || "sans-serif";
+    fontMono = cs.getPropertyValue("--font-mono").trim() || "monospace";
+    fontSerif = cs.getPropertyValue("--font-serif").trim() || "serif";
+  }
+  readTheme();
+
+  const color = c => palette[c] || c;
+  const cssColor = c => (c in palette ? `var(--${c})` : c);
+  function rgb(c) {
+    const hex = String(color(c)).replace("#", "");
+    if (!/^[0-9a-f]{6}$/i.test(hex)) return [128, 128, 128];
+    const n = parseInt(hex, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function rgba(c, a) {
+    const hex = String(color(c)).replace("#", "");
+    if (!/^[0-9a-f]{6}$/i.test(hex)) return color(c);
+    const [r, g, b] = rgb(c);
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+  // Mix of two palette colors, t from 0 (a) to 1 (b).
+  function mix(a, b, t) {
+    const p = rgb(a), q = rgb(b);
+    return `rgb(${Math.round(lerp(p[0], q[0], t))}, ${Math.round(lerp(p[1], q[1], t))}, ${Math.round(lerp(p[2], q[2], t))})`;
+  }
+
+  const decimals = step => (String(step ?? 0.01).split(".")[1] || "").length;
+  const clone = o => { try { return structuredClone(o); } catch { return { ...o }; } };
+
+  // ---------- Drawing helpers, passed to draw() as g ----------
+  function makeG(ctx) {
+    let hatchCache = new Map();
+    function hatchPattern(c, gap, angle) {
+      const key = `${color(c)}|${gap}|${angle}`;
+      if (hatchCache.has(key)) return hatchCache.get(key);
+      const s = Math.max(4, Math.round(gap * 2));
+      const cv = document.createElement("canvas");
+      const dpr = g.dpr || 1;
+      cv.width = cv.height = Math.round(s * dpr);
+      const c2 = cv.getContext("2d");
+      c2.scale(dpr, dpr);
+      c2.strokeStyle = color(c);
+      c2.lineWidth = 1;
+      for (let k = -s; k <= 2 * s; k += gap) { c2.beginPath(); c2.moveTo(k, s); c2.lineTo(k + s, 0); c2.stroke(); }
+      const pat = ctx.createPattern(cv, "repeat");
+      if (pat && pat.setTransform) pat.setTransform(new DOMMatrix().scale(1 / dpr).rotateSelf(angle - 45));
+      hatchCache.set(key, pat);
+      return pat;
+    }
+    function shape(o, build) {
+      ctx.save();
+      if (o.alpha != null) ctx.globalAlpha = o.alpha;
+      ctx.beginPath();
+      build();
+      if (o.fill) { ctx.fillStyle = color(o.fill); ctx.fill(); }
+      if (o.hatch) {
+        ctx.fillStyle = hatchPattern(o.hatch === true ? "muted" : o.hatch, o.hatchGap ?? 6, o.hatchAngle ?? 45);
+        ctx.fill();
+      }
+      if (o.stroke) {
+        ctx.strokeStyle = color(o.stroke);
+        ctx.lineWidth = o.width ?? 2;
+        ctx.lineCap = ctx.lineJoin = "round";
+        ctx.setLineDash(o.dash || []);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    const font = (o, fallback = fontText) => `${o.italic ? "italic " : ""}${o.weight ?? 500} ${o.size ?? 14}px ${o.font === "mono" ? fontMono : o.font === "serif" ? fontSerif : o.font ?? fallback}`;
+    const textWidth = (str, o) => { ctx.save(); ctx.font = font(o); if ("letterSpacing" in ctx && o.tracking) ctx.letterSpacing = `${o.tracking}px`; const w = ctx.measureText(String(str)).width; ctx.restore(); return w; };
+
+    const g = {
+      ctx, w: 0, h: 0, dpr: 1, color, rgba, mix,
+      line(a, b, o = {}) {
+        shape({ stroke: "ink", ...o }, () => { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); });
+      },
+      path(pts, o = {}) {
+        if (pts.length < 2) return;
+        shape(o.fill || o.stroke || o.hatch ? o : { ...o, stroke: "ink" }, () => {
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+          if (o.close) ctx.closePath();
+        });
+      },
+      // Smooth curve through the points (Catmull-Rom).
+      spline(pts, o = {}) {
+        if (pts.length < 2) return;
+        g.path(window.E3 ? E3.smooth(pts, { closed: !!o.close, steps: o.steps ?? 10 }) : pts, o);
+      },
+      circle(c, r, o = {}) {
+        shape(o.fill || o.stroke || o.hatch ? o : { ...o, fill: "ink" }, () => ctx.arc(c[0], c[1], Math.max(0, r), 0, TAU));
+      },
+      rect(x, y, w, h, o = {}) {
+        shape(o.fill || o.stroke || o.hatch ? o : { ...o, fill: "ink" }, () => {
+          if (o.r && ctx.roundRect) ctx.roundRect(x, y, w, h, o.r); else ctx.rect(x, y, w, h);
+        });
+      },
+      arrow(a, b, o = {}) {
+        const w = o.width ?? 2;
+        const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+        if (len < 1e-6) return;
+        const ux = dx / len, uy = dy / len;
+        const hl = Math.min(o.head ?? Math.max(9, w * 4), len);
+        const hw = hl * 0.45;
+        const base = [b[0] - ux * hl, b[1] - uy * hl];
+        g.line(a, base, { ...o, stroke: o.stroke ?? "ink", width: w });
+        shape({ fill: o.stroke ?? "ink", alpha: o.alpha }, () => {
+          ctx.moveTo(b[0], b[1]);
+          ctx.lineTo(base[0] - uy * hw, base[1] + ux * hw);
+          ctx.lineTo(base[0] + uy * hw, base[1] - ux * hw);
+          ctx.closePath();
+        });
+      },
+      // Arc with an arrowhead at the end: center c, radius r, angles in radians (canvas convention, y down).
+      arcArrow(c, r, a0, a1, o = {}) {
+        const n = 32, pts = [];
+        for (let i = 0; i <= n; i++) { const a = a0 + ((a1 - a0) * i) / n; pts.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]); }
+        const tail = pts.slice(0, -3);
+        g.path(tail, { stroke: o.stroke ?? "ink", width: o.width ?? 2, alpha: o.alpha });
+        g.arrow(pts[pts.length - 4], pts[pts.length - 1], { ...o, head: o.head ?? 10 });
+      },
+      text(str, p, o = {}) {
+        ctx.save();
+        if (o.alpha != null) ctx.globalAlpha = o.alpha;
+        ctx.font = font(o);
+        if ("letterSpacing" in ctx) ctx.letterSpacing = `${o.tracking ?? 0}px`;
+        ctx.textAlign = o.align ?? "center";
+        ctx.textBaseline = o.baseline ?? "middle";
+        const s = o.caps ? String(str).toUpperCase() : String(str);
+        if (o.halo) {
+          ctx.lineWidth = o.haloWidth ?? 4;
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = color(o.halo === true ? "panel" : o.halo);
+          ctx.strokeText(s, p[0], p[1]);
+        }
+        ctx.fillStyle = color(o.color ?? "ink");
+        ctx.fillText(s, p[0], p[1]);
+        ctx.restore();
+      },
+      measure: (str, o = {}) => textWidth(o.caps ? String(str).toUpperCase() : str, o),
+      // A small uppercase label with a halo, the house style for naming things inside figures.
+      label(str, p, o = {}) {
+        g.text(str, p, { size: 11, weight: 600, caps: true, tracking: 0.9, halo: true, color: "ink", ...o });
+      },
+      // A colored pill with text, for variable names and short values ("c", "a", "X").
+      chip(str, p, o = {}) {
+        const size = o.size ?? 12, padX = o.padX ?? 5, h = size + 8;
+        const w = Math.max(h, textWidth(str, { size, weight: 600 }) + padX * 2);
+        const c = o.color ?? "blue";
+        g.rect(p[0] - w / 2, p[1] - h / 2, w, h, { fill: mix(c, "#ffffff", 0.68), stroke: c, width: 1, r: 4 });
+        g.text(str, [p[0], p[1] + 0.5], { size, weight: 600, color: "#1d1d20" });
+        return { w, h };
+      },
+      // Labels in the left and right margins of the canvas, with leader lines to their anchors.
+      // items: [{ at: [x, y], text, color, side: "left" | "right" }]
+      callouts(items, o = {}) {
+        const pad = o.pad ?? 12, gap = o.gap ?? 20, size = o.size ?? 11;
+        const style = { size, weight: 600, caps: o.caps ?? true, tracking: 0.9 };
+        const sides = { left: [], right: [] };
+        for (const it of items) {
+          if (!it || !it.at || !Number.isFinite(it.at[0])) continue;
+          sides[it.side ?? (it.at[0] < (o.split ?? g.w / 2) ? "left" : "right")].push(it);
+        }
+        for (const [side, list] of Object.entries(sides)) {
+          list.sort((a, b) => a.at[1] - b.at[1]);
+          const lo = pad + size, hi = g.h - pad - size;
+          const ys = list.map(it => clamp(it.at[1] + (it.dy ?? 0), lo, hi));
+          for (let i = 1; i < ys.length; i++) ys[i] = Math.max(ys[i], ys[i - 1] + gap);
+          const over = ys.length ? ys[ys.length - 1] - hi : 0;
+          if (over > 0) for (let i = ys.length - 1; i >= 0; i--) ys[i] = Math.max(lo, ys[i] - over);
+          list.forEach((it, i) => {
+            const y = ys[i], c = it.color ?? "ink";
+            const tw = textWidth(it.text, style);
+            const tx = side === "left" ? (o.left ?? pad) : g.w - (o.right ?? pad);
+            const shoulder = side === "left" ? tx + tw + 8 : tx - tw - 8;
+            const knee = side === "left" ? Math.min(shoulder + 14, it.at[0]) : Math.max(shoulder - 14, it.at[0]);
+            g.path([it.at, [knee, y], [shoulder, y]], { stroke: c === "ink" ? "muted" : c, width: 1 });
+            g.circle(it.at, 2.6, { fill: c === "ink" ? "ink" : c, stroke: "panel", width: 1.2 });
+            g.text(it.text, [tx, y], { ...style, color: c, align: side === "left" ? "left" : "right", halo: true });
+          });
+        }
+      },
+      // A dimension line between a and b with end ticks and a centered label.
+      dimension(a, b, text, o = {}) {
+        const c = o.color ?? "muted", off = o.offset ?? 0;
+        const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len;
+        const A = [a[0] + nx * off, a[1] + ny * off], B = [b[0] + nx * off, b[1] + ny * off];
+        if (off) { g.line(a, A, { stroke: c, width: 0.75, dash: [2, 3] }); g.line(b, B, { stroke: c, width: 0.75, dash: [2, 3] }); }
+        g.line(A, B, { stroke: c, width: 1 });
+        for (const P of [A, B]) g.line([P[0] + nx * 5, P[1] + ny * 5], [P[0] - nx * 5, P[1] - ny * 5], { stroke: c, width: 1 });
+        if (text != null) g.text(text, [(A[0] + B[0]) / 2 + nx * 11, (A[1] + B[1]) / 2 + ny * 11], { size: 12, font: "mono", color: o.textColor ?? c, halo: true });
+      },
+      // A horizontal meter bar. frac from 0 to 1.
+      meter(x, y, w, h, frac, o = {}) {
+        const c = o.color ?? "brass";
+        g.rect(x, y, w, h, { fill: "grid", r: h / 2 });
+        g.rect(x, y, Math.max(h, w * clamp(frac, 0, 1)), h, { fill: c, r: h / 2, alpha: frac <= 0 ? 0 : 1 });
+        if (o.label) g.text(o.label, [x + w / 2, y + h + 12], { size: 11, weight: 600, caps: true, tracking: 0.8, color: "muted" });
+      },
+      // A round gauge with a needle. value in [min, max].
+      dial(c, r, value, o = {}) {
+        const min = o.min ?? 0, max = o.max ?? 1, a0 = Math.PI * 0.75, a1 = Math.PI * 2.25;
+        g.circle(c, r, { fill: "panel", stroke: "ink", width: 1.5 });
+        const ticks = o.ticks ?? 10;
+        for (let i = 0; i <= ticks; i++) {
+          const a = lerp(a0, a1, i / ticks), long = i % (o.major ?? 2) === 0;
+          g.line([c[0] + Math.cos(a) * r * (long ? 0.78 : 0.85), c[1] + Math.sin(a) * r * (long ? 0.78 : 0.85)],
+            [c[0] + Math.cos(a) * r * 0.92, c[1] + Math.sin(a) * r * 0.92], { stroke: "ink", width: long ? 1.5 : 1 });
+        }
+        const a = lerp(a0, a1, clamp((value - min) / (max - min), 0, 1));
+        g.line(c, [c[0] + Math.cos(a) * r * 0.82, c[1] + Math.sin(a) * r * 0.82], { stroke: o.color ?? "red", width: 2 });
+        g.circle(c, 3, { fill: o.color ?? "red" });
+        if (o.label) g.text(o.label, [c[0], c[1] + r * 0.45], { size: 10, weight: 600, caps: true, tracking: 0.8, color: "muted" });
+      },
+      // A scalar field drawn as color. fn(x, y) gets canvas pixels and returns a number.
+      field(fn, o = {}) {
+        const box = o.box ?? [0, 0, g.w, g.h], res = o.res ?? 3;
+        const cols = Math.max(2, Math.ceil(box[2] / res)), rows = Math.max(2, Math.ceil(box[3] / res));
+        const [lo, hi] = o.range ?? [-1, 1];
+        const map = o.map ?? "diverging";
+        const cv = document.createElement("canvas");
+        cv.width = cols; cv.height = rows;
+        const c2 = cv.getContext("2d"), img = c2.createImageData(cols, rows);
+        const paper = rgb("panel"), neg = rgb(o.low ?? "blue"), pos = rgb(o.high ?? "red");
+        for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+          const v = fn(box[0] + ((i + 0.5) / cols) * box[2], box[1] + ((j + 0.5) / rows) * box[3]);
+          let col;
+          if (map === "diverging") {
+            const t = clamp((v - (lo + hi) / 2) / ((hi - lo) / 2), -1, 1), k = Math.pow(Math.abs(t), 0.8) * 0.85;
+            const end = t < 0 ? neg : pos;
+            col = paper.map((p, q) => p + (end[q] - p) * k);
+          } else {
+            const t = clamp((v - lo) / (hi - lo), 0, 1);
+            col = paper.map((p, q) => p + (pos[q] - p) * t);
+          }
+          const k = (j * cols + i) * 4;
+          img.data[k] = col[0]; img.data[k + 1] = col[1]; img.data[k + 2] = col[2]; img.data[k + 3] = Number.isFinite(v) ? 255 : 0;
+        }
+        c2.putImageData(img, 0, 0);
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        if (o.alpha != null) ctx.globalAlpha = o.alpha;
+        ctx.drawImage(cv, box[0], box[1], box[2], box[3]);
+        ctx.restore();
+      },
+      colorbar(x, y, w, h, o = {}) {
+        const [lo, hi] = o.range ?? [-1, 1];
+        g.field((px) => lerp(lo, hi, (px - x) / w), { box: [x, y, w, h], res: 2, range: [lo, hi], map: o.map, low: o.low, high: o.high });
+        g.rect(x, y, w, h, { stroke: "faint", width: 1 });
+        if (o.label) g.text(o.label, [x + w / 2, y + h + 12], { size: 11, weight: 600, caps: true, tracking: 0.8, color: "muted" });
+        if (o.ends) { g.text(o.ends[0], [x - 6, y + h / 2], { size: 11, align: "right", color: "muted" }); g.text(o.ends[1], [x + w + 6, y + h / 2], { size: 11, align: "left", color: "muted" }); }
+      },
+      // A circular magnifier: redraws `draw` zoomed around `from`, shown in a circle at `to`.
+      inset(o, draw) {
+        const { from, to } = o, R = o.radius ?? 70, zoom = o.zoom ?? 3, r = R / zoom;
+        const dx = to[0] - from[0], dy = to[1] - from[1], d = Math.hypot(dx, dy) || 1;
+        const nx = -dy / d, ny = dx / d;
+        const lineO = { stroke: "muted", width: 1 };
+        g.line([from[0] + nx * r, from[1] + ny * r], [to[0] + nx * R, to[1] + ny * R], lineO);
+        g.line([from[0] - nx * r, from[1] - ny * r], [to[0] - nx * R, to[1] - ny * R], lineO);
+        g.circle(from, r, { stroke: "muted", width: 1 });
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(to[0], to[1], R, 0, TAU);
+        ctx.fillStyle = color("panel");
+        ctx.fill();
+        ctx.clip();
+        ctx.translate(to[0], to[1]);
+        ctx.scale(zoom, zoom);
+        ctx.translate(-from[0], -from[1]);
+        draw(g);
+        ctx.restore();
+        g.circle(to, R, { stroke: "ink", width: 1.5 });
+      },
+      // World coordinates (y up) -> canvas pixels, fitted into the canvas or into o.box = [x, y, w, h].
+      fit(x0, x1, y0, y1, o = {}) {
+        const pad = o.pad ?? 16;
+        const box = o.box ?? [0, 0, g.w, g.h];
+        let sx = (box[2] - 2 * pad) / (x1 - x0);
+        let sy = (box[3] - 2 * pad) / (y1 - y0);
+        if (o.uniform ?? true) sx = sy = Math.min(sx, sy);
+        const cx = box[0] + box[2] / 2, cy = box[1] + box[3] / 2;
+        const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+        const P = q => [cx + (q[0] - mx) * sx, cy - (q[1] - my) * sy];
+        P.inv = p => [mx + (p[0] - cx) / sx, my - (p[1] - cy) / sy];
+        P.sx = sx;
+        P.sy = sy;
+        return P;
+      },
+      axes(P, o = {}) {
+        const [x0, x1] = o.x, [y0, y1] = o.y;
+        const ax = clamp(0, x0, x1), ay = clamp(0, y0, y1);
+        const fmt = o.format ?? (t => String(+t.toFixed(3)));
+        const thin = { stroke: "muted", width: 1 };
+        if (o.grid) {
+          for (const t of o.xTicks ?? []) g.line(P([t, y0]), P([t, y1]), { stroke: "grid", width: 1 });
+          for (const t of o.yTicks ?? []) g.line(P([x0, t]), P([x1, t]), { stroke: "grid", width: 1 });
+        }
+        g.line(P([x0, ay]), P([x1, ay]), thin);
+        g.line(P([ax, y0]), P([ax, y1]), thin);
+        for (const t of o.xTicks ?? []) {
+          const p = P([t, ay]);
+          g.line(p, [p[0], p[1] + 4], thin);
+          g.text(fmt(t), [p[0], p[1] + 14], { color: "muted", size: 11, font: "mono" });
+        }
+        for (const t of o.yTicks ?? []) {
+          const p = P([ax, t]);
+          g.line(p, [p[0] - 4, p[1]], thin);
+          g.text(fmt(t), [p[0] - 7, p[1]], { color: "muted", size: 11, align: "right", font: "mono" });
+        }
+        const lab = { size: 10.5, weight: 600, caps: true, tracking: 0.8, color: "muted" };
+        if (o.xLabel) { const p = P([x1, ay]); g.text(o.xLabel, [p[0], p[1] - 10], { ...lab, align: "right" }); }
+        if (o.yLabel) { const p = P([ax, y1]); g.text(o.yLabel, [p[0] + 8, p[1] + 2], { ...lab, align: "left" }); }
+      },
+      // Runs fn with drawing clipped to box = [x, y, w, h].
+      clip(box, fn) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(box[0], box[1], box[2], box[3]);
+        ctx.clip();
+        try { fn(g); } finally { ctx.restore(); }
+      },
+      // Simple 3D to 2D projection for line drawings (no WebGL). Larger depth is closer.
+      view3d(o = {}) {
+        const yaw = o.yaw ?? 0.6, pitch = o.pitch ?? 0.3;
+        const s = o.scale ?? Math.min(g.w, g.h) * 0.35;
+        const c = o.center ?? [g.w / 2, g.h / 2];
+        const dist = o.dist ?? Infinity;
+        const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+        const rotate = q => {
+          const x1 = cy * q[0] + sy * q[2], z1 = -sy * q[0] + cy * q[2];
+          return [x1, cp * q[1] - sp * z1, sp * q[1] + cp * z1];
+        };
+        const P = q => {
+          const r = rotate(q);
+          const f = dist === Infinity ? 1 : dist / (dist - r[2]);
+          return [c[0] + r[0] * s * f, c[1] - r[1] * s * f, r[2]];
+        };
+        P.rotate = rotate;
+        P.scale = s;
+        return P;
+      },
+      // Renders an E3 scene into the canvas (or into o.box) and returns its view:
+      // view.project([x, y, z]) -> [px, py, distance], view.pick([px, py]) -> { node, point } | null.
+      render3d(scene, cam = {}, o = {}) {
+        if (!window.E3) throw new Error("the 3D engine (E3) is missing from this page");
+        const box = o.box ?? [0, 0, g.w, g.h];
+        const [bx, by, bw, bh] = box;
+        // Supersample 2x on ordinary screens; dense screens already have the pixels.
+        const out = g.dpr, budget = 4.2e6;
+        let ss = out >= 1.5 ? 1 : 2;
+        if (bw * bh * (out * ss) ** 2 > budget) ss = 1;
+        const view = E3.render(scene, cam, bw, bh, out, ss);
+        const s = view.source;
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(s.image, s.sx, s.sy, s.sw, s.sh, bx, by, bw, bh);
+        ctx.restore();
+        if (s.image.close) s.image.close();
+        return {
+          ...view,
+          box,
+          project: p => { const q = view.project(p); return [q[0] + bx, q[1] + by, q[2]]; },
+          pick: (p, opt) => view.pick([p[0] - bx, p[1] - by], opt),
+          hidden: p => view.hidden(p),
+        };
+      },
+      // Small XYZ axis marker showing the 3D view's orientation.
+      gizmo(view, o = {}) {
+        const at = o.at ?? [g.w - 34, g.h - 34], size = o.size ?? 20;
+        const t = view.target, o0 = view.project(t);
+        const span = Math.max(1e-6, E3.v3.dist(view.eye, t)) * 0.05;
+        const axes = [["X", [1, 0, 0], "red"], ["Y", [0, 1, 0], "green"], ["Z", [0, 0, 1], "blue"]];
+        const ends = axes.map(([name, d, c]) => {
+          const q = view.project(E3.v3.add(t, E3.v3.scale(d, span)));
+          const v = [q[0] - o0[0], q[1] - o0[1]], l = Math.hypot(v[0], v[1]) || 1;
+          return { name, c, depth: q[2], end: [at[0] + (v[0] / l) * size * Math.min(1, l / 6), at[1] + (v[1] / l) * size * Math.min(1, l / 6)] };
+        }).sort((a, b) => b.depth - a.depth);
+        for (const e of ends) { g.line(at, e.end, { stroke: e.c, width: 1.5 }); g.text(e.name, [e.end[0] + (e.end[0] - at[0]) * 0.35, e.end[1] + (e.end[1] - at[1]) * 0.35], { size: 9, weight: 700, color: e.c }); }
+      },
+    };
+    return g;
+  }
+
+  // ---------- Figures ----------
+  function fail(d, phase, e) {
+    d.broken = true;
+    d.playing = false;
+    syncPlay(d);
+    const message = String((e && e.message) || e);
+    errors.push({ demo: d.id, phase, message });
+    console.error(`[demo #${d.id}] ${phase}() failed:`, e);
+    let box = d.el.querySelector(".demo-error");
+    if (!box) {
+      box = document.createElement("p");
+      box.className = "demo-error";
+      d.el.append(box);
+    }
+    box.textContent = `This figure stopped: ${phase}() threw "${message}"`;
+  }
+
+  function guard(d, phase, fn) {
+    if (d.broken) return false;
+    try { fn(); return true; } catch (e) { fail(d, phase, e); return false; }
+  }
+
+  const initialState = spec =>
+    typeof spec.state === "function" ? spec.state() : clone(spec.state ?? {});
+
+  function demo(id, spec) {
+    const el = document.getElementById(id);
+    if (!el) {
+      errors.push({ demo: id, phase: "setup", message: `demo("${id}") found no element with that id` });
+      console.error(`[demo #${id}] no element with id="${id}"`);
+      return null;
+    }
+    const d = { id, el, spec, v: {}, inputs: {}, w: 0, h: 0, dpr: 1, visible: false, dirty: true, broken: false, dragging: false, playing: false, spin: null };
+    d.handle = {
+      id,
+      get state() { return d.s; },
+      get values() { return d.v; },
+      set: (key, value) => setControl(d, key, value),
+      reset() {
+        const view = d.s.view;
+        for (const k of Object.keys(d.s)) delete d.s[k];
+        Object.assign(d.s, initialState(spec));
+        if (view) d.s.view = view;
+        d.dirty = true;
+      },
+      redraw() { d.dirty = true; },
+      play(on = true) { d.playing = !!on && !!spec.step; syncPlay(d); },
+    };
+    d.s = initialState(spec);
+    if (spec.orbit) {
+      d.s.view = { yaw: spec.orbit.yaw ?? -0.6, pitch: spec.orbit.pitch ?? 0.35 };
+      d.view0 = { ...d.s.view };
+    }
+
+    el.classList.add("is-live");
+    const stage = document.createElement("div");
+    stage.className = "stage";
+    stage.tabIndex = 0;
+    stage.setAttribute("role", "group");
+    stage.setAttribute("aria-label", el.getAttribute("aria-label") || "interactive figure");
+    d.canvas = document.createElement("canvas");
+    d.canvas.setAttribute("aria-hidden", "true");
+    stage.append(d.canvas);
+    el.prepend(stage);
+    d.stage = stage;
+    d.ctx = d.canvas.getContext("2d");
+    d.g = makeG(d.ctx);
+    const side = document.createElement("div");
+    side.className = "side";
+    d.side = side;
+    let after = stage;
+    if (spec.controls?.length) { const c = buildControls(d); after.after(c); after = c; }
+    after.after(side);
+    buildTools(d, stage);
+    buildHints(d);
+    if (spec.drag || spec.orbit || spec.hover) addPointer(d);
+    addKeys(d);
+
+    demos.push(d);
+    byEl.set(el, d);
+    visibility.observe(el);
+    // Resize on the next frame, not inside the observer: changing the canvas
+    // height there would re-trigger the observer and log a loop error.
+    new ResizeObserver(() => { d.needsResize = true; }).observe(stage);
+    return d.handle;
+  }
+
+  function buildControls(d) {
+    const box = document.createElement("div");
+    box.className = "controls";
+    const buttons = document.createElement("div");
+    buttons.className = "buttons";
+    for (const c of d.spec.controls) {
+      if (c.type === "button") {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn";
+        b.textContent = c.label;
+        b.addEventListener("click", () => {
+          if (guard(d, "action", () => c.action?.(d.s, d.v, d.handle))) d.dirty = true;
+        });
+        buttons.append(b);
+        continue;
+      }
+      const row = document.createElement("label");
+      row.style.setProperty("--c", cssColor(c.color ?? "ink"));
+      const input = document.createElement("input");
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = c.label ?? c.key;
+      let out = null;
+      if (c.type === "toggle") {
+        row.className = "ctl toggle";
+        input.type = "checkbox";
+        row.append(input, name);
+        input.addEventListener("change", () => setControl(d, c.key, input.checked));
+        d.v[c.key] = !!c.value;
+      } else {
+        row.className = "ctl";
+        Object.assign(input, { type: "range", min: c.min, max: c.max, step: c.step ?? "any" });
+        out = document.createElement("output");
+        row.append(name, input, out);
+        input.addEventListener("input", () => setControl(d, c.key, input.valueAsNumber));
+        d.v[c.key] = c.value ?? c.min;
+      }
+      d.inputs[c.key] = { c, input, out };
+      syncInput(d, c.key);
+      box.append(row);
+    }
+    if (buttons.children.length) box.append(buttons);
+    return box;
+  }
+
+  function setControl(d, key, value) {
+    const entry = d.inputs[key];
+    if (!entry) throw new Error(`figure "${d.id}" has no control "${key}"`);
+    const { c } = entry;
+    d.v[key] = c.type === "toggle" ? !!value : clamp(Number(value), c.min, c.max);
+    syncInput(d, key);
+    if (d.spec.change) guard(d, "change", () => d.spec.change(key, d.s, d.v, d.handle));
+    d.dirty = true;
+  }
+
+  function syncInput(d, key) {
+    const { c, input, out } = d.inputs[key];
+    const val = d.v[key];
+    if (c.type === "toggle") { input.checked = val; return; }
+    if (input.valueAsNumber !== val) input.value = val;
+    input.style.setProperty("--p", `${((val - c.min) / (c.max - c.min)) * 100}%`);
+    out.textContent = c.format ? c.format(val) : val.toFixed(decimals(c.step)) + (c.unit ? ` ${c.unit}` : "");
+  }
+
+  const ICONS = {
+    pause: '<svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3" width="3" height="10" rx="1"/><rect x="9.5" y="3" width="3" height="10" rx="1"/></svg>',
+    play: '<svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2v9.6c0 .5.5.8.9.5l7-4.8a.6.6 0 0 0 0-1L5.9 2.7c-.4-.3-.9 0-.9.5z"/></svg>',
+    reset: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 1-5.2 3.7l1.4.5A4 4 0 1 0 8 4v2L4.8 3.3 8 .5z"/></svg>',
+  };
+
+  function buildTools(d, stage) {
+    const { spec } = d;
+    const tools = document.createElement("div");
+    tools.className = "tools";
+    if (spec.step && spec.playButton !== false) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "icon-btn play";
+      b.innerHTML = ICONS.pause + ICONS.play;
+      b.addEventListener("click", () => { d.playing = !d.playing; syncPlay(d); });
+      tools.append(b);
+      d.playBtn = b;
+      d.playing = spec.autoplay !== false && !motionQuery.matches;
+      syncPlay(d);
+    }
+    if (spec.reset && typeof spec.state === "function") {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "icon-btn";
+      b.innerHTML = ICONS.reset;
+      b.setAttribute("aria-label", "Reset");
+      b.addEventListener("click", () => {
+        d.handle.reset();
+        if (typeof spec.reset === "function") guard(d, "reset", () => spec.reset(d.s, d.v, d.handle));
+      });
+      tools.append(b);
+    }
+    if (tools.children.length) stage.append(tools);
+    if (spec.drag || spec.orbit) {
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      badge.setAttribute("aria-hidden", "true");
+      stage.append(badge);
+    }
+  }
+
+  function buildHints(d) {
+    const { spec } = d;
+    let hints = spec.hints;
+    if (hints === undefined) {
+      hints = [];
+      const sliders = (spec.controls ?? []).filter(c => !c.type);
+      if (spec.orbit && spec.drag) hints.push(["Drag", "move or turn"]);
+      else if (spec.orbit) hints.push(["Drag", "turn"]);
+      else if (spec.drag) hints.push(["Drag", "move"]);
+      if (sliders[0]) hints.push(["← →", (sliders[0].label ?? sliders[0].key).toLowerCase()]);
+      if (sliders[1]) hints.push(["↑ ↓", (sliders[1].label ?? sliders[1].key).toLowerCase()]);
+      if (spec.step && spec.playButton !== false) hints.push(["Space", "pause"]);
+    }
+    for (const [keys, what] of hints || []) {
+      const row = document.createElement("span");
+      row.className = "hint";
+      for (const k of String(keys).split(" ")) { const kb = document.createElement("kbd"); kb.textContent = k; row.append(kb); }
+      row.append(document.createTextNode(what));
+      d.side.append(row);
+    }
+    if (spec.status) {
+      d.statusEl = document.createElement("span");
+      d.statusEl.className = "status";
+      d.side.append(d.statusEl);
+    }
+  }
+
+  function syncPlay(d) {
+    if (!d.playBtn) return;
+    d.playBtn.dataset.state = d.playing ? "playing" : "paused";
+    d.playBtn.setAttribute("aria-label", d.playing ? "Pause animation" : "Play animation");
+  }
+
+  function addKeys(d) {
+    const sliders = () => (d.spec.controls ?? []).filter(c => !c.type);
+    d.stage.addEventListener("keydown", e => {
+      if (d.broken) return;
+      const sl = sliders();
+      const nudge = (c, dir) => {
+        const step = c.step ?? (c.max - c.min) / 100;
+        setControl(d, c.key, d.v[c.key] + dir * step * (e.shiftKey ? 10 : 1));
+      };
+      let used = true;
+      if (e.key === " " && d.spec.step && d.spec.playButton !== false) { d.playing = !d.playing; syncPlay(d); }
+      else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && sl[0]) nudge(sl[0], e.key === "ArrowRight" ? 1 : -1);
+      else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && sl[1]) nudge(sl[1], e.key === "ArrowUp" ? 1 : -1);
+      else if (e.key.startsWith("Arrow") && d.spec.orbit) {
+        const v = d.s.view;
+        if (e.key === "ArrowLeft") v.yaw -= 0.08; else if (e.key === "ArrowRight") v.yaw += 0.08;
+        else if (e.key === "ArrowUp") v.pitch = clampPitch(d, v.pitch + 0.06); else v.pitch = clampPitch(d, v.pitch - 0.06);
+        d.dirty = true;
+      } else used = false;
+      if (used) e.preventDefault();
+    });
+  }
+
+  const clampPitch = (d, p) => clamp(p, d.spec.orbit?.minPitch ?? -1.45, d.spec.orbit?.maxPitch ?? 1.45);
+  const clampYaw = (d, y) => clamp(y, d.spec.orbit?.minYaw ?? -Infinity, d.spec.orbit?.maxYaw ?? Infinity);
+
+  function addPointer(d) {
+    const { canvas, spec } = d;
+    if (spec.drag || spec.orbit) canvas.classList.add("draggable");
+    let mode = null, last = null, lastT = 0, vel = [0, 0];
+    const pos = e => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    const hits = p => {
+      if (!spec.drag) return false;
+      if (!spec.drag.hit) return true;
+      let hit = false;
+      guard(d, "drag.hit", () => { hit = !!spec.drag.hit(p, d.s, d.v, d.handle); });
+      return hit;
+    };
+    canvas.addEventListener("pointerdown", e => {
+      if (d.broken || e.button > 0) return;
+      const p = pos(e);
+      if (hits(p)) mode = "drag";
+      else if (spec.orbit) mode = "orbit";
+      else return;
+      d.dragging = mode === "drag";
+      d.spin = null;
+      last = p;
+      lastT = performance.now();
+      vel = [0, 0];
+      try { canvas.setPointerCapture(e.pointerId); } catch {}
+      canvas.classList.add("grabbing");
+      e.preventDefault();
+    });
+    canvas.addEventListener("pointermove", e => {
+      const p = pos(e);
+      if (!mode) {
+        if (e.pointerType === "mouse") canvas.style.cursor = spec.orbit || hits(p) ? "grab" : "";
+        if (spec.hover) {
+          let changed = false;
+          guard(d, "hover", () => { changed = spec.hover(p, d.s, d.v, d.handle); });
+          if (changed) d.dirty = true;
+        }
+        return;
+      }
+      const now = performance.now(), dtm = Math.max(1, now - lastT);
+      const delta = [p[0] - last[0], p[1] - last[1]];
+      vel = [lerp(vel[0], delta[0] / dtm, 0.5), lerp(vel[1], delta[1] / dtm, 0.5)];
+      last = p;
+      lastT = now;
+      if (mode === "drag") guard(d, "drag.move", () => spec.drag.move?.(p, d.s, d.v, delta, d.handle));
+      else {
+        const view = d.s.view;
+        view.yaw = clampYaw(d, view.yaw + delta[0] * 0.01);
+        view.pitch = clampPitch(d, view.pitch + delta[1] * 0.01);
+      }
+      d.dirty = true;
+    });
+    const end = () => {
+      if (!mode) return;
+      if (mode === "drag") guard(d, "drag.end", () => spec.drag.end?.(d.s, d.v, d.handle));
+      if (mode === "orbit" && !motionQuery.matches && performance.now() - lastT < 80 && Math.hypot(vel[0], vel[1]) > 0.08) d.spin = vel.slice();
+      mode = null;
+      d.dragging = false;
+      canvas.classList.remove("grabbing");
+      d.dirty = true;
+    };
+    canvas.addEventListener("pointerup", end);
+    canvas.addEventListener("pointercancel", end);
+    canvas.addEventListener("pointerleave", () => {
+      if (spec.hover && !mode) {
+        let changed = false;
+        guard(d, "hover", () => { changed = spec.hover(null, d.s, d.v, d.handle); });
+        if (changed) d.dirty = true;
+      }
+    });
+  }
+
+  function resize(d) {
+    const w = Math.round(d.canvas.parentElement.clientWidth);
+    if (!w || d.broken) return;
+    let aspect = 1.6;
+    if (!guard(d, "aspect", () => {
+      aspect = typeof d.spec.aspect === "function" ? d.spec.aspect(w) : d.spec.aspect ?? 1.6;
+    })) return;
+    const h = Math.round(w / aspect);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (w === d.w && h === d.h && dpr === d.dpr) return;
+    Object.assign(d, { w, h, dpr });
+    d.canvas.style.height = `${h}px`;
+    d.canvas.width = Math.round(w * dpr);
+    d.canvas.height = Math.round(h * dpr);
+    render(d);
+  }
+
+  function render(d) {
+    d.dirty = false;
+    if (d.broken || !d.w) return;
+    const ctx = d.ctx;
+    if (ctx.reset) ctx.reset();
+    // Paint the background instead of clearing: some Chrome builds don't reliably
+    // clear a canvas that receives WebGL frames, which leaves ghost images behind.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = "copy";
+    ctx.fillStyle = color(d.spec.background ?? "panel");
+    ctx.fillRect(0, 0, d.canvas.width, d.canvas.height);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.setTransform(d.dpr, 0, 0, d.dpr, 0, 0);
+    d.g.w = d.w;
+    d.g.h = d.h;
+    d.g.dpr = d.dpr;
+    guard(d, "draw", () => d.spec.draw(d.g, d.s, d.v, d.handle));
+    if (d.statusEl && !d.broken) guard(d, "status", () => { d.statusEl.textContent = d.spec.status(d.s, d.v) ?? ""; });
+  }
+
+  const visibility = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      const d = byEl.get(e.target);
+      if (d) d.visible = e.isIntersecting;
+    }
+  }, { rootMargin: "200px 0px" });
+
+  let lastTime = performance.now();
+  function frame(now) {
+    const dt = clamp((now - lastTime) / 1000, 0, 1 / 30);
+    lastTime = now;
+    for (const d of demos) {
+      if (d.needsResize) { d.needsResize = false; resize(d); }
+      if (d.spin && !d.broken && d.s.view) {
+        const view = d.s.view, k = Math.exp(-dt / 0.35);
+        view.yaw = clampYaw(d, view.yaw + d.spin[0] * dt * 1000 * 0.01);
+        view.pitch = clampPitch(d, view.pitch + d.spin[1] * dt * 1000 * 0.01);
+        d.spin = [d.spin[0] * k, d.spin[1] * k];
+        if (Math.hypot(d.spin[0], d.spin[1]) < 0.004) d.spin = null;
+        d.dirty = true;
+      }
+      if (d.spec.step && d.playing && d.visible && !d.dragging && !d.broken) {
+        if (guard(d, "step", () => d.spec.step(dt, d.s, d.v, d.handle))) d.dirty = true;
+      }
+      if (d.dirty && (d.visible || !d.w)) render(d);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  darkQuery.addEventListener("change", () => { readTheme(); for (const d of demos) d.dirty = true; });
+  addEventListener("resize", () => { for (const d of demos) resize(d); });
+  addEventListener("error", e => errors.push({ demo: null, phase: "page", message: e.message }));
+  addEventListener("unhandledrejection", e => errors.push({ demo: null, phase: "page", message: String(e.reason) }));
+
+  // ---------- Self-check (used by scripts/verify.mjs, or open the page with ?check) ----------
+  function snapshot(d) {
+    render(d);
+    const data = new Uint32Array(d.ctx.getImageData(0, 0, d.canvas.width, d.canvas.height).data.buffer);
+    let hash = 2166136261, varied = false;
+    const first = data[0];
+    for (let i = 0; i < data.length; i++) {
+      hash = Math.imul(hash ^ data[i], 16777619);
+      if (data[i] !== first) varied = true;
+    }
+    return { hash: hash >>> 0, varied };
+  }
+
+  function saveState(d) { return { s: clone(d.s), v: { ...d.v } }; }
+  function restoreState(d, saved) {
+    for (const k of Object.keys(d.s)) delete d.s[k];
+    Object.assign(d.s, clone(saved.s));
+    for (const [k, val] of Object.entries(saved.v)) { d.v[k] = val; syncInput(d, k); }
+    d.dirty = true;
+  }
+  function runSteps(d, n) {
+    for (let i = 0; i < n && !d.broken; i++) guard(d, "step", () => d.spec.step(1 / 60, d.s, d.v, d.handle));
+  }
+  function probe(d, key, value, saved) {
+    restoreState(d, saved);
+    setControl(d, key, value);
+    if (d.spec.step) runSteps(d, 20);
+    return snapshot(d).hash;
+  }
+
+  function checkDemo(d) {
+    const { spec } = d;
+    const r = { id: d.id, summary: "", errors: [], warnings: [] };
+    const own = () => errors.filter(e => e.demo === d.id).map(e => `${e.phase}() threw: ${e.message}`);
+    if (!d.el.getAttribute("aria-label")) r.warnings.push("the <figure> has no aria-label describing what it shows");
+    resize(d);
+    const n = (spec.controls ?? []).length;
+    r.summary = `${d.w}x${d.h}, ${n} control${n === 1 ? "" : "s"}` +
+      (spec.step ? ", animated" : "") + (spec.drag ? ", draggable" : "") + (spec.orbit ? ", orbit" : "") + (spec.hover ? ", hover" : "");
+    if (!d.w || !d.h) { r.errors.push("canvas has zero size"); return r; }
+    if (!d.broken) {
+      const base = snapshot(d);
+      if (!d.broken && !base.varied) r.errors.push("canvas is blank after draw()");
+    }
+    if (!d.broken) {
+      const saved = saveState(d);
+      // Probe from a fresh state when there is one, so an animation that has
+      // already finished (a ball that landed) doesn't look broken.
+      const fresh = typeof spec.state === "function"
+        ? { s: Object.assign(initialState(spec), d.s.view ? { view: clone(d.s.view) } : {}), v: saved.v }
+        : saved;
+      for (const c of spec.controls ?? []) {
+        if (c.type === "button" || d.broken) continue;
+        const values = c.type === "toggle" ? [false, true] : [c.min, (c.min + c.max) / 2, c.max];
+        const hashes = new Set(values.map(x => probe(d, c.key, x, fresh)));
+        if (!d.broken && hashes.size === 1) r.warnings.push(`moving "${c.label ?? c.key}" across its range doesn't change the figure`);
+      }
+      // A figure with autoplay: false only moves when the reader starts it (a button), so idling is fine.
+      if (spec.step && spec.autoplay !== false && !d.broken) {
+        restoreState(d, fresh);
+        const before = snapshot(d).hash;
+        runSteps(d, 40);
+        if (!d.broken && snapshot(d).hash === before) r.warnings.push("the animation runs but nothing moves in its first 40 frames");
+      }
+      if (spec.orbit && !d.broken) {
+        restoreState(d, saved);
+        const before = snapshot(d).hash;
+        d.s.view.yaw += 0.5;
+        if (!d.broken && snapshot(d).hash === before) r.warnings.push("turning the view doesn't change the figure (is draw() using s.view?)");
+      }
+      restoreState(d, saved);
+      render(d);
+    }
+    r.errors.push(...own());
+    return r;
+  }
+
+  function check() {
+    const report = { errors: [], warnings: [], demos: [] };
+    const live = new Set(demos.map(d => d.el));
+    document.querySelectorAll("figure.demo").forEach(f => {
+      if (!live.has(f)) report.errors.push(`<figure id="${f.id}"> has no demo() attached, so it renders empty`);
+    });
+    const text = [document.title, document.querySelector('meta[name="description"]')?.content ?? "", document.body.innerText];
+    if (text.some(t => t.includes("{{"))) report.errors.push("template placeholders (names in double curly braces) are still on the page");
+    if (document.getElementById("example-cube")) report.warnings.push("the template's example figure (#example-cube) is still on the page");
+    const ids = new Set(demos.map(d => d.id));
+    for (const e of errors) if (!ids.has(e.demo)) report.errors.push(`${e.phase}: ${e.message}`);
+    for (const d of demos) report.demos.push(checkDemo(d));
+    report.ok = !report.errors.length && report.demos.every(r => !r.errors.length);
+    return report;
+  }
+
+  // Exploration support for scripts/explore.mjs: describe a figure and drive its controls.
+  function describe(id) {
+    const d = demos.find(x => x.id === id);
+    if (!d) return null;
+    return {
+      id: d.id,
+      controls: (d.spec.controls ?? []).map(c => ({ key: c.key, label: c.label ?? c.key, type: c.type ?? "slider", min: c.min, max: c.max, value: d.v[c.key] })),
+      stepped: !!d.spec.step,
+      animated: !!d.spec.step, orbit: !!d.spec.orbit, drag: !!d.spec.drag,
+    };
+  }
+  function drive(id, action) {
+    const d = demos.find(x => x.id === id);
+    if (!d) return false;
+    if (action.reset) {
+      if (typeof d.spec.state === "function") d.handle.reset();
+      if (d.s.view && d.view0) Object.assign(d.s.view, d.view0);
+      d.spin = null;
+    }
+    if (action.set) for (const [k, v] of Object.entries(action.set)) setControl(d, k, v);
+    if (action.view && d.s.view) Object.assign(d.s.view, action.view);
+    if (action.viewDelta && d.s.view && d.view0) {
+      d.s.view.yaw = clampYaw(d, d.view0.yaw + action.viewDelta[0]);
+      d.s.view.pitch = clampPitch(d, d.view0.pitch + action.viewDelta[1]);
+    }
+    if (action.press) {
+      const c = (d.spec.controls ?? []).find(x => x.type === "button" && x.label === action.press);
+      if (c) guard(d, "action", () => c.action?.(d.s, d.v, d.handle));
+    }
+    if (action.steps && d.spec.step) runSteps(d, action.steps);
+    if (action.play !== undefined) d.handle.play(action.play);
+    render(d);
+    return true;
+  }
+
+  function showReport(report) {
+    const lines = [`Self-check: ${report.ok ? "PASS" : "FAIL"}`];
+    for (const e of report.errors) lines.push(`ERROR ${e}`);
+    for (const w of report.warnings) lines.push(`warn  ${w}`);
+    for (const r of report.demos) {
+      lines.push(`${r.errors.length ? "ERROR" : r.warnings.length ? "warn " : "ok   "} #${r.id}  ${r.summary}`);
+      for (const e of r.errors) lines.push(`        ${e}`);
+      for (const w of r.warnings) lines.push(`        ${w}`);
+    }
+    const box = document.createElement("pre");
+    box.className = "check-report";
+    box.textContent = lines.join("\n");
+    document.body.prepend(box);
+  }
+  if (new URLSearchParams(location.search).has("check")) {
+    addEventListener("load", () => requestAnimationFrame(() => showReport(check())));
+  }
+
+  Object.assign(window, { demo, palette, rgba, clamp, lerp, smoothstep, TAU });
+  window.__explainer = { check, describe, drive, ids: () => demos.map(d => d.id), version: 2 };
+})();
+</script>
+<!-- explainer:runtime:end -->
+</head>
+<body>
+<div class="page has-toc">
+<nav class="toc" aria-label="All explainers"><!-- explainer:nav:start --><a class="site" href="../index.html">Safis</a><h2>Body</h2><ul><li><a href="../jaw-joint/index.html">The Jaw Joint</a></li></ul><h2>Physics</h2><ul><li><a href="../pendulum/index.html" aria-current="page">How a Pendulum Keeps Time</a></li></ul><!-- explainer:nav:end --></nav>
+<main>
+<!-- explainer:back:start --><a class="backlink" href="../index.html">← Safis</a><!-- explainer:back:end -->
+<header>
+  <p class="kicker">Physics</p>
+    <h1>How a Pendulum Keeps Time</h1>
+    <p class="dek">Why a swinging weight keeps such a steady beat, and how a clock turns that beat into seconds.</p>
+  </header>
+<article>
+<!-- explainer:article:start -->
+
+  <script>
+  // Shared by every figure below: gravity, the period of a swing, and how a pendulum is drawn.
+  const Pend = {
+    G: 9.81,               // m/s² at Earth's surface
+    DEG: Math.PI / 180,
+    // Exact period for a swing of amplitude amp (radians): the small-swing period
+    // 2π√(L/g) divided by the arithmetic-geometric mean of 1 and cos(amp/2).
+    period(L, amp = 0) {
+      let a = 1, b = Math.cos(amp / 2);
+      for (let i = 0; i < 10; i++) [a, b] = [(a + b) / 2, Math.sqrt(a * b)];
+      return TAU * Math.sqrt(L / Pend.G) / a;
+    },
+    // Advance p = { th, w } by dt seconds under th'' = -(g/L) sin th - damp th'.
+    // Semi-implicit Euler with substeps, so the swing doesn't grow or shrink on its own.
+    swing(p, dt, L, damp = 0, n = 16) {
+      const h = dt / n, k = Pend.G / L;
+      for (let i = 0; i < n; i++) {
+        p.w += (-k * Math.sin(p.th) - damp * p.w) * h;
+        p.th += p.w * h;
+      }
+    },
+    // Canvas point of the bob for a pivot at canvas point c, rod length len in px, angle th.
+    at: (c, len, th) => [c[0] + len * Math.sin(th), c[1] + len * Math.cos(th)],
+    // Points along the bob's circular path from angle a0 to a1.
+    arc(c, len, a0, a1, n = 48) {
+      const pts = [];
+      for (let i = 0; i <= n; i++) pts.push(Pend.at(c, len, a0 + (a1 - a0) * i / n));
+      return pts;
+    },
+    draw(g, c, bob, r) {
+      g.line([c[0] - 16, c[1]], [c[0] + 16, c[1]], { stroke: "muted", width: 3 });
+      g.line(c, bob, { width: 2.5 });
+      g.circle(c, 3.5);
+      g.circle(bob, r);
+    },
+  };
+  </script>
+
+  <p>Pull a weight on a rod or string to one side and let it go. It swings back and forth, and every swing takes the same time as the one before. That steady beat ran the most accurate clocks in the world for close to three centuries, from the first pendulum clock, built by Christiaan Huygens in 1656, until quartz clocks overtook them in the 1930s.</p>
+
+  <p>Here are two identical pendulums, each a little under a meter long. The left one starts from a small swing of 5°. Drag the slider to change how far the right one is pulled back, and watch the two bobs cross the dashed middle line:</p>
+
+  <figure class="demo" id="beat" aria-label="Two identical pendulums swinging side by side. The left one swings 5 degrees, the right one swings as far as the slider sets, and each is labeled with its period."></figure>
+  <script>
+  {
+    const L = 0.994, D = Pend.DEG;
+    const PIVOTS = [-0.5, 0.5];
+    const release = (s, amp) => { s.p = [{ th: 5 * D, w: 0 }, { th: amp * D, w: 0 }]; };
+
+    demo("beat", {
+      aspect: 1.7,
+      state: () => { const s = {}; release(s, 20); return s; },
+      controls: [
+        { key: "amp", label: "Swing", min: 2, max: 30, step: 1, value: 20, format: a => `${a}°`, color: "blue" },
+        { label: "Release together", type: "button", action: (s, v) => release(s, v.amp) },
+      ],
+      change: (key, s, v) => release(s, v.amp),
+      step(dt, s) { for (const p of s.p) Pend.swing(p, dt, L); },
+      draw(g, s, v) {
+        const P = g.fit(-1.05, 1.05, -1.33, 0.06);
+        const len = L * P.sx, r = clamp(len * 0.055, 7, 13);
+        const amps = [5, v.amp];
+        PIVOTS.forEach((x, i) => {
+          const c = P([x, 0]), a = amps[i] * D;
+          g.line(c, [c[0], c[1] + len + r + 4], { stroke: "muted", width: 1, dash: [4, 4], alpha: 0.45 });
+          g.path(Pend.arc(c, len, -a, a), { stroke: "blue", width: 3, alpha: 0.35 });
+          Pend.draw(g, c, Pend.at(c, len, s.p[i].th), r);
+          const y = c[1] + len + r + 20;
+          g.text(`${amps[i]}° swing`, [c[0], y], { color: "blue", size: 13 });
+          g.text(`period ${Pend.period(L, a).toFixed(2)} s`, [c[0], y + 19]);
+        });
+      },
+    });
+  }
+  </script>
+
+  <p>The wider swing has much farther to travel, yet both bobs reach the middle at almost the same moment. Each takes about 2 seconds to swing out and back, a time called the <strong>period</strong>, and the two readouts differ by a percent or two at most. Leave them running for half a minute and the wider swing does start to fall behind. That small mismatch comes back later.</p>
+
+  <p>A beat that barely depends on how hard the pendulum was started is exactly what a clock needs. To see where it comes from, we have to look at what drives the swing.</p>
+
+  <h2>The pull toward the middle</h2>
+
+  <p>Two forces act on the bob: its <span class="c-red">weight</span>, pulling straight down, and the rod, pulling along its own length. The rod can't speed the bob up or slow it down along its path, so split the weight in two. One part points along the rod, and the rod cancels it. The other points along the path, and it's the <span class="c-orange">pull</span> that drives the bob back toward the middle.</p>
+
+  <p>Drag the bob, or use the slider, to change the <span class="c-blue">angle</span>, and watch how the pull changes in the plot:</p>
+
+  <figure class="demo" id="force" aria-label="A pendulum held at an angle. Its weight is drawn as a red arrow split into a part along the rod and an orange part along the path. A plot shows the orange pull against angle, next to a dashed straight line."></figure>
+  <script>
+  {
+    const D = Pend.DEG, W = 0.5;   // the weight arrow is drawn half a rod length long
+    let S;                         // scene world-to-canvas mapping from the last draw
+
+    demo("force", {
+      aspect: w => (w < 520 ? 0.8 : 1.9),
+      controls: [{ key: "angle", label: "Angle", min: 0, max: 85, step: 1, value: 25, format: a => `${a}°`, color: "blue" }],
+      draw(g, s, v) {
+        const tall = g.w < 520;
+        const sb = tall ? [0, 0, g.w, g.h * 0.52] : [0, 0, g.w * 0.45, g.h];
+        const pb = tall ? [0, g.h * 0.52, g.w, g.h * 0.48] : [g.w * 0.45, 0, g.w * 0.55, g.h];
+        S = g.fit(-0.45, 1.15, -1.58, 0.08, { box: sb });
+        const th = v.angle * D, sin = Math.sin(th), cos = Math.cos(th);
+        const c = S([0, 0]), bobW = [sin, -cos], bob = S(bobW);
+        const pull = W * sin, along = W * cos;
+        const down = S([bobW[0], bobW[1] - W]);
+        const tang = S([bobW[0] - pull * cos, bobW[1] - pull * sin]);
+        const rad = S([bobW[0] + along * sin, bobW[1] - along * cos]);
+
+        g.line(c, S([0, -1.12]), { stroke: "muted", width: 1, dash: [4, 4], alpha: 0.45 });
+        if (v.angle > 0) g.path(Pend.arc(c, 0.24 * S.sx, 0, th), { stroke: "blue", width: 2 });
+        if (v.angle >= 12) g.text(`${v.angle}°`, Pend.at(c, 0.36 * S.sx, th / 2), { color: "blue", size: 13, halo: true });
+        g.line(tang, down, { stroke: "faint", width: 1, dash: [3, 3] });
+        g.line(rad, down, { stroke: "faint", width: 1, dash: [3, 3] });
+        g.arrow(bob, rad, { stroke: "muted", width: 2 });
+        g.arrow(bob, down, { stroke: "red", width: 3 });
+        if (pull > 0.03) g.arrow(bob, tang, { stroke: "orange", width: 3 });
+        Pend.draw(g, c, bob, 9);
+        g.text("weight", [down[0], down[1] + 15], { color: "red", size: 13, halo: true });
+        if (pull > 0.08) g.text("pull", [tang[0] - 8, tang[1]], { color: "orange", size: 13, align: "right", halo: true });
+
+        const Q = g.fit(0, 90, 0, 1.1, { box: pb, uniform: false, pad: 34 });
+        g.axes(Q, {
+          x: [0, 90], y: [0, 1.1], xTicks: [30, 60, 90], yTicks: [0.5, 1],
+          format: t => (t >= 30 ? `${t}°` : String(t)), xLabel: "angle", yLabel: "pull ÷ weight",
+        });
+        const end = Q([1.1 / D, 1.1]);
+        g.line(Q([0, 0]), end, { stroke: "muted", width: 1.5, dash: [5, 5] });
+        g.text("straight line", [end[0] - 6, end[1] + 2], { color: "muted", size: 12, align: "right" });
+        const curve = [];
+        for (let a = 0; a <= 90; a++) curve.push(Q([a, Math.sin(a * D)]));
+        g.path(curve, { stroke: "orange", width: 2.5 });
+        const m = Q([v.angle, sin]);
+        g.line(m, Q([v.angle, 0]), { stroke: "muted", width: 1, dash: [2, 3] });
+        g.circle(m, 5.5, { fill: "orange" });
+        const left = v.angle > 70;
+        g.text(sin.toFixed(2), [m[0] + (left ? -10 : 10), m[1] + 14], { color: "orange", size: 13, align: left ? "right" : "left", halo: true });
+      },
+      drag: {
+        hit(p, s, v) {
+          const b = Pend.at(S([0, 0]), S.sx, v.angle * D);
+          return Math.hypot(p[0] - b[0], p[1] - b[1]) < 26;
+        },
+        move(p, s, v, delta, fig) {
+          const q = S.inv(p);
+          fig.set("angle", Math.round(clamp(Math.atan2(q[0], -q[1]) / D, 0, 85)));
+        },
+      },
+    });
+  }
+  </script>
+
+  <p>At the bottom there's no pull at all, and it grows as the bob moves out. For small angles it grows in a straight line: twice the angle, twice the pull. The <span class="c-orange">orange curve</span> sits right on the <span class="c-muted">dashed line</span> there, within half a percent at 10°. Farther out it bends below the line, because the pull is the weight times the sine of the angle, and the sine levels off toward 1 at 90°.</p>
+
+  <p>That straight-line stretch is what keeps the beat steady. Start the bob twice as far out and at every matching point on its path it feels twice the pull, so it picks up twice the speed. Twice the distance at twice the speed takes the same time. Any force that grows in step with the distance from the middle gives a swing whose period doesn't depend on its size. A weight bouncing on a spring works the same way.</p>
+
+  <h2>What sets the beat</h2>
+
+  <p>If the size of the swing doesn't set the period, what does? A pendulum is only a rod and a bob. Change the <span class="c-green">length</span> of the rod and the mass of the bob, and watch the period on the curve:</p>
+
+  <figure class="demo" id="length" aria-label="A pendulum whose length is marked by a green ruler, next to a plot of period against length with a green dot at the current length."></figure>
+  <script>
+  {
+    const D = Pend.DEG, AMP = 10 * D;
+
+    demo("length", {
+      aspect: w => (w < 520 ? 0.78 : 1.7),
+      state: () => ({ ph: 0 }),
+      controls: [
+        { key: "L", label: "Length", min: 0.1, max: 2, step: 0.01, value: 1, unit: "m", color: "green" },
+        { key: "m", label: "Mass", min: 0.1, max: 10, step: 0.1, value: 1, unit: "kg" },
+      ],
+      // A 10° swing is close enough to a pure sine that the phase can advance at the exact period.
+      step(dt, s, v) { s.ph = (s.ph + TAU * dt / Pend.period(v.L, AMP)) % TAU; },
+      draw(g, s, v) {
+        const tall = g.w < 520;
+        const sb = tall ? [0, 0, g.w, g.h * 0.55] : [0, 0, g.w * 0.36, g.h];
+        const pb = tall ? [0, g.h * 0.55, g.w - 40, g.h * 0.45] : [g.w * 0.36, 0, g.w * 0.64 - 40, g.h];
+        const S = g.fit(-0.7, 0.55, -2.28, 0.08, { box: sb });
+        const c = S([0, 0]), len = v.L * S.sx, r = 5 + 4.5 * Math.cbrt(v.m);
+
+        const x = S([-0.5, 0])[0], bot = c[1] + len;
+        g.line([x, c[1]], [x, bot], { stroke: "green", width: 2 });
+        g.line([x - 5, c[1]], [x + 5, c[1]], { stroke: "green", width: 2 });
+        g.line([x - 5, bot], [x + 5, bot], { stroke: "green", width: 2 });
+        g.text(`${v.L.toFixed(2)} m`, [x, bot + 14], { color: "green", size: 13, halo: true });
+        Pend.draw(g, c, Pend.at(c, len, AMP * Math.cos(s.ph)), r);
+
+        const T = Pend.period(v.L, AMP);
+        const Q = g.fit(0, 2, 0, 3, { box: pb, uniform: false, pad: 34 });
+        g.axes(Q, { x: [0, 2], y: [0, 3], xTicks: [0.5, 1, 1.5, 2], yTicks: [1, 2, 3], xLabel: "length (m)", yLabel: "period (s)" });
+        const curve = [];
+        for (let L = 0; L <= 2.0001; L += 0.02) curve.push(Q([L, Pend.period(L, AMP)]));
+        g.path(curve, { stroke: "ink", width: 2 });
+        const m = Q([v.L, T]);
+        g.line(m, Q([v.L, 0]), { stroke: "green", width: 1, dash: [2, 3] });
+        g.line(m, Q([0, T]), { stroke: "muted", width: 1, dash: [2, 3] });
+        g.circle(m, 6, { fill: "green" });
+        const left = v.L > 1.5;
+        g.text(`${T.toFixed(2)} s`, [m[0] + (left ? -12 : 12), m[1] - 14], { weight: 600, align: left ? "right" : "left", halo: true });
+      },
+    });
+  }
+  </script>
+
+  <p>The mass makes no difference. A heavier bob is pulled down harder, but it's also harder to get moving, by exactly the same factor. The length does matter, though not in proportion: a pendulum four times longer takes only twice as long, and the <span class="c-green">green dot</span> rides a square-root curve. For small swings the period is:</p>
+
+  <p class="eq"><i>T</i> = 2π √(<i>L</i> / <i>g</i>)</p>
+
+  <p><var>T</var> is the period, <var>L</var> the length from the pivot to the center of the bob, and <var>g</var> the strength of gravity, 9.81 m/s² at Earth's surface. Stronger gravity means a stronger pull and a quicker swing. On the Moon, where <var>g</var> is 1.62 m/s², a pendulum that takes 2 seconds on Earth would take 4.9.</p>
+
+  <p>A pendulum 0.994 m long has a period of 2.00 s, so each swing in one direction takes one second. Clockmakers call it a seconds pendulum, and it's the one swinging inside a classic grandfather clock. (The figure swings 10° each way, which adds 0.2% to the formula's answer.)</p>
+
+  <h2>Big swings run slow</h2>
+
+  <p>The formula assumes the straight-line part of the orange curve. Past it, the pull grows more slowly than the distance, so a wide swing takes longer to come back. This seconds pendulum hangs from a stiff rod, so it can swing past horizontal without going slack. Drag the slider to widen its <span class="c-blue">swing</span> and follow its period on the curve:</p>
+
+  <figure class="demo" id="big" aria-label="A seconds pendulum on a rod swinging through a wide blue arc, next to a plot of period against swing size that is flat at first and then climbs steeply."></figure>
+  <script>
+  {
+    const L = 0.994, D = Pend.DEG;
+    const release = (s, amp) => { s.th = amp * D; s.w = 0; };
+
+    demo("big", {
+      aspect: w => (w < 520 ? 0.78 : 1.7),
+      state: () => ({ th: 80 * D, w: 0 }),
+      controls: [{ key: "amp", label: "Swing", min: 5, max: 170, step: 1, value: 80, format: a => `${a}°`, color: "blue" }],
+      change: (key, s, v) => release(s, v.amp),
+      step(dt, s) { Pend.swing(s, dt, L, 0, 32); },
+      draw(g, s, v) {
+        const tall = g.w < 520;
+        const sb = tall ? [0, 0, g.w, g.h * 0.52] : [0, 0, g.w * 0.42, g.h];
+        const pb = tall ? [0, g.h * 0.52, g.w - 40, g.h * 0.48] : [g.w * 0.42, 0, g.w * 0.58 - 40, g.h];
+        const S = g.fit(-1.12, 1.12, -1.12, 1.12, { box: sb });
+        const c = S([0, 0]), len = L * S.sx, a = v.amp * D;
+        g.line(c, [c[0], c[1] + len + 14], { stroke: "muted", width: 1, dash: [4, 4], alpha: 0.45 });
+        g.path(Pend.arc(c, len, -a, a, 96), { stroke: "blue", width: 3, alpha: 0.35 });
+        Pend.draw(g, c, Pend.at(c, len, s.th), 9);
+
+        const T = Pend.period(L, a), T0 = Pend.period(L);
+        const Q = g.fit(0, 180, 0, 5, { box: pb, uniform: false, pad: 34 });
+        g.axes(Q, {
+          x: [0, 180], y: [0, 5], xTicks: [45, 90, 135, 180], yTicks: [1, 2, 3, 4, 5],
+          format: t => (t >= 45 ? `${t}°` : String(t)), xLabel: "swing", yLabel: "period (s)",
+        });
+        g.line(Q([0, T0]), Q([180, T0]), { stroke: "muted", width: 1, dash: [5, 5] });
+        g.text("small swings", Q([180, T0]).map((q, i) => q + (i ? -10 : 0)), { color: "muted", size: 12, align: "right" });
+        const curve = [];
+        for (let x = 0; x < 180; x += 0.5) {
+          const t = Pend.period(L, x * D);
+          if (t > 5) break;
+          curve.push(Q([x, t]));
+        }
+        g.path(curve, { stroke: "ink", width: 2 });
+        const m = Q([v.amp, T]);
+        g.line(m, Q([v.amp, 0]), { stroke: "blue", width: 1, dash: [2, 3] });
+        g.circle(m, 6, { fill: "blue" });
+        const pct = (T / T0 - 1) * 100;
+        const right = v.amp < 40;
+        g.text(`${T.toFixed(2)} s, +${pct.toFixed(pct < 10 ? 1 : 0)}%`, [m[0] + (right ? 12 : -12), m[1] - 16], { weight: 600, align: right ? "left" : "right", halo: true });
+      },
+    });
+  }
+  </script>
+
+  <p>Up to about 10° the curve is almost flat: the period is only 0.2% longer than for a tiny swing. At 90° it's 18% longer, and near 180° it grows without limit, because a bob balanced almost upside down barely moves at all.</p>
+
+  <p>The flat start is why pendulums work as clocks, and the slow rise is why clockmakers worried anyway. A seconds pendulum swinging 5° each way instead of 4° runs slow by about 15 seconds a day. Huygens tried to cure this with curved metal cheeks beside the pivot that bent a string into a cycloid, a path on which every swing takes exactly the same time. The cheeks brought errors of their own, and later clocks kept the swing small and steady instead.</p>
+
+  <h2>Counting the swings</h2>
+
+  <p>A pendulum on its own still isn't a clock. Air and friction take a little energy from every swing, so it slowly dies down, and nothing is counting. The <strong>escapement</strong> handles both. A toothed wheel, turned by a falling weight, is held still by the pendulum and released one tooth per swing. Each release moves the hands one step, and as the tooth slips free it gives the pendulum a small push to make up for what friction took.</p>
+
+  <p>Here the escapement is reduced to what it does. Each time the bob passes the middle, the seconds hand moves on and the pendulum gets a <span class="c-purple">push</span>. Set the push to none and watch the swing fade, then raise it again:</p>
+
+  <figure class="demo" id="clock" aria-label="A seconds pendulum next to a seconds dial. Each time the bob passes the middle, the hand advances one second and a purple arrow shows a push on the bob."></figure>
+  <script>
+  {
+    const L = 0.994, D = Pend.DEG, W0 = Math.sqrt(Pend.G / L);
+    const DAMP = 0.23;      // friction per second, far stronger than in a real clock
+    const KICK = 0.06;      // speed each push adds at push 1.0, in rad/s
+    const UNLOCK = 2 * D;   // a smaller swing can't release the next tooth
+
+    demo("clock", {
+      aspect: w => (w < 520 ? 1.4 : 1.8),
+      // Start just before the bob passes the middle, swinging about 10° each way.
+      state: () => ({ th: -0.5 * D, w: W0 * 10 * D, amp: 10 * D, last: 10 * D, ticks: 0, t: 0, tickAt: -1, beat: 0, flash: 9, dir: 1 }),
+      controls: [
+        { key: "push", label: "Push", min: 0, max: 2, step: 0.1, value: 1, format: x => (x ? `${x.toFixed(1)}×` : "none"), color: "purple" },
+        { label: "Start it swinging", type: "button", action: (s, v, fig) => fig.reset() },
+      ],
+      step(dt, s, v) {
+        const n = 16, h = dt / n, k = Pend.G / L;
+        for (let i = 0; i < n; i++) {
+          const prev = s.th;
+          s.w += (-k * Math.sin(s.th) - DAMP * s.w) * h;
+          s.th += s.w * h;
+          s.t += h;
+          s.amp = Math.max(s.amp, Math.abs(s.th));
+          if ((prev < 0) === (s.th < 0)) continue;
+          // The bob just passed the middle: count it and push, if there's a swing big enough to unlock.
+          s.last = s.amp;
+          s.amp = 0;
+          if (!v.push || s.last < UNLOCK) continue;
+          const at = s.t - h * s.th / (s.th - prev);   // when exactly it crossed
+          if (s.tickAt >= 0) s.beat = at - s.tickAt;
+          s.tickAt = at;
+          s.ticks++;
+          s.dir = Math.sign(s.w);
+          s.w += s.dir * KICK * v.push;
+          s.flash = 0;
+        }
+        s.flash += dt;
+      },
+      draw(g, s, v) {
+        const half = g.w / 2;
+        const S = g.fit(-0.62, 0.62, -1.24, 0.06, { box: [0, 0, half, g.h] });
+        const c = S([0, 0]), len = L * S.sx, r = clamp(len * 0.05, 7, 12);
+        const bob = Pend.at(c, len, s.th);
+        g.line(c, [c[0], c[1] + len + r + 4], { stroke: "muted", width: 1, dash: [4, 4], alpha: 0.45 });
+        g.path(Pend.arc(c, len, -s.last, s.last), { stroke: "blue", width: 3, alpha: 0.35 });
+        if (v.push && s.flash < 0.4) {
+          const u = [s.dir * Math.cos(s.th), -s.dir * Math.sin(s.th)], a0 = r + 3, a1 = a0 + 14 + 14 * v.push;
+          g.arrow([bob[0] + u[0] * a0, bob[1] + u[1] * a0], [bob[0] + u[0] * a1, bob[1] + u[1] * a1],
+            { stroke: "purple", width: 3, alpha: 1 - s.flash / 0.4 });
+        }
+        Pend.draw(g, c, bob, r);
+        g.text(`swing ±${(s.last / D).toFixed(1)}°`, [c[0], c[1] + len + r + 22], { color: "blue", size: 13 });
+
+        const R = Math.min(half * 0.34, g.h * 0.33), d = [half * 1.5, g.h * 0.44];
+        g.circle(d, R, { stroke: "ink", width: 2 });
+        for (let i = 0; i < 60; i++) {
+          const a = i * 6 * D, big = i % 5 === 0, u = [Math.sin(a), -Math.cos(a)], r0 = R * (big ? 0.82 : 0.89);
+          g.line([d[0] + u[0] * r0, d[1] + u[1] * r0], [d[0] + u[0] * R * 0.95, d[1] + u[1] * R * 0.95],
+            { stroke: big ? "ink" : "muted", width: big ? 2 : 1 });
+        }
+        for (const n of [15, 30, 45, 60]) {
+          const a = n * 6 * D;
+          g.text(n, [d[0] + Math.sin(a) * R * 0.64, d[1] - Math.cos(a) * R * 0.64], { color: "muted", size: 12 });
+        }
+        const ha = s.ticks * 6 * D;
+        g.line(d, [d[0] + Math.sin(ha) * R * 0.8, d[1] - Math.cos(ha) * R * 0.8], { width: 2.5 });
+        g.circle(d, 4);
+        const stopped = s.tickAt >= 0 && s.t - s.tickAt > 1.6;
+        g.text(stopped ? "stopped" : s.beat ? `${s.beat.toFixed(3)} s per tick` : "", [d[0], d[1] + R + 24]);
+      },
+    });
+  }
+  </script>
+
+  <p>With no push the hand stops at once, because nothing turns the wheel, and the swing shrinks. Raise the push and the swing grows back until each push exactly replaces what friction drains in one swing. If the swing has already shrunk too far to release the wheel, the button starts it again.</p>
+
+  <p>Now make the push stronger. The swing settles wider, but the reading under the dial barely moves: doubling the push doubles the swing and lengthens each tick by less than 1%. That's the steady beat from the first figure doing its job. The escapement doesn't have to push precisely, because the size of the swing hardly affects its timing. It also pushes as the bob passes the bottom, where a push changes how far the bob swings but not when it comes back. The pendulum keeps the time. The escapement keeps it going and counts.</p>
+
+  <p>I've made the friction far stronger than in a real clock, and the swing wider than a clock's few degrees, so both are easy to see.</p>
+
+  <p>Once the swing is small and steady, the length is the last thing to control. Warm a steel rod by 1 °C and it grows by about 12 parts per million, enough to make a clock lose about half a second a day. That's why precision pendulums were built from pairs of metals whose expansions cancel.</p>
+
+  <h2 class="plain">Further reading</h2>
+  <ul class="refs">
+    <li><a href="https://en.wikipedia.org/wiki/Pendulum_(mechanics)">Pendulum (mechanics)</a> on Wikipedia, for the full equation of motion and the exact large-swing period.</li>
+    <li><a href="https://en.wikipedia.org/wiki/Pendulum_clock">Pendulum clock</a> on Wikipedia, for the history from Huygens to the precision clocks of the 20th century.</li>
+    <li><a href="https://en.wikipedia.org/wiki/Anchor_escapement">Anchor escapement</a> on Wikipedia, for how the push and the counting work in a real clock.</li>
+  </ul>
+<!-- explainer:article:end -->
+</article>
+</main>
+</div>
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+</body>
+</html>
