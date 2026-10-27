@@ -1,6 +1,6 @@
 ---
 name: safis
-description: Safis builds interactive explainer web pages, and small sites that collect them. Long-form prose builds intuition step by step, interleaved with live 2D and 3D figures the reader drags, turns, cuts open, scrubs, and animates. Works for any subject, including anatomy and the body, biology, chemistry, physics, machines, earth and space, computing, and math. Use when someone asks for an interactive explainer, explorable explanation, visual essay, interactive article, or a page or blog that teaches how something works with live diagrams, 3D models, simulations, or sliders, for example "explain how the jaw joint works and what happens when it locks" or "an interactive page on gears". Use it even when the request doesn't say "explainer" but clearly wants a page that teaches through interactive figures.
+description: Safis builds interactive explainer web pages, and small sites that collect them. Long-form prose builds intuition step by step, interleaved with live 2D and 3D figures the reader drags, turns, cuts open, scrubs, and animates. Works for any subject, including anatomy and the body, biology, chemistry, physics, machines, earth and space, computing, AI, and math. Use when someone asks for an interactive explainer, explorable explanation, visual essay, interactive article, or a page or blog that teaches how something works with live diagrams, 3D models, simulations, or sliders, for example "explain how the jaw joint works and what happens when it locks" or "an interactive page on gears". Use it even when the request doesn't say "explainer" but clearly wants a page that teaches through interactive figures.
 compatibility: Produces self-contained HTML files with no dependencies that open from disk; 3D figures need WebGL 2. The check and exploration scripts need Node 22+ and Chrome, Chromium, or Edge.
 allowed-tools: Bash(node ${CLAUDE_SKILL_DIR}/scripts/*)
 ---
@@ -20,8 +20,13 @@ Borrow the approach, not the identity: never copy another author's text, models,
 
 One self-contained HTML page per topic. Inline CSS and JS, no network requests, opens straight from disk. Pages are built from `assets/template.html`, which contains:
 
-- the **Porcelain** theme: paper-white page, objects drawn like glazed porcelain with graphite outlines, one brass accent, serif italic accents, numbered sections, key hints in the margin, light and dark modes;
-- a **2D runtime**: `demo(id, spec)` turns each `<figure class="demo">` into a canvas with sliders, toggles, buttons, dragging, hover, keyboard control, animation, and a large set of drawing helpers (callouts, chips, measurement lines, hatching, color fields, dials, magnifier insets, plots);
+- the **Porcelain** theme, monochrome edition: serif text (Source Serif 4, with Source Sans 3 for labels, both embedded) on a neutral near-white or near-black page, numbered sections, figures drawn straight onto the page with their controls beneath and a numbered caption, color kept for the subjects of the figures, objects drawn like glazed porcelain with graphite outlines, light and dark modes with a switch;
+- a **2D runtime**: `demo(id, spec)` turns each `<figure class="demo">` into a live canvas with controls beneath it: sliders with marks, segmented choices, steppers, knobs, XY pads, switches, buttons, presets, play/step/speed transport, dragging with grab handles, hover, keyboard control, and drawing helpers (callouts, chips, measurement lines, hatching, color fields, dials, magnifier insets);
+- **prose that drives figures**: numbers in a sentence the reader drags, "try this" links that set a figure, and colored terms that light their part;
+- **article furniture**: abstract, automatic contents and reading progress, sidenotes, numbered citations with previews, defined terms, callouts, collapsible deep dives, predictions, numbered tables, highlighted code, figure references, a light/dark/system switch;
+- **simulations**: `Sim` for particle and rigid-body physics, waves and diffusion on grids, N-body gravity, random processes, classic ODE systems, and small neural networks trained live in the page; 3D surfaces, parametric meshes, and 3D plot axes in E3;
+- a **plotting and science kit**: `g.graph` for function plots, areas, tangents, vector fields, contours; `Num` numerics (ODE integration, root finding, statistics, small linear algebra, softmax); helpers for springs, charges, atoms and bonds, bar charts, heatmaps, neural networks, and tokens;
+- **math typesetting**: TeX in the prose rendered as MathML, with symbols colored to match the figures, and `g.tex` for formulas on the canvas;
 - **E3**, a small WebGL 2 engine for 3D figures: procedural meshes (boxes, lathes, extrusions with holes, sweeps, tubes, gears, springs, arrows, molecules), a scene graph, ink outlines, section cuts with hatched faces, see-through parts, soft ground shadows, orbit with momentum, and picking;
 - a **self-check** the scripts drive.
 
@@ -29,9 +34,10 @@ Several pages can form a site: put each at `<root>/<slug>/index.html` and run `s
 
 Defaults, unless the request says otherwise:
 
-- **Size:** 5-8 figures, 1,500-3,000 words, 4-7 sections. Go longer (10-30 figures) only when asked for depth.
+- **Size:** in depth. A full explainer is 15-30 figures, 4,000-8,000 words, 7-12 sections, the way the best long-form interactive articles are: every idea gets its own figure, and the page goes from the everyday phenomenon all the way to how it really works, including the complications. Write a short piece (5-8 figures, 1,500-3,000 words) only when the request asks for one.
+- **Furniture:** an "In brief" abstract, sidenotes for asides, predictions before the surprising figures, callouts for the key idea and the common mistake, collapsed "going deeper" sections for derivations and history, numbered citations to real sources, and a references list. See [references/article.md](references/article.md).
 - **Reader:** a curious adult with high-school math. Define every term, ideally while it's visible in a figure.
-- **Category:** one of Body, Biology, Chemistry, Physics, Machines, Earth & Space, Computing, Math.
+- **Category:** one of Body, Biology, Chemistry, Physics, Machines, Earth & Space, Computing, AI, Math.
 - **Location:** the path the request names; inside an existing site folder, `<root>/<slug>/index.html`; otherwise `./<slug>/index.html`.
 
 The pages are local files. Don't publish, upload, or deploy them unless asked to.
@@ -59,7 +65,9 @@ Colors: <thing> = <palette color>, ...
 
 When several figures show the same object, build one **shared model** first (geometry, kinematics, simulation) in a single script and have every figure draw from it. Side views and 3D views then always agree, and a fix in one place fixes every figure.
 
-Test the plan: does every figure have something to move, and does moving it reveal its section's idea? Does each figure add exactly one thing? Does the default state already show something? Is the order concrete phenomenon, simplest model, one complication at a time, payoff? For long pieces, share the plan and wait for a go-ahead.
+For an in-depth page, plan the arc first: the everyday phenomenon, the simplest model that explains part of it, each complication in turn (each with its own figures), the full mechanism, and the payoff back at the opening. Most sections have two to four figures that build on each other, often the same scene with one more thing added.
+
+Test the plan: does every figure have something to move, and does moving it reveal its section's idea? Does each figure add exactly one thing? Does the default state already show something? Is the order concrete phenomenon, simplest model, one complication at a time, payoff? Share the plan in a few lines and keep going; wait for a go-ahead only when the person asked to review it first.
 
 ### 3. Scaffold
 
@@ -71,10 +79,10 @@ This copies the template with the title, category, and summary filled in and an 
 
 ### 4. Build section by section
 
-Read [references/runtime.md](references/runtime.md) before the first 2D figure and [references/engine3d.md](references/engine3d.md) before the first 3D figure. Then write each section's prose and figure together, in page order:
+Read [references/runtime.md](references/runtime.md) before the first 2D figure, [references/plots.md](references/plots.md) before the first graph or science diagram, [references/simulations.md](references/simulations.md) before the first simulation, [references/math.md](references/math.md) before the first equation, [references/article.md](references/article.md) before the first sidenote, citation, or callout, and [references/engine3d.md](references/engine3d.md) before the first 3D figure. Then write each section's prose and figure together, in page order:
 
 ```html
-<p>Open the mouth with the slider and watch the <span class="c-green">condyle</span> slide:</p>
+<p>Open the mouth <span class="scrub" data-key="open"></span> and watch the <span class="c-green" data-part="condyle">condyle</span> slide:</p>
 <figure class="demo" id="slide" aria-label="Side cut through the jaw joint; the condyle turns, then slides forward."></figure>
 <script>
 {
@@ -85,7 +93,7 @@ Read [references/runtime.md](references/runtime.md) before the first 2D figure a
 <p>For the first 20 mm the condyle only turns...</p>
 ```
 
-Wrap each figure's script in a block `{ ... }`. Use palette names (`"blue"`, `"ink"`, materials like `"bone"`) for every color. Use 3D where depth, assembly, or turning the object teaches something; use 2D cross-sections, plots, and diagrams where a flat view is clearer. Most good pages mix both.
+Build a long page in passes, not in one go: write the shared model and the first section, verify, then add two or three sections at a time and verify again, so a broken figure is found while it's fresh. Wrap each figure's script in a block `{ ... }`. Use palette names (`"blue"`, `"ink"`, materials like `"bone"`) for every color. Pick each control to match its quantity (runtime.md lists which control fits what), draw draggable things with `g.handle`, give each figure a caption, and let the prose drive the figure where a sentence is about a number or a comparison. Use 3D where depth, assembly, or turning the object teaches something; use 2D cross-sections, plots, and diagrams where a flat view is clearer. Most good pages mix both.
 
 ### 5. Check, explore, look
 
@@ -94,7 +102,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/verify.mjs <page>
 node ${CLAUDE_SKILL_DIR}/scripts/explore.mjs <page> [--figure <id>]
 ```
 
-`verify.mjs` loads the page in headless Chrome at desktop and phone widths and reports script errors, blank figures, controls that change nothing, animations that don't move, views that don't turn, leftover placeholders, sideways scrolling, and external requests. It saves screenshots (desktop, dark, phone).
+`verify.mjs` loads the page in headless Chrome at desktop and phone widths and reports script errors, blank figures, controls and presets that change nothing, animations that don't move, views that don't turn, prose numbers and links not tied to a figure, citations with no reference, TeX errors, leftover placeholders, sideways scrolling, and external requests. It saves screenshots (desktop, dark, phone).
 
 `explore.mjs` plays with every figure: it sweeps each slider across its range, flips toggles, presses buttons and lets time run, turns 3D views to four sides, and steps animations. It saves one contact sheet per figure. Read every sheet. This is how you find out whether a figure actually teaches what its paragraph promises.
 
@@ -122,6 +130,8 @@ Anything that fails a check, looks wrong in a sheet, or doesn't match the text g
 If something can't be fixed, say so in the report instead of hiding it. If the cause is in the runtime or engine, fix it in the page only as a last resort, and name it in the report.
 
 If the scripts can't run (no Node 22+, no Chrome), say so in the report and suggest opening the page with `?check` on the end of the URL, which shows the same self-check in a panel.
+
+When the person wants the figures inside their own app or blog (React, Vue, Svelte, Astro/MDX) rather than standalone pages, the same runtime ships as npm packages in this repository (`packages/`, documented in the README under "Use in your app"). Figure specs are identical; only the mounting differs.
 
 ### 7. Build the site (when there is one)
 
