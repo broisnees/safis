@@ -7,7 +7,7 @@ Thanks for helping with Safis. Bug reports, new figure helpers, fixes to the gui
 You need Node 22+ and Chrome, Chromium, or Edge (set `CHROME_PATH` if it isn't found).
 
 ```
-git clone https://github.com/broisnischal/safis
+git clone https://github.com/broisnees/safis
 cd safis
 npm install
 npm test

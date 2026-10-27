@@ -11,5 +11,5 @@
   "peerDependencies": { "vue": ">=3.3" },
   "dependencies": { "safis": "0.3.0" },
   "license": "UNLICENSED",
-  "repository": { "type": "git", "url": "https://github.com/broisnischal/safis.git", "directory": "packages/vue" }
+  "repository": { "type": "git", "url": "https://github.com/broisnees/safis.git", "directory": "packages/vue" }
 }

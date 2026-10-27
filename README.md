@@ -11,10 +11,10 @@ Long-form explainers with live 2D, 3D, map, optics, and sound figures, in one HT
 [![License MIT](https://img.shields.io/badge/license-MIT-3a3a3a)](LICENSE)
 [![Node 22+](https://img.shields.io/badge/node-%E2%89%A5%2022-3a3a3a?logo=nodedotjs&logoColor=white)](#requirements)
 [![Dependencies 0](https://img.shields.io/badge/dependencies-0-3a3a3a)](#how-it-works)
-[![CI](https://github.com/broisnischal/safis/actions/workflows/ci.yml/badge.svg)](https://github.com/broisnischal/safis/actions/workflows/ci.yml)
+[![CI](https://github.com/broisnees/safis/actions/workflows/ci.yml/badge.svg)](https://github.com/broisnees/safis/actions/workflows/ci.yml)
 
 [![Website](https://img.shields.io/badge/website-safis.fyi-111111?style=for-the-badge)](https://safis.fyi)
-[![Download ZIP](https://img.shields.io/badge/download-zip-111111?style=for-the-badge&logo=github)](https://github.com/broisnischal/safis/archive/refs/heads/main.zip)
+[![Download ZIP](https://img.shields.io/badge/download-zip-111111?style=for-the-badge&logo=github)](https://github.com/broisnees/safis/archive/refs/heads/main.zip)
 [![Install](https://img.shields.io/badge/install-npx%20skills%20add-e8e8e8?style=for-the-badge&logo=npm&logoColor=111111&labelColor=e8e8e8&color=111111)](#install)
 
 [Quick start](#quick-start) · [Gallery](#gallery) · [What it makes](#what-it-makes) · [Install](#install) · [Usage](#usage) · [How it works](#how-it-works) · [Limits](#limits)
@@ -26,7 +26,7 @@ Long-form explainers with live 2D, 3D, map, optics, and sound figures, in one HT
 ## Quick start
 
 ```
-npx skills add broisnischal/safis -g
+npx skills add broisnees/safis -g
 ```
 
 The installer asks which agents to set up. Then ask for a page:
@@ -69,7 +69,7 @@ Around the figures: prose numbers the reader drags, "try this" links that set a 
 **Any agent, with the skills CLI** (Claude Code, Codex, OpenCode, Cursor, and more):
 
 ```
-npx skills add broisnischal/safis -g
+npx skills add broisnees/safis -g
 ```
 
 Leave off `-g` to install for the current project only.
@@ -77,7 +77,7 @@ Leave off `-g` to install for the current project only.
 **Claude Code, by hand:**
 
 ```
-git clone https://github.com/broisnischal/safis
+git clone https://github.com/broisnees/safis
 ln -s "$PWD/safis/skills/safis" ~/.claude/skills/safis
 ```
 

@@ -12,7 +12,7 @@ Only `main` gets fixes. Pages carry their runtime inside them, so after a fix, r
 
 ## Reporting a vulnerability
 
-Report it privately through GitHub: [open a security advisory](https://github.com/broisnischal/safis/security/advisories/new). Please don't open a public issue for it.
+Report it privately through GitHub: [open a security advisory](https://github.com/broisnees/safis/security/advisories/new). Please don't open a public issue for it.
 
 Include what's affected (the runtime, a script, a package), how to reproduce it, and what an attacker gets. I'll confirm I've received it, keep you updated while I work on a fix, and credit you in the release notes unless you'd rather not be named.
 

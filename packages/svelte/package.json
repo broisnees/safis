@@ -10,5 +10,5 @@
   "peerDependencies": { "svelte": ">=5" },
   "dependencies": { "safis": "0.3.0" },
   "license": "UNLICENSED",
-  "repository": { "type": "git", "url": "https://github.com/broisnischal/safis.git", "directory": "packages/svelte" }
+  "repository": { "type": "git", "url": "https://github.com/broisnees/safis.git", "directory": "packages/svelte" }
 }

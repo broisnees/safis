@@ -35,7 +35,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/broisnischal/safis.git",
+    "url": "https://github.com/broisnees/safis.git",
     "directory": "packages/astro"
   }
 }

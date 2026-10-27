@@ -4,8 +4,8 @@ description: Safis builds interactive explainer web pages, and small sites that 
 license: MIT
 compatibility: Produces self-contained HTML files with no dependencies that open from disk; 3D figures need WebGL 2. The check and exploration scripts need Node 22+ and Chrome, Chromium, or Edge.
 metadata:
-  author: broisnischal
-  repository: https://github.com/broisnischal/safis
+  author: broisnees
+  repository: https://github.com/broisnees/safis
 allowed-tools: Bash(node ${CLAUDE_SKILL_DIR}/scripts/*)
 ---
 
@@ -167,7 +167,7 @@ If something can't be fixed, say so in the report instead of hiding it. If the c
 
 If the scripts can't run (no Node 22+, no Chrome), say so in the report and suggest opening the page with `?check` on the end of the URL, which shows the same self-check in a panel.
 
-When the person wants the figures inside their own app or blog (React, Vue, Svelte, Astro/MDX) rather than standalone pages, the same runtime ships as packages for each framework (`safis`, `@safis/react`, `@safis/vue`, `@safis/svelte`, `@safis/astro`), with source and setup under `packages/` in https://github.com/broisnischal/safis. Figure specs are identical; only the mounting differs.
+When the person wants the figures inside their own app or blog (React, Vue, Svelte, Astro/MDX) rather than standalone pages, the same runtime ships as packages for each framework (`safis`, `@safis/react`, `@safis/vue`, `@safis/svelte`, `@safis/astro`), with source and setup under `packages/` in https://github.com/broisnees/safis. Figure specs are identical; only the mounting differs.
 
 ### 7. Build the site (when there is one)
 
