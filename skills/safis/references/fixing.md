@@ -58,3 +58,17 @@ These would affect every page. If one shows up, fix it in the page only as a las
 - Canvas content that won't clear, or ghost images: an old runtime; upgrade the page.
 - WebGL errors in the console (`shader:`, `program:`): the engine failed to compile on that browser; the figure shows an error message instead.
 - Picking hits the wrong part: a part with `pickable: true` is in front (a ghost shell); pass `{ ghosts: false }` to `view.pick` or set `pickable: false` on context parts.
+
+## 3D that looks fake
+
+verify.mjs can't see these; look at the turntable views in explore's sheets and at 2x crops.
+
+| Symptom | Usual cause | Fix |
+|---|---|---|
+| Looks like a toy | Proportions guessed; too few parts; blade, bolt, or tooth counts far from the real thing | Look up real dimensions and counts; build from `E3.parts`; list 40+ named parts for a whole machine |
+| Metal looks like grey plastic | Material set to porcelain or a plain color; no environment to reflect | Use `steel`, `brushed`, `aluminum`, `titanium`, `inconel`, `copper`, or `brass`; keep the default `scene.look` |
+| Glass looks like grey plastic | `ghost` used where real glass is meant | Use `glass`; give it a thickness so it refracts |
+| Parts float or sink | Positions eyeballed; no shared model | Place parts from one model's dimensions; let soft shadows show the contact |
+| Flickering stripes where parts meet | Two faces at the same depth (z-fighting) | Offset or cut one face; never stack coplanar surfaces |
+| Everything the same material | Materials picked for color, not for what the part is | Assign by what the real part is made of; color only the subject |
+| Hot parts don't read as hot | Plain orange color | Use `hot` with a `temperature`, or `inconel` heat tint near the source |

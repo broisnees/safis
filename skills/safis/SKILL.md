@@ -81,7 +81,7 @@ Pick how each figure draws by what it has to show:
 | The figure shows | Draw it with | Reference |
 |---|---|---|
 | A mechanism in cross-section, a graph, a process that moves | the 2D canvas and plot kit | runtime.md, plots.md |
-| A machine or device made of many parts, a cutaway, an exploded view | `Iso` (E3 when it must turn freely in perspective) | iso.md |
+| A machine or device made of many parts, a cutaway, an exploded view | E3 with `E3.parts` (real materials, turns freely), or `Iso` for a flat technical illustration | parts3d.md, engine3d.md, iso.md |
 | A shape that must turn freely in 3D, a surface, a molecule | E3 | engine3d.md |
 | Anything located on Earth | `Geo` | maps.md |
 | Light: rays, lenses, mirrors, the eye | `Optics` | optics.md |
@@ -90,6 +90,8 @@ Pick how each figure draws by what it has to show:
 | Fixed structure: message sequences, states, code, a diff | Mermaid, Shiki | diagrams.md |
 
 For a machine, list its named parts (40 or more for a whole machine) before writing any geometry. Most of a technical figure's quality comes from that list.
+
+Every 3D figure follows "Making 3D that looks real" in [references/engine3d.md](references/engine3d.md): real dimensions first, then the named parts list, then [`E3.parts`](references/parts3d.md) builders and assemblies, materials by what each real part is made of, a `scene.look` preset, and turntable checks at 2x. A 3D figure that looks like a toy (wrong proportions, flat metal, floating parts, one material everywhere) is a fault like any other: fix it before calling the page done.
 
 When several figures show the same object, build one **shared model** first (geometry, kinematics, simulation) in a single script and have every figure draw from it. Side views and 3D views then always agree, and a fix in one place fixes every figure.
 
@@ -113,7 +115,7 @@ Leave the runtime block in `<head>` alone.
 
 ### 4. Build section by section
 
-Read [references/runtime.md](references/runtime.md) before the first 2D figure, [references/plots.md](references/plots.md) before the first graph or science diagram, [references/simulations.md](references/simulations.md) before the first simulation, [references/math.md](references/math.md) before the first equation, [references/article.md](references/article.md) before the first sidenote, citation, or callout, [references/engine3d.md](references/engine3d.md) before the first 3D figure, and the reference from the table in step 2 before the first figure of each other kind ([iso](references/iso.md), [maps](references/maps.md), [optics](references/optics.md), [effects](references/effects.md), [sound](references/sound.md), [images](references/images.md), [diagrams and code](references/diagrams.md)). Then write each section's prose and figure together, in page order:
+Read [references/runtime.md](references/runtime.md) before the first 2D figure, [references/plots.md](references/plots.md) before the first graph or science diagram, [references/simulations.md](references/simulations.md) before the first simulation, [references/math.md](references/math.md) before the first equation, [references/article.md](references/article.md) before the first sidenote, citation, or callout, [references/engine3d.md](references/engine3d.md) before the first 3D figure, and the reference from the table in step 2 before the first figure of each other kind ([parts3d](references/parts3d.md), [iso](references/iso.md), [maps](references/maps.md), [optics](references/optics.md), [effects](references/effects.md), [sound](references/sound.md), [images](references/images.md), [diagrams and code](references/diagrams.md)). Then write each section's prose and figure together, in page order:
 
 ```html
 <p>Open the mouth <span class="scrub" data-key="open"></span> and watch the <span class="c-green" data-part="condyle">condyle</span> slide:</p>

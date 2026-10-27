@@ -4,30 +4,47 @@
 
 The 3D upgrade was cut down so it could ship today. Everything below was planned and left out. Each line says what to build; the briefs were in this session, and the specs are summarized here so nothing is lost.
 
-### E3 engine (`src/engine3d.js`, `references/engine3d.md`, `tools/test-engine.mjs`)
+### E3 engine (`src/engine3d.js`, `references/engine3d.md`, `tools/test-engine3d-pro.mjs`)
 
-- [ ] **GPU particles in 3D scenes**, unless the shipped version already has them (check `engine3d.md`).
-  - Transform feedback or texture ping-pong, depth-tested against the geometry.
-  - Forces: gravity, drag, wind, curl-noise turbulence, vortex, point attractors, and collision with planes and spheres.
-  - Emitters: point, disk, ring, cone, and mesh surface.
-  - Sprite kinds: soft lit sprites for smoke and steam, additive emissive for fire and sparks, streaks for airflow tracers.
-  - Deterministic from a seed and time.
-- [ ] **Volumetric plume**, unless already shipped: a ray-marched volume (noise density plus emission by temperature) attached to a nozzle, with shock diamonds and a flame core, depth-tested against the geometry.
-- [ ] **Proof scenes not built:**
-  - the full rocket nozzle firing, with smoke billowing at the pad and a throttle slider
-  - gas molecules in a piston, with pressure from the wall hits
-  - airflow tracers past a wing or cylinder (potential flow)
-  - a glass prism or lens with refraction and soft shadows
-- [ ] **Full worked recipes** in `engine3d.md` for every new material, light, look, particle, and plume option.
-- [ ] **Tests** for the new pieces (`tools/test-engine3d-pro.mjs`).
-- [ ] **Optional three.js path**, only if E3 can't make convincing gas or particles. This needs a decision first: about 200 KB gzipped per standalone page.
+Shipped on 2026-10-27:
+- physically based materials and a studio environment generated on the GPU
+- the `scene.look` presets
+- soft shadows, bloom, and tone mapping
+- temperature tint and glow
+- GPU particles with forces, emitters, and styles
+- the `E3.plume` ray-marched exhaust
+- adaptive quality tiers
+- the "Making 3D that looks real" workflow and checklist
+- tests: material names, black-body colors, particles, gas pressure, airfoil flow
+
+Still open:
+- [ ] **Proof figures not built.** The engine supports all of these; only the figures are missing:
+  - gas molecules in a piston (pressure from wall hits);
+  - airflow tracers past a wing (potential flow);
+  - a glass prism or lens with refraction and soft shadows;
+  - the full nozzle firing at a pad with a throttle.
+- [ ] **`spec.quality` on `demo()`.** It's read from the scene or camera today. Wire it through the runtime.
+- [ ] **Reduced tier after a drag.** On screens with a pixel ratio of 1, the frame right after a drag can stay at the reduced tier until the next redraw.
+- [ ] **MSAA path unchecked.** It only runs while moving, so verify never exercises it. Check it by hand.
+- [ ] **`paint` is a saturated red gloss.** Give it a neutral default, or require a color.
+- [ ] **Recipes.** More worked recipes in `engine3d.md` for particles and the plume.
 
 ### Parts library (`src/parts3d.js`, `references/parts3d.md`, `tools/test-parts3d.mjs`)
 
-- [ ] **Assemblies that weren't building at the cut** (check which shipped in `parts3d.md`): `pistonEngine` (crank, rods, pistons, valves, cams), `gearbox`, `electricMotor` (stator windings, rotor, bearings, housing), `pump` (centrifugal), `bicycleDrivetrain` (chainrings, chain, derailleur), and `turbine` (a generic bladed stage).
-- [ ] **Full tests:** outward normals, a plausible turbofan bypass ratio from the annulus areas, and watertight checks for every part.
+Shipped on 2026-10-27:
+- `E3.parts` with about 30 parametric parts plus helpers
+- assemblies: `rocketEngine`, `turbofan`, `turbopump`, `pistonEngine`
+- the recipe book, the "building a new machine" workflow, and the fake-looking checklist
+- 40 tests
+
+Still open:
+- [ ] **Assemblies not started:** `gearbox`, `electricMotor`, `pump` (centrifugal), `bicycleDrivetrain`, `turbine`. The belt and chain path helpers they need already exist.
+- [ ] **Render `pistonEngine` and look at it.** It builds and passes its kinematic tests, but nobody has seen it yet.
+- [ ] **Triangle counts are heavy:** about 340k for the rocket and 420k for the turbofan. Add level of detail, or fewer segments on small parts.
+- [ ] **Turbofan labels for hidden parts.** `labels()` returns parts inside the casing when the cutaway is off; filter by visibility.
+- [ ] **Show the rocket's pump rotors** spinning, with a cutaway on the pump housings.
 - [ ] **Demo figures not built:** a parts board with every part type, and an exploded turbopump.
-- [ ] **A recipe for every assembly** in `parts3d.md`, with a second worked figure example.
+- [ ] **Combine the two kits** into one figure: the rocket engine from `E3.parts` firing with `E3.plume` and smoke, and the turbofan with airflow particles. Then make it the home page hero.
 
 ### Video skill: `safis-animator` (planned, nothing built)
 

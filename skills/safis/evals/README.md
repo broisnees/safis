@@ -1,6 +1,6 @@
 # Evals
 
-Eight test cases for the safis skill, in the case-folder layout that `claude plugin eval` and the skill-creator skill both read. There's one case per category. Two of them test the edges: the soap case never says "explainer", so it checks that the skill triggers on a casual request, and the Pythagoras case asks for a short piece instead of the in-depth default.
+Nine test cases for the safis skill, in the case-folder layout that `claude plugin eval` and the skill-creator skill both read. There's one case per category, plus `rocket-engine-3d`, which checks that machines come out looking like real hardware. Two of them test the edges: the soap case never says "explainer", so it checks that the skill triggers on a casual request, and the Pythagoras case asks for a short piece instead of the in-depth default.
 
 | Case | Category | Checks beyond the common ones |
 |---|---|---|
@@ -12,6 +12,7 @@ Eight test cases for the safis skill, in the case-folder layout that `claude plu
 | `earthquake-location` | Earth & Space | S-minus-P gap grows with distance; three-station fix |
 | `key-exchange-visual-essay` | Computing | real modular arithmetic; discrete log; no protection from a man in the middle |
 | `pythagoras-short` | Math | a short piece (8-12 figures, at most 2,000 words); a proof the reader can reshape |
+| `rocket-engine-3d` | Machines | real hardware from `E3.parts` with matching materials; an exhaust plume tied to a throttle |
 
 ## Graders
 
