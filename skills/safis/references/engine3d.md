@@ -1,8 +1,32 @@
 # E3: the 3D engine
 
-E3 is a small WebGL 2 engine built into every page. It draws solid objects the way a technical illustration does: matte porcelain-like surfaces, ink outlines on every silhouette, crease, and part boundary (tinted to match each part), hatched faces where a section cuts through, see-through parts, and a soft shadow on the ground. It's meant for explainer figures, not games: scenes of a few dozen parts and up to a few hundred thousand triangles.
+E3 is a small WebGL 2 engine built into every page. It draws solid objects the way a technical illustration does: matte porcelain-like surfaces, ink outlines on every silhouette, crease, and part boundary (tinted to match each part), hatched faces where a section cuts through, see-through parts, and a soft shadow on the ground. Parts can also be physically based (steel that reflects a studio, brushed and heat-tinted metal, refracting glass, glowing hot parts) with soft shadows, bloom, GPU particles, and a ray-marched rocket plume. It's meant for explainer figures, not games: scenes of a few dozen parts and up to a few hundred thousand triangles.
 
-Contents: [scenes](#scenes-and-nodes), [meshes](#meshes), [materials](#materials), [cuts, ghosts, shadows](#cuts-ghosts-shadows-and-light), [camera](#camera), [picking and labels](#picking-and-labels), [molecules](#molecules), [math helpers](#math-helpers), [recipes](#recipes), [limits](#limits).
+## Making 3D that looks real
+
+Follow these steps in order for every 3D figure of a real object.
+
+1. **Real dimensions first.** Look up the real sizes and write them down in one unit (millimeters for a lock, meters for an engine). Model to those numbers; proportions are what make a part read as real.
+2. **Name the parts.** List every part the prose mentions and the ones a reader expects to see, with what each is made of.
+3. **Use the parts library.** Build from `E3.parts` (see [parts3d.md](parts3d.md)) before writing meshes by hand.
+4. **Materials by what the part is made of.** Steel shafts `steel` or `brushed`, housings `aluminum`, seals `rubber`, windows `glass`, hot sections `inconel` with a `temperature`. Keep context parts `porcelain` and color only the subject.
+5. **Pick a look.** `scene.look = "studio"` for machines, `"night"` when glow carries the story, `"outdoor"` for vehicles and buildings, `"diagram"` for teaching drawings. Don't tune lights by hand.
+6. **Camera and framing.** A three-quarter view from slightly above (`pitch` 0.2 to 0.5), `fov` 26 to 32, the subject filling most of the frame; set `target` and `distance` when context parts make it small.
+7. **Cutaway and explode.** A section cut (`scene.cutPlane`) or an exploded slider to show what's inside, with the housing ghosted.
+8. **Labels.** `g.callouts` on `view.project` of named points, a few at a time.
+9. **Check turntable views at 2x.** Run explore.mjs and read the "view" row, and crop the screenshots at 2x around joints and edges.
+
+Checklist (verify and explore can't catch these):
+
+- Proportions match the real numbers; nothing is a toy-sized thickness.
+- No gaps where parts should touch, no parts sunk into each other, no z-fighting on coplanar faces.
+- Metal doesn't look flat: curved metal shows soft-box highlights; a flat metal face that looks dull grey needs a bevel (`round`) or a slight angle.
+- Glass doesn't look like white plastic: something should sit behind it to bend.
+- Nothing floats: parts that rest on something touch it, and the shadow grounds the object.
+- One material everywhere reads as a toy; real assemblies mix two to four.
+- Dark mode: metals still read and glowing parts stay the brightest thing.
+
+Contents: [making 3D that looks real](#making-3d-that-looks-real), [scenes](#scenes-and-nodes), [meshes](#meshes), [materials](#materials), [looks](#looks), [cuts, ghosts, shadows](#cuts-ghosts-shadows-and-light), [particles and plumes](#particles-and-plumes), [camera](#camera), [picking and labels](#picking-and-labels), [molecules](#molecules), [math helpers](#math-helpers), [recipes](#recipes), [limits](#limits).
 
 ## Scenes and nodes
 
@@ -73,33 +97,59 @@ A mesh whose shape changes every frame (a deforming disc, a filling balloon) can
 
 ## Materials
 
-`material` is a name or `{ color, metal, opacity }`.
+`material` is a name or an object. Pick each part's material by what the real part is made of.
 
 | name | look |
 |---|---|
-| `porcelain` (default), `paper` | Neutral white: the context that isn't under discussion |
-| `bone`, `enamel`, `cartilage` | Skeleton and teeth |
-| `muscle`, `tendon`, `tissue`, `fat`, `nerve`, `artery`, `vein` | Soft tissue |
-| `brass`, `gold`, `copper`, `steel` | Metals, with a highlight |
-| `graphite` | Dark parts (pupils, screw slots, rubber) |
-| `glass`, `water` | See-through by default |
+| `porcelain` (default), `paper` | Neutral white diagram shading: the context that isn't under discussion |
+| `bone`, `enamel`, `cartilage`, `muscle`, `tendon`, `tissue`, `fat`, `nerve`, `artery`, `vein` | Anatomy, diagram shading |
+| `graphite` | Dark diagram parts (pupils, screw slots) |
 | `red`, `orange`, `green`, `blue`, `purple` | Pale tints of the page's subject colors, so a part can match the colored word that names it |
-| any `#rrggbb` | Exact color |
+| `steel`, `chrome`, `aluminum`, `titanium` | Metals that reflect the studio. Chrome is a near mirror, aluminum bright and soft |
+| `brushed` | Turned or brushed steel: highlights stretch across the grooves. `brush: "linear"` for a straight grain, `brushAxis` to turn it |
+| `copper`, `brass`, `gold` | Colored metals |
+| `inconel` | Nickel superalloy for hot sections; with a `temperature` it heat-tints and glows |
+| `ceramic`, `plastic` | Satin dielectrics |
+| `rubber` | Matte black |
+| `carbon` | Carbon fiber twill under clear coat |
+| `paint` | Glossy clear-coated paint; set the node's `color` (`"red"` gives the full subject color) |
+| `concrete` | Rough grey, for pads and floors |
+| `glass` | Refracts the scene behind it with a little dispersion, Fresnel edges, ink on its edges, a lighter shadow |
+| `ghost`, `water` | See-through x-ray parts (clear in the middle, denser at the edges) |
+| `hot` | Oxidized metal glowing by `temperature` (default 1400 K) |
+| any `#rrggbb` | Diagram shading in that color |
 
-The house style: nearly everything `porcelain` or a natural material, and only the parts the current paragraph talks about in a subject color.
+The object form is `{ color, metal, roughness, emissive, temperature, opacity }`, plus `base` (start from a named material), `clearcoat`, `anisotropy`, `ior`, `thickness` (glass, world units), and `f0` (measured metal reflectance, linear RGB). An object with `metal` or `roughness` is physically based; `{ color }` alone keeps diagram shading. `{ color, metal: true }` from older pages is a physical metal of that color.
+
+**Temperature.** `temperature` on a node (or material) is kelvin, or a field along a local axis: `{ axis: [0, 1, 0], stops: [[y, T], ...] }` (up to four stops). Metals take temper colors from about 450 K (straw, brown, purple, blue, then grey; inconel 150 K later) and glow by black-body color from about 750 K. `E3.blackbody(T)` returns the glow color as hex, `E3.heatTint(T)` the temper color.
+
+The house style: nearly everything `porcelain` or a natural material, and only the parts the current paragraph talks about in a subject color. Real machines use real materials: steel, aluminum, inconel, rubber, glass, by what the part is made of.
+
+## Looks
+
+`scene.look` picks the whole light rig in one word: the environment metals reflect, key, fill and rim lights locked to the camera, shadow strength, outline weight, and bloom. Every look adapts to dark pages.
+
+| look | for |
+|---|---|
+| `"studio"` (default) | Soft boxes on a neutral sweep. Real parts, product shots, machines |
+| `"diagram"` | Flatter and lighter, for teaching drawings with only a few physical materials |
+| `"night"` | Dark surround, strong cool rim light; glowing parts carry the picture (engines firing, furnaces) |
+| `"outdoor"` | Sky dome and a warm sun, firmer shadows (vehicles, buildings, terrain) |
+
+`scene.exposure` (1) brightens or darkens physical materials, `scene.bloom` (`false` or a strength) sets the glow around hot parts, `scene.lights = [{ position, color, intensity, range }]` adds up to two point lights. Physical materials are tone mapped with a neutral filmic curve, so base colors stay true and highlights roll off to white; diagram materials are never tone mapped and look exactly as before.
 
 ## Cuts, ghosts, shadows, and light
 
 | scene property | meaning |
 |---|---|
 | `scene.cutPlane = [nx, ny, nz, d]` | Removes everything where `n · p > d`. Cut solids show a hatched section face, the way technical drawings show cut material. `null` turns it off. Drive `d` from a slider to cut progressively. |
-| `scene.shadow` | `true`, `false`, or `{ opacity, scale, y }`: a soft contact shadow under the scene. |
+| `scene.shadow` | `true` (default), `false`, or `{ opacity, scale, y, strength, parts, softness, cast }`. Soft shadows from the key light (contact-hardening PCF) fall on an invisible ground and on other parts, over a soft contact shadow. `opacity` is the contact shadow, `strength` the cast shadow on the ground, `parts` (0 to 1) how dark parts shade each other, `cast: false` keeps only the contact shadow. A node with `castShadow: false` casts none. |
 | `scene.light` | `"camera"` (default: a studio light that follows the view, so every side looks lit), or a world direction like `[1, 0.2, 0]` (the Sun). |
 | `scene.lighting` | `"soft"` (default porcelain shading) or `"sun"` (hard day/night terminator, for planets and phases). |
-| `scene.ink` | Outline weight multiplier; `0` turns outlines off. |
+| `scene.ink` | Outline weight multiplier; `0` turns outlines off. Night and outdoor looks already draw lighter ink; drop to about `0.5` for a photographic scene. |
 | `scene.ao` | Ambient occlusion strength, default `0.5`: surfaces crowded by nearer ones (the crease between packed atoms, the inside of a socket) darken a little, so dense models read as solid shapes. `false` turns it off; up to `1` for very crowded scenes. |
 
-Quality is automatic: edges are supersampled 2x while the view is still, and dense screens drop to 1x while the reader turns or drags the view or an animation runs, then redraw sharp when it stops.
+Quality is automatic. Still frames are supersampled 2x with full shadow and volume quality. While the view moves or an animation plays, E3 measures the time between frames and picks a tier: `high`, `medium`, or `low` (render scale, MSAA, shadow map size, particle count, plume steps). Phones start lower; desktops start high. `E3.scene({ quality: "low" })` (or `quality` in the camera) forces a tier, and `E3.quality.tier` reads the current one. The page checker always renders at `high`, so screenshots are stable.
 
 Section cuts work best on closed meshes that don't overlap each other. For an "x-ray" view, give the outer parts `opacity: 0.3` and keep the inner parts solid.
 
@@ -136,6 +186,35 @@ demo("parts", {
 ```
 
 `view.project(p)` gives `[px, py, distance]` in the figure's pixels; `view.pick(p, { ghosts: true })` also hits see-through parts. Labels drawn with `g.callouts` stay readable while the model turns.
+
+## Particles and plumes
+
+```js
+const smoke = scene.add(E3.particles({
+  count: 800, seed: 4, life: [1.6, 3.2], style: "smoke", size: [0.3, 1.2], opacity: 0.35,
+  emitter: { shape: "ring", radius: 0.5, position: [0, 0.3, 0], along: "radial", speed: [2.5, 4.5], spread: 0.3 },
+  forces: { drag: 0.9, buoyancy: 2.2, turbulence: { strength: 1.6, scale: 1.4 }, wind: [0.25, 0, 0] },
+  colliders: [{ plane: [0, 1, 0, 0], bounce: 0.1 }],
+}));
+const plume = scene.add(E3.plume({ radius: 0.45, length: 4.3, fuel: "kerosene" }), { position: nozzleExit });
+// in draw: scene.time = s.t; plume.throttle = v.throttle;
+```
+
+Particles run on the GPU (transform feedback) and are depth tested against the solids. They are deterministic: a particle's birth, speed, and life come from a hash of `seed`, slot, and generation, and the state steps on a fixed time grid, so the picture at `scene.time` (or the system's own `time`) is the same every time. Drive time from the figure's `step`; nothing moves by itself, so reduced motion is respected.
+
+| option | meaning |
+|---|---|
+| `count`, `seed`, `life: [min, max]` | Slots, random seed, life in seconds (`Infinity` for gas molecules that never die) |
+| `style` | `"smoke"` soft lit puffs, `"fire"` additive black-body glow, `"spark"` additive streaks, `"streak"` tracer dashes along the velocity, `"sphere"` lit balls with ink (molecules), `"dot"` flat discs |
+| `emitter.shape` | `"point"`, `"disk"`, `"ring"`, `"cone"` (`angle`), `"sphere"`, `"box"` (`size`), `"line"` (`from`, `to`), `"mesh"` (`mesh`: area-weighted surface points) |
+| `emitter` | `position`, `direction`, `radius`, `speed: [a, b]`, `spread` (cone half-angle), `thermal` (Gaussian velocity, for gases), `along: "normal" or "radial"`, `rake` (lanes, for tracer lines) |
+| `forces` | `gravity`, `drag`, `wind`, `buoyancy`, `turbulence: { strength, scale, speed }` (curl noise), `vortex: { center, axis, strength, core }`, `attractors: [{ position, strength, radius }]` |
+| `colliders` | `{ plane: [nx, ny, nz, d], bounce, friction, velocity }` keeps particles where n·p ≥ d; `{ sphere: [x, y, z, r], inside }` |
+| `flow` | Tracers follow ideal flow instead of forces: `{ type: "airfoil", chord, thickness, camber, alpha }` or `{ type: "cylinder", radius, circulation }`; `E3.flow.airfoil(o)` gives the same field plus `outline()` for the wing mesh and `lift` |
+| `size: [start, end]`, `opacity`, `fade: [in, out]`, `color` (or `[a, b]`), `colorBy: "speed"` with `range`, `temperature: [T0, T1]` (fire), `density` (0 to 1, drawn share: throttle) | Look |
+| `cpu: true`, `measure: true` | Simulate on the CPU; `measure` fills `system.hits[i]` with the momentum per second delivered to collider `i` (pressure = hits / wall area) |
+
+`E3.plume({ radius, length, throttle, temperature, fuel, cells, spread, turbulence, intensity })` is a ray-marched exhaust: exit at its origin, flowing down -y, with a hot core, Mach diamonds every `cells` exit diameters, a turbulent mixing layer, and emission by temperature (`fuel`: `"kerosene"`, `"methane"`, `"hydrogen"`). It lights nearby parts and smoke orange.
 
 ## Science and math builders
 
@@ -179,5 +258,6 @@ scene.add(water);
 
 - One WebGL context serves every figure. If a browser has no WebGL 2, the figure shows an error message instead of the drawing.
 - Transparency is sorted per part, not per triangle; overlapping see-through parts can look wrong from some angles.
-- There are no textures and no cast shadows between parts; the look comes from shading, outlines, and color.
+- There are no image textures; surface detail is procedural (brushing, carbon weave, temper colors).
+- Glass refraction is screen space: it bends what's already drawn behind it, so glass behind glass shows only the nearer pane.
 - Keep each scene under a few hundred thousand triangles so it stays smooth on laptops; the headless check renders in software and is slower.
