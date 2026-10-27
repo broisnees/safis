@@ -46,6 +46,10 @@ Still open:
 - [ ] **Demo figures not built:** a parts board with every part type, and an exploded turbopump.
 - [ ] **Combine the two kits** into one figure: the rocket engine from `E3.parts` firing with `E3.plume` and smoke, and the turbofan with airflow particles. Then make it the home page hero.
 
+### Re-check after the 3D upgrade (2026-10-27 18:05 +0545)
+
+- [ ] **Re-verify every page on the new engine.** Run `tools/finish-site.sh`. The 3D upgrade was deployed with only the tests, the home page, and jaw-joint and ice checked; the other 15 explainers were not re-verified for speed.
+
 ### Video skill: `safis-animator` (planned, nothing built)
 
 - A storyboard of 30-90 s: a hook, 5-8 beats, and per beat a figure, a narration line, and what moves.
