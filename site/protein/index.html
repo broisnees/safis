@@ -84,17 +84,21 @@ window.GENE = (() => {
     g.rect(c[0] - s / 2, c[1] - s / 2, s, s, { fill: g.rgba(col, o.fill ?? 0.16), stroke: col, width: o.width ?? 1.4, r: s * 0.22, alpha });
     if (s >= 9) g.text(letter, [c[0], c[1] + 0.5], { color: col, size: Math.max(9, s * 0.62), weight: 700, alpha, font: o.font });
   }
-  // An amino acid as a bead with its one-letter code. Stop is drawn as an ink square.
+  // An amino acid as a bead with its name fitted inside (the runtime's g.bead, which follows the
+  // theme). Stop is drawn as an ink square. Callers space beads at least 2r + 2 px apart.
   function bead(g, a, c, r, o = {}) {
     const alpha = o.alpha ?? 1;
     if (a === "*") {
       g.rect(c[0] - r, c[1] - r, 2 * r, 2 * r, { fill: "ink", r: r * 0.25, alpha });
-      if (r >= 6) g.text("stop", [c[0], c[1] + 0.5], { color: "panel", size: Math.max(8, r * 0.62), weight: 700, alpha });
+      if (r >= 7) {
+        const max = Math.min(12, r * 0.8), w = g.measure("stop", { size: max, weight: 700 });
+        g.text("stop", [c[0], c[1] + 0.5], { color: "panel", size: Math.max(7, Math.min(max, (max * (2 * r - 4)) / Math.max(w, 1))), weight: 700, alpha });
+      }
       return;
     }
     const col = o.color ?? (o.oily && OILY.has(a) ? "brass" : "purple");
-    g.circle(c, r, { fill: g.rgba(col, o.fill ?? 0.2), stroke: col, width: o.width ?? 1.5, alpha });
-    if (r >= 6 && o.label !== false) g.text(o.three ? NAME[a][0] : a, [c[0], c[1] + 0.5], { color: col, size: Math.max(9, r * (o.three ? 0.62 : 0.95)), weight: 700, alpha });
+    const text = r >= 6 && o.label !== false ? (o.three ? NAME[a][0] : a) : "";
+    g.bead(c, r, text, { color: col, width: o.width ?? 1.4, alpha });
   }
 
   // Camera distance at which a sphere of radius r fills the frame.
@@ -146,13 +150,13 @@ window.GENE = (() => {
     [0.52, "a ribosome reads the message and links amino acids"], [0.86, "the finished chain folds into a protein"]];
   const stage = p => STAGES.reduce((acc, s) => (p >= s[0] ? s : acc), STAGES[0])[1];
   const span = (p, a, b) => clamp((p - a) / (b - a), 0, 1);
-  const N = 18;                                    // beads drawn for the chain
+  const N = 14, GAP = 8.6, RB = 3.2;               // beads drawn for the chain, spaced so they never overlap
 
   demo("overview", {
     aspect: w => (w < 560 ? 1.0 : 1.75),
     controls: [{ key: "p", label: "Progress", min: 0, max: 1, step: 0.005, value: 0.62, color: "purple", format: x => `${Math.round(x * 100)}%`,
       marks: [{ value: 0.1, label: "copy" }, { value: 0.36, label: "export" }, { value: 0.52, label: "read" }, { value: 0.86, label: "fold" }] }],
-    caption: "One gene's journey: copied in the nucleus, carried out as a message, read by a ribosome into a chain of amino acids, folded into a protein. Sizes and times are not to scale.",
+    caption: "One gene's path: copied in the nucleus, carried out as a message, read by a ribosome into a chain of amino acids, folded into a protein. Sizes and times are not to scale.",
     status: (s, v) => stage(v.p),
     draw(g, s, v) {
       const p = v.p, W = g.w, H = g.h, phone = W < 560;
@@ -217,15 +221,15 @@ window.GENE = (() => {
           const chain = [];
           const ball = [rx + (tFold > 0 ? W * 0.02 : 0), ry - H * 0.24];
           for (let i = 0; i < n; i++) {
-            const free = [rx - 8 - i * 0, ry - 18 - i * 6.5];
+            const free = [rx - 8, ry - 18 - i * GAP];
             const wig = [free[0] + Math.sin(i * 1.3) * 5, free[1]];
-            const ang = i * 2.39996, rr = 4.6 * Math.sqrt(i + 0.5);
+            const ang = i * 2.39996, rr = 4.9 * Math.sqrt(i + 0.5);
             const folded = [ball[0] + rr * Math.cos(ang), ball[1] + rr * Math.sin(ang)];
             const q = tFold > 0 ? [lerp(wig[0] + (ball[0] - rx) * tFold * 0.5, folded[0], tFold), lerp(wig[1], folded[1], tFold)] : wig;
             chain.push(q);
           }
           if (tFold < 1) g.spline(chain, { stroke: "purple", width: 1.5 });
-          chain.forEach(q => g.circle(q, 3.6, { fill: g.rgba("purple", 0.35), stroke: "purple", width: 1.2 }));
+          chain.forEach(q => g.bead(q, RB, "", { color: "purple", width: 1.2 }));
           if (tFold < 0.95) {
             g.path(ell([rx, ry - 5], 15, 9), { close: true, fill: g.rgba("muted", 0.3), stroke: "ink", width: 1.3 });
             g.path(ell([rx, ry + 6], 11, 6), { close: true, fill: g.rgba("muted", 0.3), stroke: "ink", width: 1.3 });
@@ -348,7 +352,7 @@ window.GENE = (() => {
     presets: [{ label: "A with T", set: { top: "A", bot: "T" } }, { label: "G with C", set: { top: "G", bot: "C" } },
       { label: "A with C", set: { top: "A", bot: "C" } }, { label: "A with G", set: { top: "A", bot: "G" } }, { label: "T with C", set: { top: "T", bot: "C" } }],
     caption: "A base pair between two backbones, drawn as a diagram. Only a big base with a small one spans the gap, and only A with T and G with C line up donors (H) against acceptors (dots).",
-    status: (s, v) => `${v.top}–${v.bot}: ${verdict(v.top, v.bot)}`,
+    status: (s, v) => `${v.top} with ${v.bot}: ${verdict(v.top, v.bot)}`,
     draw(g, s, v) {
       const W = g.w, H = g.h, cx = W / 2, top = H * 0.1, bot = H * 0.9, gap = bot - top;
       const bw = Math.min(W * 0.62, 340), x0 = cx - bw / 2;
@@ -457,7 +461,7 @@ window.GENE = (() => {
 }
 </script>
 
-<p>Behind the fork the single double strand has become two, and they spell the same thing. Each copy keeps one old strand, drawn with a solid backbone, and gains one new one, because the old strand served as the pattern, or <dfn data-def="A strand whose letters set the order of the letters built against it, through base pairing.">template</dfn>. In a real cell, an enzyme called DNA polymerase does the fetching and joining, about a thousand letters a second in bacteria and a few dozen in our own cells, from many forks at once.<span class="sidenote">Our cells copy all 3 billion base pairs in about eight hours by starting at tens of thousands of places along the chromosomes at the same time.</span></p>
+<p>Behind the fork the single double strand has become two, and they spell the same thing. Each copy keeps one old strand, drawn with a solid backbone, and gains one new one, because the old strand served as the pattern, or <dfn data-def="A strand whose letters set the order of the letters built against it, through base pairing.">template</dfn>. In a real cell, an enzyme called DNA polymerase does the fetching and joining, working from many forks along each chromosome at once.</p>
 
 <p>The same pairing rule runs through everything that follows. A cell uses it to copy its genes when it divides, to make working copies of single genes, and, in the end, to read them.</p>
 
@@ -651,7 +655,7 @@ window.GENE = (() => {
     controls: [{ key: "n", label: "RNA made", min: 0, max: 58, step: 1, value: 22, color: "red", format: n => `${n} letters` }],
     presets: [{ label: "Just started", set: { n: 3 } }, { label: "Peeling off", set: { n: 22 } }, { label: "Reached the code", set: { n: 54 } }],
     caption: "Transcription, drawn letter by letter with the real start of the HBB gene. RNA polymerase (gray) holds about 14 letters of DNA open; the newest 8 letters of RNA stay paired with the template strand, and the rest peel away.",
-    status: (s, v) => { const r = GENE.toRNA(SEQ.slice(UP, UP + v.n)); return v.n ? `RNA so far: 5′-${r.length > 16 ? "…" + r.slice(-16) : r}-3′` : "polymerase in place, no RNA yet"; },
+    status: (s, v) => { const r = GENE.toRNA(SEQ.slice(UP, UP + v.n)); return v.n ? `RNA so far: 5′-${r.length > 16 ? "..." + r.slice(-16) : r}-3′` : "polymerase in place, no RNA yet"; },
     draw(g, s, v) {
       const n = v.n, phone = g.w < 560, K = phone ? 15 : 30;
       const step = g.w / K, sz = Math.min(step * 0.84, 22), d = sz * 0.62;
@@ -711,7 +715,7 @@ window.GENE = (() => {
 
 <p>The first 50 letters aren't code at all. The message carries a lead-in, and only at letter 51 does <code>AUG</code> appear, where the ribosome will later start reading.</p>
 
-<p>How long does this take? Measured in living human cells, RNA polymerase moves at roughly 2 to 4 thousand letters a minute. That makes beta-globin quick. Choose a speed and compare it with two much longer genes:</p>
+<p>How long does this take? Measured in living human cells, RNA polymerase moves at roughly 2 to 5 thousand letters a minute once it is under way <a class="cite" href="#ref-jonkers2015"></a>. That makes beta-globin quick. Choose a speed and compare it with two much longer genes:</p>
 
 <figure class="demo" id="speed" aria-label="Bars on a logarithmic time axis showing how long RNA polymerase takes to copy three genes: beta-globin, titin, and dystrophin, at the chosen speed."></figure>
 <script>
@@ -721,8 +725,8 @@ window.GENE = (() => {
   demo("speed", {
     aspect: w => (w < 560 ? 1.0 : 2.0),
     controls: [{ key: "rate", label: "Speed", min: 0.5, max: 6, step: 0.1, value: 3, color: "ink", unit: " kb/min",
-      marks: [{ value: 2, label: "" }, { value: 4, label: "" }] }],
-    caption: "Time for one RNA polymerase to copy each gene end to end, on a logarithmic scale. The ticks under the slider mark the 2 to 4 thousand letters a minute measured in human cells.",
+      marks: [{ value: 2, label: "" }, { value: 5, label: "" }] }],
+    caption: "Time for one RNA polymerase to copy each gene end to end, on a logarithmic scale. The ticks under the slider mark the 2 to 5 thousand letters a minute measured in human cells.",
     status: (s, v) => `${v.rate.toFixed(1)} thousand letters a minute ≈ ${Math.round((v.rate * 1000) / 60)} letters a second`,
     draw(g, s, v) {
       const phone = g.w < 560;
@@ -742,7 +746,7 @@ window.GENE = (() => {
 }
 </script>
 
-<p>At 3 thousand letters a minute, about 50 a second, beta-globin's 1,608 letters take about half a minute. The gene for titin, the largest protein in muscle, takes over an hour and a half. Dystrophin, a muscle protein whose gene stretches over 2.2 million letters, takes more than half a day: a single copy, started in the morning, is finished in the evening. Measurements in cultured muscle cells put it at about 16 hours <a class="cite" href="#ref-tennyson"></a>. Most of those letters are introns, which brings us to what happens to the copy.</p>
+<p>At 3 thousand letters a minute, about 50 a second, beta-globin's 1,608 letters take about half a minute. The gene for titin, the largest protein in muscle, takes over an hour and a half. Dystrophin, a muscle protein whose gene stretches over 2.2 million letters, takes about half a day. Measured in cultured human muscle cells, the polymerase on dystrophin made 2.4 thousand letters a minute, so one copy takes about 16 hours <a class="cite" href="#ref-tennyson"></a>. Most of those letters are introns, which brings us to what happens to the copy.</p>
 
 <h2>Cutting out the introns</h2>
 
@@ -806,7 +810,7 @@ window.GENE = (() => {
 }
 </script>
 
-<p>At the start, more than half of the copy is <span class="c-muted">intron</span>; when both are gone, the 1,608-letter copy has become a message of 628 letters, and the darker <span class="c-purple">coding</span> part, 444 letters, now runs without a break. Beta-globin is a small, tidy gene. A typical human gene has around ten exons separated by introns that are thousands of letters long, so the cut-out parts usually outweigh the message many times over.</p>
+<p>At the start, more than half of the copy is <span class="c-muted">intron</span>; when both are gone, the 1,608-letter copy has become a message of 628 letters, and the darker <span class="c-purple">coding</span> part, 444 letters, now runs without a break. Beta-globin is a small, tidy gene. A typical human gene has about 11 exons, and its introns average about 7,000 letters, so the cut-out parts usually outweigh the message many times over <a class="cite" href="#ref-piovesan2019"></a>.</p>
 
 <p>Splicing has a payoff. Many genes can be spliced in more than one way, skipping or keeping particular exons, so one gene can make several related proteins. The message also gets a chemical cap on its front end and a tail of a couple of hundred A's on its back end, which protect it and help it get read. Then it is exported through a pore in the nuclear envelope, and the cell faces its real puzzle: turning four letters into twenty amino acids.</p>
 
@@ -955,7 +959,7 @@ window.GENE = (() => {
     status: (s, v) => {
       const r = GENE.translate(M, v.st - 1).map(x => x.aa).join("");
       const stop = r.indexOf("*");
-      return stop >= 0 && stop < 40 ? `reads ${r.slice(0, stop) || "nothing"}, then stop after ${stop} amino acid${stop === 1 ? "" : "s"}` : `reads ${r.slice(0, 14)}… (beta-globin)`;
+      return stop >= 0 && stop < 40 ? `reads ${r.slice(0, stop) || "nothing"}, then stop after ${stop} amino acid${stop === 1 ? "" : "s"}` : `reads ${r.slice(0, 14)}... (beta-globin)`;
     },
     draw(g, s, v) {
       const phone = g.w < 560, rows = phone ? 3 : 2, per = phone ? 18 : 30;
@@ -1004,7 +1008,7 @@ window.TRNA = (() => {
   const CL = { acc: [[0, 0.7, 0], [0, 3.0, 0]], cca: [[0.15, 3.6, 0], [0.3, 4.1, 0]], aa: [0.45, 4.65, 0],
     t: [[0.7, 0, 0], [2.4, 0, 0]], tLoop: [3.05, 0, 0], d: [[-0.7, 0, 0], [-2.3, 0, 0]], dLoop: [-2.95, 0, 0],
     ac: [[0, -0.7, 0], [0, -2.6, 0]], acLoop: [0, -3.25, 0] };
-  const LF = { acc: [[2.6, 0, 0], [4.5, 0, 0]], cca: [[5.0, -0.3, 0], [5.5, -0.6, 0]], aa: [6.0, -0.9, 0],
+  const LF = { acc: [[2.6, 0, 0], [4.2, 0, 0]], cca: [[4.7, -0.35, 0], [5.15, -0.7, 0]], aa: [5.6, -1.0, 0],
     t: [[2.6, 0, 0], [0.9, 0, 0]], tLoop: [0.3, 0.25, 0.35], d: [[0, -2.2, 0], [0, -0.9, 0]], dLoop: [0.1, -0.3, -0.45],
     ac: [[0, -2.2, 0], [0, -4.2, 0]], acLoop: [0, -4.85, 0] };
   const mix = (a, b, t) => (Array.isArray(a[0]) ? a.map((p, i) => v3.lerp(p, b[i], t)) : v3.lerp(a, b, t));
@@ -1231,7 +1235,7 @@ window.TRNA = (() => {
 }
 </script>
 
-<p>The message enters on the right and is read moving left to right, 5′ to 3′. The <span class="c-orange">A site</span> is where a new tRNA arrives with its amino acid, the <span class="c-green">P site</span> holds the tRNA carrying the chain built so far, and the <span class="c-blue">E site</span> holds an emptied tRNA on its way out. The <span class="c-purple">chain</span> leaves through a tunnel in the large subunit about 30 to 40 amino acids long, so the first part of a protein is already out in the cell while the rest is being made.</p>
+<p>The message enters on the right and is read moving left to right, 5′ to 3′. The <span class="c-orange">A site</span> is where a new tRNA arrives with its amino acid, the <span class="c-green">P site</span> holds the tRNA carrying the chain built so far, and the <span class="c-blue">E site</span> holds an emptied tRNA on its way out. The <span class="c-purple">chain</span> leaves through a tunnel in the large subunit that holds a few dozen amino acids, so the first part of a protein is already out in the cell while the rest is being made.</p>
 
 <p>Step through three rounds of reading at the start of the beta-globin message. Watch where the <span class="c-purple">chain</span> is attached at each step:</p>
 
@@ -1287,7 +1291,7 @@ window.TRNA = (() => {
       const nx = off(r + 1) + (1 - arrive) * cw * 0.6, ny = yb - (1 - arrive) * sz * 3;
       const tipNew = drawT(r + 1, nx, ny, 0.25 + 0.75 * arrive);
       // The chain: amino acids 0..r hang from the older tRNA until the bond forms, then from the newer one.
-      const step = [-sz * 0.95, -sz * 0.8];
+      const rb = sz * 0.5, step = [-sz * 0.95, -sz * 0.8];   // |step| = 1.24 sz, more than 2 rb + 2
       const at = (base, back) => [base[0] + back * step[0], base[1] + back * step[1]];
       const anchor = [lerp(tipOld[0], tipNew[0] + step[0], bond), lerp(tipOld[1], tipNew[1] + step[1], bond)];
       const beads = [];
@@ -1295,8 +1299,8 @@ window.TRNA = (() => {
       const newest = tipNew;
       if (bond > 0) beads.push(newest);
       if (beads.length > 1) g.path(beads, { stroke: "purple", width: 2 });
-      beads.forEach((p, i) => GENE.bead(g, CODS[i].aa, p, sz * 0.55, { three: true }));
-      if (bond === 0) GENE.bead(g, CODS[r + 1].aa, newest, sz * 0.55, { three: true, alpha: 0.25 + 0.75 * arrive });
+      beads.forEach((p, i) => GENE.bead(g, CODS[i].aa, p, rb, { three: true }));
+      if (bond === 0) GENE.bead(g, CODS[r + 1].aa, newest, rb, { three: true, alpha: 0.25 + 0.75 * arrive });
     },
   });
 }
@@ -1314,27 +1318,32 @@ window.TRNA = (() => {
   const START = 50, STOP = 50 + 441, LEN = GENE.MRNA.length, FOOT = 30;   // letters; a ribosome covers about 30
   const RATE = 5.6;                                                        // codons per second (mammalian cells)
   const fresh = () => ({ t: 0, next: 0, ribs: [], done: 0, made: [] });
+  function advance(s, every, dt) {
+    s.t += dt;
+    // Load a new ribosome on schedule, if the start is clear.
+    if (s.t >= s.next && !s.ribs.some(r => r.p - START < FOOT)) { s.ribs.push({ p: START }); s.next = s.t + every; }
+    // Move each ribosome 3 letters per codon; the leading one first, so nobody overtakes.
+    s.ribs.sort((a, b) => b.p - a.p);
+    for (let i = 0; i < s.ribs.length; i++) {
+      const r = s.ribs[i], lim = i === 0 ? Infinity : s.ribs[i - 1].p - FOOT;
+      r.p = Math.min(r.p + RATE * 3 * dt, lim);
+    }
+    while (s.ribs.length && s.ribs[0].p >= STOP) { s.ribs.shift(); s.done++; s.made.push(s.t); }
+    if (s.made.length > 30) s.made.shift();
+  }
+  // Starts from a message that has already been read for 40 s, so the figure opens at steady state.
+  const warm = every => { const s = fresh(); for (let i = 0; i < 800; i++) advance(s, every, 0.05); return s; };
   demo("polysome", {
     aspect: w => (w < 560 ? 0.95 : 2.1),
-    state: fresh,
+    state: () => warm(5),
     reset: true,
-    controls: [{ key: "every", label: "New ribosome every", min: 1, max: 12, step: 0.5, value: 3, unit: " s", color: "ink" }],
+    controls: [{ key: "every", label: "New ribosome every", min: 1, max: 12, step: 0.5, value: 5, unit: " s", color: "ink" }],
     caption: "Ribosomes on the 628-letter beta-globin message, moving at 5.6 codons a second; time runs as in the cell (use the speed button to hurry it). A ribosome can't start until the one before it has cleared the start, and can't run into the one ahead.",
-    change(key, s) { if (key === "every") s.next = Math.min(s.next, s.t); },
+    change(key, s, v) { if (key === "every") Object.assign(s, warm(v.every)); },
     status: s => `${s.ribs.length} ribosome${s.ribs.length === 1 ? "" : "s"} on the message · ${s.done} chain${s.done === 1 ? "" : "s"} finished · ${s.t.toFixed(0)} s`,
     step(dt, s, v) {
-      s.t += dt;
-      // Load a new ribosome on schedule, if the start is clear.
-      if (s.t >= s.next && !s.ribs.some(r => r.p - START < FOOT)) { s.ribs.push({ p: START }); s.next = s.t + v.every; }
-      // Move each ribosome 3 letters per codon; the leading one first, so nobody overtakes.
-      s.ribs.sort((a, b) => b.p - a.p);
-      for (let i = 0; i < s.ribs.length; i++) {
-        const r = s.ribs[i], lim = i === 0 ? Infinity : s.ribs[i - 1].p - FOOT;
-        r.p = Math.min(r.p + RATE * 3 * dt, lim);
-      }
-      while (s.ribs.length && s.ribs[0].p >= STOP) { s.ribs.shift(); s.done++; s.made.push(s.t); }
-      if (s.made.length > 30) s.made.shift();
-      if (s.t > 600) Object.assign(s, fresh());
+      advance(s, v.every, dt);
+      if (s.t > 600) Object.assign(s, warm(v.every));
     },
     draw(g, s, v) {
       const pad = 16, my = g.h * 0.82, X = p => pad + (p / LEN) * (g.w - 2 * pad), sc = (g.w - 2 * pad) / LEN;
@@ -1367,7 +1376,460 @@ window.TRNA = (() => {
 }
 </script>
 
-<p>Each ribosome takes about 26 seconds to make one beta-globin chain at 5.6 codons a second <a class="cite" href="#ref-ingolia2011"></a>, and its <span class="c-purple">chain</span> grows longer as it moves toward the stop. With a new ribosome <button class="set" data-set="every=3">every 3 seconds</button>, eight or nine read the message at once and a finished chain comes off every 3 seconds. Start them <button class="set" data-set="every=1">every second</button> and they jam: a ribosome covers about 30 letters, so they queue nose to tail and the output is set by how fast they can clear the start. A message being read by many ribosomes at once is called a <em>polysome</em>, and it is one reason a single gene copy can turn out so much protein.</p>
+<p>Each ribosome takes about 26 seconds to make one beta-globin chain at 5.6 codons a second <a class="cite" href="#ref-ingolia2011"></a>, and its <span class="c-purple">chain</span> grows longer as it moves toward the stop. With a new ribosome <button class="set" data-set="every=5">every 5 seconds</button>, about five read the message at once, roughly what was seen when polysomes were first found on globin messages <a class="cite" href="#ref-warner1963"></a>, and a finished chain comes off every 5 seconds. Start them <button class="set" data-set="every=1">every second</button> and they jam: a ribosome covers about 30 letters, so they queue nose to tail and the output is set by how fast they can clear the start. A message being read by many ribosomes at once is called a <em>polysome</em>, and it is one reason a single gene copy can turn out so much protein.</p>
+
+<h2>Speed and mistakes</h2>
+
+<p>The hardest part of the ribosome's job is the check in the A site. Dozens of kinds of tRNA float in the cell, so for any codon nearly every tRNA that bumps into the A site is the wrong one. Some differ from the right one at a single letter and pair almost as well. The ribosome tells them apart by holding each arrival a moment and seeing whether it stays. Here is a toy version of that check, with rates chosen to land in the real range. Make the ribosome wait longer before it accepts a tRNA, and compare speed with mistakes:</p>
+
+<figure class="demo" id="proofread" aria-label="Two linked plots against the time the ribosome spends checking each tRNA: reading speed in codons per second falls slowly, and the error rate per codon falls steeply on a logarithmic scale."></figure>
+<script>
+{
+  // Toy model: tRNAs arrive at R per second; a fraction PC are right and PN differ at one letter.
+  // During a check of length tau a right one leaves at KC per second, a near miss at KN per second;
+  // whatever is still bound at the end is accepted. Joining and moving on take T0 seconds.
+  const R = 1500, PC = 0.025, PN = 0.12, KC = 6, KN = 160, T0 = 0.03;
+  function model(tau) {
+    const sc = Math.exp(-KC * tau), sn = Math.exp(-KN * tau), pa = PC * sc + PN * sn;
+    const busy = 1 / R + PC * (tau > 0 ? (1 - sc) / KC : 0) + PN * (tau > 0 ? (1 - sn) / KN : 0);
+    return { speed: 1 / (busy / pa + T0), error: (PN * sn) / pa, tries: 1 / pa };
+  }
+  const fmtE = e => {
+    if (e >= 0.01) return `${Math.round(e * 100)}%`;
+    const inv = 1 / e, p = 10 ** Math.floor(Math.log10(inv) - 1);
+    return `1 in ${Num.fmt(Math.round(inv / p) * p)}`;
+  };
+  demo("proofread", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    controls: [{ key: "tau", label: "Checking time", min: 0, max: 120, step: 1, value: 20, unit: " ms", color: "orange" }],
+    presets: [{ label: "Hasty", set: { tau: 10 } }, { label: "Like a real ribosome", set: { tau: 70 } }, { label: "Very careful", set: { tau: 115 } }],
+    caption: "A toy model of tRNA selection with invented rates: right and near-miss tRNAs differ only in how fast they let go. Checking longer cuts errors by orders of magnitude at a modest cost in speed. The shaded bands are the measured range for real ribosomes.",
+    status: (s, v) => { const m = model(v.tau / 1000); return `${m.speed.toFixed(1)} codons/s · wrong amino acid ${fmtE(m.error)} · about ${Math.round(m.tries)} tRNAs tried per codon`; },
+    draw(g, s, v) {
+      const [a, b] = GENE.split(g, 0.5);
+      const m = model(v.tau / 1000);
+      const A = g.graph({ box: a, x: [0, 120], y: [0, 30], axes: "frame", xLabel: "checking time (ms)", yLabel: "codons per second", xTicks: 30, yTicks: 10 });
+      A.clip(() => { const p0 = A([0, 20]), p1 = A([120, 5]); g.rect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1], { fill: g.rgba("green", 0.1) }); });
+      A.fn(t => model(t / 1000).speed, { color: "ink" });
+      A.marker(v.tau, m.speed, { color: "orange", drop: true });
+      const B2 = g.graph({ box: b, x: [0, 120], y: [1e-9, 1], yScale: "log", axes: "frame", xLabel: "checking time (ms)", yLabel: "errors per codon", xTicks: 30 });
+      B2.clip(() => { const p0 = B2([0, 1e-3]), p1 = B2([120, 1e-4]); g.rect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1], { fill: g.rgba("green", 0.1) }); });
+      B2.fn(t => model(t / 1000).error, { color: "ink" });
+      B2.marker(v.tau, m.error, { color: "orange", drop: true });
+    },
+  });
+}
+</script>
+
+<p>With no wait at all, the ribosome is fast and useless: most of what it accepts is wrong. Each extra millisecond of checking cuts the error rate by a large factor, because a near miss lets go much faster than the right tRNA does, while the speed falls only gently. Wait too long and the right tRNAs start letting go too, and reading drags. Real ribosomes sit in the <span class="c-green">shaded band</span>: in bacteria up to about 17 amino acids a second, in mammalian cells about 3 to 6, with one wrong amino acid in every 1,000 to 10,000 <a class="cite" href="#ref-zaher2009"></a>.</p>
+
+<p>The real ribosome does better than a single wait. It checks twice, with an energy-spending step in between that a wrong tRNA can't undo, an idea called <em>kinetic proofreading</em> that John Hopfield worked out in 1974 <a class="cite" href="#ref-hopfield1974"></a>. Copying DNA uses a proofreading step too and then adds a repair crew, which is how it gets down to about one error in a billion letters or better <a class="cite" href="#ref-zaher2009"></a>.</p>
+
+<p>One mistake in 10,000 sounds tiny. Whether it is depends on how long the protein is. Choose an error rate per amino acid and see what fraction of chains come out perfect:</p>
+
+<figure class="demo" id="budget" aria-label="The percentage of protein chains made with no errors at all, plotted against chain length on a logarithmic axis, for a chosen error rate per amino acid. Beta-globin, a typical protein, and titin are marked."></figure>
+<script>
+{
+  const MARKS = [["beta-globin", 147], ["typical protein", 400], ["titin", 34350]];
+  const lab = e => `1 in ${Num.fmt(Math.round(10 ** -e))}`;
+  demo("budget", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    controls: [{ key: "e", label: "Errors per amino acid", min: -6, max: -2, step: 0.05, value: -4, color: "red", format: lab,
+      marks: [{ value: -4, label: "ribosome" }] }],
+    presets: [{ label: "1 in 1,000", set: { e: -3 } }, { label: "1 in 10,000", set: { e: -4 } }, { label: "1 in 100,000", set: { e: -5 } }],
+    caption: "Fraction of chains with no wrong amino acid, (1 − error rate) raised to the chain length. Long proteins are rarely perfect even when each step is very accurate.",
+    status: (s, v) => { const e = 10 ** v.e; return MARKS.map(([n, L]) => `${n} ${(100 * (1 - e) ** L).toFixed(L > 1000 ? 1 : 1)}%`).join(" · "); },
+    draw(g, s, v) {
+      const e = 10 ** v.e, phone = g.w < 560;
+      const P = g.graph({ box: [0, 0, g.w, g.h], x: [10, 1e5], y: [0, 100], xScale: "log", axes: "frame", xLabel: "chain length (amino acids)", yLabel: "perfect chains (%)", yTicks: 25 });
+      P.fn(L => 100 * (1 - e) ** L, { color: "red", width: 2.5 });
+      MARKS.forEach(([n, L], i) => {
+        const y = 100 * (1 - e) ** L;
+        P.marker(L, y, { color: i === 0 ? "purple" : "ink", drop: true, label: `${n}: ${y.toFixed(1)}%`, pos: i === 2 ? "nw" : y > 60 ? "sw" : "ne" });
+      });
+    },
+  });
+}
+</script>
+
+<p>At one error in 10,000, about 98.5% of beta-globin chains are perfect, and for a typical protein of a few hundred amino acids the figure is still near 96%. For titin, the largest human protein at about 34,000 amino acids, only about 3% come out without a single wrong amino acid. Most of those mistakes are harmless, because a single wrong amino acid usually doesn't change how a protein folds, and cells break down the ones that come out badly. The errors that matter more are the ones written into the gene, because every copy then carries them.</p>
+
+<h2>Changed letters</h2>
+
+<p>A change in the DNA of a gene is a <dfn data-def="A change in the sequence of DNA, passed on to every copy made from it.">mutation</dfn>. Unlike a ribosome's slip, it is copied into every message and every chain. The simplest kind swaps one letter for another. Pick a letter of the beta-globin code, by number or by clicking it, and choose what to change it to:</p>
+
+<script>
+// Drawing shared by the mutation figures: a window of codons with their amino acids, and a whole
+// protein as a strip of ticks compared against normal beta-globin.
+window.MUT = (() => {
+  const REF = GENE.CDS, REFP = GENE.protein(REF);   // 147 amino acids and the stop
+  // Codons from letter `from` (0-based) of seq, n of them, laid out from x0.
+  function row(g, seq, from, n, x0, y, step, sz, o = {}) {
+    const out = [];
+    let stopped = o.stoppedBefore ?? false;
+    for (let k = 0; k < n; k++) {
+      const i = from + 3 * k, c = seq.slice(i, i + 3);
+      if (i < 0 || c.length < 3) continue;
+      const cx = x0 + (3 * k + 1.5) * step, a = GENE.aa(c);
+      [...c].forEach((b, j) => GENE.base(g, b, [x0 + (3 * k + j + 0.5) * step, y], sz, { alpha: stopped ? 0.3 : 1, width: o.mark && o.mark(i + j) ? 3 : 1.4 }));
+      if (!stopped) {
+        const changed = o.ref && GENE.aa(o.ref.slice(i, i + 3)) !== a;
+        GENE.bead(g, a, [cx, y + sz * 1.45], Math.min(sz * 0.62, 14), { three: true, oily: false, width: changed ? 3 : 1.5 });
+        if (changed) g.circle([cx, y + sz * 1.45], Math.min(sz * 0.62, 14) + 4, { stroke: "ink", width: 1.5 });
+      }
+      if (a === "*") stopped = true;
+      out.push({ i, cx });
+    }
+    return out;
+  }
+  // One tick per amino acid: purple where it matches normal beta-globin, ink where it differs.
+  function strip(g, prot, x0, y, w, h, label) {
+    const per = w / REFP.length;
+    g.rect(x0, y, w, h, { stroke: "muted", width: 1, r: 2 });
+    for (let i = 0; i < prot.length; i++) {
+      const a = prot[i];
+      if (a === "*") { g.rect(x0 + i * per, y - 3, Math.max(2, per), h + 6, { fill: "ink" }); break; }
+      g.rect(x0 + i * per, y, Math.max(1, per - 0.4), h, { fill: a === REFP[i] ? g.rgba("purple", 0.45) : "ink" });
+    }
+    if (label) g.text(label, [x0, y - 9], { color: "muted", size: 12, align: "left" });
+  }
+  return { REF, REFP, row, strip };
+})();
+</script>
+
+<figure class="demo" id="mutate" aria-label="Codons of the beta-globin gene with their amino acids, normal above and changed below. The chosen letter is replaced; a strip under them compares the whole chain with normal beta-globin."></figure>
+<script>
+{
+  const REF = MUT.REF;
+  let L = null;   // last layout, for clicks
+  const mutant = v => REF.slice(0, v.pos - 1) + v.to + REF.slice(v.pos);
+  demo("mutate", {
+    aspect: w => (w < 560 ? 0.95 : 1.85),
+    controls: [
+      { key: "pos", label: "Letter", type: "stepper", min: 1, max: 441, step: 1, value: 20, color: "ink" },
+      { key: "to", label: "Change to", type: "choice", options: ["A", "C", "G", "T"].map(b => ({ value: b, label: b })), value: "T" },
+    ],
+    presets: [{ label: "Silent", set: { pos: 9, to: "C" } }, { label: "Sickle cell", set: { pos: 20, to: "T" } },
+      { label: "Hemoglobin C", set: { pos: 19, to: "A" } }, { label: "Early stop", set: { pos: 118, to: "T" } }],
+    caption: "Single-letter changes in the HBB coding sequence, read with the real genetic code. Codons are numbered from the starting ATG; hemoglobin's traditional numbering starts one later, because the first methionine is trimmed off.",
+    status: (s, v) => {
+      const m = mutant(v), ci = Math.floor((v.pos - 1) / 3), c0 = REF.slice(ci * 3, ci * 3 + 3), c1 = m.slice(ci * 3, ci * 3 + 3);
+      const a0 = GENE.aa(c0), a1 = GENE.aa(c1), nm = a => (a === "*" ? "stop" : GENE.NAME[a][1]);
+      if (REF[v.pos - 1] === v.to) return `letter ${v.pos} is already ${v.to}: no change`;
+      if (a0 === a1) return `silent: codon ${ci + 1}, ${c0} → ${c1}, still ${nm(a0)}`;
+      if (a1 === "*") return `nonsense: codon ${ci + 1}, ${c0} → ${c1}, the chain stops after ${ci} amino acids instead of 147`;
+      return `missense: codon ${ci + 1}, ${c0} → ${c1}, ${nm(a0)} becomes ${nm(a1)}`;
+    },
+    drag: {
+      hit: p => L && Math.abs(p[1] - L.y) < L.sz && p[0] > L.x0 && p[0] < L.x0 + L.n * 3 * L.step,
+      start(p, s, v, fig) { const k = Math.floor((p[0] - L.x0) / L.step); fig.set("pos", clamp(L.from + k + 1, 1, 441)); },
+    },
+    draw(g, s, v) {
+      const phone = g.w < 560, n = phone ? 5 : 9, step = (g.w - (phone ? 16 : 90)) / (3 * n), sz = Math.min(step * 0.86, 22);
+      const x0 = phone ? 8 : 80, ci = Math.floor((v.pos - 1) / 3), from = 3 * clamp(ci - Math.floor(n / 2), 0, 148 - n);
+      const m = mutant(v), y1 = g.h * 0.12 + sz / 2, y2 = y1 + sz * 3.4;
+      L = { x0, from, n, step, sz, y: y1 };
+      const mark = i => i === v.pos - 1;
+      MUT.row(g, REF, from, n, x0, y1, step, sz, { mark });
+      MUT.row(g, m, from, n, x0, y2, step, sz, { mark, ref: REF });
+      for (let k = 0; k < n; k++) g.text(`${from / 3 + k + 1}`, [x0 + (3 * k + 1.5) * step, y1 - sz * 0.95], { color: "muted", size: 10.5 });
+      if (!phone) { g.text("normal", [x0 - 10, y1], { color: "muted", size: 12, align: "right" }); g.text("changed", [x0 - 10, y2], { color: "ink", size: 12, align: "right" }); }
+      const px = x0 + ((v.pos - 1 - from) + 0.5) * step;
+      g.arrow([px, y1 + sz * 0.62], [px, y2 - sz * 0.62], { stroke: "ink", width: 1.5 });
+      const sy = y2 + sz * 3.0, sw = g.w - x0 - 16;
+      MUT.strip(g, MUT.REFP, x0, sy, sw, 12, "normal chain, 147 amino acids");
+      MUT.strip(g, GENE.protein(m), x0, sy + 46, sw, 12, "changed chain");
+    },
+  });
+}
+</script>
+
+<p>Most changes do one of three things. A <strong>silent</strong> change, like turning the third letter of codon 3 from <code>CAT</code> to <code>CAC</code>, leaves the protein exactly as it was, thanks to the redundant code. A <strong>missense</strong> change swaps one amino acid. The most famous is the <button class="set" data-set="pos=20 to=T">sickle-cell change</button>: <code>GAG</code> becomes <code>GTG</code>, and a glutamate becomes a valine. In 1956 Vernon Ingram showed that this one amino acid is the entire difference between normal and sickle hemoglobin <a class="cite" href="#ref-ingram1956"></a>. A different change at the same codon, <code>GAG</code> to <code>AAG</code>, gives hemoglobin C, a much milder condition. A <strong>nonsense</strong> change turns a codon into a stop. At codon 40, <button class="set" data-set="pos=118 to=T"><code>CAG</code> to <code>TAG</code></button> ends the chain after 39 amino acids. It is a common cause of beta-thalassemia around the Mediterranean, especially in Sardinia <a class="cite" href="#ref-galanello2010"></a>.</p>
+
+<div class="quiz">
+  <p>You delete a single letter near the start of the code. What happens to the chain?</p>
+  <div class="choices"><button>It loses one amino acid</button><button>One amino acid changes</button><button data-correct>Everything after the deletion changes, and it usually stops early</button></div>
+  <p class="why">The ribosome still reads in threes, so every codon after the gap is regrouped. Wrong amino acids follow until a stop codon turns up by chance.</p>
+</div>
+
+<p>Adding or removing letters is worse, because the ribosome keeps counting in threes from the start. Choose an edit and a place for it, and compare the two chains:</p>
+
+<figure class="demo" id="frameshift" aria-label="The beta-globin code with letters deleted or inserted at a chosen place. The codons after the edit regroup into a new reading frame; strips compare the whole changed chain with the normal one and show where it stops."></figure>
+<script>
+{
+  const REF = MUT.REF;
+  const EDITS = { del1: [1, ""], ins1: [0, "A"], del3: [3, ""], del4: [4, ""] };
+  const edit = v => { const [d, ins] = EDITS[v.kind]; return REF.slice(0, v.at - 1) + ins + REF.slice(v.at - 1 + d); };
+  demo("frameshift", {
+    aspect: w => (w < 560 ? 0.95 : 1.85),
+    controls: [
+      { key: "kind", label: "Edit", type: "choice", options: [{ value: "del1", label: "delete 1" }, { value: "ins1", label: "insert 1" }, { value: "del3", label: "delete 3" }, { value: "del4", label: "delete 4" }], value: "del1" },
+      { key: "at", label: "At letter", type: "stepper", min: 4, max: 430, step: 1, value: 30, color: "ink" },
+    ],
+    presets: [{ label: "Delete one", set: { kind: "del1", at: 30 } }, { label: "Delete three", set: { kind: "del3", at: 124 } }, { label: "Codons 41/42, −TTCT", set: { kind: "del4", at: 126 } }],
+    caption: "An insertion or deletion in the HBB code. After the edit the codons regroup; ink ticks in the strips mark amino acids that differ from normal beta-globin, and the black bar is the stop.",
+    status: (s, v) => {
+      const p = GENE.protein(edit(v)), n = p.indexOf("*"), same = [...p].findIndex((a, i) => a !== MUT.REFP[i]);
+      const shift = EDITS[v.kind][0] % 3 !== 0 || v.kind === "ins1";
+      if (!shift) return `in frame: ${n} amino acids, ${n === 147 ? "same length" : `${147 - n} fewer`}`;
+      return `frame shifted from codon ${same + 1}: ${n} amino acids, then stop`;
+    },
+    draw(g, s, v) {
+      const phone = g.w < 560, n = phone ? 5 : 9, step = (g.w - (phone ? 16 : 90)) / (3 * n), sz = Math.min(step * 0.86, 22);
+      const x0 = phone ? 8 : 80, ci = Math.floor((v.at - 1) / 3), from = 3 * clamp(ci - 1, 0, 148 - n);
+      const m = edit(v), y1 = g.h * 0.12 + sz / 2, y2 = y1 + sz * 3.4;
+      const [d] = EDITS[v.kind];
+      MUT.row(g, REF, from, n, x0, y1, step, sz, { mark: i => i >= v.at - 1 && i < v.at - 1 + d });
+      MUT.row(g, m, from, n, x0, y2, step, sz, { mark: i => v.kind === "ins1" && i === v.at - 1, ref: REF });
+      for (let k = 0; k < n; k++) g.text(`${from / 3 + k + 1}`, [x0 + (3 * k + 1.5) * step, y1 - sz * 0.95], { color: "muted", size: 10.5 });
+      if (!phone) { g.text("normal", [x0 - 10, y1], { color: "muted", size: 12, align: "right" }); g.text("edited", [x0 - 10, y2], { color: "ink", size: 12, align: "right" }); }
+      const sy = y2 + sz * 3.0, sw = g.w - x0 - 16;
+      MUT.strip(g, MUT.REFP, x0, sy, sw, 12, "normal chain, 147 amino acids");
+      const p = GENE.protein(m);
+      MUT.strip(g, p, x0, sy + 46, sw, 12, `edited chain, ${p.indexOf("*")} amino acids`);
+    },
+  });
+}
+</script>
+
+<p>Delete <button class="set" data-set="kind=del1 at=30">one letter</button> and every codon after the gap is read one letter off. The amino acids that follow are nonsense, and within a few dozen codons a stop turns up by chance. That kind of change is called a <strong>frameshift</strong>. Deleting <button class="set" data-set="kind=del3 at=124">three letters</button> removes one amino acid and leaves the rest in frame. In 1961 Crick, Brenner, and colleagues used exactly this behavior, with deletions and insertions in a virus gene, to show that the code is read in threes <a class="cite" href="#ref-crick1961"></a>. The <button class="set" data-set="kind=del4 at=126">loss of four letters</button> at codons 41 and 42 of beta-globin is one of the most common causes of beta-thalassemia in southern China and Southeast Asia <a class="cite" href="#ref-galanello2010"></a>; the shifted chain stops after 59 amino acids.</p>
+
+<p>How often does a random single-letter change do harm? The code itself decides, and we can simply count. Choose which letter of the codon gets hit:</p>
+
+<figure class="demo" id="tally" aria-label="Bars counting every possible single-letter change in the 147 codons of beta-globin, sorted into silent, missense, and nonsense, for the first, second, or third letter of the codon or all of them."></figure>
+<script>
+{
+  const REF = MUT.REF;
+  const COUNT = (() => {
+    const out = { 0: { silent: 0, missense: 0, nonsense: 0 }, 1: { silent: 0, missense: 0, nonsense: 0 }, 2: { silent: 0, missense: 0, nonsense: 0 } };
+    for (let i = 0; i < 147 * 3; i += 3) {
+      const c = REF.slice(i, i + 3), a = GENE.aa(c);
+      for (let k = 0; k < 3; k++) for (const b of "ACGT") {
+        if (b === c[k]) continue;
+        const m = c.slice(0, k) + b + c.slice(k + 1), x = GENE.aa(m);
+        out[k][x === a ? "silent" : x === "*" ? "nonsense" : "missense"]++;
+      }
+    }
+    return out;
+  })();
+  const KINDS = [["silent", "green"], ["missense", "orange"], ["nonsense", "ink"]];
+  const pick = w => (w === "all" ? KINDS.map(([k]) => COUNT[0][k] + COUNT[1][k] + COUNT[2][k]) : KINDS.map(([k]) => COUNT[w][k]));
+  demo("tally", {
+    aspect: w => (w < 560 ? 1.1 : 2.2),
+    controls: [{ key: "w", label: "Letter of the codon", type: "choice", options: [{ value: "all", label: "any" }, { value: 0, label: "first" }, { value: 1, label: "second" }, { value: 2, label: "third" }], value: "all" }],
+    caption: "Every possible single-letter change in the 147 codons of beta-globin (three alternatives at each of 441 letters), sorted by effect with the real genetic code.",
+    status: (s, v) => { const c = pick(v.w), t = c[0] + c[1] + c[2]; return `${t} possible changes: ${KINDS.map(([k], i) => `${Math.round((100 * c[i]) / t)}% ${k}`).join(", ")}`; },
+    draw(g, s, v) {
+      const c = pick(v.w), t = c[0] + c[1] + c[2];
+      g.bars(c.map(x => x / t), { box: [8, 8, g.w - 16, g.h - 16], labels: KINDS.map(k => k[0]), horizontal: true, range: [0, 1], values: true,
+        format: x => `${Math.round(x * t)} (${Math.round(x * 100)}%)`, colors: KINDS.map(k => k[1]) });
+    },
+  });
+}
+</script>
+
+<p>Of the 1,323 possible single-letter changes, about a quarter are silent, 73% are missense, and fewer than 3% are nonsense. Split by letter, the pattern from the codon table jumps out: changes in the <button class="set" data-set="w=2">third letter</button> are silent more than two times in three, while changes in the <button class="set" data-set="w=1">second letter</button> are never silent at all. Whether a missense change matters depends on where in the folded protein the new amino acid lands, which is where the chain goes next.</p>
+
+<h2>Folding</h2>
+
+<p>A chain of amino acids is not yet a working protein. It has to fold into the right shape, and for most small proteins nobody does the folding for it: the sequence alone decides. The main push comes from water. Several of the twenty amino acids have oily side chains, and water packs around oily surfaces awkwardly, so oily side chains end up pressed together, out of its way. Here is a made-up chain of 22 beads, 9 of them <span class="c-brass">oily</span>, jostled the way water jostles everything. Let it run, then turn the oily pull off and start again:</p>
+
+<figure class="demo" id="fold" aria-label="A chain of 22 beads, oily ones in brass and the rest in purple, jiggling in water. With the oily pull on, the chain collapses into a ball with the oily beads inside; with it off, the chain stays loose."></figure>
+<script>
+{
+  // Overdamped beads: stiff links, beads that can't overlap, a pull between oily beads that are close,
+  // and random kicks from the water. Units: one link = 1; time is scaled to fold in a few seconds.
+  const SEQ = "PHPPHHPHPPHPHHPPHPHPPH", N = SEQ.length;
+  const KB = 100, KT = 0.3, EPS = 3.0, RC = 2.4, H = 0.003;
+  const fresh = () => ({ x: Array.from({ length: N }, (_, i) => i - (N - 1) / 2), y: Array.from({ length: N }, (_, i) => Math.sin(i * 0.9) * 0.15), seed: 12345, t: 0 });
+  const rand = s => (s.seed = (s.seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const gauss = s => Math.sqrt(-2 * Math.log(Math.max(1e-9, rand(s)))) * Math.cos(TAU * rand(s));
+  function step(s, oil) {
+    const fx = new Float64Array(N), fy = new Float64Array(N);
+    for (let i = 0; i < N - 1; i++) {
+      const dx = s.x[i + 1] - s.x[i], dy = s.y[i + 1] - s.y[i], r = Math.hypot(dx, dy) || 1e-6, f = KB * (r - 1);
+      fx[i] += (f * dx) / r; fy[i] += (f * dy) / r; fx[i + 1] -= (f * dx) / r; fy[i + 1] -= (f * dy) / r;
+    }
+    for (let i = 0; i < N; i++) for (let j = i + 2; j < N; j++) {
+      const dx = s.x[j] - s.x[i], dy = s.y[j] - s.y[i], r = Math.hypot(dx, dy) || 1e-6;
+      let f = 0;
+      if (r < 1) f -= 300 * (1 - r);
+      if (oil && SEQ[i] === "H" && SEQ[j] === "H" && r > 1 && r < RC) f += 2 * EPS * (1 - (r - 1) / (RC - 1));
+      fx[i] += (f * dx) / r; fy[i] += (f * dy) / r; fx[j] -= (f * dx) / r; fy[j] -= (f * dy) / r;
+    }
+    const amp = Math.sqrt(2 * KT * H);
+    for (let i = 0; i < N; i++) { s.x[i] += fx[i] * H + amp * gauss(s); s.y[i] += fy[i] * H + amp * gauss(s); }
+    s.t += H;
+  }
+  const contacts = s => { let n = 0; for (let i = 0; i < N; i++) for (let j = i + 2; j < N; j++) if (SEQ[i] === "H" && SEQ[j] === "H" && Math.hypot(s.x[j] - s.x[i], s.y[j] - s.y[i]) < 1.5) n++; return n; };
+  let view = { cx: 0, cy: 0 };
+  demo("fold", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    state: fresh,
+    reset: true,
+    controls: [
+      { key: "oil", label: "Oily beads pull together", type: "toggle", value: true, color: "brass" },
+      { label: "Stretch it out again", type: "button", action: s => Object.assign(s, fresh()) },
+    ],
+    caption: "A toy chain in two dimensions: brass beads are oily, purple ones are not, and every bead is kicked at random by the surrounding water. Only the pull between oily beads differs between the two runs.",
+    change(key, s) { if (key === "oil") Object.assign(s, fresh()); },
+    status: s => `${contacts(s)} oily-oily contacts`,
+    step(dt, s, v) { const n = Math.round(dt * 1800); for (let i = 0; i < n; i++) step(s, v.oil); },
+    draw(g, s, v) {
+      let cx = 0, cy = 0;
+      for (let i = 0; i < N; i++) { cx += s.x[i]; cy += s.y[i]; }
+      cx /= N; cy /= N;
+      // Follow the chain's middle smoothly so it stays in view.
+      view.cx += (cx - view.cx) * 0.2; view.cy += (cy - view.cy) * 0.2;
+      const P = g.fit(view.cx - 12, view.cx + 12, view.cy - 6.3, view.cy + 6.3);
+      const r = Math.max(5, P.sx * 0.42);
+      g.path(s.x.map((x, i) => P([x, s.y[i]])), { stroke: "ink", width: 1.6 });
+      for (let i = 0; i < N; i++) g.bead(P([s.x[i], s.y[i]]), r, "", { color: SEQ[i] === "H" ? "brass" : "purple", width: 1.4 });
+    },
+  });
+}
+</script>
+
+<p>With the pull on, the chain thrashes for a moment and then collapses into a ball, with the <span class="c-brass">oily beads</span> in the middle and the others on the outside facing the water. Turn the pull off and the same chain stays a loose, wandering string. Real proteins fold the same way at heart, though with many more forces at work: hydrogen bonds, charges attracting and repelling, the stiffness of the chain. Small proteins can fold in a few microseconds, while others take seconds <a class="cite" href="#ref-kubelka2004"></a>.</p>
+
+<p>Two shapes turn up everywhere inside folded proteins, and one dominates hemoglobin: the <strong>alpha helix</strong>, where the chain winds into a tight spiral held by hydrogen bonds between each amino acid and the one four further along. Here are amino acids 3 to 18 of the beta chain, which form its first helix. Coil them up and look at where the oily side chains end up:</p>
+
+<figure class="demo wide" id="ahelix" aria-label="A 3D chain of 16 amino acids from beta-globin. A slider winds it from a stretched strand into an alpha helix; oily side chains are brass, and amino acid 6 can be switched from glutamate to the sickle-cell valine."></figure>
+<script>
+{
+  const { mesh, m4, v3 } = E3;
+  const RES = MUT.REFP.slice(3, 19), N = RES.length, FIRST = 3;   // traditional numbering: residues 3 to 18
+  const CA = 3.8;                                                      // Å between neighboring amino acids along the chain
+  // Helix parameters as the chain coils: turn per residue from 180° (flat zigzag) to 100°, radius
+  // from 0.95 Å to 2.3 Å, and the rise per residue set so neighbors stay 3.8 Å apart.
+  function pose(c) {
+    const th = lerp(Math.PI, (100 * Math.PI) / 180, c), r = lerp(0.95, 2.28, c);
+    const chord = 2 * r * Math.sin(th / 2), rise = Math.sqrt(Math.max(0.01, CA * CA - chord * chord));
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      const a = i * th, x = (i - (N - 1) / 2) * rise;
+      pts.push({ ca: [x, r * Math.cos(a), r * Math.sin(a)], out: [0, Math.cos(a), Math.sin(a)] });
+    }
+    return { pts, rise, th };
+  }
+  const scene = E3.scene({ shadow: { opacity: 0.08 } });
+  const back = scene.add(null, { name: "backbone", material: "purple" });
+  const ball = mesh.sphere(1, { segments: 18 });
+  const cas = RES.split("").map(() => scene.add(ball, { material: "purple", name: "amino acid" }));
+  const sides = RES.split("").map(() => scene.add(ball, { material: "porcelain", name: "side chain" }));
+  const sticks = RES.split("").map(() => scene.add(null, { material: "porcelain", name: "side chain" }));
+  demo("ahelix", {
+    aspect: w => (w < 560 ? 0.95 : 2.0),
+    orbit: { yaw: 0.2, pitch: 0.35, minPitch: -1.3, maxPitch: 1.3 },
+    controls: [
+      { key: "c", label: "Coil", min: 0, max: 1, step: 0.01, value: 1, color: "purple", format: x => (x === 1 ? "helix" : x === 0 ? "stretched" : `${Math.round(x * 100)}%`) },
+      { key: "val", label: "Sickle-cell valine at 6", type: "toggle", value: false, color: "brass" },
+    ],
+    caption: "Amino acids 3 to 18 of beta-globin, drawn as one ball per amino acid (purple) with its side chain sticking out (brass when oily). Coiled, the chain makes an alpha helix: 3.6 amino acids and 0.54 nm per turn.",
+    status: (s, v) => { const p = pose(v.c); return v.c > 0.98 ? `${(360 / ((p.th * 180) / Math.PI)).toFixed(1)} amino acids per turn · ${(p.rise * 360 / ((p.th * 180) / Math.PI) / 10).toFixed(2)} nm per turn · ${((p.rise * (N - 1)) / 10).toFixed(1)} nm long` : `${((p.rise * (N - 1)) / 10).toFixed(1)} nm long`; },
+    draw(g, s, v) {
+      const p = pose(v.c);
+      back.mesh = mesh.tube(E3.smooth(p.pts.map(q => q.ca), { steps: 6 }), 0.35, { segments: 10 });
+      p.pts.forEach((q, i) => {
+        const a = i === 6 - FIRST && v.val ? "V" : RES[i];
+        cas[i].matrix = m4.multiply(m4.translation(q.ca), m4.scaling([0.75, 0.75, 0.75]));
+        const tip = v3.add(q.ca, v3.scale(q.out, 2.4));
+        sides[i].matrix = m4.multiply(m4.translation(tip), m4.scaling([0.9, 0.9, 0.9]));
+        sticks[i].mesh = GENE.stick(q.ca, tip, 0.22, 8);
+        const oily = GENE.OILY.has(a);
+        sides[i].material = sticks[i].material = oily ? "brass" : "porcelain";
+      });
+      const len = (p.rise * (N - 1)) / 2;
+      const view = g.render3d(scene, { ...s.view, fov: 24, target: [0, 0, 0], distance: GENE.fitDistance(Math.max(9, len + 3), 24, g.w / g.h, 0.95) });
+      // Hydrogen bonds between amino acid i and i + 4, once the helix has formed.
+      const hb = clamp((v.c - 0.85) / 0.15, 0, 1);
+      if (hb > 0) for (let i = 0; i + 4 < N; i++) g.line(view.project(p.pts[i].ca), view.project(p.pts[i + 4].ca), { stroke: "ink", width: 1, dash: [2, 3], alpha: 0.6 * hb });
+      const six = p.pts[6 - FIRST];
+      g.callouts([{ at: view.project(v3.add(six.ca, v3.scale(six.out, 2.4))), text: v.val ? "valine 6 (sickle)" : "glutamate 6", color: v.val ? "brass" : "ink" },
+        { at: view.project(p.pts[0].ca), text: `${GENE.NAME[RES[0]][0]} ${FIRST}`, color: "purple" },
+        { at: view.project(p.pts[N - 1].ca), text: `${GENE.NAME[RES[N - 1]][0]} ${FIRST + N - 1}`, color: "purple" }]);
+    },
+  });
+}
+</script>
+
+<p>Stretched, the chain is over 5 nanometers long. Coiled, it is a rod about 2.3 nanometers long with 3.6 amino acids per turn, and the dashed lines show each amino acid bonded to the one four further on. Look along the rod and most of the <span class="c-brass">oily side chains</span> line up on one side, the side that packs against the rest of the protein. The beta chain has eight such helices, labeled A to H, folded around a pocket that holds the iron-containing heme group that binds oxygen.</p>
+
+<p>Amino acid 6 sits on the other side, facing the water. Normally it is a glutamate, which carries a charge and is happy there. Switch on the <span class="c-brass">sickle-cell valine</span> and that spot becomes oily too: a small greasy patch on the outside of the finished protein.</p>
+
+<h2>One letter, whole cells</h2>
+
+<p>An oily patch on the outside of a protein has nowhere to hide, except against another protein. When sickle hemoglobin gives up its oxygen, its shape shifts slightly, and the valine patch on one molecule fits into an oily pocket on its neighbor. The molecules then stack into long, stiff fibers. Choose the hemoglobin, then lower the oxygen, as happens when blood passes through small vessels in working muscle:</p>
+
+<figure class="demo" id="sickle" aria-label="A red blood cell full of hemoglobin molecules. With sickle hemoglobin and low oxygen, the molecules stack into fibers and the cell stretches into a crescent; normal hemoglobin stays scattered at any oxygen level."></figure>
+<script>
+{
+  const N = 90, R = GENE.rng(31), FIB = 5;
+  // Each molecule's place in the free cell (inside a unit disc) and in a fiber.
+  const home = Array.from({ length: N }, () => { const a = R() * TAU, r = Math.sqrt(R()) * 0.88; return [r * Math.cos(a), r * Math.sin(a)]; });
+  const order = home.map((p, i) => i).sort((a, b) => home[a][1] - home[b][1]);
+  const fiber = [];
+  order.forEach((i, k) => { const f = Math.floor((k / N) * FIB), j = k - Math.floor((f * N) / FIB), per = Math.ceil(N / FIB); fiber[i] = [-0.92 + (1.84 * (j + 0.5)) / per, (f - (FIB - 1) / 2) * 0.17]; });
+  const polymer = (hbs, o2) => (hbs ? smoothstep(0.55, 0.15, o2) : 0);
+  // The cell's shape: a disc that stretches and bends into a crescent as fibers form.
+  const shape = (u, v, m) => {
+    const x = u * (1 + 0.75 * m), y = v * (1 - 0.55 * m), bend = 0.55 * m;
+    if (bend < 1e-3) return [x, y];
+    const Rb = 2.2 / bend, phi = x / Rb;
+    return [(Rb + y) * Math.sin(phi), Rb - (Rb + y) * Math.cos(phi) - 0.4 * m];
+  };
+  demo("sickle", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    controls: [
+      { key: "hb", label: "Hemoglobin", type: "choice", options: [{ value: "A", label: "normal" }, { value: "S", label: "sickle" }], value: "S" },
+      { key: "o2", label: "Oxygen", min: 0, max: 1, step: 0.01, value: 0.7, color: "red", format: x => `${Math.round(x * 100)}%`, marks: [{ value: 0.95, label: "lungs" }, { value: 0.25, label: "working muscle" }] },
+    ],
+    presets: [{ label: "Sickle, low oxygen", set: { hb: "S", o2: 0.15 } }, { label: "Normal, low oxygen", set: { hb: "A", o2: 0.15 } }, { label: "Sickle, lungs", set: { hb: "S", o2: 0.95 } }],
+    caption: "A cartoon of one red blood cell with a few dozen hemoglobin molecules standing in for its 270 million. The oxygen levels at which fibers form are illustrative; real fibers are bundles of 14 strands.",
+    status: (s, v) => { const m = polymer(v.hb === "S", v.o2); return m < 0.02 ? "molecules free; cell round and flexible" : `${Math.round(m * 100)}% of the hemoglobin in fibers; cell ${m > 0.6 ? "stiff and sickled" : "stiffening"}`; },
+    draw(g, s, v) {
+      const hbs = v.hb === "S", m = polymer(hbs, v.o2);
+      const P = g.fit(-2.4, 2.4, -1.35, 1.35);
+      const out = [];
+      for (let i = 0; i <= 120; i++) { const a = (i / 120) * TAU; out.push(P(shape(Math.cos(a), Math.sin(a), m))); }
+      g.path(out, { close: true, fill: g.rgba("red", 0.08), stroke: "red", width: 2 });
+      const r = Math.max(3.2, P.sx * 0.05);
+      for (let i = 0; i < N; i++) {
+        // Molecules join fibers in order, so the first ones are fully placed while others are still free.
+        const k = clamp(m * N * 1.15 - (order.indexOf(i) % Math.ceil(N / FIB)) * 0.4, 0, 1);
+        const u = lerp(home[i][0], fiber[i][0], k), w = lerp(home[i][1], fiber[i][1], k);
+        const c = P(shape(u, w, m));
+        g.bead(c, r, "", { color: "purple", width: 1.1 });
+        const pa = home[i][0] * 7 + i;
+        if (hbs) g.circle([c[0] + Math.cos(pa) * r * 0.55, c[1] + Math.sin(pa) * r * 0.55], Math.max(1.6, r * 0.38), { fill: "brass" });
+      }
+    },
+  });
+}
+</script>
+
+<p>Normal hemoglobin stays dissolved at any oxygen level. Sickle hemoglobin does too while it carries oxygen, but as the oxygen drops, its molecules join into fibers that stretch and stiffen the whole cell into the crescent that gives the disease its name <a class="cite" href="#ref-sundd2019"></a>. Stiff cells jam in small vessels and break apart early, which causes the pain and anemia of sickle cell disease. All of that follows from one letter, an A changed to a T in the seventh codon of a 1,608-letter gene: the cell copied the change faithfully, the ribosome read it faithfully, and the chain folded exactly as its sequence told it to.</p>
+
+<p>The same machinery runs for each of your roughly 20,000 protein-coding genes, with different promoters deciding which ones a cell reads and how often. A red-cell precursor reads the globin genes almost to the exclusion of everything else; a nerve cell never reads them at all. Much is still being worked out: how a cell sets the pace of each gene, how a long chain finds its fold among countless wrong ones, and why some mistakes in folding lead to disease decades later. The four steps on this page, copy, cut, read, and fold, are the part that every living cell shares.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-tennyson">C. N. Tennyson, H. J. Klamut and R. G. Worton, “The human dystrophin gene requires 16 hours to be transcribed and is cotranscriptionally spliced”, <em>Nature Genetics</em> 9 (1995), 184-190.</li>
+  <li id="ref-jonkers2015">I. Jonkers and J. T. Lis, “Getting up to speed with transcription elongation by RNA polymerase II”, <em>Nature Reviews Molecular Cell Biology</em> 16 (2015), 167-177.</li>
+  <li id="ref-piovesan2019">A. Piovesan et al., “Human protein-coding genes and gene feature statistics in 2019”, <em>BMC Research Notes</em> 12 (2019), 315.</li>
+  <li id="ref-crick1966">F. H. C. Crick, “Codon-anticodon pairing: the wobble hypothesis”, <em>Journal of Molecular Biology</em> 19 (1966), 548-555.</li>
+  <li id="ref-nissen2000">P. Nissen, J. Hansen, N. Ban, P. B. Moore and T. A. Steitz, “The structural basis of ribosome activity in peptide bond synthesis”, <em>Science</em> 289 (2000), 920-930.</li>
+  <li id="ref-ingolia2011">N. T. Ingolia, L. F. Lareau and J. S. Weissman, “Ribosome profiling of mouse embryonic stem cells reveals the complexity and dynamics of mammalian proteomes”, <em>Cell</em> 147 (2011), 789-802.</li>
+  <li id="ref-warner1963">J. R. Warner, P. M. Knopf and A. Rich, “A multiple ribosomal structure in protein synthesis”, <em>Proceedings of the National Academy of Sciences USA</em> 49 (1963), 122-129.</li>
+  <li id="ref-zaher2009">H. S. Zaher and R. Green, “Fidelity at the molecular level: lessons from protein synthesis”, <em>Cell</em> 136 (2009), 746-762.</li>
+  <li id="ref-hopfield1974">J. J. Hopfield, “Kinetic proofreading: a new mechanism for reducing errors in biosynthetic processes requiring high specificity”, <em>Proceedings of the National Academy of Sciences USA</em> 71 (1974), 4135-4139.</li>
+  <li id="ref-ingram1956">V. M. Ingram, “A specific chemical difference between the globins of normal human and sickle-cell anaemia haemoglobin”, <em>Nature</em> 178 (1956), 792-794.</li>
+  <li id="ref-galanello2010">R. Galanello and R. Origa, “Beta-thalassemia”, <em>Orphanet Journal of Rare Diseases</em> 5 (2010), 11.</li>
+  <li id="ref-crick1961">F. H. C. Crick, L. Barnett, S. Brenner and R. J. Watts-Tobin, “General nature of the genetic code for proteins”, <em>Nature</em> 192 (1961), 1227-1232.</li>
+  <li id="ref-kubelka2004">J. Kubelka, J. Hofrichter and W. A. Eaton, “The protein folding ‘speed limit’”, <em>Current Opinion in Structural Biology</em> 14 (2004), 76-88.</li>
+  <li id="ref-sundd2019">P. Sundd, M. T. Gladwin and E. M. Novelli, “Pathophysiology of sickle cell disease”, <em>Annual Review of Pathology</em> 14 (2019), 263-292.</li>
+  <li>Sequences: NCBI RefSeq NM_000518.5 (HBB messenger RNA) and NG_059281.1 (HBB gene); gene positions from NCBI Gene, GRCh38. The genetic code is NCBI translation table 1.</li>
+</ol>
 <!-- explainer:article:end -->
 </article>
 </main>

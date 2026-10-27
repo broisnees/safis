@@ -215,7 +215,7 @@
 <div class="abstract">
   <ul>
     <li>A dot going round a circle traces a sine wave with its height. The circle's size, speed, and starting angle are the wave's amplitude, frequency, and phase.</li>
-    <li>Stack circles on circles and the heights add. With whole-number speeds the result repeats every turn, and enough circles can match any repeating wave, even a square one, except for a 9% overshoot at each jump that never goes away.</li>
+    <li>Stack circles on circles and the heights add. With whole-number speeds the result repeats every turn, and enough circles can match any repeating wave, even a square one, except for an overshoot of about 9% of each jump that never goes away.</li>
     <li>To find how much of each speed a wave holds, multiply it by a test wave of that speed and average. Every other speed averages to zero.</li>
     <li>Let the circles turn both ways and the pen can draw any closed shape in the plane. Most shapes need only their few biggest circles, which is the idea behind compressing sound and pictures.</li>
   </ul>
@@ -301,7 +301,7 @@
 }
 </script>
 
-<p>With one circle the pen just goes round. With ten it makes a lumpy oval with a bump where the flag should be. With forty the note is clear, and with a hundred and twenty you can barely tell the copy from the dashed original. Every circle in that chain turns at a steady whole-number speed: once per lap, twice, three times, some clockwise and some counterclockwise. Nothing else moves.</p>
+<p>With one circle the pen just goes round. With five it draws a loop that only hints at a flag; with ten the head, stem, and flag are there but soft; with forty the note is crisp, and with a hundred and twenty the copy sits on the dashed original. Every circle in that chain turns at a steady whole-number speed: once per lap, twice, three times, some clockwise and some counterclockwise. Nothing else moves.</p>
 
 <p>The idea behind this goes back to Joseph Fourier, who used it in 1807 to work out how heat spreads through a solid <a class="cite" href="#ref-fourier"></a>. It now runs inside every phone: in how sound is recorded and squeezed into small files, how photos are stored, and how radios pick one station out of the air. I'll build it up from a single circle.</p>
 
@@ -426,7 +426,7 @@
 
 <p>The pen's height is the first dot's height plus the second dot's height above the first, so at every moment the <span class="c-blue">blue wave</span> is the gray wave plus the <span class="c-orange">orange wave</span>, added point by point. Where both are high, the sum is higher still; where one is up and the other down, they partly cancel. With a <button class="set" data-set="k2=3 r2=0.35">small circle at speed 3</button> the big wave gets flattened shoulders. With <button class="set" data-set="k2=2 r2=0.5">speed 2</button> it leans to one side like a shark fin. Two plain sine waves already make shapes that look nothing like sine waves.</p>
 
-<p>Adding waves this way is called <dfn data-def="Adding waves point by point: at every moment, the heights simply add.">superposition</dfn>, and it is what real waves do. Two ripples crossing on a pond, or two instruments playing at once, add their heights in exactly this way.</p>
+<p>Adding waves this way is called <dfn data-def="Adding waves point by point: at every moment, the heights add.">superposition</dfn>, and it is what real waves do. Two ripples crossing on a pond, or two instruments playing at once, add their heights in exactly this way.</p>
 
 <p>There is a reason I keep the speeds whole numbers. Look at the path the pen draws in the plane, not just its height. I'll make the second speed a slider that can stop between whole numbers. Watch whether the pen, after one full turn of the big circle, lands back on the <span class="c-orange">orange ring</span> where it started. The blue cross marks where the first turn ends:</p>
 
@@ -500,7 +500,7 @@
     aspect: w => (w < 560 ? 1.35 : 2.2),
     caption: "A square wave (dashed) and the sum of its first few odd waves (blue). Each new wave, in orange, fills in where the sum so far is too low and pulls it down where it's too high.",
     controls: [{ key: "n", label: "Waves", type: "stepper", min: 1, max: 15, step: 1, value: 3, format: n => `${n} wave${n === 1 ? "" : "s"}` }, Sound.button(voice)],
-    status: (s, v) => `${voice.playing ? "sounding: " : ""}speeds 1${v.n > 1 ? ", 3" : ""}${v.n > 2 ? ", 5" : ""}${v.n > 4 ? ", …" : v.n > 3 ? ", 7" : ""}${v.n > 4 ? `, ${2 * v.n - 1}` : ""}`,
+    status: (s, v) => `${voice.playing ? "sounding: " : ""}speeds ${v.n > 4 ? `1, 3, 5, and on up to ${2 * v.n - 1}` : Array.from({ length: v.n }, (_, k) => 2 * k + 1).join(", ")}`,
     draw(g, s, v) {
       voice.set({ harmonics: Array.from({ length: 2 * v.n - 1 }, (_, i) => FS.sqAmp(i + 1)) });
       const W = g.graph({ x: [0, 2 * TAU], y: [-1.5, 1.5], xTicks: "pi", yTicks: [-1, 1], xLabel: "t", grid: false });
@@ -660,7 +660,7 @@
 
 <p>At speed 3 the product balances out and the bar stays flat: there's no speed-3 wave inside. Step through the rest. Speeds <button class="set" data-set="k=2">2</button> and <button class="set" data-set="k=5">5</button> come out positive, 0.9 and 0.5; speed <button class="set" data-set="k=7">7</button> comes out at −0.3, which means that wave is upside down; everything else is zero. Those are exactly the numbers I used to build the hidden wave. The test wave of speed 2 is blind to the other components, because each of them is orthogonal to it.</p>
 
-<p>The averages here are taken with the same multiply-and-add a computer does, over a thousand moments in one turn. I never tell the figure the answer.</p>
+<p>The figure never reads the hidden numbers. It only multiplies and averages, over a thousand moments in one turn.</p>
 
 <p>There's a catch. My hidden waves all started at height zero, like sines. A wave with a different phase gives a smaller average against the sine test, and a cosine gives nothing at all. The fix is to test with a cosine too. Turn the knob to slide the hidden wave's phase, and watch the two measured amounts, plotted as a point:</p>
 
@@ -758,7 +758,7 @@
 
 <p>The <button class="set" data-set="sig=square">square wave</button>'s bars are the recipe from before, measured instead of handed over: nothing at even speeds, and <span class="tex">4/\pi n</span> at odd ones, 1.27, 0.42, 0.25, and on down. The <button class="set" data-set="sig=saw">sawtooth</button> uses every speed, with sizes falling as <span class="tex">1/n</span>. The <button class="set" data-set="sig=triangle">triangle</button> uses odd speeds again, but its bars die away much faster. The <button class="set" data-set="sig=pulse">pulse</button>, on for a sixth of each turn, has a bar at speed 0, its middle level of 1/6, and gaps at speeds 6, 12, and 18.</p>
 
-<p>The spectrum and the wave hold the same information. Given the bars, including the phases I've left out of the picture, you can rebuild the wave exactly, and given the wave, the multiply-and-average step gives you the bars. They are two descriptions of one thing, one in time and one in speed.</p>
+<p>The spectrum and the wave hold the same information: given the bars, plus the phases I've left out of the picture, you can rebuild the wave exactly. One describes it in time, the other in speed.</p>
 
 <p>Why do the triangle's bars shrink so much faster than the square's? The square jumps, and the triangle only has corners. Sharp features need fast waves to draw them. Smooth the square's jumps into ramps and watch the high speeds on this scale, where each step down is ten times smaller:</p>
 
@@ -1347,7 +1347,7 @@
 {
   let T; // the thumbnail's pixel mapping, for dragging the block
   demo("block", {
-    aspect: w => (w < 560 ? 0.85 : 2.6),
+    aspect: w => (w < 560 ? 0.85 : 3.3),
     caption: "One 8 × 8 block, its 64 pattern amounts (darker means bigger; the purple outlines are the ones kept), and the block rebuilt from only the kept amounts. Smooth blocks need one or two; blocks with an edge need more.",
     state: () => ({ b: [6, 9] }),
     controls: [{ key: "K", label: "Keep", type: "stepper", min: 1, max: 64, step: 1, value: 4, color: "purple", format: n => `${n} of 64` }],
@@ -1385,7 +1385,7 @@
 }
 </script>
 
-<p>Over <button class="set" data-set="K=1">smooth sky</button>, one amount, the average shade, is enough. Drag the square onto the roof or the window, where an edge cuts through, and the amounts spread out over many patterns; with <button class="set" data-set="K=4">4</button> the edge is blurred, with <button class="set" data-set="K=12">12</button> it's back. Here is the whole picture, every block keeping only its biggest few:</p>
+<p>On a block of smooth sky, one amount, the average shade, is enough. This block has an edge running across it, so its amounts pile up in the first column, the patterns that change only downward. With <button class="set" data-set="K=1">1</button> it's a flat gray square, with <button class="set" data-set="K=4">4</button> the edge is there but soft and ringing, and with <button class="set" data-set="K=12">12</button> it's sharp. Here is the whole picture, every block keeping only its biggest few:</p>
 
 <figure class="demo" id="jpeg" aria-label="Left: a 128 by 128 gray picture of a country scene with a house. Middle: the same picture rebuilt block by block from only the biggest few pattern amounts in each 8 by 8 block. Right: an enlarged part of the rebuilt picture around the house, where the blocks show."></figure>
 <script>
@@ -1393,7 +1393,7 @@
   const CROP = [16, 56, 40, 40];
   demo("jpeg", {
     aspect: w => (w < 560 ? 0.42 : 2.6),
-    caption: "A 128 × 128 picture (left), the same picture rebuilt from only the biggest few amounts in each 8 × 8 block (middle), and part of the rebuilt picture enlarged (right). A handful per block keeps the scene; the edges show the loss first.",
+    caption: "A 128 × 128 picture, the same picture rebuilt from only the biggest few amounts in each 8 × 8 block, and part of the rebuilt picture enlarged. A handful per block keeps the scene; the edges show the loss first.",
     controls: [{ key: "K", label: "Keep per block", type: "stepper", min: 1, max: 64, step: 1, value: 4, color: "purple" }],
     status: (s, v) => `${v.K} of 64 amounts per block (${Math.round((v.K / 64) * 100)}%), typical pixel off by ${JPG.pictureOff(v.K).toFixed(1)} of 255 shades`,
     draw(g, s, v) {
@@ -1405,7 +1405,7 @@
       label(0, "original");
       g.pixels(R, box(1), { values: false });
       label(1, `${v.K} per block`);
-      g.pixels(R, box(2), { src: CROP, values: false, grid: false });
+      g.pixels(R, box(2), { src: CROP, values: false, grid: false, snap: false });
       label(2, "enlarged");
     },
   });
@@ -1460,17 +1460,17 @@
 <h2 class="plain">References</h2>
 <ol class="references">
   <li id="ref-fourier">Joseph Fourier, <em>Théorie analytique de la chaleur</em>, Paris, 1822. English translation by Alexander Freeman, <em>The Analytical Theory of Heat</em>, Cambridge University Press, 1878.</li>
+  <li id="ref-gibbs">J. Willard Gibbs, “Fourier's series”, <em>Nature</em> 59 (1899), 606.</li>
   <li id="ref-wilbraham">Henry Wilbraham, “On a certain periodic function”, <em>The Cambridge and Dublin Mathematical Journal</em> 3 (1848), 198-201.</li>
   <li id="ref-michelson">A. A. Michelson and S. W. Stratton, “A new harmonic analyser”, <em>Philosophical Magazine</em>, series 5, 45 (1898), 85-91.</li>
-  <li id="ref-gibbs">J. Willard Gibbs, “Fourier's series”, <em>Nature</em> 59 (1899), 606.</li>
   <li id="ref-korner">T. W. Körner, <em>Fourier Analysis</em>, Cambridge University Press, 1988. Short chapters on the mathematics and its history, including Dirichlet's proof and the Gibbs phenomenon.</li>
+  <li id="ref-fletcher">Neville H. Fletcher and Thomas D. Rossing, <em>The Physics of Musical Instruments</em>, 2nd edition, Springer, 1998.</li>
+  <li id="ref-helmholtz">Hermann von Helmholtz, <em>On the Sensations of Tone as a Physiological Basis for the Theory of Music</em>, translated by Alexander J. Ellis, Longmans, Green, and Co., 1875 (German original 1863).</li>
   <li id="ref-hanson">Norwood Russell Hanson, “The mathematical power of epicyclical astronomy”, <em>Isis</em> 51(2) (1960), 150-158.</li>
   <li id="ref-brandenburg">Karlheinz Brandenburg, “MP3 and AAC explained”, <em>AES 17th International Conference on High-Quality Audio Coding</em>, 1999.</li>
   <li id="ref-wallace">Gregory K. Wallace, “The JPEG still picture compression standard”, <em>Communications of the ACM</em> 34(4) (1991), 30-44.</li>
   <li id="ref-cooley">James W. Cooley and John W. Tukey, “An algorithm for the machine calculation of complex Fourier series”, <em>Mathematics of Computation</em> 19 (1965), 297-301.</li>
   <li id="ref-heideman">Michael T. Heideman, Don H. Johnson, and C. Sidney Burrus, “Gauss and the history of the fast Fourier transform”, <em>IEEE ASSP Magazine</em> 1(4) (1984), 14-21.</li>
-  <li id="ref-helmholtz">Hermann von Helmholtz, <em>On the Sensations of Tone as a Physiological Basis for the Theory of Music</em>, translated by Alexander J. Ellis, Longmans, Green, and Co., 1875 (German original 1863).</li>
-  <li id="ref-fletcher">Neville H. Fletcher and Thomas D. Rossing, <em>The Physics of Musical Instruments</em>, 2nd edition, Springer, 1998.</li>
 </ol>
 <!-- explainer:article:end -->
 </article>

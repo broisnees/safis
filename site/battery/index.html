@@ -44,12 +44,12 @@ window.BAT = (() => {
 
   // Lithium iron phosphate (LFP) against the same graphite, for comparison (fit by Afshar and others, 2017).
   const Ulfp = y => 3.4077 - 0.020269 * y + 0.5 * ex(-150 * y) - 0.9 * ex(-30 * (1 - y));
-  const ocvLfp = s => Ulfp(0.985 - 0.98 * s) - Un(xAt(s));
+  const ocvLfp = s => Ulfp(0.96 - 0.955 * s) - Un(xAt(s));
 
   // Resistance. A round 30 mΩ at 25 °C, rising in the cold (activation energy 30 kJ/mol). Illustrative.
   const RG = 8.314;
   const arrh = (Ea, T) => ex((Ea / RG) * (1 / 298.15 - 1 / (T + 273.15)));
-  const R = (T = 25) => 0.03 * arrh(30000, T);
+  const R = (T = 25) => 0.03 / arrh(30000, T);
 
   // Constant-current discharge from full until the terminal voltage reaches 2.5 V.
   function discharge(I, T = 25, n = 300) {
@@ -88,10 +88,11 @@ window.BAT = (() => {
     return out;
   }
 
-  // Storage fade: lithium lost to the film on the graphite grows with the square root of time, faster when the
-  // graphite sits at a low potential (a full cell) and about twice as fast for every 10 °C. Tuned to the size of
-  // fade reported in storage tests; illustrative, not a fit to one cell.
-  const fadeRate = (soc, T) => 0.04 * arrh(53000, T) * ex(-(Un(xAt(soc)) - 0.092) / 0.24);   // fraction per √year
+  // Storage fade, as lithium lost: mostly to the film on the graphite, which grows faster when the graphite sits at a
+  // low potential (a fuller cell), plus a smaller part at the cathode that matters only near full charge. Both grow with
+  // the square root of time and about double for every 10 °C. Tuned to the size of fade reported in storage tests;
+  // illustrative, not a fit to one cell.
+  const fadeRate = (soc, T) => arrh(53000, T) * (0.03 * ex(-(Un(xAt(soc)) - 0.092) / 0.24) + 0.012 * ex((Up(yAt(soc)) - 4.29) / 0.07));   // per √year
   const fade = (soc, T, years) => fadeRate(soc, T) * Math.sqrt(Math.max(0, years));
 
   // Drawing helpers shared by the 2D figures.
@@ -217,9 +218,9 @@ window.BAT = (() => {
 }
 </script>
 
-<p>The two foils are just wires spread flat: copper on the anode side, aluminum on the cathode side. The coatings do the work. The anode coating is a paste of graphite grains, the stuff of pencil leads. The cathode coating is a paste of grains of a metal oxide, here one made of lithium, nickel, manganese, cobalt, and oxygen, called NMC. Each coating is about as thick as a human hair, and the whole stack is about a fifth of a millimeter, two sheets of paper. Every gap in it, including the pores of the separator, is soaked in a liquid, the <dfn data-def="The liquid that fills a cell's pores: a lithium salt dissolved in organic solvents. It carries lithium ions but not electrons.">electrolyte</dfn>.</p>
+<p>The two foils are just wires spread flat: copper on the anode side, aluminum on the cathode side. The coatings do the work. The anode coating is a paste of graphite grains, the stuff of pencil leads. The cathode coating is a paste of grains of a metal oxide, here one made of lithium, nickel, manganese, cobalt, and oxygen, called NMC. The whole stack is about a fifth of a millimeter thick, two sheets of paper. Every gap in it, including the pores of the separator, is soaked in a liquid, the <dfn data-def="The liquid that fills a cell's pores: a lithium salt dissolved in organic solvents. It carries lithium ions but not electrons.">electrolyte</dfn>.</p>
 
-<p>Nothing in this stack moves, and nothing burns. A charged cell can sit on a shelf for months and still hold most of its charge. So where, in a few grams of graphite and oxide, is 18 watt-hours of energy hiding? The answer lies in what those two coatings would do if they were allowed to touch.</p>
+<p>Nothing in this stack moves, and nothing burns. So where, in a few grams of graphite and oxide, is 18 watt-hours of energy hiding? The answer lies in what those two coatings would do if they were allowed to touch.</p>
 <h2>Two materials, kept apart</h2>
 
 <p>Start with two materials. One is lithium metal, whose atoms each hold one outer electron loosely. The other is a cobalt oxide with empty spaces for lithium, the material in the first lithium-ion cells, which pulls hard on electrons. Pull them apart and push them back together with the switch, and watch the boundary:</p>
@@ -432,7 +433,7 @@ window.CIRCUIT = (() => {
 }
 </script>
 
-<p>Electrons take the easiest road, and metal is far easier than a lamp. A <button class="set" data-set="bridge=1">thin bridge</button> steals most of the current and the lamp dims; a <button class="set" data-set="bridge=2">thick one</button> takes nearly all of it, and the lamp goes dark. Either way, the cell's energy now pours into a spot smaller than a pinhead, at about three times the power the lamp was getting. This is an <dfn data-def="A path for electrons through the inside of a cell, from anode to cathode, that bypasses the outside circuit.">internal short circuit</dfn>. Separators are tested for holes, and cells are built clean, because a short like this sits behind most battery fires<a class="cite" href="#ref-feng"></a>. We'll see later how a cell can grow its own bridge.</p>
+<p>Electrons take the easiest road, and metal is far easier than a lamp. A <button class="set" data-set="bridge=1">thin bridge</button> steals most of the current and the lamp dims; a <button class="set" data-set="bridge=2">thick one</button> takes nearly all of it, and the lamp goes dark. Either way, the cell's energy now pours into a spot smaller than a pinhead, at about three times the power the lamp was getting. This is an <dfn data-def="A path for electrons through the inside of a cell, from anode to cathode, that bypasses the outside circuit.">internal short circuit</dfn>. A short like this sits behind most battery fires<a class="cite" href="#ref-feng"></a>. We'll see later how a cell can grow its own bridge.</p>
 <h2>Why lithium</h2>
 
 <p>Some materials hold their electrons loosely and others grab for more. Chemists rank them by a voltage, the <dfn data-def="The voltage of a material's electron-giving reaction measured against a standard hydrogen electrode. The more negative, the more eagerly it gives electrons away.">standard electrode potential</dfn>: the more negative it is, the more eagerly the material gives its electrons away. Any two make a cell whose voltage is the gap between them, with electrons flowing from the lower to the higher. Pick a pair:</p>
@@ -486,7 +487,7 @@ window.CIRCUIT = (() => {
 }
 </script>
 
-<p><button class="set" data-set="neg=Zn pos=Cu">Zinc and copper</button>, the pair in some of the first batteries, give 1.10 V. <button class="set" data-set="neg=Li pos=Cu">Lithium and copper</button> give 3.38 V. Lithium sits at the very bottom, at −3.04 V, so it opens a bigger gap with any partner than anything else on the list. Its single outer electron comes off fairly easily, though sodium's and potassium's come off more easily still. What puts lithium lower is the ion it leaves behind: it is so small that the molecules around it cling to it unusually hard, and that grip pays back more of the cost of losing the electron than for any other metal<span class="sidenote">These potentials are measured in water, where lithium metal would fizz away. In a battery's organic electrolyte the numbers shift, but lithium stays at the bottom.</span>.</p>
+<p><button class="set" data-set="neg=Zn pos=Cu">Zinc and copper</button>, the pair in some of the first batteries, give 1.10 V. <button class="set" data-set="neg=Li pos=Cu">Lithium and copper</button> give 3.38 V. Lithium sits at the very bottom, at −3.04 V, so it opens a bigger gap with any partner than anything else on the list. What puts lithium lowest is the ion it leaves behind: it is so small that the molecules around it cling to it unusually hard, and that grip pays back more of the cost of losing the electron than for any other metal<span class="sidenote">These potentials are measured in water, where lithium metal would fizz away. In a battery's organic electrolyte the numbers shift, but lithium stays at the bottom.</span>.</p>
 
 <p>Voltage is only half of what makes a battery good. The other half is weight. Here every metal from the ladder is placed by its potential and by how much charge a gram of it can give. Point at a dot to name it, or pick one:</p>
 
@@ -524,7 +525,7 @@ window.CIRCUIT = (() => {
 }
 </script>
 
-<p><span class="c-purple">Lithium</span> is the lightest metal, 6.94 grams per mole, light enough to float on oil. Each atom gives one electron, so a gram of it can deliver 3,860 milliamp-hours (mAh), more than any other metal here, and it does so at the most negative potential. <button class="set" data-set="pick=5">Aluminum</button> comes closest on charge per gram, because each atom gives three electrons, but at about half lithium's voltage, and its triply charged ion is hard to move in and out of solids. <button class="set" data-set="pick=3">Sodium</button> gives a similar voltage at less than a third of the charge per gram.</p>
+<p><span class="c-purple">Lithium</span> is the lightest metal, 6.94 grams per mole, light enough to float on oil. Each atom gives one electron, so a gram of it can deliver 3,860 milliamp-hours (mAh), more than any other metal here, and it does so at the most negative potential. <button class="set" data-set="pick=5">Aluminum</button> comes closest on charge per gram, because each atom gives three electrons, but at about half lithium's voltage, and its triply charged ion is hard to move in and out of solids.</p>
 
 <p>Lithium metal has a dark side, though. Recharged, it doesn't plate back smoothly but grows spikes, and the first rechargeable lithium-metal cells were prone to shorting and catching fire. The answer, the idea behind every lithium-ion cell, was never to let lithium be metal at all: keep it as ions, stored inside two host materials, and move it back and forth between them.</p>
 
@@ -598,7 +599,7 @@ window.CIRCUIT = (() => {
 }
 </script>
 
-<p>Each <span class="c-purple">lithium</span> slides in from the edge of the sheets, since the honeycomb itself is too tight to pass through, and settles over the middle of a hexagon. Its electron joins the carbon sheets, which conduct like a metal along their plane. At most one lithium fits for every six carbons, a compound written LiC₆, which gives graphite a capacity of 372 mAh per gram: a tenth of lithium metal's, the price of keeping lithium out of its metallic form. A full gap is 0.370 nm wide instead of 0.335 nm, so graphite swells by about a tenth as it fills, and the sheets on either side of a full gap slide to sit exactly over one another. Slipping guests between the layers of a host like this is called <dfn data-def="Storing atoms or ions between the layers (or in the tunnels) of a host crystal, which keeps its structure.">intercalation</dfn>.</p>
+<p>Each <span class="c-purple">lithium</span> slides in from the edge of the sheets, since the honeycomb itself is too tight to pass through, and settles over the middle of a hexagon. At most one lithium fits for every six carbons, a compound written LiC₆, which gives graphite a capacity of 372 mAh per gram: a tenth of lithium metal's, the price of keeping lithium out of its metallic form. A full gap is 0.370 nm wide instead of 0.335 nm, so graphite swells by about a tenth as it fills, and the sheets beside a full gap slide into line. Slipping guests between the layers of a host like this is called <dfn data-def="Storing atoms or ions between the layers (or in the tunnels) of a host crystal, which keeps its structure.">intercalation</dfn>.</p>
 
 <p>Notice that lithium filled the middle gap before touching the outer two. Graphite prefers to fill some gaps completely while leaving others empty. Here is a side view of a whole stack of gaps in a graphite grain, with the electrolyte to its right. Fill it, and watch the potential of the graphite measured against lithium metal:</p>
 
@@ -652,7 +653,7 @@ window.CIRCUIT = (() => {
 }
 </script>
 
-<p>At first a few lithium scatter through every gap. Then they gather into every fourth or third gap, then every second, then all of them, each arrangement spreading in from the edge as a front. These arrangements are called <dfn data-def="Ordered ways that lithium fills graphite: in stage n, every nth gap between sheets is full and the rest are empty.">stages</dfn><a class="cite" href="#ref-dahn"></a>. While one stage is turning into the next, the two share the grain and the potential holds steady, which is why the curve has flat steps near <button class="set" data-set="x=0.22">0.21 V</button>, <button class="set" data-set="x=0.47">0.13 V</button>, and <button class="set" data-set="x=0.8">0.09 V</button>. Most of graphite's lithium goes in below 0.2 V, barely above lithium metal itself. So a lithium stored in graphite carries almost as much energy as one in the metal, which keeps the cell's voltage high. It also leaves very little margin, and that will come back to bite when we charge too fast.</p>
+<p>At first a few lithium scatter through every gap, then gather into every fourth or third gap, then every second, then all of them. These arrangements are called <dfn data-def="Ordered ways that lithium fills graphite: in stage n, every nth gap between sheets is full and the rest are empty.">stages</dfn><a class="cite" href="#ref-dahn"></a>. While one stage is turning into the next, the two share the grain and the potential holds steady, which is why the curve has flat steps near <button class="set" data-set="x=0.22">0.21 V</button>, <button class="set" data-set="x=0.47">0.13 V</button>, and <button class="set" data-set="x=0.8">0.09 V</button>. Most of graphite's lithium goes in below 0.2 V, barely above lithium metal itself. So a lithium stored in graphite carries almost as much energy as one in the metal, which keeps the cell's voltage high. It also leaves little margin when we charge too fast.</p>
 
 <p>The cathode is a host of a different kind: a metal oxide built of flat slabs, with lithium in single layers between them. Here is a small piece of it. Take lithium out with the slider, and turn it to look along the layers:</p>
 
@@ -714,16 +715,547 @@ window.CIRCUIT = (() => {
 }
 </script>
 
-<p>Each slab is a sheet of metal atoms, here mostly nickel with some manganese and cobalt, each at the center of an octahedron of six oxygen atoms. The <span class="c-purple">lithium</span> sits in single layers between the slabs, which repeat about every 0.47 nm. When a lithium ion leaves, its electron leaves too, taken from one of the metal atoms in the slab, whose charge rises by one. The slabs stay put, so lithium can go out and come back thousands of times. Not all of it can leave, though. Strip out too much and the empty layers let the slabs shift and shed oxygen, so a cell is built to stop with about a quarter of the cathode's lithium still in place when it reads 100%.</p>
+<p>Each slab is a sheet of metal atoms, here mostly nickel with some manganese and cobalt, each at the center of an octahedron of six oxygen atoms. The <span class="c-purple">lithium</span> sits in single layers between the slabs, which repeat about every 0.47 nm. When a lithium ion leaves, its electron leaves too, taken from one of the metal atoms in the slab, whose charge rises by one. Not all of it can leave, though. Strip out too much and the empty layers let the slabs shift and shed oxygen, so a cell is built to stop with about a quarter of the cathode's lithium still in place when it reads 100%.</p>
+<h2>The rocking chair</h2>
+
+<p>Put the two hosts on either side of the separator and we have the whole cell. When it is charged, nearly all the lithium that can move is in the graphite. Connect a lamp and let it run, then switch to a charger:</p>
+
+<figure class="demo" id="rocking" aria-label="A cross-section of a cell: copper foil, dark graphite grains, separator, pale oxide grains, aluminum foil, with a wire over the top through a lamp. Lithium ions cross the electrolyte while electrons go round the wire; switching to charge reverses both."></figure>
+<script>
+{
+  const GA = [[13, 9, 5.2], [26, 8, 5.6], [36, 14, 4.4], [12, 23, 5.6], [24, 24, 5], [36, 28, 4.8], [17, 33.5, 3.6]];
+  const GC = [[64, 9, 5], [77, 10, 5.4], [88, 8, 4], [66, 23, 5.6], [79, 24, 4.6], [89, 21, 4.2], [70, 33, 4], [84, 32, 4.4]];
+  const SLOT = (() => { const r = BAT.rng(7), out = []; for (let i = 0; i < 9; i++) { const a = r() * TAU, d = 0.25 + 0.5 * Math.sqrt(r()); out.push([Math.cos(a) * d, Math.sin(a) * d]); } return out; })();
+  const IONS = 16;
+  const route = i => { const r = BAT.rng(100 + i); return { a: GA[Math.floor(r() * GA.length)], c: GC[Math.floor(r() * GC.length)], wob: r() * TAU }; };
+  const routes = Array.from({ length: IONS }, (_, i) => route(i));
+  const wire = [[5, 37], [5, 50], [50, 50], [95, 50], [95, 37]];
+  const along = f => { const L = [13, 45, 45, 13], tot = 116; let d = (((f % 1) + 1) % 1) * tot; for (let i = 0; i < 4; i++) { if (d <= L[i]) return [lerp(wire[i][0], wire[i + 1][0], d / L[i]), lerp(wire[i][1], wire[i + 1][1], d / L[i])]; d -= L[i]; } return wire[4]; };
+  let P;
+  demo("rocking", {
+    aspect: w => (w < 560 ? 1.05 : 1.75),
+    caption: "A slice through the cell, with the grains far fewer and larger than life. Lithium ions (purple) cross inside while electrons (blue) go round the outside; the dots in each grain show how full it is.",
+    state: () => ({ soc: 0.8, ph: 0, eph: 0 }),
+    controls: [{ key: "mode", label: "Connected to", type: "choice", options: [{ value: -1, label: "A lamp" }, { value: 1, label: "A charger" }], value: -1, color: "blue" }],
+    status: (s, v) => {
+      const pct = Math.round(s.soc * 100);
+      if (v.mode < 0 && s.soc <= 0.001) return "empty: the graphite has given up its lithium";
+      if (v.mode > 0 && s.soc >= 0.999) return "full: the graphite holds all the lithium it can";
+      return `${v.mode < 0 ? "discharging" : "charging"} · ${pct}% charged`;
+    },
+    step(dt, s, v) {
+      const moving = v.mode < 0 ? s.soc > 0 : s.soc < 1;
+      if (!moving) return;
+      s.soc = clamp(s.soc + v.mode * dt * 0.035, 0, 1);
+      s.ph += dt * 0.28;
+      s.eph -= v.mode * dt * 0.3;
+    },
+    draw(g, s, v) {
+      P = g.fit(0, 100, -3, 60, { pad: 8 });
+      const box = (x0, x1, y0, y1, st) => { const a = P([x0, y0]), b = P([x1, y1]); g.rect(a[0], b[1], b[0] - a[0], a[1] - b[1], st); };
+      box(6, 94, 2, 38, { fill: g.rgba("blue", 0.06) });
+      box(46.5, 53.5, 2, 38, { fill: g.rgba("muted", 0.1), hatch: g.rgba("muted", 0.45), hatchGap: 5 });
+      box(3.5, 6, 2, 38, { fill: g.mix("panel", "brass", 0.55), stroke: "ink", width: 1 });
+      box(94, 96.5, 2, 38, { fill: g.mix("panel", "muted", 0.35), stroke: "ink", width: 1 });
+      const x = BAT.xAt(s.soc), y = BAT.yAt(s.soc), nA = Math.round(x * SLOT.length), nC = Math.round(y * SLOT.length);
+      for (const [cx, cy, r] of GA) {
+        g.circle(P([cx, cy]), r * P.sx, { fill: g.mix("panel", "ink", 0.6), stroke: "ink", width: 1.3 });
+        for (let k = 0; k < nA; k++) BAT.li(g, P([cx + SLOT[k][0] * r, cy + SLOT[k][1] * r]), Math.max(2.2, 0.17 * r * P.sx));
+      }
+      for (const [cx, cy, r] of GC) {
+        g.circle(P([cx, cy]), r * P.sx, { fill: g.mix("panel", "muted", 0.18), stroke: "ink", width: 1.3 });
+        for (let k = 0; k < nC; k++) BAT.li(g, P([cx + SLOT[k][0] * r, cy + SLOT[k][1] * r]), Math.max(2.2, 0.17 * r * P.sx));
+      }
+      // Ions on their way: from a graphite grain to an oxide grain while discharging, back while charging.
+      const moving = v.mode < 0 ? s.soc > 0 : s.soc < 1;
+      if (moving) routes.forEach((R, i) => {
+        let f = (((s.ph + i / IONS) % 1) + 1) % 1;
+        if (v.mode > 0) f = 1 - f;
+        const p = [lerp(R.a[0] + R.a[2], R.c[0] - R.c[2], f), lerp(R.a[1], R.c[1], f) + 1.6 * Math.sin(f * 9 + R.wob)];
+        BAT.li(g, P(p), 4.2, { plus: true, alpha: smoothstep(0, 0.06, f) * smoothstep(1, 0.94, f) });
+      });
+      // The outside circuit.
+      g.path(wire.map(P), { stroke: "ink", width: 2 });
+      const c = P([50, 50]), R = 4.4 * P.sx;
+      if (v.mode < 0) {
+        if (moving) g.circle(c, R * 2.3, { fill: g.rgba("orange", 0.22) });
+        g.circle(c, R, { fill: moving ? g.mix("panel", "orange", 0.7) : "panel", stroke: "ink", width: 1.5 });
+        g.label("lamp", P([50, 57.5]));
+      } else {
+        g.rect(c[0] - R * 1.6, c[1] - R, R * 3.2, R * 2, { fill: g.mix("panel", "green", 0.25), stroke: "green", width: 1.5, r: 3 });
+        g.text("charger", c, { size: 11.5, color: "green", weight: 600 });
+      }
+      if (moving) for (let i = 0; i < 14; i++) { const q = along(s.eph + i / 14); if (Math.abs(q[0] - 50) > 7 || q[1] < 49) BAT.electron(g, P(q), 3.2); }
+      g.label("copper", P([4.8, -1.2]), { color: "muted" });
+      g.label("graphite (anode)", P([25, -1.2]));
+      g.label("separator", P([50, 41]), { color: "muted" });
+      g.label("oxide (cathode)", P([76, -1.2]));
+      g.label("aluminum", P([95.2, -1.2]), { color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>While the lamp is lit, <span class="c-purple">lithium ions</span> leave the graphite grains, cross the electrolyte and separator, and slip into the oxide grains. For each one, an <span class="c-blue">electron</span> leaves the graphite through the copper foil, goes round through the lamp, and comes back in through the aluminum foil to meet its ion in the oxide. Switch to the <button class="set" data-set="mode=1">charger</button> and both flows reverse: the charger pulls electrons out of the oxide and pushes them into the graphite, and the lithium follows them back. The lithium rocks from one host to the other and back, which is why the first of these were called rocking-chair batteries.</p>
+
+<p>Nothing is used up: no metal dissolves, no gas forms, and the same lithium makes the trip every time. Real cells lose a little on each trip, and the second half of this page is about where it goes.</p>
+
+<h2>Where the voltage comes from</h2>
+
+<p>Why should lithium in graphite want to move into an oxide at all? Because it has less energy there. Picture each host as a shelf whose height is the energy of a lithium stored in it, measured from lithium metal. A lithium that moves from the graphite shelf down to the oxide shelf gives up the difference, and that drop, per electron, is the cell's voltage. Run the cell down and watch both shelves:</p>
+
+<figure class="demo" id="shelves" aria-label="Two energy levels for a lithium: one in graphite near lithium metal's level, one in the oxide about 4 eV lower. A slider drains the cell; the graphite level sinks, the oxide level rises, and the orange drop between them, the cell voltage, shrinks."></figure>
+<script>
+{
+  let P;
+  demo("shelves", {
+    aspect: w => (w < 560 ? 0.95 : 1.7),
+    caption: "The energy of a lithium in each host, measured from lithium metal (dashed). The drop between them in electronvolts equals the cell's voltage in volts.",
+    state: () => ({ f: 0 }),
+    controls: [{ key: "soc", label: "Charge left", min: 0, max: 1, step: 0.005, value: 0.7, color: "orange", format: x => `${Math.round(x * 100)}%`, marks: [{ value: 0, label: "empty" }, { value: 1, label: "full" }] }],
+    presets: [{ label: "Full", set: { soc: 1 } }, { label: "Half", set: { soc: 0.5 } }, { label: "Nearly empty", set: { soc: 0.03 } }],
+    status: (s, v) => `${Math.round(v.soc * 100)}% charged · each lithium gives up ${BAT.ocv(v.soc).toFixed(2)} eV · cell at ${BAT.ocv(v.soc).toFixed(2)} V`,
+    step(dt, s) { s.f = (s.f + dt * 0.55) % 1; },
+    draw(g, s, v) {
+      const narrow = g.w < 560;
+      P = g.fit(0, 100, -4.75, 0.75, { pad: 14, uniform: false });
+      const x = BAT.xAt(v.soc), y = BAT.yAt(v.soc), En = -BAT.Un(x), Ep = -BAT.Up(y);
+      const axX = P([narrow ? 14 : 9, 0])[0];
+      g.line([axX, P([0, 0.5])[1]], [axX, P([0, -4.6])[1]], { stroke: "muted", width: 1.5 });
+      for (let e = 0; e >= -4; e--) { const yy = P([0, e])[1]; g.line([axX - 4, yy], [axX, yy], { stroke: "muted", width: 1 }); g.text(`${e < 0 ? "−" : ""}${Math.abs(e)} eV`, [axX - 7, yy], { size: 11.5, color: "muted", align: "right" }); }
+      g.line(P([16, 0]), P([96, 0]), { stroke: "muted", width: 1, dash: [5, 4] });
+      g.text("lithium metal", [P([96, 0])[0], P([0, 0])[1] - 10], { size: 12, color: "muted", align: "right" });
+      const shelf = (x0, x1, E, fill, label, full) => {
+        const a = P([x0, E]), b = P([x1, E]);
+        g.rect(a[0], a[1], b[0] - a[0], 7, { fill, stroke: "ink", width: 1.3 });
+        g.text(label, [(a[0] + b[0]) / 2, a[1] + 22], { size: 12.5, weight: 600, color: "ink" });
+        // how full the host is
+        const m = [b[0] + 8, a[1] - 34], h = 40;
+        g.rect(m[0], m[1], 9, h, { stroke: "muted", width: 1 });
+        g.rect(m[0], m[1] + h * (1 - full), 9, h * full, { fill: g.mix("panel", "purple", 0.5) });
+      };
+      const gx = [20, 42], ox = [62, 84];
+      shelf(gx[0], gx[1], En, g.mix("panel", "ink", 0.6), "graphite", x);
+      shelf(ox[0], ox[1], Ep, g.mix("panel", "muted", 0.15), "oxide", y);
+      // A lithium falling from one shelf to the other.
+      const t = s.f, p0 = P([(gx[0] + gx[1]) / 2, En]), p1 = P([(ox[0] + ox[1]) / 2, Ep]);
+      const px = lerp(p0[0], p1[0], t), py = lerp(p0[1], p1[1], t * t) - 26 * Math.sin(Math.PI * Math.min(1, t * 1.6)) * (1 - t);
+      BAT.li(g, [px, py - 8], 7, { alpha: smoothstep(0, 0.1, t) * smoothstep(1, 0.9, t) });
+      BAT.li(g, [p0[0], p0[1] - 8], 7);
+      // The drop.
+      const bx = P([52, 0])[0];
+      g.arrow([bx, P([0, En])[1]], [bx, P([0, Ep])[1]], { stroke: "orange", width: 3 });
+      g.chip(`${BAT.ocv(v.soc).toFixed(2)} V`, [bx, P([0, (En + Ep) / 2])[1]], { color: "orange" });
+    },
+  });
+}
+</script>
+
+<p>When the cell is full, a lithium falling from graphite to oxide gives up 4.19 electronvolts, so the cell reads 4.19 V. As it drains, the shelves close in from both ends. The oxide fills up, and each newcomer is less welcome in a crowded host, so the oxide's shelf rises. The graphite empties, and the lithium left behind is held more tightly, so its shelf sinks, slowly at first and then fast at the very end. By the time the cell reads <button class="set" data-set="soc=0">empty</button>, the drop is down to 2.5 V.</p>
+
+<p>Plot each shelf against the charge that has flowed out of the cell and we get its <dfn data-def="A plot of a cell's voltage against the charge it has delivered, from full to empty.">discharge curve</dfn>. Each electrode's potential is measured against lithium metal, so the cell's voltage is the gap between the two curves. Drag along the discharge:</p>
+
+<figure class="demo" id="curve" aria-label="A plot of voltage against charge delivered for the cell in Figure 1: the cathode's potential falling from 4.3 V to 3.6 V, the anode's potential near 0.1 V rising at the end, and the orange cell voltage between them, which drops off a cliff at the end."></figure>
+<script>
+{
+  let Q;
+  const at = q => { const sc = 1 - q / BAT.CAP; return { sc, Up: BAT.Up(BAT.yAt(sc)), Un: BAT.Un(BAT.xAt(sc)), V: BAT.ocv(sc) }; };
+  demo("curve", {
+    aspect: w => (w < 560 ? 1.0 : 1.75),
+    caption: "The discharge curve of the cell in Figure 1, drawn slowly enough that resistance doesn't matter. The cell's voltage (orange) is the cathode's potential minus the anode's.",
+    controls: [{ key: "q", label: "Delivered", min: 0, max: 5, step: 0.01, value: 2.0, unit: "Ah", color: "orange" }],
+    presets: [{ label: "Start", set: { q: 0 } }, { label: "Middle", set: { q: 2.5 } }, { label: "The cliff", set: { q: 4.85 } }],
+    status: (s, v) => { const a = at(v.q); return `cell ${a.V.toFixed(2)} V = cathode ${a.Up.toFixed(2)} V − anode ${a.Un.toFixed(2)} V`; },
+    drag: {
+      hit: (p, s, v) => Q && Math.abs(p[0] - Q([v.q, 0])[0]) < 24,
+      move: (p, s, v, d, fig) => { fig.set("q", clamp(Math.round(Q.inv(p)[0] * 100) / 100, 0, 5)); },
+    },
+    draw(g, s, v) {
+      Q = g.graph({ x: [0, 5], y: [0, 4.6], axes: "frame", xLabel: "Charge delivered (Ah)", yLabel: "Volts", yTicks: [0, 1, 2, 2.5, 3, 4], xTicks: [0, 1, 2, 3, 4, 5] });
+      Q.fn(q => at(q).Up, { color: "ink", width: 2, label: "cathode", labelAt: 0.6, labelOffset: [0, -14] });
+      Q.fn(q => at(q).Un, { color: "ink", width: 2, dash: [5, 4], label: "anode", labelAt: 0.6, labelOffset: [0, -12] });
+      Q.fn(q => at(q).V, { color: "orange", width: 3, label: "cell", labelAt: 0.6, labelOffset: [0, 14] });
+      Q.hline(2.5, { label: "cut-off" });
+      const a = at(v.q);
+      Q.segment([v.q, a.Un], [v.q, a.Up], { color: "orange", width: 1.5, dash: [3, 3] });
+      Q.marker(v.q, a.V, { color: "orange" });
+      g.handle(Q([v.q, a.V]), { color: "orange" });
+    },
+  });
+}
+</script>
+
+<div class="tex">\orange{V_{\mathrm{cell}}} = U_{\mathrm{cathode}} - U_{\mathrm{anode}}</div>
+
+<p>Through most of the discharge the anode sits nearly flat, near 0.1 V, so the slope of the <span class="c-orange">cell's curve</span> comes mostly from the cathode, from 4.3 V down to about 3.6 V. The cliff at the end comes from the anode. When the graphite is almost empty its potential shoots up, and the cell's voltage collapses with it. A battery manager stops the discharge at 2.5 V, so 0% on a phone doesn't mean the cell has run out of lithium. It means the graphite has, while the oxide is still a tenth empty. Averaged over the whole discharge, this cell gives 3.69 V, close to its rated 3.63 V.</p>
+
+<details class="deeper"><summary>From volts to joules <span class="hint">2 min</span></summary>
+<p>Moving one mole of electrons across a voltage <span class="tex">V</span> takes or gives the energy <span class="tex">F V</span>, where <span class="tex">F = 96\,485\ \mathrm{C/mol}</span> is the charge of a mole of electrons, the Faraday constant. Each lithium carries one electron's worth of charge, so a mole of lithium falling through the cell's 3.69 V gives up</p>
+<div class="tex">F V = 96\,485 \times 3.69 \approx 356\ \mathrm{kJ}</div>
+<p>A mole of lithium is 6.94 g, so that is about 51 kJ per gram of lithium that moves, or 14 Wh. The 5 Ah this cell delivers is 18,000 coulombs, about 0.19 mol of electrons, so the lithium that does all the work weighs about 1.3 g. The rest of the cell's 69 g is the hosts that store it, the electrolyte, the foils, and the can.</p>
+</details>
+<h2>Pushing lithium uphill</h2>
+
+<p>Charging has to lift every lithium from the oxide shelf back up to the graphite shelf. A charger does it by holding the cell's terminals at a voltage of its own, and the cell pushes back with its own voltage. Here the cell is half charged, so it pushes back with 3.71 V. Set the <span class="c-green">charger's voltage</span> and watch which way the lithium goes:</p>
+
+<figure class="demo" id="push" aria-label="The two energy shelves at half charge, with an orange arrow for the cell's 3.71 V and a green arrow for the charger's voltage. Lithium climbs from oxide to graphite when the charger's voltage is higher, and falls the other way when it is lower."></figure>
+<script>
+{
+  const SOC = 0.5, V0 = BAT.ocv(SOC), r = BAT.R(25);
+  const Ex = -BAT.Un(BAT.xAt(SOC)), Ey = -BAT.Up(BAT.yAt(SOC));
+  demo("push", {
+    aspect: w => (w < 560 ? 0.95 : 1.8),
+    caption: "A charger against a half-charged cell. The current is set by how far the charger's voltage is above the cell's own, divided by the cell's resistance.",
+    state: () => ({ ph: 0 }),
+    controls: [{ key: "vc", label: "Charger", min: 3.5, max: 3.95, step: 0.005, value: 3.86, unit: "V", color: "green", marks: [{ value: +V0.toFixed(3), label: "cell" }] }],
+    status: (s, v) => { const I = (v.vc - V0) / r; return Math.abs(I) < 0.05 ? "balanced: no current" : I > 0 ? `charging at ${I.toFixed(1)} A` : `the cell wins: discharging into the charger at ${(-I).toFixed(1)} A`; },
+    step(dt, s, v) { s.ph += dt * 0.12 * ((v.vc - V0) / r); },
+    draw(g, s, v) {
+      const P = g.fit(0, 100, -4.4, 0.6, { pad: 14, uniform: false });
+      const I = (v.vc - V0) / r;
+      const shelf = (x0, x1, E, fill, label) => { const a = P([x0, E]), b = P([x1, E]); g.rect(a[0], a[1], b[0] - a[0], 7, { fill, stroke: "ink", width: 1.3 }); g.text(label, [(a[0] + b[0]) / 2, a[1] + 22], { size: 12.5, weight: 600 }); };
+      g.line(P([4, 0]), P([96, 0]), { stroke: "muted", width: 1, dash: [5, 4] });
+      g.text("lithium metal", [P([4, 0])[0], P([0, 0])[1] - 10], { size: 12, color: "muted", align: "left" });
+      shelf(8, 30, Ex, g.mix("panel", "ink", 0.6), "graphite");
+      shelf(70, 92, Ey, g.mix("panel", "muted", 0.15), "oxide");
+      // Lithium on the move between the shelves, along a path over the top.
+      const a = P([30, Ex]), b = P([70, Ey]);
+      if (Math.abs(I) > 0.05) for (let i = 0; i < 6; i++) {
+        const f = ((s.ph * -1 + i / 6) % 1 + 1) % 1, p = [lerp(a[0], b[0], f), lerp(a[1], b[1], f) - 50 * Math.sin(Math.PI * f)];
+        BAT.li(g, [p[0], p[1] - 8], 6, { alpha: smoothstep(0, 0.1, f) * smoothstep(1, 0.9, f) });
+      }
+      // The cell's push (orange) and the charger's (green), side by side, measured from the oxide shelf.
+      const x1 = P([44, 0])[0], x2 = P([56, 0])[0], top1 = P([0, Ey + V0])[1], top2 = P([0, Ey + v.vc])[1], base = P([0, Ey])[1];
+      g.arrow([x1, base], [x1, top1], { stroke: "orange", width: 3 });
+      g.arrow([x2, base], [x2, top2], { stroke: "green", width: 3 });
+      g.text(`cell ${V0.toFixed(2)} V`, [x1 - 8, (base + top1) / 2], { size: 12.5, color: "orange", weight: 600, align: "right", halo: true });
+      g.text(`charger ${v.vc.toFixed(2)} V`, [x2 + 8, (base + top2) / 2], { size: 12.5, color: "green", weight: 600, align: "left", halo: true });
+      g.chip(Math.abs(I) < 0.05 ? "no current" : I > 0 ? `${I.toFixed(1)} A in` : `${(-I).toFixed(1)} A out`, P([50, -3.95]), { color: I > 0.05 ? "green" : I < -0.05 ? "orange" : "muted" });
+    },
+  });
+}
+</script>
+
+<p>Set the charger <button class="set" data-set="vc=3.6">below the cell</button> and the cell wins: current flows out of it, into the charger, and the lithium keeps falling. <button class="set" data-set="vc=3.708">Match it</button> and nothing moves. Raise it <button class="set" data-set="vc=3.86">above</button> and lithium climbs back to the graphite. How fast depends on the margin. The cell has an internal resistance, here 30 milliohms, so every 0.03 V of extra push drives about 1 A. That resistance is the sum of many small obstacles: ions shouldering through the electrolyte, electrons crossing from grain to grain, and the effort of getting each ion across the surface of a grain.</p>
+
+<p>Why not push hard all the way? Because the cell can't safely sit above 4.2 V. Push the cathode higher and it starts to come apart, and the electrolyte starts to break down. So chargers work in two phases: a steady current until the cell reads 4.2 V, then that voltage held steady while the current dies away. Choose the charging current and drag through the charge:</p>
+
+<figure class="demo" id="cccv" aria-label="Two plots against time for charging the cell from empty: the cell voltage rising to 4.2 V and then held, and the current constant at first and then tapering. A slider sets the current; a marker shows how charged the cell is at any moment."></figure>
+<script>
+{
+  let Qv, Qi, last = null, run = null;
+  const get = I => { if (last !== I) { run = BAT.charge(I); last = I; } return run; };
+  const sample = (R, t) => { let i = 0; while (i < R.t.length - 1 && R.t[i + 1] < t) i++; return i; };
+  demo("cccv", {
+    aspect: w => (w < 560 ? 0.8 : 1.45),
+    caption: "Charging the cell in Figure 1 from empty: constant current until it reads 4.2 V, then constant voltage until the current falls to 0.25 A. The model has only a resistance, so its taper is shorter than a real cell's.",
+    controls: [
+      { key: "I", label: "Current", min: 1.5, max: 10, step: 0.5, value: 5, unit: "A", color: "green", marks: [{ value: 5, label: "1C" }, { value: 10, label: "2C" }] },
+      { key: "t", label: "Time", min: 0, max: 210, step: 1, value: 40, unit: "min", color: "ink" },
+    ],
+    presets: [{ label: "Slow", set: { I: 2.5 } }, { label: "1 hour rate", set: { I: 5 } }, { label: "Fast", set: { I: 10 } }],
+    status: (s, v) => {
+      const R = get(v.I), i = sample(R, v.t), done = v.t >= R.end;
+      const t80 = R.t[R.s.findIndex(x => x >= 0.8)];
+      return `${done ? "done" : `${Math.round(R.s[i] * 100)}% charged`} · 80% at ${Math.round(t80)} min · finished at ${Math.round(R.end)} min`;
+    },
+    drag: {
+      hit: (p, s, v) => Qv && Math.abs(p[0] - Qv([v.t, 0])[0]) < 22 && p[1] < Qi.box[1] + Qi.box[3],
+      move: (p, s, v, d, fig) => fig.set("t", clamp(Math.round(Qv.inv(p)[0]), 0, 210)),
+    },
+    draw(g, s, v) {
+      const R = get(v.I), i = sample(R, v.t), done = v.t >= R.end;
+      const h1 = g.h * 0.5;
+      Qv = g.graph({ box: [0, 0, g.w, h1], x: [0, 210], y: [3, 4.35], axes: "frame", yLabel: "Volts", yTicks: [3, 3.5, 4, 4.2], xTicks: false });
+      Qv.hline(4.2, { label: "4.2 V limit" });
+      Qv.polyline(R.t.map((t, k) => [t, R.v[k]]), { color: "orange", width: 2.5 });
+      Qv.polyline(R.t.map((t, k) => [t, BAT.ocv(R.s[k])]), { color: "orange", width: 1.2, dash: [4, 4] });
+      if (R.cvAt !== null) Qv.vline(R.cvAt, { label: "switch to constant voltage" });
+      Qi = g.graph({ box: [0, h1, g.w, g.h - h1], x: [0, 210], y: [0, 10.5], axes: "frame", xLabel: "Minutes", yLabel: "Amps", yTicks: [0, 5, 10], xTicks: [0, 30, 60, 90, 120, 150, 180, 210] });
+      Qi.polyline([[0, R.i[0]], ...R.t.map((t, k) => [t, R.i[k]]), [R.end, 0]], { color: "green", width: 2.5 });
+      const sv = done ? 4.2 : R.v[i], si = done ? 0 : R.i[i];
+      Qv.marker(v.t, done ? BAT.ocv(1) : sv, { color: "orange" });
+      Qi.marker(v.t, si, { color: "green", label: done ? "done" : `${Math.round(R.s[i] * 100)}%`, pos: "ne" });
+      g.handle(Qi([v.t, si]), { color: "ink", r: 6 });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="I=5 t=40">5 A</button>, enough to fill this cell in an hour, the voltage climbs with the <span class="c-orange">cell's own voltage</span> (dashed) plus the 0.15 V it takes to push 5 A through its resistance. It reaches 4.2 V after 50 minutes, at about 83%. From then on the charger holds 4.2 V, and as the cell's own voltage creeps up toward it the margin shrinks and the <span class="c-green">current</span> fades. Double the current to <button class="set" data-set="I=10 t=25">10 A</button> and 80% comes in 25 minutes instead of 48, but the switch to constant voltage comes at about two-thirds full, and the whole charge takes 49 minutes, not 36. This is why fast chargers quote 0 to 80%: the last fifth runs at the pace of the taper, however strong the charger.</p>
+
+<h2>Capacity, energy, and power</h2>
+
+<p>A cell's <dfn data-def="How much charge a cell can deliver between full and empty, in amp-hours (Ah). It counts the lithium that can move.">capacity</dfn>, in amp-hours, counts lithium: 1 Ah is 3,600 coulombs, the charge on about a quarter of a gram of lithium ions. Its energy, in watt-hours, is capacity times voltage, added up along the way, which is the area under the discharge curve. Drag along the curve to see the energy delivered so far, then switch the cathode to <button class="set" data-set="cat=lfp">lithium iron phosphate</button>:</p>
+
+<figure class="demo" id="area" aria-label="The discharge curve of the cell, with the area under it shaded as energy. A choice swaps the NMC cathode for lithium iron phosphate, whose flatter, lower curve encloses less area for the same amp-hours."></figure>
+<script>
+{
+  let Q;
+  const curve = (cat, q) => { const sc = 1 - q / BAT.CAP; return cat === "lfp" ? BAT.ocvLfp(sc) : BAT.ocv(sc); };
+  const energy = (cat, q1) => { let E = 0; const n = 400; for (let i = 0; i < n; i++) { const q = ((i + 0.5) / n) * q1; E += Math.max(0, curve(cat, q)) * (q1 / n); } return E; };
+  const qEnd = cat => (cat === "lfp" ? Num.solve(q => curve(cat, q) - 2.5, 4, 5) : 5);
+  demo("area", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    caption: "Energy is the area under the discharge curve. Both cells hold 5 Ah, but the NMC cell's curve sits higher, so it encloses more energy.",
+    controls: [
+      { key: "cat", label: "Cathode", type: "choice", options: [{ value: "nmc", label: "NMC" }, { value: "lfp", label: "Iron phosphate (LFP)" }], value: "nmc", color: "orange" },
+      { key: "q", label: "Delivered", min: 0, max: 5, step: 0.01, value: 3.2, unit: "Ah", color: "orange" },
+    ],
+    status: (s, v) => { const q = Math.min(v.q, qEnd(v.cat)); return `${q.toFixed(2)} Ah · ${energy(v.cat, q).toFixed(1)} Wh so far, of ${energy(v.cat, qEnd(v.cat)).toFixed(1)} Wh in all`; },
+    drag: {
+      hit: (p, s, v) => Q && Math.abs(p[0] - Q([v.q, 0])[0]) < 22,
+      move: (p, s, v, d, fig) => fig.set("q", clamp(Math.round(Q.inv(p)[0] * 100) / 100, 0, 5)),
+    },
+    draw(g, s, v) {
+      Q = g.graph({ x: [0, 5], y: [0, 4.5], axes: "frame", xLabel: "Charge delivered (Ah)", yLabel: "Volts", xTicks: [0, 1, 2, 3, 4, 5], yTicks: [0, 1, 2, 3, 4] });
+      const other = v.cat === "lfp" ? "nmc" : "lfp", qe = qEnd(v.cat), q = Math.min(v.q, qe);
+      Q.fn(x => (x <= qEnd(other) ? curve(other, x) : NaN), { color: "muted", width: 1.5, dash: [4, 4], label: other === "lfp" ? "LFP" : "NMC", labelAt: 1.2, labelOffset: [0, other === "lfp" ? 14 : -14] });
+      Q.area(x => curve(v.cat, x), 0, qe, { color: "orange", alpha: 0.08 });
+      Q.area(x => curve(v.cat, x), 0, Math.max(0.001, q), { color: "orange", alpha: 0.32 });
+      Q.fn(x => (x <= qe ? curve(v.cat, x) : NaN), { color: "orange", width: 3 });
+      Q.marker(q, curve(v.cat, q), { color: "orange", drop: true });
+      g.handle(Q([q, curve(v.cat, q)]), { color: "orange" });
+      g.chip(`${energy(v.cat, q).toFixed(1)} Wh`, Q([Math.max(0.6, q / 2), 1.6]), { color: "orange" });
+    },
+  });
+}
+</script>
+
+<p>The NMC cell delivers 18.5 Wh. The <span class="c-orange">iron phosphate cell</span>, with the same 5 Ah and the same graphite, delivers 16.0 Wh, because its cathode holds lithium at a lower, flatter 3.3 V or so<a class="cite" href="#ref-afshar"></a>. It trades energy for a cheaper, longer-lasting cathode with no nickel or cobalt. The cell in Figure 1 stores 18.2 Wh in 69 g, about 260 Wh per kilogram, roughly ten times what a lead-acid car battery manages.</p>
+
+<p>Capacity and energy say how much a cell holds. Power is how fast it can give it, and here the internal resistance comes back. Every amp pulled through 30 milliohms costs 0.03 V, so the harder we pull, the lower the voltage the device sees, and the sooner the cell hits its 2.5 V cut-off. Raise the current, then cool the cell:</p>
+
+<figure class="demo" id="load" aria-label="A plot of the cell's voltage against charge delivered at a chosen current and temperature, below the dashed no-load curve. Higher current or lower temperature drops the curve, so it reaches the 2.5 V cut-off sooner."></figure>
+<script>
+{
+  let Q;
+  demo("load", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    caption: "The cell's voltage under load (orange) against the no-load curve (dashed), with other currents in grey; point at the plot to read both curves. The gap is current times resistance, and the resistance grows as the cell cools. A simple model with one resistor; a real cell warms itself as it works, which helps in the cold.",
+    controls: [
+      { key: "I", label: "Current", min: 0.5, max: 15, step: 0.5, value: 5, unit: "A", color: "orange", marks: [{ value: 5, label: "1C" }, { value: 10, label: "2C" }] },
+      { key: "T", label: "Temperature", min: -20, max: 40, step: 1, value: 25, unit: "°C", color: "blue", marks: [{ value: 0, label: "freezing" }, { value: 25, label: "room" }] },
+    ],
+    presets: [{ label: "Gentle", set: { I: 1, T: 25 } }, { label: "Hard", set: { I: 15, T: 25 } }, { label: "Winter", set: { I: 5, T: -20 } }],
+    state: () => ({ hx: null }),
+    hover(p, s) { const hx = p && Q ? clamp(Q.inv(p)[0], 0, 5) : null; if (hx !== s.hx) { s.hx = hx; return true; } return false; },
+    status: (s, v) => { const d = BAT.discharge(v.I, v.T); return `${(BAT.R(v.T) * 1000).toFixed(0)} mΩ · delivers ${d.Q.toFixed(2)} Ah and ${d.E.toFixed(1)} Wh · ${d.heat.toFixed(1)} Wh lost as heat`; },
+    draw(g, s, v) {
+      const d = BAT.discharge(v.I, v.T);
+      Q = g.graph({ x: [0, 5], y: [2, 4.4], axes: "frame", xLabel: "Charge delivered (Ah)", yLabel: "Volts", xTicks: [0, 1, 2, 3, 4, 5], yTicks: [2, 2.5, 3, 3.5, 4] });
+      const ocvData = Num.linspace(0, 5, 101).map(q => [q, BAT.ocv(1 - q / BAT.CAP)]);
+      Q.series(ocvData, { color: "muted", width: 1.5, dash: [4, 4] });
+      for (const I of [1, 5, 10, 15]) { if (Math.abs(I - v.I) < 0.01) continue; const o = BAT.discharge(I, v.T, 120); Q.series(o.q.map((q, i) => [q, o.v[i]]), { color: "muted", width: 1, label: `${I} A` }); }
+      Q.hline(2.5, { label: "cut-off" });
+      const data = d.q.map((q, i) => [q, d.v[i]]);
+      Q.series(data, { color: "orange", width: 3 });
+      Q.marker(d.Q, 2.5, { color: "orange", drop: true, label: `${d.Q.toFixed(2)} Ah`, pos: "nw" });
+      if (s.hx !== null && s.hx <= d.Q) Q.crosshair(s.hx, [{ data: ocvData, color: "muted", label: "no load", format: x => `${x.toFixed(2)} V` }, { data, color: "orange", label: `${v.I} A`, format: x => `${x.toFixed(2)} V` }], { xFormat: x => `${x.toFixed(2)} Ah` });
+      else { const k = Math.floor(d.q.length * 0.35); if (d.q[k] !== undefined) { Q.segment([d.q[k], d.v[k]], [d.q[k], d.o[k]], { color: "red", width: 2 }); Q.label(`${(v.I * BAT.R(v.T)).toFixed(2)} V lost`, [d.q[k], (d.v[k] + d.o[k]) / 2], { dx: 8, align: "left", color: "red" }); } }
+    },
+  });
+}
+</script>
+
+<p>At a <button class="set" data-set="I=1 T=25">gentle 1 A</button> the loaded curve hugs the dashed one and the cell gives nearly all its 18.5 Wh. At <button class="set" data-set="I=15 T=25">15 A</button> the whole curve drops by 0.45 V: the cell still delivers almost all its charge, but each coulomb arrives with less energy, and 2.2 Wh, an eighth of the total, stays behind in the cell as heat. Cold does the same thing more harshly. Ions move sluggishly through cold electrolyte and across cold surfaces, so the resistance climbs. In the <button class="set" data-set="I=5 T=-20">winter preset</button> it is about nine times higher, and the cell hits its cut-off with more than half its lithium still in the graphite. That is why phones die early on a ski slope, and recover indoors.</p>
+
+<p>The power the device gets is current times the voltage it sees, while the heat inside grows with the square of the current. Pull ever harder and there comes a point where more current gives less power. Choose a current:</p>
+
+<figure class="demo" id="power" aria-label="A plot against current of the power delivered to the device, an orange hill that peaks near 62 A, and the heat inside the cell, a red curve that rises with the square of the current. A slider marks a current and reads off how much power is wasted."></figure>
+<script>
+{
+  const V = BAT.ocv(0.5), r = BAT.R(25);
+  demo("power", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    caption: "Power to the device (orange) and heat inside the cell (red) for the half-charged cell at room temperature. The device gets the most power when half of it is wasted as heat.",
+    controls: [{ key: "I", label: "Current", min: 0, max: 120, step: 1, value: 20, unit: "A", color: "orange", marks: [{ value: 5, label: "1C" }] }],
+    presets: [{ label: "Phone", set: { I: 1 } }, { label: "Power tool", set: { I: 20 } }, { label: "Peak power", set: { I: 62 } }],
+    status: (s, v) => { const P = v.I * (V - v.I * r), H = v.I * v.I * r; return `${v.I} A · ${Math.max(0, P).toFixed(1)} W to the device · ${H.toFixed(1)} W of heat · ${v.I ? Math.round((100 * H) / (P + H)) : 0}% wasted`; },
+    draw(g, s, v) {
+      const Q = g.graph({ x: [0, 125], y: [0, 125], axes: "frame", xLabel: "Current (A)", yLabel: "Watts", xTicks: [0, 25, 50, 75, 100, 125], yTicks: [0, 25, 50, 75, 100, 125] });
+      Q.fn(I => Math.max(0, I * (V - I * r)), { color: "orange", width: 3, label: "to the device", labelAt: 38, labelOffset: [0, -14] });
+      Q.fn(I => I * I * r, { color: "red", width: 2.5, label: "heat in the cell", labelAt: 98, labelOffset: [-6, -12] });
+      const P = Math.max(0, v.I * (V - v.I * r)), H = v.I * v.I * r;
+      Q.vline(v.I, {});
+      Q.marker(v.I, P, { color: "orange" });
+      Q.marker(v.I, H, { color: "red" });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="I=1">1 A</button>, about what a busy phone draws, less than 1% of the power becomes heat. A <button class="set" data-set="I=20">power tool's 20 A</button> wastes 16%, 12 W warming the cell from inside. The <span class="c-orange">device's share</span> peaks at <button class="set" data-set="I=62">62 A</button>, where exactly half the power is lost and the cell would be heating itself at over 100 W. No one runs a cell there. The same trade shapes cell design: thin coatings give short paths for ions and high power, thick ones give more room for lithium and more energy.</p>
+<h2>The film that saves and costs</h2>
+
+<p>Now the question from the start: why does the same 100% hold less after a few years? Look again at the graphite's potential, below 0.2 V against lithium metal for most of its filling. The electrolyte's solvents are not stable that low. Below about 0.8 V they pick up electrons from the graphite and break down, and the pieces, along with lithium, form a solid film over every graphite grain. It is called the <dfn data-def="Solid electrolyte interphase: a film a few to tens of nanometers thick that forms on the graphite from broken-down electrolyte and trapped lithium.">solid electrolyte interphase</dfn>, or SEI<a class="cite" href="#ref-peled"></a>.</p>
+
+<p>The film is what makes the cell possible. It blocks electrons but lets lithium ions through, so once it covers the graphite the breakdown nearly stops. Nearly, not completely: solvent keeps creeping through it, and every bit of new film locks away more lithium for good. The thicker the film, the slower the creep, so the loss grows with the square root of time<a class="cite" href="#ref-ploehn"></a>, and like most chemistry it runs faster when warm. Set the temperature the cell lives at, and point at the curve to read it:</p>
+
+<figure class="demo" id="fade" aria-label="A plot of the cell's capacity over five years at a chosen temperature: a curve that falls fast at first and then more slowly, with a shaded band for the spread between cells, and a dashed curve at 25 °C for comparison. Pointing shows the values."></figure>
+<script>
+{
+  let Q;
+  const curve = (T, k = 1) => Num.linspace(0, 60, 121).map(m => [m, 100 * (1 - k * BAT.fade(0.6, T, m / 12))]);
+  demo("fade", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    caption: "Capacity lost to the film, for a cell kept on average 60% charged. The band shows a ±25% spread between cells. The model is illustrative: square-root growth, doubling about every 10 °C, tuned to the size of fade reported in storage tests.",
+    state: () => ({ hx: 36 }),
+    controls: [{ key: "T", label: "Temperature", min: 10, max: 45, step: 1, value: 35, unit: "°C", color: "red", marks: [{ value: 25, label: "room" }] }],
+    presets: [{ label: "Cool", set: { T: 15 } }, { label: "Room", set: { T: 25 } }, { label: "Hot", set: { T: 40 } }],
+    hover(p, s) { const hx = p && Q ? clamp(Q.inv(p)[0], 0, 60) : null; if (hx !== null && hx !== s.hx) { s.hx = hx; return true; } return false; },
+    status: (s, v) => `${v.T} °C · after 1 year ${(100 * (1 - BAT.fade(0.6, v.T, 1))).toFixed(1)}% · after 3 years ${(100 * (1 - BAT.fade(0.6, v.T, 3))).toFixed(1)}% · after 5 years ${(100 * (1 - BAT.fade(0.6, v.T, 5))).toFixed(1)}%`,
+    draw(g, s, v) {
+      Q = g.graph({ x: [0, 60], y: [60, 101], axes: "frame", xLabel: "Months", yLabel: "Capacity left (%)", xTicks: [0, 12, 24, 36, 48, 60], yTicks: [60, 70, 80, 90, 100] });
+      const xs = Num.linspace(0, 60, 121), lo = xs.map(m => 100 * (1 - 1.25 * BAT.fade(0.6, v.T, m / 12))), hi = xs.map(m => 100 * (1 - 0.75 * BAT.fade(0.6, v.T, m / 12)));
+      Q.band(xs, lo, hi, { color: "red" });
+      const ref = curve(25), here = curve(v.T);
+      if (v.T !== 25) Q.series(ref, { color: "muted", width: 1.5, dash: [4, 4], label: "25 °C" });
+      Q.series(here, { color: "red", width: 2.5, label: `${v.T} °C` });
+      Q.hline(80, { label: "80%: often called end of life" });
+      Q.crosshair(s.hx, [{ data: here, color: "red", format: y => `${y.toFixed(1)}%` }, ...(v.T !== 25 ? [{ data: ref, color: "muted", format: y => `${y.toFixed(1)}%` }] : [])], { xFormat: x => `${x.toFixed(0)} months` });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="T=25">25 °C</button> this model cell loses about 2.5% in its first year and under 6% in five. At <button class="set" data-set="T=40">40 °C</button>, a phone left on a sunny dashboard, it loses more in one year than the 25 °C cell does in five. The film also grows faster when the cell sits full, because a full cell keeps its graphite at the lowest potential, where the solvent breaks down most readily. Storage tests find the fade climbing in steps with the charge level, matching the graphite's own steps<a class="cite" href="#ref-keil"></a>.</p>
+
+<p>Where does the lost lithium leave the cell? The graphite and the oxide are mostly undamaged. There is simply less lithium to shuttle between them, and that shifts how the two electrodes line up. Take lithium away and watch the window between full and empty:</p>
+
+<figure class="demo" id="slip" aria-label="The cathode and anode potential curves on one axis of lithium in the cathode, with the cell voltage between them and the usable window shaded. Removing lithium slides the anode curve over, so the anode runs empty sooner and the window shrinks."></figure>
+<script>
+{
+  const { Up, Un, QN, QP, LI } = BAT;
+  let Q;
+  const lineup = L => {
+    const x = u => (LI - L - u) / QN, V = u => Up(u / QP) - Un(Math.max(1e-6, x(u)));
+    const uMax = Math.min(QP, LI - L - 1e-6 * QN);
+    const ud = V(uMax) > 2.5 ? uMax : Num.solve(u => V(u) - 2.5, 0.5 * QP, uMax);
+    const uc = Num.solve(u => V(u) - 4.2, 0.15 * QP, 0.6 * QP);
+    return { x, V, ud, uc, cap: ud - uc };
+  };
+  demo("slip", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    caption: "The two electrode curves of the cell in Figure 1 on a common axis: how much lithium the cathode holds. Lost lithium slides the anode's curve to the left, so the graphite empties before the oxide can refill.",
+    controls: [{ key: "L", label: "Lithium lost", min: 0, max: 1.5, step: 0.01, value: 0.5, unit: "Ah", color: "red" }],
+    presets: [{ label: "New", set: { L: 0 } }, { label: "10% lost", set: { L: 0.5 } }, { label: "20% lost", set: { L: 1 } }],
+    status: (s, v) => { const z = lineup(v.L); return `capacity ${z.cap.toFixed(2)} Ah of 5.00 · at empty the oxide is ${Math.round((100 * z.ud) / QP)}% full (new: 91%)`; },
+    draw(g, s, v) {
+      const z = lineup(v.L);
+      Q = g.graph({ x: [1.5, 7.9], y: [0, 4.6], axes: "frame", xLabel: "Lithium in the cathode (Ah)", yLabel: "Volts", yTicks: [0, 1, 2, 3, 4], xTicks: [2, 3, 4, 5, 6, 7] });
+      const a = Q([z.uc, 0]), b = Q([z.ud, 4.6]);
+      g.rect(a[0], b[1], b[0] - a[0], a[1] - b[1], { fill: g.rgba("orange", 0.08) });
+      Q.fn(u => Up(u / QP), { color: "ink", width: 2, label: "cathode", labelAt: 7.3, labelOffset: [0, -14] });
+      Q.fn(u => (z.x(u) > 0.002 && z.x(u) < 1 ? Un(z.x(u)) : NaN), { color: "ink", width: 2, dash: [5, 4], label: "anode", labelAt: 2.2, labelOffset: [0, -12] });
+      Q.fn(u => (u >= z.uc - 1e-6 && u <= z.ud + 1e-6 ? z.V(u) : NaN), { color: "orange", width: 3 });
+      if (v.L > 0.01) { const z0 = lineup(0); Q.vline(z0.ud, { label: "new cell's empty" }); }
+      Q.marker(z.ud, 2.5, { color: "orange", label: "empty", pos: "nw" });
+      Q.marker(z.uc, 4.2, { color: "orange", label: "full", pos: "ne" });
+      g.chip(`${z.cap.toFixed(2)} Ah`, Q([(z.uc + z.ud) / 2, 1.5]), { color: "orange" });
+    },
+  });
+}
+</script>
+
+<p>Each amp-hour of lithium lost costs almost exactly an amp-hour of capacity. The cell still charges to 4.2 V, because the top is set by the oxide, which empties to the same point as before. But at the bottom the graphite runs out of lithium early, its potential shoots up, and the cell reads empty while the oxide still has rooms it can't fill. With <button class="set" data-set="L=1">1 Ah lost</button> the oxide stops at 78% full instead of 91%. This loss of cyclable lithium is the main way most cells fade<a class="cite" href="#ref-birkl"></a>. Other wear adds to it: grains of oxide crack as they swell and shrink with every cycle, and fresh cracks grow fresh film.</p>
+
+<h2>Plating and spikes</h2>
+
+<p>Charging adds a faster way to lose lithium. Pushing current into the graphite takes an extra push at its surface, so during charging the graphite sits below its resting potential by an amount that grows with the current and with the cold. It starts only about 0.09 V above lithium metal. If the push takes it below zero, lithium stops slipping between the sheets and coats the grains as metal instead. Choose a charging rate and a temperature:</p>
+
+<figure class="demo" id="plating" aria-label="A plot of the graphite's potential against lithium metal while charging, from empty to full. A red zone below zero marks where lithium plates as metal; faster charging and lower temperature push the curve down into it."></figure>
+<script>
+{
+  const eta = (c, T) => (c * 0.025) / BAT.arrh(45000, T);
+  const phi = (s, c, T) => BAT.Un(BAT.xAt(s)) - eta(c, T);
+  const start = (c, T) => { for (let s = 0; s <= 1.0001; s += 0.002) if (phi(s, c, T) < 0) return s; return null; };
+  demo("plating", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    caption: "The graphite's potential while charging, in a simple model where the extra push at its surface grows with current and roughly doubles for every 10 °C colder. Below zero, lithium plates as metal. Illustrative numbers.",
+    controls: [
+      { key: "c", label: "Charging rate", min: 0.2, max: 5, step: 0.1, value: 1, color: "green", format: x => `${x.toFixed(1)}C`, marks: [{ value: 1, label: "1 hour" }] },
+      { key: "T", label: "Temperature", min: -10, max: 35, step: 1, value: 0, unit: "°C", color: "blue", marks: [{ value: 25, label: "room" }] },
+    ],
+    presets: [{ label: "1C, room", set: { c: 1, T: 25 } }, { label: "4C, room", set: { c: 4, T: 25 } }, { label: "1C, freezing", set: { c: 1, T: 0 } }, { label: "0.3C, −10 °C", set: { c: 0.3, T: -10 } }],
+    status: (s, v) => { const st = start(v.c, v.T); return `${(eta(v.c, v.T) * 1000).toFixed(0)} mV of extra push · ${st === null ? "no plating" : `plating from ${Math.round(st * 100)}% charged`}`; },
+    draw(g, s, v) {
+      const Q = g.graph({ x: [0, 1], y: [-0.3, 0.45], axes: "frame", xLabel: "Charged", yLabel: "Graphite vs lithium (V)", xTicks: [0, 0.25, 0.5, 0.75, 1], xFormat: x => `${Math.round(x * 100)}%`, yTicks: [-0.2, 0, 0.2, 0.4] });
+      const a = Q([0, 0]), b = Q([1, -0.3]);
+      g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], { fill: g.rgba("red", 0.1), hatch: g.rgba("red", 0.3) });
+      Q.label("lithium plates as metal", [0.03, -0.25], { align: "left", color: "red" });
+      Q.series(Num.linspace(0, 1, 201).map(s => [s, BAT.Un(BAT.xAt(s))]), { color: "muted", width: 1.5, dash: [4, 4], label: "at rest" });
+      Q.series(Num.linspace(0, 1, 201).map(s => [s, phi(s, v.c, v.T)]), { color: "green", width: 3, label: "charging" });
+      const st = start(v.c, v.T);
+      if (st !== null) Q.marker(st, 0, { color: "red", label: `${Math.round(st * 100)}%`, pos: "ne" });
+    },
+  });
+}
+</script>
+
+<p>At room temperature this model cell can take <button class="set" data-set="c=3 T=25">3C</button>, a full charge in 20 minutes, without plating. At <button class="set" data-set="c=4 T=25">4C</button> it plates in the last third of the charge, where the graphite's potential is lowest. Cold is worse: at <button class="set" data-set="c=1 T=0">freezing</button> even a one-hour charge plates from 60% on, and at −10 °C only a trickle is safe<a class="cite" href="#ref-waldmann"></a>. That is why battery managers slow charging in the cold and near full, and why fast chargers taper early. Some plated lithium slips back in later; the rest is cut off, covered in fresh film, and lost.</p>
+
+<p>Plated lithium also doesn't lie flat. It grows where the current is strongest, and the tip of any bump draws more current than the hollow beside it, so bumps become needles. These <dfn data-def="Needle- or tree-shaped growths of lithium metal that can grow through the separator.">dendrites</dfn> are the same spikes that sank the early lithium-metal cells. Given enough cycles, one can push through the 12 µm separator and become the metal bridge from earlier in the page, an internal short.</p>
+
+<details class="deeper"><summary>How a short becomes a fire <span class="hint">2 min</span></summary>
+<p>A short dumps the cell's energy as heat in one spot. If the cell warms past roughly 80 to 120 °C, the film on the graphite starts to break down, and the bare graphite reacts with the electrolyte, which releases more heat. Around 130 °C the plastic separator softens and shrinks, letting the electrodes touch over a wide area. Between about 150 and 250 °C, depending on the cathode, the oxide releases oxygen, and the hot, flammable electrolyte burns with it<a class="cite" href="#ref-feng"></a>. Each step heats the cell enough to start the next, so once heat is produced faster than the can can shed it, the temperature runs away to several hundred degrees within seconds. This is <dfn data-def="A self-heating chain of reactions in a cell: each reaction releases heat that starts the next, faster than the cell can lose it.">thermal runaway</dfn>. Nickel-rich cathodes like this cell's NMC release oxygen at lower temperatures than iron phosphate, one more reason LFP is used where safety matters more than energy.</p>
+</details>
+
+<h2>Back to the phone</h2>
+
+<p>So the phone that dies by mid-afternoon has lost lithium, mostly into the film on its graphite: a little more every day it was warm, every night it sat at 100%, and every time it was fast-charged in the cold. Its graphite and oxide still work; there is just less lithium to carry between them. Choose the charge a phone usually sits at and how warm it lives, and compare it with one kept full at room temperature:</p>
+
+<figure class="demo" id="storage" aria-label="Capacity over three years for a cell kept at a chosen charge level and temperature, against a dashed reference cell kept full at 25 °C."></figure>
+<script>
+{
+  let Q;
+  const run = (soc, T) => Num.linspace(0, 36, 73).map(m => [m, 100 * (1 - BAT.fade(soc, T, m / 12))]);
+  demo("storage", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    caption: "Capacity over three years in the illustrative fade model: film growth set by the graphite's potential, plus a cathode term near full charge, both doubling about every 10 °C. Daily cycling adds wear this model leaves out.",
+    state: () => ({ hx: 30 }),
+    controls: [
+      { key: "soc", label: "Usually at", min: 0.3, max: 1, step: 0.01, value: 0.8, color: "orange", format: x => `${Math.round(x * 100)}%` },
+      { key: "T", label: "Temperature", min: 15, max: 40, step: 1, value: 25, unit: "°C", color: "red" },
+    ],
+    presets: [{ label: "Full, 25 °C", set: { soc: 1, T: 25 } }, { label: "Stops at 80%", set: { soc: 0.8, T: 25 } }, { label: "Half, cool", set: { soc: 0.5, T: 18 } }, { label: "Full, hot", set: { soc: 1, T: 38 } }],
+    hover(p, s) { const hx = p && Q ? clamp(Q.inv(p)[0], 0, 36) : null; if (hx !== null && hx !== s.hx) { s.hx = hx; return true; } return false; },
+    status: (s, v) => `after 3 years: ${(100 * (1 - BAT.fade(v.soc, v.T, 3))).toFixed(1)}% left, against ${(100 * (1 - BAT.fade(1, 25, 3))).toFixed(1)}% for a cell kept full at 25 °C`,
+    draw(g, s, v) {
+      Q = g.graph({ x: [0, 36], y: [75, 101], axes: "frame", xLabel: "Months", yLabel: "Capacity left (%)", xTicks: [0, 6, 12, 18, 24, 30, 36], yTicks: [75, 80, 85, 90, 95, 100] });
+      const ref = run(1, 25), here = run(v.soc, v.T);
+      Q.series(ref, { color: "muted", width: 1.5, dash: [4, 4], label: "full, 25 °C" });
+      Q.series(here, { color: "orange", width: 3, label: "this phone" });
+      Q.crosshair(s.hx, [{ data: here, color: "orange", format: y => `${y.toFixed(1)}%` }, { data: ref, color: "muted", format: y => `${y.toFixed(1)}%` }], { xFormat: x => `${x.toFixed(0)} months` });
+    },
+  });
+}
+</script>
+
+<p>In this model a phone that <button class="set" data-set="soc=0.8 T=25">stops at 80%</button> keeps about 2 points more capacity after three years than one kept full, and one that sits <button class="set" data-set="soc=1 T=38">full and hot</button> loses more than twice as much. That is why phones offer to pause charging at 80% overnight, slow down charging when hot or cold, and why a battery stored for months is best kept half full and cool.</p>
+
+<p>The same picture explains where batteries are heading. Silicon holds ten times more lithium per gram than graphite but swells and grows new film as it does. Solid electrolytes might let lithium metal back into the anode without growing spikes. Each is a different answer to the same two questions this page started from: how far can lithium fall, and how much of it can we keep from getting lost on the way.</p>
 <h2 class="plain">References</h2>
 <ol class="references">
   <li id="ref-chen">C.-H. Chen, F. Brosa Planella, K. O’Regan, D. Gastol, W. D. Widanage, and E. Kendrick, “Development of experimental techniques for parameterization of multi-scale lithium-ion battery models,” <em>Journal of The Electrochemical Society</em> 167 (2020), 080534. The teardown of the LG M50 cell, and the electrode curves used throughout this page.</li>
-  <li id="ref-feng">X. Feng, M. Ouyang, X. Liu, L. Lu, Y. Xia, and X. He, “Thermal runaway mechanism of lithium ion battery for electric vehicles: A review,” <em>Energy Storage Materials</em> 10 (2018), 246–267.</li>
-  <li id="ref-whittingham">M. S. Whittingham, “Electrical energy storage and intercalation chemistry,” <em>Science</em> 192 (1976), 1126–1127.</li>
-  <li id="ref-mizushima">K. Mizushima, P. C. Jones, P. J. Wiseman, and J. B. Goodenough, “Li<sub>x</sub>CoO<sub>2</sub> (0 &lt; x ≤ 1): A new cathode material for batteries of high energy density,” <em>Materials Research Bulletin</em> 15 (1980), 783–789.</li>
+  <li id="ref-feng">X. Feng, M. Ouyang, X. Liu, L. Lu, Y. Xia, and X. He, “Thermal runaway mechanism of lithium ion battery for electric vehicles: A review,” <em>Energy Storage Materials</em> 10 (2018), 246-267.</li>
+  <li id="ref-whittingham">M. S. Whittingham, “Electrical energy storage and intercalation chemistry,” <em>Science</em> 192 (1976), 1126-1127.</li>
+  <li id="ref-mizushima">K. Mizushima, P. C. Jones, P. J. Wiseman, and J. B. Goodenough, “Li<sub>x</sub>CoO<sub>2</sub> (0 &lt; x ≤ 1): A new cathode material for batteries of high energy density,” <em>Materials Research Bulletin</em> 15 (1980), 783-789.</li>
   <li id="ref-nobel">The Nobel Prize in Chemistry 2019, awarded to John B. Goodenough, M. Stanley Whittingham, and Akira Yoshino “for the development of lithium-ion batteries.” <a href="https://www.nobelprize.org/prizes/chemistry/2019/summary/">nobelprize.org</a>.</li>
-  <li id="ref-dahn">J. R. Dahn, “Phase diagram of Li<sub>x</sub>C<sub>6</sub>,” <em>Physical Review B</em> 44 (1991), 9170–9177.</li>
+  <li id="ref-dahn">J. R. Dahn, “Phase diagram of Li<sub>x</sub>C<sub>6</sub>,” <em>Physical Review B</em> 44 (1991), 9170-9177.</li>
+  <li id="ref-afshar">S. Afshar, K. Morris, and A. Khajepour, “Efficient electrochemical model for lithium-ion cells,” arXiv:1709.03970 (2017). The lithium iron phosphate curve in the energy figure.</li>
+  <li id="ref-peled">E. Peled, “The electrochemical behavior of alkali and alkaline earth metals in nonaqueous battery systems: the solid electrolyte interphase model,” <em>Journal of The Electrochemical Society</em> 126 (1979), 2047-2051.</li>
+  <li id="ref-ploehn">H. J. Ploehn, P. Ramadass, and R. E. White, “Solvent diffusion model for aging of lithium-ion battery cells,” <em>Journal of The Electrochemical Society</em> 151 (2004), A456.</li>
+  <li id="ref-keil">P. Keil, S. F. Schuster, J. Wilhelm, J. Travi, A. Hauser, R. C. Karl, and A. Jossen, “Calendar aging of lithium-ion batteries,” <em>Journal of The Electrochemical Society</em> 163 (2016), A1872-A1880.</li>
+  <li id="ref-birkl">C. R. Birkl, M. R. Roberts, E. McTurk, P. G. Bruce, and D. A. Howey, “Degradation diagnostics for lithium ion cells,” <em>Journal of Power Sources</em> 341 (2017), 373-386.</li>
+  <li id="ref-waldmann">T. Waldmann, B.-I. Hogg, and M. Wohlfahrt-Mehrens, “Li plating as unwanted side reaction in commercial Li-ion cells: a review,” <em>Journal of Power Sources</em> 384 (2018), 107-124.</li>
 </ol>
+
+<h2 class="plain">Further reading</h2>
+<ul class="refs">
+  <li><a href="https://en.wikipedia.org/wiki/Lithium-ion_battery">Lithium-ion battery</a> and <a href="https://en.wikipedia.org/wiki/Graphite_intercalation_compound">Graphite intercalation compound</a> on Wikipedia.</li>
+  <li>J. B. Goodenough and K.-S. Park, “The Li-ion rechargeable battery: a perspective,” <em>Journal of the American Chemical Society</em> 135 (2013), 1167-1176.</li>
+</ul>
 <!-- explainer:article:end -->
 </article>
 </main>

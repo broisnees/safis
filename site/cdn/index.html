@@ -141,7 +141,7 @@ window.CDN = (() => {
   // drawn into box; returns P([lon, lat]) -> [px, py], with P.inv, P.box, and the map as P.M.
   function map(g, box, o = {}) {
     const [lon0, lon1] = o.lon ?? [-168, 180], [lat0, lat1] = o.lat ?? [-47, 72];
-    const M = g.map({ box, pad: o.pad ?? 2, fit: [[lon0, lat0], [lon1, lat1]], graticule: o.graticule === false ? false : { step: 30, alpha: 0.6 },
+    const M = g.map({ box, pad: o.pad ?? 2, fit: [[lon0, lat0], [lon1, lat1]], center: [(lon0 + lon1) / 2, (lat0 + lat1) / 2], graticule: o.graticule === false ? false : { step: 30, alpha: 0.6 },
       borders: { alpha: 0.35, width: 0.5 }, land: { stroke: "muted", width: 0.8 } });
     const P = q => M.project(q) ?? [NaN, NaN];
     P.inv = p => M.invert(p) ?? [NaN, NaN];
@@ -718,7 +718,7 @@ window.CDN = (() => {
       { key: "bw", label: "Bandwidth", min: 0, max: 3, step: 0.01, value: Math.log10(50), color: "blue", format: x => `${Math.round(10 ** x).toLocaleString("en-US")} Mbit/s`,
         marks: [{ value: 0, label: "1" }, { value: 1, label: "10" }, { value: 2, label: "100" }, { value: 3, label: "1,000" }] },
       { key: "rtt", label: "Round trip", min: 10, max: 300, step: 1, value: 280, unit: " ms", color: "orange",
-        marks: [{ value: 10, label: "nearby" }, { value: 280, label: "Sydney–London" }] },
+        marks: [{ value: 10, label: "nearby" }, { value: 280, label: "Sydney to London" }] },
     ],
     caption: "Time to fetch 100 KB on a new connection. Past about 20 Mbit/s the curve is flat: the remaining time is round trips, and only a shorter round trip brings it down.",
     status(s, v) {
@@ -1647,7 +1647,7 @@ window.CDN = (() => {
       if (!narrow) {
         // a key on the right
         const kx = x0 + w + 24, ky = y0 + 20;
-        const rows = [["green", "sent by the edge, from a copy"], ["purple", "must come from London"]];
+        const rows = [["green", "from the edge"], ["purple", "from London"]];
         rows.forEach(([c, t], i) => { g.rect(kx, ky + i * 26 - 7, 14, 14, { r: 3, fill: g.rgba(c, 0.25), stroke: c, width: 1.2 }); g.text(t, [kx + 22, ky + i * 26], { size: 12, color: "muted", align: "left" }); });
         const lines = !v.signed ? ["Nobody is signed in, so", "the whole page is the", "same for everyone."]
           : personalHtml ? ["The greeting is inside the", "HTML, so the whole HTML", "(16 KB) is private."]
@@ -1712,7 +1712,7 @@ window.CDN = (() => {
 }
 </script>
 
-<p>Straight to London, the page takes 1,140 ms: two round trips of handshakes, one for the request, and one more because 16 KB is a little more than slow start's first burst. Going <button class="set" data-set="mode=cold">through the edge on a new connection</button> saves nothing, since the edge has to do the same handshakes with London. The gain comes from the <button class="set" data-set="mode=warm">warm connection</button>. Edges keep connections to busy origins open for many requests from many readers, with the encryption already set up and TCP's window already grown <a class="cite" href="#ref-hpbn"></a>. The reader's own handshakes happen over 10 ms to the edge, and only the request and its answer cross the world: 320 ms, a quarter of the direct time. Big CDNs also route these requests over their own backbone, which can beat the public internet's path.</p>
+<p>Straight to London, the page takes about 1,150 ms: two round trips of handshakes, one for the request, and one more because 16 KB is a little more than slow start's first burst. Going <button class="set" data-set="mode=cold">through the edge on a new connection</button> saves nothing, since the edge has to do the same handshakes with London. The gain comes from the <button class="set" data-set="mode=warm">warm connection</button>. Edges keep connections to busy origins open for many requests from many readers, with the encryption already set up and TCP's window already grown <a class="cite" href="#ref-hpbn"></a>. The reader's own handshakes happen over 10 ms to the edge, and only the request and its answer cross the world: 320 ms, a quarter of the direct time. Big CDNs also route these requests over their own backbone, which can beat the public internet's path.</p>
 
 <p>The edge can also make the bytes themselves fewer. Text files such as HTML, CSS, and JavaScript shrink a lot with compression, and the edge can compress them once and keep the compressed copy. Fewer bytes means fewer slow-start bursts, so compression saves round trips, not just bandwidth. I compressed three real files with gzip and with Brotli <a class="cite" href="#ref-brotli"></a>. Pick a file and an encoding, and count the bursts it needs on a new connection:</p>
 
@@ -1767,10 +1767,11 @@ window.CDN = (() => {
         }
         const w = (b / 10) * sq;
         const live = used < n;
-        g.text(`round trip ${k + 1}`, [c0 + w / 2, top + 10 * sq + 14], { size: narrow ? 10 : 11, color: live ? "ink" : "faint", weight: live ? 600 : 500 });
+        g.text(String(k + 1), [c0 + w / 2, top + 10 * sq + 14], { size: 11, color: live ? "ink" : "faint", weight: live ? 600 : 500 });
         used += b;
         x += w + gap;
       });
+      g.text("packets, grouped by the round trip that carries them", [8, top + 10 * sq + 32], { size: 11.5, color: "muted", align: "left" });
     },
   });
 }
@@ -1825,7 +1826,7 @@ window.CDN = (() => {
 }
 </script>
 
-<p>With nothing but compression, the page takes 2.6 seconds, as it did at the start. <button class="set" data-set="cdn=true br=true quic=false">Through the edge</button> it takes about 0.4. The handshakes and every slow-start burst now happen over 10 ms, the shared files come from the edge's copies, and the <span class="c-purple">personal HTML</span> crosses to London once over the edge's warm connection, which is most of what's left. <button class="set" data-set="cdn=false br=true quic=true">HTTP/3 alone</button> saves one round trip of handshake, a quarter of a second from Sydney, but only about 10 ms through the edge, where round trips are cheap. Compression changes little here, because by the time the big files go, slow start has already opened the window. The order of the gains matches the order of this page: distance first, then everything else.</p>
+<p>With nothing but compression, the page takes 2.6 seconds, as it did at the start. <button class="set" data-set="cdn=true br=true quic=false">Through the edge</button> it takes about 0.4. The handshakes and every slow-start burst now happen over 10 ms, the shared files come from the edge's copies, and the <span class="c-purple">personal HTML</span> crosses to London once over the edge's warm connection, which is most of what's left. <button class="set" data-set="cdn=false br=true quic=true">HTTP/3 alone</button> saves one round trip of handshake, about 0.28 seconds from Sydney, but only about 10 ms through the edge, where round trips are cheap. Compression changes little here, because by the time the big files go, slow start has already opened the window. The order of the gains matches the order of this page: distance first, then everything else.</p>
 
 <p>No CDN can make light faster. What it does is rearrange the work so that almost every round trip a page needs happens over a short distance: handshakes with a nearby edge, files from that edge's copies, misses gathered behind a shield, and the unavoidable trips to the origin sent over a connection that's already open. Some CDNs now also let sites run their own code on the edges, so that more of the personal page can be assembled near the reader. The trip that remains is set by the size of the planet: about 270 ms from Sydney to London and back.</p>
 
