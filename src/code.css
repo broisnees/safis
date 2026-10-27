@@ -1,0 +1,80 @@
+/* Code and diagrams that scripts/render.mjs pre-renders: Shiki code carrying both light
+   and dark colors, marked diffs, and Mermaid diagrams as inline SVG in the page's own
+   colors. Aliases first: the diagrams name their colors --bg, --fg, --muted, and
+   --accent, so they read the page's through names that can't loop back on themselves. */
+:root { --safis-paper: var(--bg); --safis-ink: var(--ink); --safis-muted: var(--muted); --safis-rule: var(--faint); }
+
+.code-block {
+  position: relative; margin: 1.8em 0; border-radius: 10px; overflow: hidden;
+  background: color-mix(in srgb, var(--ink) 3.5%, transparent);
+  box-shadow: inset 0 0 0 1px var(--chip-line);
+}
+.code-title {
+  font: 500 12.5px/1 var(--font-mono); color: var(--muted); letter-spacing: 0.01em;
+  padding: 11px 18px; border-bottom: 1px solid var(--chip-line);
+}
+.code-block pre.shiki {
+  margin: 0; padding: 14px 0; border-radius: 0; background: none !important; overflow-x: auto;
+  font: 13.5px/1.65 var(--font-mono); tab-size: 2;
+}
+.code-block pre.shiki code { display: block; min-width: max-content; background: none; padding: 0; font-size: inherit; }
+.code-block .line { position: relative; display: inline-block; width: 100%; padding: 0 18px; }
+.code-block .shiki span { color: var(--shiki-light); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .code-block .shiki span { color: var(--shiki-dark); } }
+:root[data-theme="dark"] .code-block .shiki span { color: var(--shiki-dark); }
+
+/* Line numbers, highlights, focus */
+.code-block[data-numbered] code { counter-reset: ln; }
+.code-block[data-numbered] .line { padding-left: 3.6em; }
+.code-block[data-numbered] .line::before {
+  counter-increment: ln; content: counter(ln);
+  position: absolute; left: 0; width: 2.6em; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+.code-block .line.highlighted { background: var(--chip); box-shadow: inset 2px 0 0 var(--ink); }
+.code-block .has-focused .line:not(.focused) { opacity: 0.4; transition: opacity 0.25s var(--ease-out); }
+.code-block .has-focused:hover .line { opacity: 1; }
+
+/* Diffs: added and removed lines get a tint and a sign in the gutter. */
+.code-block .line.diff.add { background: color-mix(in srgb, var(--green) 12%, transparent); }
+.code-block .line.diff.remove { background: color-mix(in srgb, var(--red) 11%, transparent); }
+.code-block .line.diff.remove > span { opacity: 0.78; }
+.code-block .line.diff.hunk { color: var(--muted); background: var(--chip); }
+/* A diff file already starts its lines with + and -, so only marked code gets the gutter sign. */
+.code-block:not([data-numbered]) .shiki:not(.diff-file) .line.diff::before { position: absolute; left: 6px; font-weight: 600; }
+.code-block:not([data-numbered]) .shiki:not(.diff-file) .line.diff.add::before { content: "+"; color: var(--green); }
+.code-block:not([data-numbered]) .shiki:not(.diff-file) .line.diff.remove::before { content: "−"; color: var(--red); }
+
+/* Copy button, added by the runtime */
+.code-copy {
+  position: absolute; top: 7px; right: 8px; z-index: 1;
+  font: 500 12px/1 var(--font-text); color: var(--muted); padding: 6px 9px; border: 0; border-radius: 7px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent); box-shadow: inset 0 0 0 1px var(--chip-line);
+  cursor: pointer; opacity: 0; transition: opacity 0.18s var(--ease-out), color 0.18s var(--ease-out);
+}
+.code-block:hover .code-copy, .code-copy:focus-visible, .code-copy.done { opacity: 1; }
+.code-copy:hover { color: var(--ink); }
+.code-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: none) { .code-copy { opacity: 1; } }
+
+/* Diagrams, numbered with the figures */
+figure.diagram { margin: 2.4em 0 2.6em; counter-increment: figure; }
+figure.diagram.wide { width: min(calc(100vw - 40px), var(--wide)); margin-left: 50%; transform: translateX(-50%); }
+figure.diagram figcaption { font: 15.5px/1.5 var(--font-serif); color: var(--muted); margin: 12px 2px 0; text-wrap: pretty; }
+figure.diagram figcaption::before {
+  content: "Figure " counter(figure);
+  font-weight: 600; font-variant-caps: all-small-caps; letter-spacing: 0.05em; color: var(--ink); margin-right: 0.6em;
+}
+.mermaid-svg { overflow-x: auto; }
+.mermaid-svg svg {
+  display: block; max-width: 100%; height: auto; margin: 0 auto;
+  --bg: var(--safis-paper); --fg: var(--safis-ink); --muted: var(--safis-muted); --accent: var(--safis-ink);
+  --line: color-mix(in srgb, var(--safis-ink) 55%, var(--safis-paper));
+  --border: color-mix(in srgb, var(--safis-ink) 28%, var(--safis-paper));
+  --surface: color-mix(in srgb, var(--safis-ink) 4%, var(--safis-paper));
+}
+.mermaid-svg text { font-family: var(--font-text); }
+pre.mermaid { white-space: pre-wrap; color: var(--muted); }
+@media (max-width: 560px) {
+  .code-block { margin-inline: -16px; border-radius: 0; box-shadow: inset 0 1px 0 var(--chip-line), inset 0 -1px 0 var(--chip-line); }
+  .code-block pre.shiki { font-size: 12.5px; }
+}

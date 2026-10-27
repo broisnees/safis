@@ -96,10 +96,11 @@
       if (o.alpha != null) ctx.globalAlpha = o.alpha;
       ctx.beginPath();
       build();
-      if (o.fill) { ctx.fillStyle = color(o.fill); ctx.fill(); }
+      const rule = o.fillRule ?? "nonzero";
+      if (o.fill) { ctx.fillStyle = color(o.fill); ctx.fill(rule); }
       if (o.hatch) {
         ctx.fillStyle = hatchPattern(o.hatch === true ? "muted" : o.hatch, o.hatchGap ?? 6, o.hatchAngle ?? 45);
-        ctx.fill();
+        ctx.fill(rule);
       }
       if (o.stroke) {
         ctx.strokeStyle = color(o.stroke);
@@ -118,14 +119,20 @@
       line(a, b, o = {}) {
         shape({ stroke: "ink", ...o }, () => { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); });
       },
+      // A list of points, or a list of rings (shapes with holes: pair with fillRule: "evenodd").
       path(pts, o = {}) {
-        if (pts.length < 2) return;
+        const rings = Array.isArray(pts[0]?.[0]) ? pts.filter(r => r.length > 1) : pts.length > 1 ? [pts] : [];
+        if (!rings.length) return;
         shape(o.fill || o.stroke || o.hatch ? o : { ...o, stroke: "ink" }, () => {
-          ctx.moveTo(pts[0][0], pts[0][1]);
-          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-          if (o.close) ctx.closePath();
+          for (const r of rings) {
+            ctx.moveTo(r[0][0], r[0][1]);
+            for (let i = 1; i < r.length; i++) ctx.lineTo(r[i][0], r[i][1]);
+            if (o.close) ctx.closePath();
+          }
         });
       },
+      // The house hatching as a fill style, for drawing straight on g.ctx (shadows, night, cut faces).
+      hatch: (c = "muted", gap = 6, angle = 45) => hatchPattern(c, gap, angle),
       // Smooth curve through the points (Catmull-Rom).
       spline(pts, o = {}) {
         if (pts.length < 2) return;
@@ -194,6 +201,51 @@
         g.rect(p[0] - w / 2, p[1] - h / 2, w, h, { fill: mix(c, "#ffffff", 0.68), stroke: c, width: 1, r: 4 });
         g.text(str, [p[0], p[1] + 0.5], { size, weight: 600, color: "#1d1d20" });
         return { w, h };
+      },
+      // A disc with a short name inside (beads on a chain, residues, nodes). The name shrinks
+      // to fit the disc instead of spilling out of it, and the fill follows the theme.
+      bead(c, r, str, o = {}) {
+        const col = o.color ?? "blue";
+        g.circle(c, r, { fill: o.fill ?? mix(col, "panel", 0.8), stroke: o.stroke ?? col, width: o.width ?? 1.25, alpha: o.alpha });
+        if (str == null || str === "") return;
+        const max = o.size ?? Math.min(13, r * 0.9);
+        const w = textWidth(str, { size: max, weight: 600 });
+        const size = Math.max(7, Math.min(max, (max * (2 * r - 5)) / Math.max(w, 1)));
+        g.text(str, [c[0], c[1] + 0.5], { size, weight: 600, color: o.textColor ?? "ink", alpha: o.alpha });
+      },
+      // Labels beside their points. Each takes the first nearby spot that overlaps no other
+      // label or point and stays on the canvas; one pushed further out gets a leader line.
+      // items: [{ at: [x, y], text, color, r (the point's radius), size, prefer: [dx, dy] }]
+      labels(items, o = {}) {
+        const placed = [], gap = 2;
+        const pts = items.filter(it => it && it.at && Number.isFinite(it.at[0]) && Number.isFinite(it.at[1]));
+        const DIRS = [[1, 0], [-1, 0], [0, -1], [0, 1], [1, -1], [-1, -1], [1, 1], [-1, 1]];
+        const onCanvas = b => b.x >= 2 && b.y >= 2 && b.x + b.w <= g.w - 2 && b.y + b.h <= g.h - 2;
+        const hitsLabel = b => placed.some(p => b.x < p.x + p.w + gap && p.x < b.x + b.w + gap && b.y < p.y + p.h + gap && p.y < b.y + b.h + gap);
+        const hitsPoint = (b, self) => pts.some(q => {
+          if (q === self) return false;
+          const r = (q.r ?? 3) + gap;
+          return q.at[0] > b.x - r && q.at[0] < b.x + b.w + r && q.at[1] > b.y - r && q.at[1] < b.y + b.h + r;
+        });
+        for (const it of pts) {
+          const style = { size: it.size ?? o.size ?? 12.5, weight: 600 };
+          const w = textWidth(it.text, style), h = style.size + 3, r = (it.r ?? 3) + 5;
+          let best = null;
+          for (const ring of [1, 1.9, 2.8]) {
+            for (const [dx, dy] of it.prefer ? [it.prefer, ...DIRS] : DIRS) {
+              const cx = it.at[0] + dx * (r * ring + (dx ? w / 2 : 0)), cy = it.at[1] + dy * (r * ring + (dy ? h / 2 : 0));
+              const b = { x: cx - w / 2, y: cy - h / 2, w, h, cx, cy, ring };
+              if (onCanvas(b) && !hitsLabel(b) && !hitsPoint(b, it)) { best = b; break; }
+            }
+            if (best) break;
+          }
+          best ??= { x: it.at[0] + r, y: it.at[1] - h / 2, w, h, cx: it.at[0] + r + w / 2, cy: it.at[1], ring: 1 };
+          placed.push(best);
+          const c = it.color ?? o.color ?? "ink";
+          if (best.ring > 1) g.line(it.at, [clamp(it.at[0], best.x, best.x + best.w), clamp(it.at[1], best.y, best.y + best.h)], { stroke: c === "ink" ? "muted" : c, width: 1 });
+          g.text(it.text, [best.cx, best.cy], { ...style, color: c, halo: true });
+        }
+        return placed;
       },
       // Labels in the left and right margins of the canvas, with leader lines to their anchors.
       // items: [{ at: [x, y], text, color, side: "left" | "right" }]
@@ -464,6 +516,8 @@
     get fontText() { return fontText; },
     get fontSerif() { return fontSerif; },
     get fontMono() { return fontMono; },
+    // True when the page is dark, for kits that pick additive light or absorbing ink.
+    get dark() { const [r, g, b] = rgb("bg"); return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128; },
   };
 
   // ---------- Figures ----------
@@ -538,13 +592,18 @@
       get values() { return d.v; },
       set: (key, value) => setControl(d, key, value),
       setMany: (values, o = {}) => applyValues(d, values, o.animate),
+      // Back to the starting state. A spec.reset function runs after, so a figure can stop
+      // what it started (a sound, a timer); listeners get a "safis:reset" event.
       reset() {
         const view = d.s.view;
         for (const k of Object.keys(d.s)) delete d.s[k];
         Object.assign(d.s, initialState(spec));
         if (view) d.s.view = view;
         d.dirty = true;
+        if (typeof spec.reset === "function") guard(d, "reset", () => spec.reset(d.s, d.v, d.handle));
+        el.dispatchEvent(new CustomEvent("safis:reset", { detail: d.handle }));
       },
+      get visible() { return d.visible; },
       redraw() { d.dirty = true; },
       play(on = true) { d.playing = !!on && !!spec.step; syncPlay(d); },
       get playing() { return d.playing; },
@@ -607,6 +666,7 @@
     demos.push(d);
     byEl.set(el, d);
     visibility.observe(el);
+    reveal?.observe(el);
     // Resize on the next frame, not inside the observer: changing the canvas
     // height there would re-trigger the observer and log a loop error.
     d.resizer = new ResizeObserver(() => { d.needsResize = true; });
@@ -616,6 +676,8 @@
   }
 
   function destroy(d) {
+    if (typeof d.spec.destroy === "function") guard(d, "destroy", () => d.spec.destroy(d.s, d.v, d.handle));
+    d.el.dispatchEvent(new CustomEvent("safis:destroy", { detail: d.handle }));
     d.abort.abort();
     d.resizer?.disconnect();
     visibility.unobserve(d.el);
@@ -978,10 +1040,7 @@
       }
     }
     if (spec.reset && typeof spec.state === "function") {
-      iconBtn(ICONS.reset, "Reset", () => {
-        d.handle.reset();
-        if (typeof spec.reset === "function") guard(d, "reset", () => spec.reset(d.s, d.v, d.handle));
-      });
+      iconBtn(ICONS.reset, "Reset", () => d.handle.reset());
     }
     if (transport.children.length) foot.append(transport);
 
@@ -993,6 +1052,9 @@
       if (c.color) b.style.setProperty("--c", cssColor(c.color));
       on(b, "click", () => { d.touched = true; pressButton(d, c); });
       buttons.append(b);
+      // c.text(s, v) relabels the button as the state changes ("Play" / "Stop"); c.pressed(s, v)
+      // marks it on. c.label stays its name for presets ({ press }) and the checker.
+      if (c.text || c.pressed) (d.liveButtons ??= []).push([c, b]);
     }
     if (buttons.children.length) foot.append(buttons);
 
@@ -1023,6 +1085,14 @@
     if (p.set) applyValues(d, p.set, animate);
     if (p.press) { const c = (d.spec.controls ?? []).find(x => x.type === "button" && x.label === p.press); if (c) pressButton(d, c); }
     if (p.play != null) d.handle.play(p.play);
+  }
+
+  function syncButtons(d) {
+    for (const [c, b] of d.liveButtons ?? []) {
+      let t = c.label, on = false;
+      if (c.text && guard(d, "button text", () => { t = String(c.text(d.s, d.v) ?? c.label); }) && b.textContent !== t) b.textContent = t;
+      if (c.pressed && guard(d, "button pressed", () => { on = !!c.pressed(d.s, d.v); }) && b.getAttribute("aria-pressed") !== String(on)) b.setAttribute("aria-pressed", String(on));
+    }
   }
 
   function syncPresets(d) {
@@ -1140,8 +1210,9 @@
       if (mode === "drag") guard(d, "drag.move", () => spec.drag.move?.(p, d.s, d.v, delta, d.handle));
       else {
         const view = d.s.view;
-        view.yaw = clampYaw(d, view.yaw + delta[0] * 0.01);
-        view.pitch = clampPitch(d, view.pitch + delta[1] * 0.01);
+        const k = d.spec.orbit?.speed ?? 0.01;
+        view.yaw = clampYaw(d, view.yaw + delta[0] * k);
+        view.pitch = clampPitch(d, view.pitch + delta[1] * k);
       }
       d.dirty = true;
     });
@@ -1247,6 +1318,7 @@
       }
     }
     syncPresets(d);
+    syncButtons(d);
   }
 
   function setHighlight(d, name) {
@@ -1270,7 +1342,7 @@
       aspect = typeof d.spec.aspect === "function" ? d.spec.aspect(w) : d.spec.aspect ?? 1.6;
     })) return;
     const h = Math.round(w / aspect);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
     if (w === d.w && h === d.h && dpr === d.dpr) return;
     Object.assign(d, { w, h, dpr });
     d.canvas.style.height = `${h}px`;
@@ -1302,9 +1374,21 @@
   const visibility = new IntersectionObserver(entries => {
     for (const e of entries) {
       const d = byEl.get(e.target);
-      if (d) d.visible = e.isIntersecting;
+      if (d && d.visible !== e.isIntersecting) {
+        d.visible = e.isIntersecting;
+        d.el.dispatchEvent(new CustomEvent("safis:visibility", { detail: { visible: d.visible, handle: d.handle } }));
+      }
     }
   }, { rootMargin: "200px 0px" });
+
+  // Figures settle in the first time they scroll into view (theme.css, .safis-reveal).
+  // Apps that host figures (window.__safisHost) keep their own motion.
+  const reveal = window.__safisHost ? null : new IntersectionObserver(entries => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add("in"); reveal.unobserve(e.target); }
+  }, { threshold: 0.12 });
+  if (reveal) document.documentElement.classList.add("safis-reveal");
+  // The checker and screenshot tools drive the page; show every figure at rest for them.
+  const checking = () => document.documentElement.classList.add("safis-checking");
 
   let lastTime = performance.now();
   function frame(now) {
@@ -1315,8 +1399,9 @@
       if (d.tweens.size && !d.broken) runTweens(d, now);
       if (d.spin && !d.broken && d.s.view) {
         const view = d.s.view, k = Math.exp(-dt / 0.35);
-        view.yaw = clampYaw(d, view.yaw + d.spin[0] * dt * 1000 * 0.01);
-        view.pitch = clampPitch(d, view.pitch + d.spin[1] * dt * 1000 * 0.01);
+        const turn = d.spec.orbit?.speed ?? 0.01;
+        view.yaw = clampYaw(d, view.yaw + d.spin[0] * dt * 1000 * turn);
+        view.pitch = clampPitch(d, view.pitch + d.spin[1] * dt * 1000 * turn);
         d.spin = [d.spin[0] * k, d.spin[1] * k];
         if (Math.hypot(d.spin[0], d.spin[1]) < 0.004) d.spin = null;
         d.dirty = true;
@@ -1517,6 +1602,19 @@
     for (const t of article.querySelectorAll("table")) if (!t.parentElement.classList.contains("table-wrap")) { const w = node("div", "table-wrap"); t.before(w); w.append(t); }
     // Code
     for (const c of article.querySelectorAll('pre code[class*="language-"]')) highlight(c);
+    // Blocks from scripts/render.mjs get a copy button.
+    for (const b of article.querySelectorAll(".code-block")) {
+      if (b.querySelector(".code-copy")) continue;
+      const btn = node("button", "code-copy", "Copy");
+      btn.type = "button";
+      btn.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(b.querySelector("code")?.innerText ?? ""); btn.textContent = "Copied"; }
+        catch { btn.textContent = "Select to copy"; }
+        btn.classList.add("done");
+        setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1400);
+      });
+      b.append(btn);
+    }
     // Reading progress for long pieces
     if (sections.length >= 4) {
       const bar = node("div", "progress");
@@ -1630,6 +1728,7 @@
   }
 
   function check() {
+    checking();
     const report = { errors: [], warnings: [], demos: [] };
     // Figures inside collapsed "going deeper" sections need a size to be checked.
     const closed = [...document.querySelectorAll("details:not([open])")].filter(x => x.querySelector("figure.demo"));
@@ -1644,6 +1743,8 @@
     const text = [document.title, document.querySelector('meta[name="description"]')?.content ?? "", document.body.innerText];
     if (text.some(t => t.includes("{{"))) report.errors.push("template placeholders (names in double curly braces) are still on the page");
     if (document.getElementById("example-cube")) report.warnings.push("the template's example figure (#example-cube) is still on the page");
+    const raw = document.querySelectorAll("pre.mermaid").length;
+    if (raw) report.errors.push(`${raw} Mermaid block${raw === 1 ? " isn't" : "s aren't"} rendered: run scripts/render.mjs on the page`);
     for (const e of document.querySelectorAll(".scrub, .set, [data-part]")) {
       if (!e.__safis) report.warnings.push(`${e.outerHTML.slice(0, 80)}… isn't tied to any figure`);
     }
@@ -1656,6 +1757,7 @@
 
   // Exploration support for scripts/explore.mjs: describe a figure and drive its controls.
   function describe(id) {
+    checking();
     const d = demos.find(x => x.id === id);
     if (!d) return null;
     const controls = (d.spec.controls ?? []).flatMap(c => {
@@ -1671,6 +1773,7 @@
     return { id: d.id, controls, stepped: !!d.spec.step, animated: !!d.spec.step, orbit: !!d.spec.orbit, drag: !!d.spec.drag };
   }
   function drive(id, action) {
+    checking();
     const d = demos.find(x => x.id === id);
     if (!d) return false;
     d.touched = true;

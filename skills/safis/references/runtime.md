@@ -30,9 +30,10 @@ Each figure is drawn straight onto the page, with its controls beneath it (slide
 | `transport` | Animated figures get play/pause, step-forward, and speed (¼×–2×) buttons. `{ step: false, speed: false }` hides parts; `false` hides all. `stepFrames` [6] sets how far one step goes (in 1/60 s frames). |
 | `autoplay` | `false` starts paused, and tells the self-check that stillness is fine (motion starts from a button). |
 | `playButton` | `false` hides the transport and the Space key, for one-shot animations started by a button via `fig.play()`. |
-| `reset` | `true` adds a reset button (needs `state` as a function). A function also runs after the reset. |
+| `reset` | `true` adds a reset button (needs `state` as a function). A function `(s, v, fig)` runs after every reset (the button, `fig.reset()`, the checker), so a figure can stop what it started. |
+| `destroy` | `(s, v, fig)` runs when the figure is removed: stop sounds, timers, and anything outside the canvas. |
 | `drag` | `{ hit(p, s, v, fig), start(p, s, v, fig), move(p, s, v, delta, fig), end(s, v, fig) }`. `hit` returns truthy when `p` is on something draggable (omit to drag anywhere). Points are `[x, y]` CSS pixels, origin top-left. Draw what can be dragged with `g.handle`. |
-| `orbit` | `{ yaw, pitch, minPitch, maxPitch, minYaw, maxYaw }` in radians. Dragging (where `drag.hit` doesn't claim it) turns `s.view = { yaw, pitch }`, with momentum after release. Arrow keys turn it too when there are no number controls. |
+| `orbit` | `{ yaw, pitch, minPitch, maxPitch, minYaw, maxYaw, speed }` in radians; `speed` is radians per pixel of drag [0.01], lower for big globes so the surface keeps up with the pointer. Dragging (where `drag.hit` doesn't claim it) turns `s.view = { yaw, pitch }`, with momentum after release. Arrow keys turn it too when there are no number controls. |
 | `hover(p, s, v, fig)` | Called on pointer moves while not dragging, with `null` when the pointer leaves. Return `true` when something changed and the figure should redraw. |
 | `highlight(name, s, v, fig)` | Called when a linked term in the prose lights a part (or `null` when it goes out). Usually you don't need it: read `g.lit("part")` in `draw`. |
 | `status(s, v, fig)` | Returns a short readout shown at the right of the panel, updated after every draw ("period 2.01 s", "slid 4.2 mm"). |
@@ -67,7 +68,7 @@ controls: [
 - **Knob**: `type: "knob"`, for angles and phases; drag sideways or up and down. `wrap: true` makes max wrap round to min.
 - **Pad**: `type: "pad"`, `keys: [kx, ky]`, `x` and `y` ranges; the reader drags a dot in a square. Both values arrive in `v`.
 - **Switch**: `type: "toggle"`, `key`, `label`, `value`, `color`. Several switches share one row.
-- **Button**: `type: "button"`, `label`, `action(s, v, fig)`, `primary: true` for the main one. The exploration script presses every button, from the start and with the first slider at its maximum.
+- **Button**: `type: "button"`, `label`, `action(s, v, fig)`, `primary: true` for the main one. `text(s, v)` relabels it as the state changes ("Play" and "Stop"), and `pressed(s, v)` shows it as on; `label` stays its name for presets and the checker. The exploration script presses every button, from the start and with the first slider at its maximum.
 - **Hidden**: `hidden: true` on any control keeps the value and its range but draws nothing in the panel, for numbers the reader changes only from the prose (below).
 - Every value readout can be dragged sideways to scrub it, and clicked to type a number.
 - Give a control the color of the thing it changes in the figure and the colored word in the prose.
@@ -95,7 +96,8 @@ Callbacks get it as their last argument (`fig`); `demo()` returns it.
 |---|---|
 | `fig.set(key, value)` | Set a control as if the reader moved it (updates the panel and prose, runs `change`, redraws). |
 | `fig.setMany({ key: value }, { animate })` | Set several at once; `animate: true` glides numbers there like a preset. |
-| `fig.reset()` | Fresh `state()`, keeping the 3D view. |
+| `fig.reset()` | Fresh `state()`, keeping the 3D view, then the spec's `reset` function. |
+| `fig.visible` | Whether the figure is on screen (with a 200 px margin). The figure element also fires `safis:visibility`, `safis:reset`, and `safis:destroy` events, with the handle in `event.detail`. |
 | `fig.redraw()` | Ask for a redraw. |
 | `fig.play(on = true)`, `fig.playing` | Start or stop `step()`. |
 | `fig.highlight` | The lit part's name, or `null`; assign to light a part and its term. |
@@ -109,7 +111,8 @@ Callbacks get it as their last argument (`fig`); `demo()` returns it.
 | call | options `o` (defaults in brackets) |
 |---|---|
 | `g.line(a, b, o)` | `stroke` ["ink"], `width` [2], `dash`, `alpha` |
-| `g.path(points, o)` | `stroke`, `fill`, `hatch`, `width`, `dash`, `close`, `alpha` |
+| `g.path(points, o)` | `stroke`, `fill`, `hatch`, `width`, `dash`, `close`, `alpha`, `fillRule` (`"evenodd"` for holes). `points` can be a list of rings for one shape with holes. |
+| `g.hatch(color, gap, angle)` | The house hatching as a fill style, for code that draws on `g.ctx` directly. |
 | `g.spline(points, o)` | Smooth curve through the points; same options, `close` for loops |
 | `g.circle(c, r, o)` | `fill`, `stroke`, `hatch`, `width`, `alpha` |
 | `g.rect(x, y, w, h, o)` | `fill`, `stroke`, `hatch`, `width`, `r` (corner radius), `alpha` |
@@ -134,6 +137,8 @@ Callbacks get it as their last argument (`fig`); `demo()` returns it.
 | `g.handle(p, o)` | A grab handle for something draggable: a filled dot in `o.color` that breathes gently until the reader first touches the figure. `o.r` [7], `o.active` (while dragging or hovered). Returns `{ at, r }` for hit-testing. |
 | `g.lit(name)` | True while the prose term with `data-part="name"` is hovered (or `fig.highlight` is that name). |
 | `g.chip(str, p, o)` | A colored pill with text, for variables and short values; `o.color`. The same look exists in prose as `<span class="chip green">c</span>`, for visual equations like e = c / a. |
+| `g.labels(items, o)` | Labels beside crowded points. Each takes the first nearby spot that overlaps no other label or point and stays on the canvas; one pushed further out gets a leader line. `items: [{ at, text, color, r, size, prefer: [dx, dy] }]`. Use it instead of hand-placed `g.label` calls whenever points can crowd. |
+| `g.bead(c, r, text, o)` | A disc with a short name inside (residues on a chain, nodes, atoms by name). The text shrinks to fit the disc instead of spilling out; the fill follows the theme. `o.color`, `fill`, `stroke`, `textColor`, `size`. |
 | `g.dimension(a, b, text, o)` | A measurement line with end ticks and a centered value; `o.offset` moves it off the object. |
 | `g.inset({ from, to, radius, zoom }, draw)` | A circular magnifier: calls `draw(g)` again zoomed around `from`, shown in a circle at `to`, connected by lines. |
 
@@ -166,7 +171,7 @@ Callbacks get it as their last argument (`fig`); `demo()` returns it.
 
 ## Globals
 
-`demo`, `palette` (live colors by name), `rgba(name, a)`, `clamp`, `lerp`, `smoothstep`, `TAU`, `E3` (the 3D engine), `Num` (numerics, [plots.md](plots.md)), `SafisTeX` ([math.md](math.md)), and `Safis` (`{ demo, mount, enhance, typeset, version }`, for hosts that add figures after load). `window.__explainer` holds `check()`, `describe(id)`, `drive(id, action)`, and `ids()`, which the scripts use. Opening a page with `?check` shows the self-check in a panel.
+`demo`, `palette` (live colors by name), `rgba(name, a)`, `clamp`, `lerp`, `smoothstep`, `TAU`, `E3` (the 3D engine), `Num` (numerics, [plots.md](plots.md)), `Sim` ([simulations.md](simulations.md)), `Geo` ([maps.md](maps.md)), `Optics` ([optics.md](optics.md)), `Sound` ([sound.md](sound.md)), `Img` ([images.md](images.md)), `Fx` ([effects.md](effects.md)), `SafisTeX` ([math.md](math.md)), and `Safis` (`{ demo, mount, enhance, typeset, version }`, for hosts that add figures after load). `window.__explainer` holds `check()`, `describe(id)`, `drive(id, action)`, and `ids()`, which the scripts use. Opening a page with `?check` shows the self-check in a panel.
 
 Pages follow the reader's light or dark setting; a host can force one with `<html data-theme="light">` or `"dark"`.
 

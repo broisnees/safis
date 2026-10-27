@@ -24,6 +24,11 @@
   --track: color-mix(in srgb, var(--ink) 13%, transparent);
   --thumb: #ffffff;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px -12px rgb(0 0 0 / 0.14);
+  /* Controls are soft chips of ink over the page, so they follow the theme on their own. */
+  --chip: color-mix(in srgb, var(--ink) 5.5%, transparent);
+  --chip-hover: color-mix(in srgb, var(--ink) 10%, transparent);
+  --chip-line: color-mix(in srgb, var(--ink) 9%, transparent);
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
   --font-serif: "Safis Serif", "Iowan Old Style", Charter, "Palatino Linotype", Georgia, serif;
   --font-display: "Safis Display", "Safis Serif", "Iowan Old Style", Georgia, serif;
   --font-text: "Safis Sans", "Source Sans 3", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -268,7 +273,8 @@ figcaption em { color: var(--ink); }
 .ctl .name::first-letter { text-transform: uppercase; }
 .ctl .val {
   justify-self: end; min-width: 4.6rem; text-align: right; white-space: nowrap;
-  color: var(--ink); font-weight: 600; padding: 4px 9px; border-radius: 6px; background: var(--grid);
+  color: var(--ink); font-weight: 600; padding: 5px 10px; border-radius: 8px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--chip-line);
+  transition: background-color 0.18s var(--ease-out);
   cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none; outline: none;
 }
 .ctl .val:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
@@ -327,21 +333,25 @@ input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
 .toggles { display: flex; flex-wrap: wrap; gap: 0 22px; }
 
 /* Segmented choice */
-.segmented { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 8px; background: var(--grid); justify-self: start; }
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 10px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--chip-line); justify-self: start; }
 .segmented button {
   font: 500 14px/1 var(--font-text); color: var(--muted); background: transparent; border: 0;
-  padding: 8px 12px; border-radius: 6px; cursor: pointer; min-height: 32px;
+  padding: 8px 13px; border-radius: 7px; cursor: pointer; min-height: 32px;
 }
 @media (hover: hover) { .segmented button:hover { color: var(--ink); } }
-.segmented button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / 0.14), inset 0 -2px 0 var(--c); }
+.segmented button[aria-pressed="true"] {
+  background: var(--panel); color: var(--ink);
+  box-shadow: 0 0 0 1px var(--chip-line), 0 1px 2px rgb(0 0 0 / 0.12), 0 2px 8px -2px rgb(0 0 0 / 0.1);
+}
+.segmented button[aria-pressed="true"]::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--c); margin-right: 7px; vertical-align: 0.08em; }
 .segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Stepper */
-.stepper { display: inline-flex; align-items: center; justify-self: start; border: 1px solid var(--faint); border-radius: 8px; overflow: hidden; }
-.stepper button { width: 34px; height: 32px; border: 0; background: transparent; color: var(--ink); font: 500 17px/1 var(--font-text); cursor: pointer; }
-@media (hover: hover) { .stepper button:hover { background: var(--grid); } }
+.stepper { display: inline-flex; align-items: center; justify-self: start; border-radius: 10px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--chip-line); overflow: hidden; }
+.stepper button { width: 36px; height: 34px; border: 0; background: transparent; color: var(--ink); font: 500 17px/1 var(--font-text); cursor: pointer; }
+@media (hover: hover) { .stepper button:hover { background: var(--chip-hover); } }
 .stepper button:disabled { color: var(--faint); cursor: default; background: transparent; }
-.stepper .val { min-width: 4rem; text-align: center; border-left: 1px solid var(--faint); border-right: 1px solid var(--faint); padding: 0 8px; border-radius: 0; line-height: 32px; }
+.stepper .val { min-width: 4rem; text-align: center; background: transparent; padding: 0 8px; border-radius: 0; line-height: 34px; }
 
 /* Knob (angles and other wrap-around values) and XY pad */
 .knob { width: 40px; height: 40px; border-radius: 50%; position: relative; justify-self: start; cursor: grab; touch-action: none; outline: none;
@@ -357,38 +367,50 @@ input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
 /* Buttons, transport, presets */
 .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 .btn {
-  font: 500 14px/1 var(--font-text); min-height: 34px; padding: 8px 14px;
-  border: 1px solid var(--faint); border-radius: 7px;
-  background: var(--panel); color: var(--ink); cursor: pointer;
-  box-shadow: 0 1px 0 rgb(0 0 0 / 0.04);
+  position: relative;
+  font: 500 14px/1 var(--font-text); letter-spacing: 0.005em; min-height: 34px; padding: 9px 15px;
+  border: 0; border-radius: 9px;
+  background: var(--chip); color: var(--ink); cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--chip-line);
 }
-@media (hover: hover) { .btn:hover { border-color: var(--muted); } }
-.btn, .preset, .icon-btn, .segmented button, .stepper button { transition-property: scale, background-color, border-color, color; transition-duration: 0.15s; }
+@media (hover: hover) { .btn:hover { background: var(--chip-hover); } }
+.btn.primary, .btn[aria-pressed="true"] { background: var(--ink); color: var(--bg); box-shadow: 0 1px 2px rgb(0 0 0 / 0.18); }
+@media (hover: hover) { .btn.primary:hover { background: color-mix(in srgb, var(--ink) 86%, var(--bg)); } }
+.btn, .preset, .icon-btn, .speed, .segmented button, .stepper button {
+  transition: scale 0.12s var(--ease-out), background-color 0.18s var(--ease-out), color 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
+}
 :is(.btn, .preset, .icon-btn, .segmented button, .stepper button):active { scale: 0.96; }
-.btn.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-.foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-height: 34px; }
+.foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; min-height: 34px; }
 .foot:empty { display: none; }
 .transport { display: inline-flex; align-items: center; gap: 4px; }
 .icon-btn {
-  width: 32px; height: 32px; padding: 0;
+  position: relative;
+  width: 34px; height: 34px; padding: 0;
   display: grid; place-items: center;
-  border: 1px solid var(--faint); border-radius: 50%;
-  background: var(--panel); color: var(--ink);
+  border: 0; border-radius: 50%;
+  background: var(--chip); color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--chip-line);
   cursor: pointer;
 }
-@media (hover: hover) { .icon-btn:hover { border-color: var(--muted); } }
+@media (hover: hover) { .icon-btn:hover { background: var(--chip-hover); } }
+.icon-btn[data-state="playing"] { background: var(--ink); color: var(--bg); box-shadow: none; }
 .icon-btn svg { width: 13px; height: 13px; fill: currentColor; }
 .icon-btn[data-state="playing"] .i-play, .icon-btn[data-state="paused"] .i-pause { display: none; }
-.speed { font: 600 12.5px/1 var(--font-text); color: var(--muted); background: none; border: 0; padding: 6px 6px; border-radius: 5px; cursor: pointer; min-width: 2.6rem; }
-@media (hover: hover) { .speed:hover { color: var(--ink); background: var(--grid); } }
+.speed { font: 600 12.5px/1 var(--font-text); color: var(--muted); background: none; border: 0; padding: 7px 7px; border-radius: 7px; cursor: pointer; min-width: 2.6rem; font-variant-numeric: tabular-nums; }
+@media (hover: hover) { .speed:hover { color: var(--ink); background: var(--chip); } }
 .presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.presets .try { color: var(--muted); font-style: italic; font-family: var(--font-serif); font-size: 15px; margin-right: 2px; }
+.presets .try { color: var(--muted); font: italic 400 15px/1 var(--font-serif); margin-right: 4px; }
 .preset {
-  font: 500 13.5px/1 var(--font-text); color: var(--ink); background: transparent;
-  border: 1px solid var(--faint); border-radius: 999px; padding: 7px 11px; cursor: pointer;
+  position: relative;
+  font: 500 13.5px/1 var(--font-text); letter-spacing: 0.005em; color: var(--ink);
+  background: var(--chip); border: 0; border-radius: 999px; padding: 8px 13px; min-height: 30px; cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--chip-line);
 }
-@media (hover: hover) { .preset:hover { border-color: var(--muted); background: var(--bg); } }
-.preset[aria-pressed="true"] { border-color: var(--ink); }
+/* A bigger hit area than the chip shows, without spreading the row. */
+:is(.preset, .icon-btn, .btn)::after { content: ""; position: absolute; inset: -4px; }
+@media (hover: hover) { .preset:hover { background: var(--chip-hover); } }
+.preset[aria-pressed="true"] { background: var(--ink); color: var(--bg); box-shadow: 0 1px 2px rgb(0 0 0 / 0.16); }
 :is(.icon-btn, .btn, .preset, .speed):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .status { margin-left: auto; color: var(--ink); font-weight: 600; white-space: pre-wrap; text-align: right; }
 .side { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--muted); }
@@ -416,13 +438,32 @@ footer.colophon { margin-top: 96px; padding-top: 22px; border-top: 1px solid var
   main { padding-top: 48px; }
   header { margin-bottom: 40px; }
   .page { padding: 0 16px; }
-  .panel { padding: 8px 12px 10px; }
-  .ctl { grid-template-columns: 4.8rem 1fr auto; gap: 10px; }
-  .ctl .val { min-width: 3.6rem; padding: 3px 2px; }
+  .panel { padding: 8px 0 10px; }
+  /* On a phone the name and value share a line and the widget gets the full width under them. */
+  .controls { gap: 10px; }
+  .ctl { grid-template-columns: 1fr auto; grid-template-areas: "name val" "widget widget"; gap: 2px 10px; min-height: 0; }
+  .ctl > .name { grid-area: name; }
+  .ctl > .val { grid-area: val; min-width: 3.6rem; padding: 3px 8px; }
+  .ctl > :nth-child(2) { grid-area: widget; }
   .ctl .val[contenteditable="true"] { font-size: 16px; }
-  .ctl.wide-widget { grid-template-columns: 4.8rem 1fr; }
+  .ctl.wide-widget { grid-template-columns: 1fr; grid-template-areas: "name" "widget"; gap: 6px; }
+  .status { margin-left: 0; text-align: left; flex-basis: 100%; }
   figure.demo figcaption { font-size: 14.5px; }
+}
+/* Figures settle in as they first scroll into view. The runtime adds .safis-reveal to
+   the root, .in to each figure it has seen, and .safis-checking while the checker and
+   screenshot tools drive the page, so captures never catch a figure mid-fade. */
+.safis-reveal figure.demo .plate { opacity: 0; translate: 0 10px; transition: opacity 0.55s var(--ease-out), translate 0.7s var(--ease-out); }
+.safis-reveal figure.demo.in .plate, .safis-checking figure.demo .plate { opacity: 1; translate: none; }
+.safis-checking figure.demo .plate { transition: none; }
+/* Theme changes crossfade instead of snapping. */
+body { transition: background-color 0.3s ease, color 0.3s ease; }
+
+@media print {
+  figure.demo .plate { opacity: 1 !important; translate: none !important; }
+  .theme-toggle, .panel, .side { display: none !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
+  .safis-reveal figure.demo .plate { opacity: 1; translate: none; }
 }

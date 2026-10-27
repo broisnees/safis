@@ -823,6 +823,98 @@
         });
         return [x, y, w, h];
       };
+
+      // ---------- Measured data ----------
+      // y at x on a list of [x, y] pairs sorted by x, by straight lines between them.
+      const interp = (data, x) => {
+        if (!data.length || x < data[0][0] || x > data[data.length - 1][0]) return NaN;
+        let i = 1;
+        while (i < data.length - 1 && data[i][0] < x) i++;
+        const [x0, y0] = data[i - 1], [x1, y1] = data[i];
+        return x1 === x0 ? y1 : y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+      };
+      P.interp = interp;
+      // A line through [x, y] pairs: o.dots, o.fill (a soft area down to o.to, default 0),
+      // o.smooth, o.label at the last point. Returns the px points.
+      P.series = (data, so = {}) => {
+        const pts = data.filter(q => q && Number.isFinite(q[0]) && Number.isFinite(q[1])).map(q => lim(toPx(q)));
+        if (pts.length < 2) return pts;
+        const c = so.color ?? "blue";
+        clipped(so, () => {
+          if (so.fill) {
+            const base = ypx(so.to ?? 0);
+            g.path([[pts[0][0], base], ...pts, [pts[pts.length - 1][0], base]], { fill: c, alpha: so.fillAlpha ?? 0.12, close: true });
+          }
+          (so.smooth ? g.spline : g.path)(pts, { stroke: c, width: so.width ?? 2, dash: so.dash, alpha: so.alpha });
+          if (so.dots) for (const p of pts) g.circle(p, so.r ?? 3, { fill: c, stroke: "panel", width: 1.2, alpha: so.alpha });
+        });
+        if (so.label) {
+          const end = pts[pts.length - 1], right = end[0] > R - 60;
+          txt(so.label, [end[0] + (right ? -8 : 8), end[1] - (right ? 12 : 0)], { size: 12.5, color: c, weight: 600, halo: true, align: right ? "right" : "left" });
+        }
+        return pts;
+      };
+      // A band between lo and hi over xs (arrays the length of xs, or functions of x):
+      // confidence intervals, ranges, envelopes.
+      P.band = (xs, lo, hi, so = {}) => {
+        const at = (v, x, i) => (typeof v === "function" ? v(x) : Array.isArray(v) ? v[i] : v);
+        const top = xs.map((x, i) => lim(toPx([x, at(hi, x, i)]))), bot = xs.map((x, i) => lim(toPx([x, at(lo, x, i)])));
+        clipped(so, () => {
+          g.path([...top, ...bot.reverse()], { fill: so.color ?? "blue", alpha: so.alpha ?? 0.15, close: true });
+          if (so.edges) { g.path(top, { stroke: so.color ?? "blue", width: 1, alpha: 0.5 }); g.path(bot, { stroke: so.color ?? "blue", width: 1, alpha: 0.5 }); }
+        });
+      };
+      // Error bars: [x, y, err] or [x, y, below, above]; a dot with capped whiskers.
+      P.errorbars = (list, so = {}) => {
+        const c = so.color ?? "ink", cap = so.cap ?? 4;
+        clipped(so, () => {
+          for (const [x, y, e1, e2 = e1] of list) {
+            const p = toPx([x, y]), lo = toPx([x, y - e1]), hi = toPx([x, y + e2]);
+            g.line(lo, hi, { stroke: c, width: 1.2 });
+            g.line([lo[0] - cap, lo[1]], [lo[0] + cap, lo[1]], { stroke: c, width: 1.2 });
+            g.line([hi[0] - cap, hi[1]], [hi[0] + cap, hi[1]], { stroke: c, width: 1.2 });
+            g.circle(p, so.r ?? 3.5, { fill: c, stroke: "panel", width: 1.2 });
+          }
+        });
+      };
+      // A histogram of raw samples (binned with Num.histogram) or of { edges, counts }.
+      // o.bins, o.range, o.density (area 1, to compare with a pdf), o.color. Returns the bins.
+      P.histogram = (samples, so = {}) => {
+        const h = Array.isArray(samples) || ArrayBuffer.isView(samples) ? histogram(samples, { bins: so.bins ?? 20, range: so.range }) : samples;
+        const total = h.counts.reduce((a, b) => a + b, 0) || 1;
+        const k = so.density ? 1 / (total * h.width) : 1, c = so.color ?? "blue";
+        clipped(so, () => h.counts.forEach((n, i) => {
+          const a = lim(toPx([h.edges[i], n * k])), b = lim(toPx([h.edges[i + 1], 0]));
+          const x = Math.min(a[0], b[0]) + 0.5, w = Math.max(0, Math.abs(b[0] - a[0]) - 1), y = Math.min(a[1], b[1]), hh = Math.abs(b[1] - a[1]);
+          g.rect(x, y, w, hh, { fill: c, alpha: so.alpha ?? 0.22 });
+          g.line([x, y], [x + w, y], { stroke: c, width: 1.5 });
+        }));
+        return { ...h, scale: k };
+      };
+      // A hover readout at data x: a guide line, a dot where each curve crosses it, and
+      // value tags that keep clear of each other. curves: [{ f } or { data }, with color,
+      // label, format]. Feed x from the figure's hover: s.hx = P.inv(p)[0].
+      P.crosshair = (x, curves, so = {}) => {
+        if (x == null || !Number.isFinite(x)) return [];
+        const px = xpx(x);
+        if (px < L - 0.5 || px > R + 0.5) return [];
+        g.line([px, T], [px, B], { stroke: "muted", width: 1, dash: [3, 3] });
+        const hits = curves.map(c => ({ c, y: c.f ? c.f(x) : interp(c.data, x) })).filter(h => Number.isFinite(h.y));
+        hits.forEach(h => { h.p = toPx([x, h.y]); g.circle(h.p, 4, { fill: h.c.color ?? "blue", stroke: "panel", width: 1.6 }); });
+        const left = px > R - 110, gap = 17;
+        const ys = hits.map(h => clamp(h.p[1], T + 8, B - 8)).sort((a, b) => a - b);
+        const order = [...hits].sort((a, b) => a.p[1] - b.p[1]);
+        for (let i = 1; i < ys.length; i++) ys[i] = Math.max(ys[i], ys[i - 1] + gap);
+        order.forEach((h, i) => {
+          const v = h.c.format ? h.c.format(h.y) : fmt(h.y);
+          txt(h.c.label ? `${h.c.label} ${v}` : v, [px + (left ? -9 : 9), ys[i]], { size: 12.5, weight: 600, color: h.c.color ?? "blue", halo: true, align: left ? "right" : "left" });
+        });
+        if (so.xLabel !== false) {
+          const xs = so.xFormat ? so.xFormat(x) : fmt(x);
+          txt(xs, [px, B + 14], { size: 11.5, weight: 600, color: "ink", halo: true });
+        }
+        return hits;
+      };
       // Arrows of F(x, y) -> [u, v] on a grid; o.scale "linear" (length by magnitude) or "normalize" (same length, fade by magnitude).
       P.vectorField = (F, so = {}) => {
         const sp = so.spacing ?? 32, cols = Math.max(1, Math.floor(W / sp)), rows = Math.max(1, Math.floor(H / sp));

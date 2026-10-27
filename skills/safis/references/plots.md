@@ -79,6 +79,12 @@ The graph draws its grid and axes as soon as it's created; every later call draw
 | `P.streamlines(F, seeds, o)` | Curves that follow `F` from each seed (`[x, y]` in data). Without seeds, a grid of them (`o.count: [7, 5]`). `o.both` [true] traces backward too; arrowheads mark the direction. |
 | `P.contour(f, levels, o)` | Level curves by marching squares. `levels` is a list or a count; `o.colors` cycles per level. Returns `{ levels, min, max }`. |
 | `P.heat(f, o)` | `f(x, y)` as color under the axes. `o.map`: "diverging" (default, symmetric around 0) or "sequential"; `o.range`; `o.res` [3 px]. |
+| `P.series(data, o)` | Measured data: a line through `[x, y]` pairs. `o.dots`, `fill` (soft area down to `o.to`, default 0), `smooth`, `label` (at the last point), `color`, `width`, `dash`. |
+| `P.band(xs, lo, hi, o)` | A shaded band between `lo` and `hi` (arrays the length of `xs`, or functions of x): confidence intervals, ranges, envelopes. `o.edges` outlines it. |
+| `P.errorbars(list, o)` | `[x, y, err]` or `[x, y, below, above]`: a dot with capped whiskers. `o.cap` [4 px]. |
+| `P.histogram(samples, o)` | Bins raw samples (`o.bins` [20], `o.range`) or takes `{ edges, counts }`. `o.density` scales the area to 1 so a pdf from `P.fn` lays over it. |
+| `P.crosshair(x, curves, o)` | A hover readout at data x: a guide line, a dot on each curve, and value tags that keep clear of each other. `curves: [{ f } or { data }, color, label, format]`; `o.xFormat`, `o.xLabel: false`. Returns the hits. |
+| `P.interp(data, x)` | y on `[x, y]` pairs by straight lines between them; `NaN` outside the data. |
 
 ## Num
 
@@ -186,6 +192,35 @@ Drag the point around the circle. The graph traces where its height goes.
       P.polyline(s.log.map(r => [r[0], r[1]]), { color: "green" });
       P.polyline(s.log.map(r => [r[0], r[2]]), { color: "purple" });
       P.legend([{ label: "in the spring", color: "green" }, { label: "in the motion", color: "purple" }], { at: "top-right" });
+    },
+  });
+}
+</script>
+```
+
+### Measured data with a hover readout
+
+Readers compare curves by pointing at them. Keep the pointer's x in the state and draw the readout where it is:
+
+```html
+<p>Point anywhere on the chart to read both runs at that moment:</p>
+<figure class="demo" id="runs" aria-label="Two noisy temperature runs with a shaded uncertainty band; pointing shows both values at that time."></figure>
+<script>
+{
+  let P;
+  const t = Num.linspace(0, 60, 61);
+  const a = t.map(x => [x, 20 + 15 * (1 - Math.exp(-x / 12))]);
+  const b = t.map(x => [x, 20 + 11 * (1 - Math.exp(-x / 20))]);
+  demo("runs", {
+    aspect: 1.6,
+    state: () => ({ hx: null }),
+    hover(p, s) { const hx = p && P ? P.inv(p)[0] : null; if (hx !== s.hx) { s.hx = hx; return true; } return false; },
+    draw(g, s) {
+      P = g.graph({ x: [0, 60], y: [15, 40], axes: "frame", xLabel: "Time (s)", yLabel: "Temperature (°C)" });
+      P.band(t, x => 20 + 15 * (1 - Math.exp(-x / 12)) - 1.5, x => 20 + 15 * (1 - Math.exp(-x / 12)) + 1.5, { color: "red" });
+      P.series(a, { color: "red", label: "copper" });
+      P.series(b, { color: "blue", label: "steel" });
+      P.crosshair(s.hx, [{ data: a, color: "red", format: v => v.toFixed(1) + " °C" }, { data: b, color: "blue", format: v => v.toFixed(1) + " °C" }], { xFormat: x => x.toFixed(0) + " s" });
     },
   });
 }
