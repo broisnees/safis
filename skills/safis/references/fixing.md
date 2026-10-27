@@ -15,6 +15,12 @@ The loop is in SKILL.md: reproduce, find the cause and its layer, fix the cause,
 | `loads https://...` | A CDN script, web font, or remote image | Inline it or drop it; pages must work offline |
 | `template placeholders are still on the page` | A `{{...}}` left from the template | Replace it, or delete the element |
 | `the <figure> has no aria-label` | Missing description | Add `aria-label` saying what the figure shows |
+| `<span class="scrub" ...> isn't tied to any figure` | No figure after it on the page, or a `data-figure` id that doesn't exist | Put the lead-in before its figure, or set `data-figure` to the right id |
+| `a .scrub names control "x", which isn't a number control` | The key is a toggle or a choice, or misspelled | Scrubs drive sliders, steppers, and knobs; use a `.set` link for toggles and choices |
+| `citation #ref-x has no matching .references item` | A cite whose reference was renamed or never written | Add the reference to the `.references` list with that id, or remove the cite |
+| `figure reference #x names no figure` | A `.figref` to a renamed figure | Point it at the figure's current id |
+| `[tex] ...` in the console, red source in the text | Unsupported command or unbalanced braces | Check [math.md](math.md) for the supported commands; put spaces around `&` in environments |
+| `preset "X": figure has no control "k"` | A preset sets a key that doesn't exist | Fix the key, or add the control (it can be `hidden: true`) |
 
 ## Pictures that look wrong
 
@@ -24,6 +30,9 @@ The loop is in SKILL.md: reproduce, find the cause and its layer, fix the cause,
 | Labels collide with each other or cover the subject | Too many labels on one side, or anchors bunched together | Label fewer things; use `callouts` with `split` to send labels left and right; move anchors to distinct spots; put names in the prose instead |
 | 3D object small in the frame, or a band of empty space | Camera fitted to something large but unimportant (a ghost shell, a ground plane) | Set `target` to the subject's center and `distance` or `zoom`; leave context out of the fit |
 | 3D object jumps in size while turning | Camera refits every frame (`fit: "always"`) | Use the default one-time fit, or a fixed `distance` |
+| 3D model cut off at the top or bottom of the canvas at some views or toggles | A fixed `distance` chosen for one state (small atoms, one layer) and kept when the model grows | Compute `distance` from the bounding radius of what's visible now, or fit once from the largest state with `fitFrom`; check the sheet at every toggle |
+| A label jumps between the left and right margins while the view turns | Its anchor crosses the middle of the canvas | The runtime keeps a label's side until its anchor is well past the middle; if it still flips, give the item a fixed `side` |
+| Packed spheres look like flat discs | No depth cue between touching parts | Ambient occlusion is on by default (`scene.ao`); raise it for crowded scenes, or ghost the context |
 | A cut-open 3D part shows hatching across faces that aren't cut | An interpenetrating mesh: two closed meshes overlap, so the inside of one shows through the other | Model parts that touch as separate, non-overlapping solids, or merge them into one mesh |
 | Hard-to-read 3D shape (a "brick", a "balloon") | Primitive used as-is | Shape it: bevels, sweeps along curves, lathe profiles, extruded real outlines; or ghost it (`opacity`) so it reads as context |
 | Thin outlines vanish or flicker | Canvas resized or scaled by hand | Always draw 3D through `g.render3d`, which supersamples and copies 1:1 |

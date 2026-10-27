@@ -97,6 +97,9 @@ The house style: nearly everything `porcelain` or a natural material, and only t
 | `scene.light` | `"camera"` (default: a studio light that follows the view, so every side looks lit), or a world direction like `[1, 0.2, 0]` (the Sun). |
 | `scene.lighting` | `"soft"` (default porcelain shading) or `"sun"` (hard day/night terminator, for planets and phases). |
 | `scene.ink` | Outline weight multiplier; `0` turns outlines off. |
+| `scene.ao` | Ambient occlusion strength, default `0.5`: surfaces crowded by nearer ones (the crease between packed atoms, the inside of a socket) darken a little, so dense models read as solid shapes. `false` turns it off; up to `1` for very crowded scenes. |
+
+Quality is automatic: edges are supersampled 2x while the view is still, and dense screens drop to 1x while the reader turns or drags the view or an animation runs, then redraw sharp when it stops.
 
 Section cuts work best on closed meshes that don't overlap each other. For an "x-ray" view, give the outer parts `opacity: 0.3` and keep the inner parts solid.
 
@@ -133,6 +136,20 @@ demo("parts", {
 ```
 
 `view.project(p)` gives `[px, py, distance]` in the figure's pixels; `view.pick(p, { ghosts: true })` also hits see-through parts. Labels drawn with `g.callouts` stay readable while the model turns.
+
+## Science and math builders
+
+For plots and fields in 3D. Full signatures and examples are in [simulations.md](simulations.md#3d-builders-for-math-and-science).
+
+| call | builds |
+|---|---|
+| `E3.mesh.surface(f, { x, z, n, nz })` | A height field y = f(x, z) (the engine is y-up), with holes where `f` is not finite |
+| `E3.mesh.surfaceBands(f, { ..., bands })` | The same surface cut into color bands; the outlines between bands are contour lines |
+| `E3.mesh.parametric((u, v) => [x, y, z], { u, v, nu, nv, wrapU, wrapV })` | Spheres, tori, saddles, Möbius strips |
+| `E3.mesh.glyphs(points, vectors, { scale })` | A 3D vector field as arrows, in one mesh |
+| `E3.mesh.polyline(points, r)` | A trajectory or field line as a wire |
+| `E3.axes3(scene, { x, y, z, ticks, grid })` | Graphite axes, ticks and a floor grid; returns label anchors for `view.project` |
+| `E3.ramp(t, stops)` | A color between palette stops (call it in `draw` so it follows dark mode) |
 
 ## Molecules
 

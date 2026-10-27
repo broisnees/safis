@@ -63,4 +63,4 @@ Use it to borrow techniques. Don't reuse their text, models, or designs.
 | Hero, build-up, hide parts | One scene reused across figures; `visible`, positions driven by a slider |
 | Scale | `g.dimension`, a real-size reference object |
 
-Where this skill deliberately differs: the Porcelain theme (paper white, brass accent, serif italic accents, numbered sections, key hints in the margin) is its own look, and controls carry small labels and keyboard support, because not every reader can drag.
+Where this skill deliberately differs: the Porcelain theme (a monochrome page, serif text, numbered sections, figures on the page with controls beneath, color only for the subjects) is its own look, and controls carry small labels and keyboard support, because not every reader can drag.
