@@ -215,6 +215,18 @@ export let E3: any;
 export let Num: any;
 /** Simulators: particles, rigid bodies, waves, grids, N-body, random walks, tiny neural nets (set in the browser). Reference: simulations.md. */
 export let Sim: any;
+/** Maps: projections, world land and borders, great circles, distances (set in the browser). Reference: maps.md. */
+export let Geo: any;
+/** Optics: 2D ray tracing through mirrors, lenses, prisms, drops, and eyes (set in the browser). Reference: optics.md. */
+export let Optics: any;
+/** Sound: Web Audio tones, harmonics, plucked strings, spectra (set in the browser). Reference: sound.md. */
+export let Sound: any;
+/** Images: pixel grids, convolution, sampling, color, dithering, DCT (set in the browser). Reference: images.md. */
+export let Img: any;
+/** Effects: WebGL fire, smoke, water, caustics, and glow drawn inside figures (set in the browser). Reference: effects.md. */
+export let Fx: any;
+/** Isometric technical illustration: solid parts with four-tone shading, painted back to front, exportable as SVG (set in the browser). Reference: iso.md. */
+export let Iso: any;
 export let SafisTeX: { toMathML(src: string, o?: { display?: boolean }): string; typeset(root?: ParentNode): number } | undefined;
 /** Live palette colors by name (set in the browser). */
 export let palette: Record<string, string>;

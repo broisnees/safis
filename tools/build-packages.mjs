@@ -45,7 +45,7 @@ const browser = typeof window !== "undefined" && typeof document !== "undefined"
 function sources() {
 ${scripts.join("\n;\n")}
 }
-export let E3, Num, Sim, SafisTeX, palette;
+export let E3, Num, Sim, SafisTeX, Geo, Optics, Sound, Img, Fx, Iso, palette;
 let api = null;
 function start() {
   if (api) return api;
@@ -56,7 +56,7 @@ function start() {
     sources.call(window);
   }
   api = window.Safis;
-  ({ E3, Num, Sim, SafisTeX, palette } = window);
+  ({ E3, Num, Sim, SafisTeX, Geo, Optics, Sound, Img, Fx, Iso, palette } = window);
   return api;
 }
 if (browser) start();
