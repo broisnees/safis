@@ -1,8 +1,10 @@
 
 /* E3: a small WebGL2 engine for explainer figures.
-   Surfaces are shaded like matte porcelain and outlined in ink, the way a
-   technical illustration is drawn. It does section cuts with hatched caps,
-   see-through parts, a soft ground shadow, and CPU picking.
+   Surfaces are drawn the way a technical illustration is: porcelain diagram shading
+   or physically based materials (metals that reflect a studio, brushed and heat-tinted
+   steel, refracting glass, glowing hot parts), ink outlines, soft shadows, section cuts
+   with hatching, see-through parts, ambient occlusion, GPU particles, a ray-marched
+   rocket plume, bloom, and adaptive quality.
    Reference: references/engine3d.md in the skill. */
 (() => {
   "use strict";
@@ -650,7 +652,58 @@
     merge: mergeMeshes,
   };
 
+
+  // ---------- color ----------
+  // Colors are 0..1 display (sRGB) values unless a name says linear. Palette values arrive
+  // as #rgb, #rrggbb, or rgb() once a host's CSS minifier has had them.
+  const clamp01 = x => Math.max(0, Math.min(1, x));
+  function parseColor(v) {
+    const s = String(v ?? "").trim();
+    let m = /^#([0-9a-f]{3})$/i.exec(s);
+    if (m) return [...m[1]].map(h => parseInt(h + h, 16) / 255);
+    m = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(s);
+    if (m) { const n = parseInt(m[1], 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; }
+    m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(s);
+    if (m) return [+m[1] / 255, +m[2] / 255, +m[3] / 255];
+    return null;
+  }
+  const hexRgb = hex => parseColor(hex) ?? [0.5, 0.5, 0.5];
+  const mixRgb = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const toLinear = c => c.map(v => Math.max(0, v) ** 2.2);
+  const toHex = c => "#" + c.map(v => Math.round(clamp01(v) * 255).toString(16).padStart(2, "0")).join("");
+
+  // Color of a black body at T kelvin, as linear RGB with its brightest channel at 1
+  // (Tanner Helland's fit to the Planckian locus). The shaders carry the same formula.
+  function blackbody(T) {
+    const t = Math.min(40000, Math.max(500, T)) / 100;
+    const r = t <= 66 ? 255 : 329.698727446 * (t - 60) ** -0.1332047592;
+    const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * (t - 60) ** -0.0755148492;
+    const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+    return [r, g, b].map(v => clamp01(v / 255) ** 2.2);
+  }
+  // How brightly a surface at T kelvin glows, in the engine's linear units: nothing below
+  // about 720 K (450 °C), a dull red by 1000 K, bright orange by 1500 K, near white past 2500 K.
+  const glowOf = T => { const k = Math.max(T - 720, 0) / 700; return k * k * k * 2.5; };
+  // Temper colors: the oxide film on hot steel goes straw, brown, purple, blue, then grey.
+  // T in kelvin; shift moves the ramp up for alloys that resist it (inconel: 150).
+  // Returns { color: [r, g, b] display, amount: 0..1 }.
+  function heatTint(T, shift = 0) {
+    const c = T - shift - 273.15, sm = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+    let col = mixRgb([0.93, 0.86, 0.62], [0.85, 0.66, 0.32], sm(190, 240, c));
+    col = mixRgb(col, [0.62, 0.38, 0.2], sm(240, 260, c));
+    col = mixRgb(col, [0.45, 0.22, 0.42], sm(260, 278, c));
+    col = mixRgb(col, [0.15, 0.2, 0.55], sm(278, 295, c));
+    col = mixRgb(col, [0.3, 0.5, 0.78], sm(295, 320, c));
+    col = mixRgb(col, [0.52, 0.55, 0.58], sm(320, 380, c));
+    col = mixRgb(col, [0.36, 0.35, 0.34], sm(380, 600, c));
+    return { color: col, amount: sm(180, 230, c) };
+  }
+
   // ---------- materials ----------
+  // Materials without `metal` or `roughness` keep the original porcelain shading: soft wrap
+  // light, ink outlines, the house diagram look. The rest are physically based: GGX
+  // specular, Fresnel, metalness and roughness, lit by the studio environment. f0 is the
+  // measured reflectance of the metal (linear RGB).
   const MATERIALS = {
     porcelain: { color: "#f1efe9" },
     paper: { color: "#f7f5ef" },
@@ -664,36 +717,152 @@
     nerve: { color: "#ecd067" },
     artery: { color: "#d8645c" },
     vein: { color: "#7896c8" },
-    brass: { color: "#d1a650", metal: true },
-    gold: { color: "#e0b94f", metal: true },
-    copper: { color: "#cf8a5c", metal: true },
-    steel: { color: "#bfc3ca", metal: true },
     graphite: { color: "#4a4a50" },
-    glass: { color: "#dfe8ee", opacity: 0.28 },
+    steel: { color: "#bfc3ca", metal: 1, roughness: 0.3, f0: [0.56, 0.57, 0.58] },
+    brushed: { color: "#c4c7cc", metal: 1, roughness: 0.3, f0: [0.6, 0.6, 0.6], anisotropy: 0.75, brush: "turned" },
+    aluminum: { color: "#d4d7db", metal: 1, roughness: 0.36, f0: [0.91, 0.92, 0.92] },
+    titanium: { color: "#a9a49c", metal: 1, roughness: 0.38, f0: [0.54, 0.5, 0.45], heatShift: 60 },
+    chrome: { color: "#d8dadc", metal: 1, roughness: 0.08, f0: [0.55, 0.56, 0.55] },
+    copper: { color: "#cf8a5c", metal: 1, roughness: 0.26, f0: [0.95, 0.64, 0.54] },
+    brass: { color: "#d1a650", metal: 1, roughness: 0.24, f0: [0.91, 0.78, 0.42] },
+    gold: { color: "#e0b94f", metal: 1, roughness: 0.18, f0: [1.0, 0.77, 0.34] },
+    inconel: { color: "#b8b3aa", metal: 1, roughness: 0.4, f0: [0.62, 0.58, 0.52], heatShift: 150 },
+    ceramic: { color: "#ece8df", metal: 0, roughness: 0.4 },
+    plastic: { color: "#e9e7e2", metal: 0, roughness: 0.5 },
+    concrete: { color: "#bdb8ae", metal: 0, roughness: 0.92 },
+    carbon: { color: "#2b2c30", metal: 0, roughness: 0.32, clearcoat: 1, weave: true },
+    rubber: { color: "#2c2c2e", metal: 0, roughness: 0.9 },
+    paint: { color: "#b8322a", metal: 0, roughness: 0.45, clearcoat: 1 },
+    glass: { color: "#eef4f4", glass: true, ior: 1.5, roughness: 0.03 },
     water: { color: "#a8cbe6", opacity: 0.45 },
+    ghost: { color: "#f1efe9", opacity: 0.3 },
+    hot: { color: "#3b3634", metal: 0, roughness: 0.6, temperature: 1400 },
   };
   const ACCENTS = ["red", "orange", "green", "blue", "purple"];
 
-  const hexRgb = hex => {
-    const h = String(hex).replace("#", "");
-    const n = parseInt(h.length === 3 ? h.split("").map(c => c + c).join("") : h, 16);
-    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-  };
-  const mixRgb = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  // A display color for a material color: an accent name, a material name, #hex, rgb(), or a
+  // palette name. Accents on diagram materials are the pale tints of the page's subject
+  // colors; on physical materials (paint) they are the subject colors themselves.
+  function colorOf(c, physical) {
+    const pal = (typeof window !== "undefined" && window.palette) || {};
+    if (ACCENTS.includes(c)) { const p = hexRgb(pal[c] || "#888888"); return physical ? p : mixRgb(p, [1, 1, 1], 0.42); }
+    if (MATERIALS[c]) return hexRgb(MATERIALS[c].color);
+    return parseColor(c) ?? (pal[c] ? hexRgb(pal[c]) : hexRgb(MATERIALS.porcelain.color));
+  }
 
+  // Temperature: a number (kelvin) or a field along a local axis,
+  // { axis: [0, 1, 0], stops: [[s, T], ...] } with s the distance along the axis (up to 4 stops).
+  function tempField(t) {
+    if (t == null || t === false) return null;
+    if (typeof t === "number") return { axis: [0, 1, 0], stops: [[0, t]] };
+    const stops = (Array.isArray(t) ? t : t.stops || []).slice(0, 4).map(s => [+s[0], +s[1]]).sort((a, b) => a[0] - b[0]);
+    return stops.length ? { axis: v3.norm(t.axis || [0, 1, 0]), stops } : null;
+  }
+  const tempAt = (field, s) => {
+    const S = field.stops;
+    if (S.length === 1 || s <= S[0][0]) return S[0][1];
+    for (let i = 1; i < S.length; i++) if (s <= S[i][0]) return S[i - 1][1] + (S[i][1] - S[i - 1][1]) * (s - S[i - 1][0]) / (S[i][0] - S[i - 1][0] || 1);
+    return S[S.length - 1][1];
+  };
+
+  // Everything the renderer needs to know about how a node looks.
   function resolveMaterial(node) {
-    let m = node.material;
-    if (typeof m === "string") m = MATERIALS[m] ?? (ACCENTS.includes(m) ? { color: m } : { color: m });
-    m = { ...MATERIALS.porcelain, ...(m || {}) };
-    let color = node.color ?? m.color;
-    let rgb;
-    const pal = window.palette || {};
-    if (ACCENTS.includes(color)) rgb = mixRgb(hexRgb(pal[color] || "#888888"), [1, 1, 1], 0.42);
-    else if (MATERIALS[color]) rgb = hexRgb(MATERIALS[color].color);
-    else if (/^#/.test(color)) rgb = hexRgb(color);
-    else if (pal[color]) rgb = hexRgb(pal[color]);
-    else rgb = hexRgb(MATERIALS.porcelain.color);
-    return { rgb, metal: !!m.metal, opacity: node.opacity < 1 ? node.opacity : m.opacity ?? 1 };
+    let m = node.material, name = null;
+    if (typeof m === "string") { name = m; m = MATERIALS[m] ?? { color: m }; }
+    else if (m && m.base) m = { ...(MATERIALS[m.base] || {}), ...m };
+    m = { ...(m || {}) };
+    if (m.color == null) m.color = MATERIALS.porcelain.color;
+    const temp = tempField(node.temperature ?? m.temperature);
+    const physical = (m.metal != null && m.metal !== false) || m.roughness != null || !!m.glass || m.emissive != null || !!temp;
+    const rgb = colorOf(node.color ?? m.color, physical);
+    const metal = m.metal === true ? 1 : clamp01(+m.metal || 0);
+    const f0 = metal ? (node.color == null && m.f0 ? m.f0 : toLinear(rgb)) : [0.04, 0.04, 0.04];
+    let emissive = [0, 0, 0];
+    if (m.emissive != null && m.emissive !== false) {
+      const k = m.emissiveIntensity ?? 2;
+      emissive = typeof m.emissive === "number" ? toLinear(rgb).map(v => v * m.emissive) : toLinear(Array.isArray(m.emissive) ? m.emissive : colorOf(m.emissive, true)).map(v => v * k);
+    }
+    const opacity = node.opacity < 1 ? node.opacity : m.opacity ?? 1;
+    const brush = m.brush === "linear" ? 1 : 0;
+    return {
+      name, rgb, physical, metal, f0, emissive, temp, opacity,
+      kind: opacity < 0.999 ? "ghost" : m.glass ? "glass" : "opaque",
+      roughness: clamp01(m.roughness ?? (metal ? 0.3 : 0.5)),
+      anisotropy: clamp01(m.anisotropy ?? 0),
+      brush, brushAxis: v3.norm(m.brushAxis || [0, 1, 0]),
+      clearcoat: clamp01(m.clearcoat ?? 0),
+      weave: !!m.weave,
+      heatShift: metal && temp ? (m.heatShift ?? 0) : null,
+      ior: m.ior ?? 1.5, dispersion: m.dispersion ?? 0.012, thickness: m.thickness ?? null,
+      glow: !!temp || emissive.some(v => v > 0),
+    };
+  }
+
+  // ---------- looks ----------
+  // One word picks the whole light rig: the environment the metals reflect, the strength of
+  // the camera-locked key, fill, and rim lights, shadows, outline weight, and bloom.
+  //   studio   soft boxes on a neutral sweep, the default
+  //   diagram  flatter and lighter, for teaching drawings with only a few real materials
+  //   night    dark surround, strong rim light, glowing parts carry the picture
+  //   outdoor  sky dome and a warm sun, harder shadows
+  const LOOKS = {
+    studio: { env: 0, key: 2.6, fill: 0.5, rim: 1.4, diffuse: 1, specular: 1, ink: 1, parts: 0.5, ground: 0.5, soft: 1, bloom: 0.9, exposure: 1, keyColor: [1, 0.97, 0.93], fillColor: [0.9, 0.94, 1] },
+    diagram: { env: 0, key: 2.2, fill: 0.6, rim: 0.7, diffuse: 1.15, specular: 0.85, ink: 1, parts: 0.3, ground: 0.36, soft: 1.5, bloom: 0.6, exposure: 1.05, keyColor: [1, 0.98, 0.95], fillColor: [0.92, 0.95, 1] },
+    night: { env: 1, key: 1.1, fill: 0.15, rim: 2.6, diffuse: 0.5, specular: 1, ink: 0.55, parts: 0.7, ground: 0.6, soft: 0.8, bloom: 1.4, exposure: 1, keyColor: [0.72, 0.8, 1], fillColor: [0.6, 0.7, 1] },
+    outdoor: { env: 2, key: 3.4, fill: 0.55, rim: 0.4, diffuse: 0.9, specular: 1, ink: 0.65, parts: 0.65, ground: 0.6, soft: 0.45, bloom: 0.7, exposure: 0.95, keyColor: [1, 0.94, 0.84], fillColor: [0.72, 0.84, 1] },
+  };
+  const lookOf = scene => LOOKS[scene.look] || LOOKS.studio;
+  // Whether the page is dark, from the palette's background.
+  function pageDark() {
+    const pal = (typeof window !== "undefined" && window.palette) || {};
+    const c = parseColor(pal.bg || pal.panel);
+    return !!c && 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] < 0.5;
+  }
+
+  // ---------- adaptive quality ----------
+  // Three tiers. While the view moves or an animation plays, the engine watches the time
+  // between frames and steps down a tier when frames run long, back up when they're quick.
+  // Still frames (and the page checker) always get the full shadow and volume quality;
+  // particle counts follow the tier so a paused figure doesn't change its smoke.
+  const TIERS = {
+    low: { rank: 0, ss: 1, scale: 0.75, msaa: 4, shadow: 1024, particles: 0.35, steps: 22, bloom: true },
+    medium: { rank: 1, ss: 2, scale: 1, msaa: 4, shadow: 1536, particles: 0.6, steps: 32, bloom: true },
+    high: { rank: 2, ss: 3, scale: 1, msaa: 4, shadow: 2048, particles: 1, steps: 48, bloom: true },
+  };
+  const TIER_NAMES = ["low", "medium", "high"];
+  const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null };
+  function startRank() {
+    try {
+      const coarse = matchMedia("(pointer: coarse)").matches;
+      const small = Math.min(screen.width, screen.height) < 600;
+      return coarse ? (small ? 0 : 1) : 2;
+    } catch { return 2; }
+  }
+  const checking = () => typeof document !== "undefined" && document.documentElement.classList.contains("safis-checking");
+  // Picks the tier for this frame. `moving` frames come in a stream (< 250 ms apart) or at
+  // ss 1, which the page asks for while the reader drags on a dense screen.
+  function qualityFor(scene, cam, ss, now) {
+    const force = cam.quality ?? scene.quality ?? Q.forced;
+    const dt = now - (scene._lastFrame ?? -1e9);
+    scene._lastFrame = now;
+    const moving = dt < 250 || ss < 2;
+    if (Q.rank == null) Q.rank = startRank();
+    if (checking()) return { ...TIERS.high, name: "high", ss, moving: false };
+    if (TIERS[force]) {
+      const t = TIERS[force];
+      return { ...t, name: force, ss: moving ? Math.min(ss, t.ss) : ss, scale: moving ? t.scale : 1, moving };
+    }
+    if (moving && dt < 250) {
+      Q.ema = Q.ema * 0.9 + Math.min(dt, 250) * 0.1;
+      if (Q.ema > 30 && Q.rank > 0 && now - Q.downAt > 800) { Q.rank--; Q.downAt = now; Q.ema = 20; Q.quickSince = now; }
+      else if (Q.ema < 18) {
+        if (!Q.quickSince) Q.quickSince = now;
+        if (Q.rank < 2 && now - Q.quickSince > 3000 && now - Q.downAt > 10000) { Q.rank++; Q.quickSince = now; }
+      } else Q.quickSince = 0;
+    }
+    const name = TIER_NAMES[Q.rank], t = TIERS[name];
+    if (!moving) return { ...t, name, ss, scale: 1, shadow: TIERS.high.shadow, steps: TIERS.high.steps, moving };
+    return { ...t, name, ss: Math.min(ss, t.ss), moving };
   }
 
   // ---------- scene graph ----------
@@ -711,6 +880,7 @@
       this.material = "porcelain";
       this.color = null;
       this.opacity = 1;
+      this.temperature = null;
       this.visible = true;
       this.cut = true;
       this.highlight = false;
@@ -739,40 +909,736 @@
       return null;
     }
     traverse(fn) { fn(this); for (const c of this.children) c.traverse(fn); }
+    scene() { let n = this; while (n.parent) n = n.parent; return n; }
   }
 
   class Scene extends Node {
     constructor(o = {}) {
       super(null, {});
       this.cutPlane = null;    // [nx, ny, nz, d]: removes points where n·p > d
-      this.shadow = true;      // soft contact shadow under the scene
+      this.shadow = true;      // soft shadows on the ground and between parts
       this.light = "camera";   // "camera" (studio light that follows the view) or a world direction
       this.lighting = "soft";  // "soft" porcelain shading, or "sun" for a hard day/night terminator
+      this.look = "studio";    // "studio", "diagram", "night", "outdoor"
       this.ink = 1;            // outline weight multiplier
+      this.time = 0;           // seconds, for particles and plumes
       this.set(o);
     }
   }
 
-  // ---------- WebGL renderer ----------
+  // ---------- random numbers shared with the shaders ----------
+  // A 32-bit integer hash; the GLSL in the particle shaders is the same function, so a
+  // particle's birth place, speed, and life come out the same on the CPU and the GPU.
+  const hashU = x => {
+    x = (x ^ (x >>> 16)) >>> 0; x = Math.imul(x, 0x7feb352d) >>> 0;
+    x = (x ^ (x >>> 15)) >>> 0; x = Math.imul(x, 0x846ca68b) >>> 0;
+    return (x ^ (x >>> 16)) >>> 0;
+  };
+  const rndU = (i, k, c, seed) => (hashU((Math.imul(i, 0x9E3779B1) ^ hashU((k + Math.imul(c, 0x632BE5AB) + seed) >>> 0)) >>> 0) >>> 8) / 16777216;
+  const hash3 = (x, y, z, s) => (hashU((Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791) ^ s) >>> 0) >>> 8) / 8388608 - 1;
+  // Value noise with its gradient, [n, dn/dx, dn/dy, dn/dz] (Quilez); curl noise is built from three of these.
+  function noised(x, y, z, s = 0) {
+    const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z), fx = x - ix, fy = y - iy, fz = z - iz;
+    const q = f => f * f * f * (f * (f * 6 - 15) + 10), dq = f => 30 * f * f * (f * (f - 2) + 1);
+    const ux = q(fx), uy = q(fy), uz = q(fz), dx = dq(fx), dy = dq(fy), dz = dq(fz);
+    const a = hash3(ix, iy, iz, s), b = hash3(ix + 1, iy, iz, s), c = hash3(ix, iy + 1, iz, s), d = hash3(ix + 1, iy + 1, iz, s);
+    const e = hash3(ix, iy, iz + 1, s), f = hash3(ix + 1, iy, iz + 1, s), g = hash3(ix, iy + 1, iz + 1, s), h = hash3(ix + 1, iy + 1, iz + 1, s);
+    const k1 = b - a, k2 = c - a, k3 = e - a, k4 = a - b - c + d, k5 = a - c - e + g, k6 = a - b - e + f, k7 = -a + b + c - d + e - f - g + h;
+    return [a + k1 * ux + k2 * uy + k3 * uz + k4 * ux * uy + k5 * uy * uz + k6 * uz * ux + k7 * ux * uy * uz,
+      dx * (k1 + k4 * uy + k6 * uz + k7 * uy * uz), dy * (k2 + k5 * uz + k4 * ux + k7 * uz * ux), dz * (k3 + k6 * ux + k5 * uy + k7 * ux * uy)];
+  }
+  function curl(x, y, z) {
+    const a = noised(x, y, z, 0), b = noised(x + 31.4, y + 17.2, z + 5.9, 0), c = noised(x - 11.3, y + 47.1, z + 23.7, 0);
+    return [c[2] - b[3], a[3] - c[1], b[1] - a[2]];
+  }
+
+  // ---------- potential flow ----------
+  // Two-dimensional ideal flow in the xy plane (extruded along z): uniform stream past a
+  // cylinder, and past a Joukowski airfoil with the circulation that makes the flow leave
+  // the trailing edge smoothly (the Kutta condition). The particle shaders carry the same
+  // formulas, so tracers follow exactly these streamlines.
+  const cx = {
+    mul: (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]],
+    div: (a, b) => { const d = b[0] * b[0] + b[1] * b[1] || 1e-30; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; },
+    sqrt: a => { const r = Math.hypot(a[0], a[1]), t = Math.atan2(a[1], a[0]) / 2, s = Math.sqrt(r); return [s * Math.cos(t), s * Math.sin(t)]; },
+  };
+  function flowSpec(o = {}) {
+    const type = o.type ?? (o.chord != null ? "airfoil" : o.radius != null ? "cylinder" : "uniform");
+    const U = o.U ?? o.speed ?? 1, center = o.center ?? [0, 0, 0];
+    if (type === "cylinder") {
+      const R = o.radius ?? 1;
+      return { type, kind: 1, U, center, R, gamma: o.circulation ?? 0, alpha: 0, S: 1, mu: [0, 0], a: R, mid: 0 };
+    }
+    if (type === "airfoil") {
+      const eps = (o.thickness ?? 0.12) / 1.299, del = 2 * (o.camber ?? 0.04), alpha = o.alpha ?? 0;
+      const mu = [-eps, del], a = Math.hypot(1 + eps, del), beta = Math.atan2(del, 1 + eps);
+      const gamma = o.kutta === false ? 0 : 4 * Math.PI * a * U * Math.sin(alpha + beta);
+      let x0 = Infinity, x1 = -Infinity;
+      for (let i = 0; i < 360; i++) {
+        const t = (i / 360) * Math.PI * 2, z = [mu[0] + a * Math.cos(t), mu[1] + a * Math.sin(t)];
+        const w = [z[0], z[1]], inv = cx.div([1, 0], w);
+        const X = w[0] + inv[0];
+        x0 = Math.min(x0, X); x1 = Math.max(x1, X);
+      }
+      const chord = o.chord ?? 1;
+      return { type, kind: 2, U, center, mu, a, gamma, alpha, S: chord / (x1 - x0), mid: (x0 + x1) / 2, beta, lift: 2 * Math.PI * Math.sin(alpha + beta) * (o.kutta === false ? 0 : 1), chord };
+    }
+    return { type: "uniform", kind: 0, U, center, alpha: 0, S: 1, mu: [0, 0], a: 0, gamma: 0, mid: 0 };
+  }
+  // Velocity at world point p, or null inside the body.
+  function flowAt(F, p) {
+    if (F.kind === 0) return [F.U, 0, 0];
+    const ca = Math.cos(F.alpha), sa = Math.sin(F.alpha);
+    let x = (p[0] - F.center[0]) / F.S, y = (p[1] - F.center[1]) / F.S;
+    let w;
+    if (F.kind === 1) {
+      const z = [x, y], r2 = x * x + y * y;
+      if (r2 < F.R * F.R / (F.S * F.S)) return null;
+      const R2 = F.R * F.R;
+      const t = cx.div([R2, 0], cx.mul(z, z));
+      const circ = cx.div([0, F.gamma / (2 * Math.PI)], z);
+      w = [F.U * (1 - t[0]) + circ[0], -F.U * t[1] + circ[1]];
+    } else {
+      // into the airfoil's own frame: chord along x, free stream at angle alpha
+      const xr = x * ca - y * sa, yr = x * sa + y * ca;
+      const z = [xr + F.mid, yr];
+      const s = cx.sqrt([z[0] * z[0] - z[1] * z[1] - 4, 2 * z[0] * z[1]]);
+      const z1 = [(z[0] + s[0]) / 2, (z[1] + s[1]) / 2], z2 = [(z[0] - s[0]) / 2, (z[1] - s[1]) / 2];
+      const d1 = Math.hypot(z1[0] - F.mu[0], z1[1] - F.mu[1]), d2 = Math.hypot(z2[0] - F.mu[0], z2[1] - F.mu[1]);
+      const zeta = d1 >= d2 ? z1 : z2, dm = Math.max(d1, d2);
+      if (dm < F.a * 1.002) return null;
+      const zm = [zeta[0] - F.mu[0], zeta[1] - F.mu[1]];
+      const e1 = [Math.cos(-F.alpha), Math.sin(-F.alpha)], e2 = [Math.cos(F.alpha), Math.sin(F.alpha)];
+      const t = cx.div(cx.mul([F.a * F.a, 0], e2), cx.mul(zm, zm));
+      const circ = cx.div([0, F.gamma / (2 * Math.PI)], zm);
+      const dWdzeta = [F.U * (e1[0] - t[0]) + circ[0], F.U * (e1[1] - t[1]) + circ[1]];
+      const dzdzeta = (() => { const iz = cx.div([1, 0], cx.mul(zeta, zeta)); return [1 - iz[0], -iz[1]]; })();
+      const dw = cx.div(dWdzeta, dzdzeta);
+      const u = dw[0], v = -dw[1];
+      return [u * ca + v * sa, -u * sa + v * ca, 0];
+    }
+    return [w[0], -w[1], 0];
+  }
+  const flow = {
+    spec: flowSpec,
+    // A flow you can sample: { velocity(p), outline(n), lift, spec }.
+    cylinder: (o = {}) => flowObject(flowSpec({ ...o, type: "cylinder" })),
+    airfoil: (o = {}) => flowObject(flowSpec({ ...o, type: "airfoil" })),
+    uniform: (o = {}) => flowObject(flowSpec({ ...o, type: "uniform" })),
+  };
+  function flowObject(F) {
+    return {
+      spec: F, lift: F.lift ?? 0, circulation: F.gamma,
+      velocity: p => flowAt(F, p),
+      // The body's outline in the xy plane, in world units around the flow's center, with
+      // the angle of attack applied: ready for E3.mesh.extrude (which extrudes along z).
+      outline(n = 96) {
+        const pts = [];
+        for (let i = 0; i < n; i++) {
+          const t = (i / n) * Math.PI * 2;
+          if (F.kind === 1) { pts.push([F.R * Math.cos(t), F.R * Math.sin(t)]); continue; }
+          if (F.kind !== 2) continue;
+          const z = [F.mu[0] + F.a * Math.cos(t), F.mu[1] + F.a * Math.sin(t)], inv = cx.div([1, 0], z);
+          const xr = (z[0] + inv[0] - F.mid) * F.S, yr = (z[1] + inv[1]) * F.S;
+          const ca = Math.cos(F.alpha), sa = Math.sin(F.alpha);
+          pts.push([xr * ca + yr * sa, -xr * sa + yr * ca]);
+        }
+        // Joukowski points crowd at the trailing edge; drop near-duplicates for clean triangulation.
+        return pts.filter((p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 1e-4 * (F.chord ?? 1));
+      },
+    };
+  }
+
+  // ---------- particles ----------
+  // A particle system lives in the scene like any node. Each of `count` slots is reborn
+  // every `life[1]` seconds at a fixed phase (golden-ratio spacing, so any prefix of the
+  // slots is spread evenly in time); where and how fast it's born comes from the hash of
+  // (seed, slot, generation). The state is stepped in fixed steps on a global time grid,
+  // so the picture at time t depends only on the seed and t: the page checker and
+  // screenshots see the same smoke every time. Set `time` (or scene.time) from the figure's state.
+  const PDEF = {
+    count: 2000, seed: 1, life: [2, 4], step: 1 / 30, prewarm: true, style: "smoke",
+    size: [0.2, 0.8], opacity: 0.6, fade: [0.12, 0.4], trail: 0.12, width: 0, intensity: 1, density: 1,
+    temperature: [1900, 900], color: null, colorBy: null, range: [0, 1], soft: null, measure: false,
+  };
+  const STYLE_ID = { smoke: 0, fire: 1, spark: 2, streak: 3, sphere: 4, dot: 5 };
+  class Particles extends Node {
+    constructor(o = {}) {
+      super(null, {});
+      this.isParticles = true;
+      this.pickable = false;
+      this.cut = false;
+      this.time = null;
+      Object.assign(this, PDEF, o);
+      this.emitter = { shape: "point", ...(o.emitter || {}) };
+      this.forces = o.forces || {};
+      this.colliders = o.colliders || [];
+      this._state = null;
+      this._n = null;
+      this.hits = [];
+    }
+    get lifeRange() { const L = this.life; return typeof L === "number" ? [L, L] : L; }
+    get period() { const P = this.lifeRange[1]; return Number.isFinite(P) ? P : 0; }
+    // Slot i's generation k and age at time t.
+    slot(i, t) {
+      const P = this.period;
+      if (!P) return [0, t];
+      const ph = ((i * 0.6180339887) % 1) * P, k = Math.floor((t - ph) / P);
+      return [k, t - (ph + k * P)];
+    }
+    lifeOf(i, k) { const [a, b] = this.lifeRange; return Number.isFinite(b) ? a + (b - a) * rndU(i, k, 1, this.seed) : Infinity; }
+    simTime(t) { return (t ?? 0) + (this.prewarm && this.period ? this.period : 0); }
+    // Where slot i is born in generation k: position and velocity in world space.
+    emit(i, k, M) {
+      const E = this.emitter, s = this.seed, r = c => rndU(i, k, c, s);
+      const dir = v3.norm(E.direction || [0, 1, 0]);
+      const tmp = Math.abs(dir[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+      const u = v3.norm(v3.cross(dir, tmp)), w = v3.cross(dir, u);
+      const R = E.radius ?? 0.5, pos0 = E.position || [0, 0, 0];
+      const lanes = E.rake | 0, lane = x => (lanes > 0 ? (Math.floor(x * lanes) + 0.5) / lanes : x);
+      let p = [0, 0, 0], n = dir, radial = null;
+      const shape = E.shape;
+      if (shape === "disk" || shape === "cone" || shape === "ring") {
+        const a = 2 * Math.PI * r(10), rr = shape === "ring" ? R + (E.thickness ?? 0) * (r(11) - 0.5) : R * Math.sqrt(r(11));
+        radial = v3.add(v3.scale(u, Math.cos(a)), v3.scale(w, Math.sin(a)));
+        p = v3.scale(radial, rr);
+        if (shape === "cone") n = v3.norm(v3.add(dir, v3.scale(radial, Math.tan(E.angle ?? 0.4) * (R > 0 ? rr / R : 1))));
+        if (shape === "ring" && E.along === "radial") n = radial;
+      } else if (shape === "sphere") {
+        const z = 2 * r(10) - 1, a = 2 * Math.PI * r(11), q = Math.sqrt(1 - z * z);
+        n = [q * Math.cos(a), z, q * Math.sin(a)];
+        p = v3.scale(n, E.surface ? R : R * Math.cbrt(r(12)));
+      } else if (shape === "box") {
+        const sz = E.size || [1, 1, 1];
+        p = [(r(10) - 0.5) * sz[0], (lane(r(11)) - 0.5) * sz[1], (r(12) - 0.5) * sz[2]];
+      } else if (shape === "line") {
+        const a = E.from || [-0.5, 0, 0], b = E.to || [0.5, 0, 0];
+        p = v3.sub(v3.lerp(a, b, lane(r(10))), pos0);
+      } else if (shape === "mesh" && this._samples) {
+        const S = this._samples, j = Math.min(S.length / 6 - 1, Math.floor(r(10) * S.length / 6));
+        p = [S[j * 6], S[j * 6 + 1], S[j * 6 + 2]].map((v, q) => v - pos0[q]);
+        n = [S[j * 6 + 3], S[j * 6 + 4], S[j * 6 + 5]];
+      }
+      p = v3.add(p, pos0);
+      let d = E.along === "normal" ? n : shape === "cone" ? n : dir;
+      const spread = E.spread ?? 0;
+      if (spread > 0) {
+        const ct = 1 - r(13) * (1 - Math.cos(spread)), st = Math.sqrt(Math.max(0, 1 - ct * ct)), a = 2 * Math.PI * r(14);
+        const du = v3.norm(v3.cross(d, Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), dw = v3.cross(d, du);
+        d = v3.add(v3.scale(d, ct), v3.add(v3.scale(du, st * Math.cos(a)), v3.scale(dw, st * Math.sin(a))));
+      }
+      const sp = E.speed ?? 1, speed = Array.isArray(sp) ? sp[0] + (sp[1] - sp[0]) * r(15) : sp;
+      let vel = v3.scale(d, speed);
+      if (E.thermal) {
+        const g = c => Math.sqrt(-2 * Math.log(Math.max(1e-7, r(c)))) * Math.cos(2 * Math.PI * r(c + 1));
+        vel = v3.add(vel, v3.scale([g(16), g(18), g(20)], E.thermal));
+      }
+      const pw = m4.apply(M, p);
+      const vw = m4.applyDir(M, vel);
+      return [pw, vw];
+    }
+    // Area-weighted surface samples for the mesh emitter (local coordinates), made once.
+    prepare() {
+      const E = this.emitter;
+      if (E.shape !== "mesh" || !E.mesh || this._samples) return;
+      const m = E.mesh, P = m.positions, I = m.indices, nT = I.length / 3, area = new Float64Array(nT);
+      let total = 0;
+      for (let t = 0; t < nT; t++) {
+        const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
+        const e1 = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]], e2 = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
+        total += v3.len(v3.cross(e1, e2)) / 2;
+        area[t] = total;
+      }
+      const N = 1024, S = new Float32Array(N * 6);
+      for (let j = 0; j < N; j++) {
+        const x = ((j + rndU(j, 0, 3, this.seed)) / N) * total;
+        let lo = 0, hi = nT - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (area[mid] < x) lo = mid + 1; else hi = mid; }
+        const a = I[lo * 3] * 3, b = I[lo * 3 + 1] * 3, c = I[lo * 3 + 2] * 3;
+        let s = rndU(j, 0, 4, this.seed), t = rndU(j, 0, 5, this.seed);
+        if (s + t > 1) { s = 1 - s; t = 1 - t; }
+        for (let q = 0; q < 3; q++) S[j * 6 + q] = P[a + q] + (P[b + q] - P[a + q]) * s + (P[c + q] - P[a + q]) * t;
+        const e1 = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]], e2 = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
+        const nn = v3.norm(v3.cross(e1, e2));
+        S.set(nn, j * 6 + 3);
+      }
+      this._samples = S;
+    }
+    // Packed force and collider parameters, shared by the CPU and GPU integrators.
+    params() {
+      const f = this.forces;
+      const g = f.gravity == null ? [0, 0, 0] : typeof f.gravity === "number" ? [0, f.gravity, 0] : f.gravity;
+      const tb = f.turbulence == null ? null : typeof f.turbulence === "number" ? { strength: f.turbulence } : f.turbulence;
+      const vx = f.vortex || null;
+      const planes = [], spheres = [];
+      this.colliders.forEach((c, idx) => {
+        if (c.plane) { const n = v3.norm(c.plane.slice(0, 3)), L = v3.len(c.plane.slice(0, 3)) || 1; planes.push({ n, d: c.plane[3] / L, e: c.bounce ?? 0.3, fr: c.friction ?? 0, u: c.velocity ?? 0, idx }); }
+        else if (c.sphere) spheres.push({ c: c.sphere.slice(0, 3), r: c.sphere[3], inside: c.inside ? -1 : 1, e: c.bounce ?? 0.3, fr: c.friction ?? 0, idx });
+      });
+      return {
+        g, drag: f.drag ?? 0, wind: f.wind || [0, 0, 0],
+        turb: tb ? [tb.strength ?? 1, 1 / (tb.scale ?? 1), tb.speed ?? 0.3] : [0, 1, 0],
+        vortex: vx ? { c: vx.center || [0, 0, 0], a: v3.norm(vx.axis || [0, 1, 0]), s: vx.strength ?? 1, core: vx.core ?? 0.2, pull: vx.pull ?? 0 } : null,
+        attractors: (f.attractors || []).slice(0, 4).map(a => ({ p: a.position, s: a.strength ?? 1, r: a.radius ?? 0.1 })),
+        planes: planes.slice(0, 8), spheres: spheres.slice(0, 4),
+        flow: this.flow ? flowSpec(this.flow) : null,
+        kill: this.kill || null,
+        buoyancy: f.buoyancy ?? 0,
+      };
+    }
+    // The CPU integrator: the same steps as the transform-feedback shader. Used when there's
+    // no WebGL (tests in Node), for small exact systems (`cpu: true`), and for `measure`.
+    cpuStep(state, n, t, h, M, F) {
+      const P = this.period;
+      const hits = this._hitAcc;
+      for (let i = 0; i < n; i++) {
+        const o = i * 8;
+        const [k, age] = this.slot(i, t);
+        const life = this.lifeOf(i, k);
+        let px = state[o], py = state[o + 1], pz = state[o + 2], vx = state[o + 4], vy = state[o + 5], vz = state[o + 6];
+        let dtl = h;
+        if (Math.floor(state[o + 3]) !== k) {
+          if (age > h + 1e-9 && P) { state[o + 3] = k + 0.5; continue; } // born before this run began; it dies unseen
+          const [pw, vw] = this.emit(i, k, M);
+          [px, py, pz] = pw; [vx, vy, vz] = vw;
+          state[o + 3] = k;
+          dtl = Math.max(0, Math.min(age, h));
+        }
+        if (state[o + 3] !== k || age > life) continue;
+        if (F.flow) {
+          const v1 = flowAt(F.flow, [px, py, pz]);
+          if (!v1) { state[o + 3] = k + 0.5; continue; }
+          const v2 = flowAt(F.flow, [px + v1[0] * dtl * 0.5, py + v1[1] * dtl * 0.5, pz]) || v1;
+          vx = v2[0]; vy = v2[1]; vz = v2[2];
+          if (F.turb[0]) { const c = curl(px * F.turb[1], py * F.turb[1], pz * F.turb[1] + t * F.turb[2]); vx += c[0] * F.turb[0]; vy += c[1] * F.turb[0]; vz += c[2] * F.turb[0]; }
+          px += vx * dtl; py += vy * dtl; pz += vz * dtl;
+        } else {
+          let ax = F.g[0] + F.drag * (F.wind[0] - vx), ay = F.g[1] + F.drag * (F.wind[1] - vy) + F.buoyancy * Math.max(0, 1 - age / life), az = F.g[2] + F.drag * (F.wind[2] - vz);
+          if (F.turb[0]) { const c = curl(px * F.turb[1], py * F.turb[1], pz * F.turb[1] + t * F.turb[2]); ax += c[0] * F.turb[0]; ay += c[1] * F.turb[0]; az += c[2] * F.turb[0]; }
+          if (F.vortex) {
+            const V = F.vortex, r = [px - V.c[0], py - V.c[1], pz - V.c[2]], ra = v3.dot(r, V.a), rp = v3.sub(r, v3.scale(V.a, ra));
+            const tng = v3.cross(V.a, rp), q = 1 / (v3.dot(rp, rp) + V.core * V.core);
+            ax += V.s * tng[0] * q - V.pull * rp[0]; ay += V.s * tng[1] * q - V.pull * rp[1]; az += V.s * tng[2] * q - V.pull * rp[2];
+          }
+          for (const A of F.attractors) {
+            const d = [A.p[0] - px, A.p[1] - py, A.p[2] - pz], q = A.s / Math.pow(v3.dot(d, d) + A.r * A.r, 1.5);
+            ax += d[0] * q; ay += d[1] * q; az += d[2] * q;
+          }
+          vx += ax * dtl; vy += ay * dtl; vz += az * dtl;
+          px += vx * dtl; py += vy * dtl; pz += vz * dtl;
+        }
+        for (const C of F.planes) {
+          const s = C.n[0] * px + C.n[1] * py + C.n[2] * pz - C.d;
+          if (s >= 0) continue;
+          px -= C.n[0] * s; py -= C.n[1] * s; pz -= C.n[2] * s;
+          const vn = C.n[0] * vx + C.n[1] * vy + C.n[2] * vz - C.u;
+          if (vn < 0) {
+            const j = -(1 + C.e) * vn;
+            vx += C.n[0] * j; vy += C.n[1] * j; vz += C.n[2] * j;
+            if (C.fr) { const vn2 = C.n[0] * vx + C.n[1] * vy + C.n[2] * vz; vx -= (vx - C.n[0] * vn2) * C.fr; vy -= (vy - C.n[1] * vn2) * C.fr; vz -= (vz - C.n[2] * vn2) * C.fr; }
+            if (hits) hits[C.idx] += j;
+          }
+        }
+        for (const C of F.spheres) {
+          const d = [px - C.c[0], py - C.c[1], pz - C.c[2]], L = v3.len(d) || 1e-9, s = (L - C.r) * C.inside;
+          if (s >= 0) continue;
+          const nn = v3.scale(d, C.inside / L);
+          px -= nn[0] * s; py -= nn[1] * s; pz -= nn[2] * s;
+          const vn = v3.dot(nn, [vx, vy, vz]);
+          if (vn < 0) { const j = -(1 + C.e) * vn; vx += nn[0] * j; vy += nn[1] * j; vz += nn[2] * j; if (hits) hits[C.idx] += j; }
+        }
+        if (F.kill && (px < F.kill.min[0] || py < F.kill.min[1] || pz < F.kill.min[2] || px > F.kill.max[0] || py > F.kill.max[1] || pz > F.kill.max[2])) state[o + 3] = k + 0.5;
+        state[o] = px; state[o + 1] = py; state[o + 2] = pz; state[o + 4] = vx; state[o + 5] = vy; state[o + 6] = vz;
+      }
+    }
+    // Brings the state to time t (seconds). Returns true if anything was simulated.
+    // stepFn(tEnd) runs one step on whatever integrator holds the state; reset() starts over.
+    advanceWith(t, n, reset, stepFn) {
+      const h = this.step, te = this.simTime(t), target = Math.floor(te / h + 1e-6), P = this.period;
+      const need = P ? Math.ceil(P / h) + 2 : 4000;
+      if (this._n == null || target < this._n || target - this._n > need || this._count !== n) {
+        this._n = P ? target - need : Math.max(0, target - need);
+        this._count = n;
+        reset();
+      }
+      while (this._n < target) { this._n++; stepFn(this._n * h); }
+      this._t = this._n * h;
+      return true;
+    }
+    // CPU simulation to time t; returns the state (8 floats per particle: x, y, z, generation, vx, vy, vz, 0).
+    simulate(t = this.time ?? 0, n = this.count) {
+      this.prepare();
+      const M = this.world(), F = this.params(), h = this.step;
+      if (!this._state || this._state.length !== this.count * 8) this._state = new Float32Array(this.count * 8);
+      const S = this._state;
+      const window_ = this.measureWindow ?? 0.5;
+      this.advanceWith(t, n, () => { for (let i = 0; i < this.count; i++) S[i * 8 + 3] = -1e6; this._hitLog = []; }, tEnd => {
+        this._hitAcc = this.measure ? new Float64Array(this.colliders.length) : null;
+        this.cpuStep(S, n, tEnd, h, M, F);
+        if (this._hitAcc) { this._hitLog.push(this._hitAcc); if (this._hitLog.length > Math.max(1, Math.round(window_ / h))) this._hitLog.shift(); }
+      });
+      if (this.measure && this._hitLog) {
+        // Momentum delivered to each collider per second, averaged over the last `measureWindow` seconds.
+        const L = this._hitLog, out = new Array(this.colliders.length).fill(0);
+        for (const a of L) a.forEach((v, j) => (out[j] += v));
+        this.hits = out.map(v => v / Math.max(1, L.length) / h);
+      }
+      return S;
+    }
+    // Live particles at the current state: [{ position, velocity, age, life }].
+    alive() {
+      const S = this._state, out = [];
+      if (!S) return out;
+      const tt = this._t ?? 0;
+      for (let i = 0; i < this._count; i++) {
+        const [k, age] = this.slot(i, tt), life = this.lifeOf(i, k);
+        if (S[i * 8 + 3] !== k || age > life) continue;
+        out.push({ position: [S[i * 8], S[i * 8 + 1], S[i * 8 + 2]], velocity: [S[i * 8 + 4], S[i * 8 + 5], S[i * 8 + 6]], age, life });
+      }
+      return out;
+    }
+  }
+
+  // ---------- plume ----------
+  // A rocket exhaust drawn as a ray-marched volume: hot core, Mach diamonds, turbulent
+  // mixing layer, all emitting by temperature. Its local frame has the nozzle exit at the
+  // origin and the flow running down -y. It also lights the scene around it.
+  const FUELS = { kerosene: 0, rp1: 0, methane: 1, hydrogen: 2, solid: 3 };
+  class Plume extends Node {
+    constructor(o = {}) {
+      super(null, {});
+      this.isPlume = true;
+      this.pickable = false;
+      this.cut = false;
+      this.time = null;
+      Object.assign(this, { radius: 1, length: 8, throttle: 1, temperature: 2500, fuel: "kerosene", cells: 1.5, spread: 0.05, turbulence: 1, intensity: 1, light: 1, speed: 1 }, o);
+    }
+    get lengthNow() { return this.length * (0.45 + 0.55 * clamp01(this.throttle)); }
+    // A point light in world space that stands in for the plume's glow on nearby surfaces.
+    glowLight() {
+      if (!this.light || this.throttle <= 0) return null;
+      const T = this.temperature * (0.7 + 0.3 * clamp01(this.throttle));
+      const at = this.toWorld([0, -this.lengthNow * 0.3, 0]);
+      const k = this.light * clamp01(this.throttle) * 2.2;
+      const sc = this.world(), s = Math.hypot(sc[0], sc[1], sc[2]);
+      return { position: at, color: blackbody(T * 0.75).map(v => v * k), range: this.lengthNow * s * 0.9 };
+    }
+  }
+
+  // ---------- shaders ----------
+  const G_COMMON = `
+precision highp float;
+precision highp int;
+const float PI = 3.141592653589793;
+vec3 toLin(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+vec3 toSrgb(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
+// Khronos PBR Neutral: base colors stay true up to about 0.8, highlights roll off to white.
+vec3 tonemap(vec3 c) {
+  float x = min(c.r, min(c.g, c.b));
+  float off = x < 0.08 ? x - 6.25 * x * x : 0.04;
+  c -= off;
+  float peak = max(c.r, max(c.g, c.b));
+  if (peak < 0.76) return c;
+  float np = 1.0 - 0.0576 / (peak - 0.52);
+  c *= np / peak;
+  float g = 1.0 - 1.0 / (0.15 * (peak - np) + 1.0);
+  return mix(c, vec3(np), g);
+}
+vec3 blackbody(float T) {
+  float t = clamp(T, 500.0, 40000.0) / 100.0;
+  float r = t <= 66.0 ? 255.0 : 329.698727446 * pow(t - 60.0, -0.1332047592);
+  float g = t <= 66.0 ? 99.4708025861 * log(t) - 161.1195681661 : 288.1221695283 * pow(t - 60.0, -0.0755148492);
+  float b = t >= 66.0 ? 255.0 : (t <= 19.0 ? 0.0 : 138.5177312231 * log(t - 10.0) - 305.0447927307);
+  return toLin(clamp(vec3(r, g, b) / 255.0, 0.0, 1.0));
+}
+float glowOf(float T) { float k = max(T - 720.0, 0.0) / 700.0; return k * k * k * 2.5; }
+uint hashu(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
+float hash3(ivec3 p, uint s) { return float(hashu(uint(p.x) * 73856093u ^ uint(p.y) * 19349663u ^ uint(p.z) * 83492791u ^ s) >> 8) / 8388608.0 - 1.0; }
+vec4 noised(vec3 x, uint s) {
+  vec3 i = floor(x), f = x - i;
+  ivec3 p = ivec3(i);
+  vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0), du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  float a = hash3(p, s), b = hash3(p + ivec3(1, 0, 0), s), c = hash3(p + ivec3(0, 1, 0), s), d = hash3(p + ivec3(1, 1, 0), s);
+  float e = hash3(p + ivec3(0, 0, 1), s), g = hash3(p + ivec3(1, 0, 1), s), h = hash3(p + ivec3(0, 1, 1), s), k = hash3(p + ivec3(1, 1, 1), s);
+  float k1 = b - a, k2 = c - a, k3 = e - a, k4 = a - b - c + d, k5 = a - c - e + h, k6 = a - b - e + g, k7 = -a + b + c - d + e - g - h + k;
+  return vec4(a + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x + k7 * u.x * u.y * u.z,
+    du * vec3(k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z, k2 + k5 * u.z + k4 * u.x + k7 * u.z * u.x, k3 + k6 * u.x + k5 * u.y + k7 * u.x * u.y));
+}
+float vnoise(vec3 x) {
+  vec3 i = floor(x), f = x - i;
+  ivec3 p = ivec3(i);
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash3(p, 7u), hash3(p + ivec3(1, 0, 0), 7u), u.x), mix(hash3(p + ivec3(0, 1, 0), 7u), hash3(p + ivec3(1, 1, 0), 7u), u.x), u.y),
+             mix(mix(hash3(p + ivec3(0, 0, 1), 7u), hash3(p + ivec3(1, 0, 1), 7u), u.x), mix(hash3(p + ivec3(0, 1, 1), 7u), hash3(p + ivec3(1, 1, 1), 7u), u.x), u.y), u.z);
+}
+float vnoise1(float x) { float i = floor(x), f = x - i; return mix(hash3(ivec3(int(i), 0, 0), 3u), hash3(ivec3(int(i) + 1, 0, 0), 3u), f * f * (3.0 - 2.0 * f)); }
+vec3 curl(vec3 p) {
+  vec4 a = noised(p, 0u), b = noised(p + vec3(31.4, 17.2, 5.9), 0u), c = noised(p + vec3(-11.3, 47.1, 23.7), 0u);
+  return vec3(c.z - b.w, a.w - c.y, b.y - a.z);
+}
+// Linear view distance from a depth-buffer value.
+uniform vec2 uNearFar; uniform float uOrtho;
+float linDepth(float d) {
+  if (uOrtho > 0.5) return uNearFar.x + d * (uNearFar.y - uNearFar.x);
+  float z = d * 2.0 - 1.0;
+  return 2.0 * uNearFar.x * uNearFar.y / (uNearFar.y + uNearFar.x - z * (uNearFar.y - uNearFar.x));
+}`;
+
+  // Studio environment lookups: a prefiltered radiance map (mip level = roughness) and an
+  // irradiance map, both lat-long, turned with the camera so the soft boxes stay put.
+  const G_ENV = `
+uniform sampler2D uEnvSpec; uniform sampler2D uEnvIrr; uniform mat3 uEnvRot; uniform vec2 uEnvInfo;
+vec2 envUv(vec3 d) { d = uEnvRot * d; return vec2(atan(d.x, -d.z) * (0.5 / PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) / PI); }
+vec3 envSpec(vec3 r, float rough) { return textureLod(uEnvSpec, envUv(r), rough * uEnvInfo.y).rgb * uEnvInfo.x; }
+vec3 envDiff(vec3 n) { return textureLod(uEnvIrr, envUv(n), 0.0).rgb * uEnvInfo.x; }`;
+
+  // Soft shadows from the key light: a blocker search sets the penumbra (contact-hardening),
+  // then 16 rotated Poisson taps of hardware 2x2 PCF. Glass casts a lighter shadow of its own.
+  const G_SHADOW = `
+uniform highp sampler2DShadow uShadowCmp; uniform highp sampler2D uShadowRaw; uniform highp sampler2DShadow uShadowGlass;
+uniform mat4 uShadowVP; uniform vec4 uShadowA; uniform vec4 uShadowB;
+const vec2 DISK[16] = vec2[16](
+  vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725), vec2(-0.094184101, -0.92938870), vec2(0.34495938, 0.29387760),
+  vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464), vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
+  vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420), vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19090188),
+  vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590), vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790));
+float shadowAt(vec3 wp, vec3 n) {
+  if (uShadowA.x < 0.5) return 1.0;
+  vec4 sp = uShadowVP * vec4(wp + n * uShadowA.z, 1.0);
+  vec3 p = sp.xyz / sp.w * 0.5 + 0.5;
+  if (p.x <= 0.0 || p.y <= 0.0 || p.x >= 1.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
+  float ang = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  float ca = cos(ang), sa = sin(ang);
+  mat2 rot = mat2(ca, sa, -sa, ca);
+  float z = p.z - uShadowA.y;
+  float blk = 0.0, cnt = 0.0;
+  float d0 = texture(uShadowRaw, p.xy).r;
+  if (d0 < z) { blk += d0; cnt += 1.0; }
+  for (int i = 0; i < 16; i += 2) {
+    float d = texture(uShadowRaw, p.xy + rot * DISK[i] * uShadowB.y).r;
+    if (d < z) { blk += d; cnt += 1.0; }
+  }
+  float vis = 1.0;
+  if (cnt > 0.0) {
+    float r = clamp((z - blk / cnt) * uShadowB.z, uShadowB.x, uShadowB.y);
+    float s = 0.0;
+    for (int i = 0; i < 16; i++) s += texture(uShadowCmp, vec3(p.xy + rot * DISK[i] * r, z));
+    vis = s / 16.0;
+  }
+  if (uShadowA.w > 0.0) {
+    float g = 0.0;
+    for (int i = 0; i < 8; i++) g += texture(uShadowGlass, vec3(p.xy + rot * DISK[i * 2 + 1] * uShadowB.x * 3.0, z));
+    vis *= 1.0 - uShadowA.w * (1.0 - g / 8.0);
+  }
+  return vis;
+}`;
+
   const VS = `#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 uniform mat4 uModel, uViewProj;
 uniform mat3 uNormalMat;
-out vec3 vWorld; out vec3 vNormal;
+out vec3 vWorld; out vec3 vNormal; out vec3 vLocal; out vec3 vLocalN;
 void main() {
   vec4 w = uModel * vec4(aPos, 1.0);
   vWorld = w.xyz;
   vNormal = uNormalMat * aNormal;
+  vLocal = aPos;
+  vLocalN = aNormal;
   gl_Position = uViewProj * w;
 }`;
 
-  const FS_MAIN = `#version 300 es
+  // Depth only, for the shadow maps; it honors the section cut so cut-away parts cast nothing.
+  const FS_DEPTH = `#version 300 es
 precision highp float;
-in vec3 vWorld; in vec3 vNormal;
-uniform vec3 uColor; uniform float uMetal; uniform vec3 uLight; uniform vec3 uEye;
+in vec3 vWorld;
+uniform vec4 uCut; uniform float uCutOn;
+out vec4 o;
+void main() {
+  if (uCutOn > 0.5 && dot(vWorld, uCut.xyz) > uCut.w) discard;
+  o = vec4(1.0);
+}`;
+
+  // Surface shading. Model 0 is the original porcelain look (wrap light, cool shade side,
+  // a faint sheen), now with cast shadows; model 1 is physically based (GGX, Fresnel,
+  // metalness, roughness, anisotropy for brushed metal, clear coat, temper colors and
+  // black-body glow), lit by key, fill and rim lights, point lights, and the environment.
+  // PBR color is tone mapped here, so diagram materials stay exactly as they were; glow
+  // above 1.0 is what the bloom pass picks up.
+  const G_SURFACE = `
+uniform mat4 uModel;
+uniform vec3 uColor; uniform vec3 uLight; uniform vec3 uEye;
+uniform float uSun;
+uniform vec4 uMat; uniform vec3 uF0; uniform vec4 uBrush; uniform vec4 uDetail; uniform vec3 uEmit;
+uniform vec4 uTempAxis; uniform vec4 uTempS; uniform vec4 uTempT; uniform vec4 uHeat;
+uniform vec3 uKeyCol; uniform vec3 uFillDir; uniform vec3 uFillCol; uniform vec3 uRimDir; uniform vec3 uRimCol;
+uniform vec4 uPtPos[2]; uniform vec3 uPtCol[2];
+uniform vec4 uLook;
+float D_GGX(float NoH, float a) { float a2 = a * a; float f = (NoH * a2 - NoH) * NoH + 1.0; return a2 / (PI * f * f + 1e-7); }
+float V_GGX(float NoV, float NoL, float a) { float a2 = a * a; float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2); float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2); return 0.5 / (gv + gl + 1e-7); }
+float D_Aniso(float at, float ab, float XoH, float YoH, float NoH) { float a2 = at * ab; vec3 d = vec3(ab * XoH, at * YoH, a2 * NoH); float d2 = dot(d, d); float b2 = a2 / d2; return a2 * b2 * b2 / PI; }
+float V_Aniso(float at, float ab, float XoV, float YoV, float XoL, float YoL, float NoV, float NoL) {
+  float lv = NoL * length(vec3(at * XoV, ab * YoV, NoV)); float ll = NoV * length(vec3(at * XoL, ab * YoL, NoL)); return 0.5 / (lv + ll + 1e-7);
+}
+vec2 envBRDF(float NoV, float r) {
+  const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022); const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+  vec4 rr = r * c0 + c1; float a004 = min(rr.x * rr.x, exp2(-9.28 * NoV)) * rr.x + rr.y;
+  return vec2(-1.04, 1.04) * a004 + rr.zw;
+}
+vec4 heatTint(float T) {
+  float c = T - 273.15;
+  vec3 col = mix(vec3(0.93, 0.86, 0.62), vec3(0.85, 0.66, 0.32), smoothstep(190.0, 240.0, c));
+  col = mix(col, vec3(0.62, 0.38, 0.2), smoothstep(240.0, 260.0, c));
+  col = mix(col, vec3(0.45, 0.22, 0.42), smoothstep(260.0, 278.0, c));
+  col = mix(col, vec3(0.15, 0.2, 0.55), smoothstep(278.0, 295.0, c));
+  col = mix(col, vec3(0.3, 0.5, 0.78), smoothstep(295.0, 320.0, c));
+  col = mix(col, vec3(0.52, 0.55, 0.58), smoothstep(320.0, 380.0, c));
+  col = mix(col, vec3(0.36, 0.35, 0.34), smoothstep(380.0, 600.0, c));
+  return vec4(col, smoothstep(180.0, 230.0, c));
+}
+float temperatureAt(vec3 lp) {
+  int n = int(uTempAxis.w + 0.5);
+  float s = dot(lp, uTempAxis.xyz), T = uTempT.x;
+  if (n > 1) T = mix(uTempT.x, uTempT.y, smoothstep(uTempS.x, uTempS.y, s));
+  if (n > 2 && s > uTempS.y) T = mix(uTempT.y, uTempT.z, smoothstep(uTempS.y, uTempS.z, s));
+  if (n > 3 && s > uTempS.z) T = mix(uTempT.z, uTempT.w, smoothstep(uTempS.z, uTempS.w, s));
+  return T;
+}
+vec3 lightPBR(vec3 N, vec3 V, vec3 L, vec3 Lc, vec3 diff, vec3 f0, float a, vec3 X, vec3 Y, float aniso) {
+  float NoL = dot(N, L);
+  if (NoL <= 0.0) return vec3(0.0);
+  vec3 H = normalize(V + L);
+  float NoV = max(dot(N, V), 1e-4), NoH = max(dot(N, H), 0.0), VoH = max(dot(V, H), 0.0);
+  vec3 F = f0 + (1.0 - f0) * pow(1.0 - VoH, 5.0);
+  float DV;
+  if (aniso > 0.0) {
+    float at = max(a * (1.0 + aniso), 0.003), ab = max(a * (1.0 - aniso), 0.003);
+    DV = D_Aniso(at, ab, dot(X, H), dot(Y, H), NoH) * V_Aniso(at, ab, dot(X, V), dot(Y, V), dot(X, L), dot(Y, L), NoV, NoL);
+  } else DV = D_GGX(NoH, a) * V_GGX(NoV, NoL, a);
+  return (diff * (1.0 - F) / PI + DV * F) * Lc * NoL;
+}
+// N, V: unit normal and view vector; wp: world position; lp, ln: local position and normal.
+vec3 shadePBR(vec3 N, vec3 V, vec3 wp, vec3 lp, vec3 ln, float vis, out vec3 emission) {
+  vec3 base = toLin(uColor);
+  float metal = uMat.y, rough = clamp(uMat.z, 0.03, 1.0), cc = uMat.w;
+  vec3 f0 = mix(vec3(0.04), uF0, metal);
+  vec3 diff = base * (1.0 - metal);
+  float aniso = uBrush.w;
+  vec3 X = vec3(1.0, 0.0, 0.0), Y = vec3(0.0, 0.0, 1.0);
+  vec3 org = (uModel * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  if (aniso > 0.0 || uDetail.y > 0.0) {
+    vec3 A = normalize(mat3(uModel) * uBrush.xyz);
+    vec3 T;
+    if (uDetail.x < 0.5) {
+      // turned: the grooves run around the axis, on the sides and on the end faces
+      vec3 side = cross(A, N);
+      vec3 rad = wp - org; rad -= A * dot(rad, A);
+      T = length(side) > 0.3 ? normalize(side) : normalize(cross(A, normalize(rad + N * 1e-4)) + 1e-6);
+    } else {
+      T = A - N * dot(A, N);
+      T = length(T) > 1e-3 ? normalize(T) : normalize(cross(N, vec3(0.0, 0.0, 1.0)) + vec3(1e-4));
+    }
+    Y = T; X = normalize(cross(N, T));
+    if (uDetail.y > 0.0) {
+      float s = dot(wp - org, X) * uDetail.y;
+      float g = 0.55 * vnoise1(s) + 0.3 * vnoise1(s * 3.7 + 11.0) + 0.15 * vnoise1(s * 11.3 + 37.0);
+      rough = clamp(rough * (1.0 + 0.4 * g), 0.03, 1.0);
+      f0 *= 1.0 + 0.07 * g;
+    }
+  }
+  if (uDetail.z > 0.5) {
+    // carbon fiber: a 2x2 twill of tows, each with its own fiber direction, under clear coat
+    vec3 an = abs(normalize(ln));
+    vec2 uv; vec3 ax, ay;
+    if (an.x >= an.y && an.x >= an.z) { uv = lp.yz; ax = vec3(0.0, 1.0, 0.0); ay = vec3(0.0, 0.0, 1.0); }
+    else if (an.y >= an.z) { uv = lp.xz; ax = vec3(1.0, 0.0, 0.0); ay = vec3(0.0, 0.0, 1.0); }
+    else { uv = lp.xy; ax = vec3(1.0, 0.0, 0.0); ay = vec3(0.0, 1.0, 0.0); }
+    vec2 q = uv * uDetail.w, c = floor(q), f = q - c;
+    bool hz = mod(c.x + c.y, 4.0) < 2.0;
+    vec3 fib = normalize(mat3(uModel) * (hz ? ax : ay));
+    Y = normalize(fib - N * dot(fib, N) + 1e-5); X = normalize(cross(N, Y));
+    float across = hz ? f.y : f.x, along = hz ? f.x : f.y;
+    float edge = smoothstep(0.0, 0.18, across) * smoothstep(1.0, 0.82, across);
+    diff *= 0.55 + 0.45 * edge * (0.75 + 0.25 * sin(along * PI));
+    aniso = 0.75;
+    rough = mix(0.55, 0.28, edge);
+  }
+  emission = uEmit;
+  if (uTempAxis.w > 0.5) {
+    float Tk = temperatureAt(lp);
+    if (uHeat.x > 0.5) {
+      vec4 ht = heatTint(Tk - uHeat.y);
+      f0 = mix(f0, toLin(mix(ht.rgb, vec3(0.6), 0.3)), ht.a * 0.7);
+      rough = mix(rough, max(rough, 0.5), smoothstep(620.0, 900.0, Tk - uHeat.y));
+    }
+    emission += blackbody(Tk) * glowOf(Tk);
+  }
+  float a = rough * rough;
+  vec3 col = vec3(0.0);
+  col += lightPBR(N, V, uLight, uKeyCol * vis, diff, f0, a, X, Y, aniso);
+  if (uSun < 0.5) {
+    col += lightPBR(N, V, uFillDir, uFillCol, diff, f0, a, X, Y, aniso);
+    col += lightPBR(N, V, uRimDir, uRimCol, diff, f0, a, X, Y, aniso);
+  }
+  for (int i = 0; i < 2; i++) {
+    if (uPtPos[i].w <= 0.0) continue;
+    vec3 d = uPtPos[i].xyz - wp;
+    float r2 = dot(d, d), att = 1.0 / (1.0 + r2 / (uPtPos[i].w * uPtPos[i].w));
+    col += lightPBR(N, V, normalize(d), uPtCol[i] * att, diff, f0, a, X, Y, aniso);
+  }
+  float NoV = max(dot(N, V), 1e-4);
+  vec3 Nb = N;
+  if (aniso > 0.0) {
+    vec3 at = cross(Y, V), anN = normalize(cross(at, Y) + 1e-6);
+    Nb = normalize(mix(N, anN, aniso * clamp(3.0 * rough, 0.0, 0.9)));
+  }
+  vec2 ab = envBRDF(NoV, rough);
+  float envK = uSun > 0.5 ? 0.06 : 1.0;
+  col += (diff * envDiff(N) * uLook.x + envSpec(reflect(-V, Nb), rough) * (f0 * ab.x + ab.y) * uLook.y) * envK;
+  if (cc > 0.0) {
+    float Fc = (0.04 + 0.96 * pow(1.0 - NoV, 5.0)) * cc;
+    col *= 1.0 - Fc;
+    vec3 H = normalize(V + uLight);
+    float sp = D_GGX(max(dot(N, H), 0.0), 0.04) * V_GGX(NoV, max(dot(N, uLight), 0.0), 0.04) * max(dot(N, uLight), 0.0);
+    col += (envSpec(reflect(-V, N), 0.05) * uLook.y * envK + uKeyCol * vis * sp) * Fc;
+  }
+  return col;
+}
+vec3 shadeSoft(vec3 N, vec3 V, vec3 wp, float vis) {
+  float ndl = dot(N, uLight);
+  vec3 col;
+  float sh = mix(1.0, vis, uHeat.w);
+  if (uSun > 0.5) {
+    float lit = smoothstep(-0.05, 0.25, ndl) * sh;
+    col = uColor * (0.12 + 0.95 * lit * (0.55 + 0.45 * max(ndl, 0.0)));
+  } else {
+    float wrap = clamp((ndl + 0.5) / 1.5, 0.0, 1.0);
+    wrap = wrap * wrap * (3.0 - 2.0 * wrap);
+    vec3 cool = uColor * vec3(0.84, 0.86, 0.90);
+    col = mix(cool, uColor, wrap * sh);
+    col *= (0.92 + 0.08 * (0.5 + 0.5 * N.y)) * (1.0 - 0.1 * (1.0 - sh));
+    vec3 H = normalize(uLight + V);
+    float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
+    col += vec3(pow(max(dot(N, H), 0.0), 40.0) * 0.06) * sh;
+    col = mix(col, vec3(1.0), fres * 0.10);
+  }
+  for (int i = 0; i < 2; i++) {
+    if (uPtPos[i].w <= 0.0) continue;
+    vec3 d = uPtPos[i].xyz - wp;
+    float r2 = dot(d, d), att = 1.0 / (1.0 + r2 / (uPtPos[i].w * uPtPos[i].w));
+    col += uColor * uPtCol[i] * att * max(dot(N, normalize(d)), 0.0) * 0.3;
+  }
+  return col;
+}`;
+
+  const FS_MAIN = `#version 300 es
+${G_COMMON}
+${G_ENV}
+${G_SHADOW}
+${G_SURFACE}
+in vec3 vWorld; in vec3 vNormal; in vec3 vLocal; in vec3 vLocalN;
 uniform vec4 uCut; uniform float uCutOn; uniform float uId; uniform vec3 uHighlight; uniform float uHighlightOn;
-uniform float uSun; uniform float uHatch; uniform mat4 uViewProj;
+uniform float uHatch;
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
 void main() {
@@ -792,37 +1658,24 @@ void main() {
     float fw = max(fwidth(u), 1e-6);
     float d = abs(fract(u / uHatch + 0.5) - 0.5) * uHatch / fw;
     float line = 1.0 - smoothstep(0.35, 1.1, d);
-    vec3 cap = uColor * 0.93;
-    oColor = vec4(mix(cap, uColor * 0.5, line * 0.75), 1.0);
+    vec3 capc = uMat.x > 0.5 ? mix(uColor, vec3(0.86), 0.25 * uMat.y) : uColor;
+    oColor = vec4(mix(capc * 0.93, capc * 0.5, line * 0.75), 1.0);
     oNormal = vec4(n * 0.5 + 0.5, uId);
     return;
   }
   vec3 N = normalize(vNormal);
   vec3 V = normalize(uEye - vWorld);
-  float ndl = dot(N, uLight);
-  vec3 col;
-  if (uSun > 0.5) {
-    float lit = smoothstep(-0.05, 0.25, ndl);
-    col = uColor * (0.12 + 0.95 * lit * (0.55 + 0.45 * max(ndl, 0.0)));
-  } else {
-    float wrap = clamp((ndl + 0.5) / 1.5, 0.0, 1.0);
-    wrap = wrap * wrap * (3.0 - 2.0 * wrap);
-    vec3 cool = uColor * vec3(0.84, 0.86, 0.90);
-    col = mix(cool, uColor, wrap);
-    col *= 0.92 + 0.08 * (0.5 + 0.5 * N.y);
-  }
-  vec3 H = normalize(uLight + V);
-  float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
-  if (uMetal > 0.5) {
-    float env = smoothstep(-0.4, 0.8, reflect(-V, N).y);
-    float spec = pow(max(dot(N, H), 0.0), 50.0);
-    col = uColor * (0.62 + 0.38 * clamp(ndl * 0.5 + 0.5, 0.0, 1.0)) * (0.78 + 0.32 * env) + vec3(1.0, 0.97, 0.9) * spec * 0.55;
-  } else if (uSun < 0.5) {
-    col += vec3(pow(max(dot(N, H), 0.0), 40.0) * 0.06);
-    col = mix(col, vec3(1.0), fres * 0.10);
+  float vis = shadowAt(vWorld, N);
+  vec3 col, glow = vec3(0.0);
+  if (uMat.x < 0.5) col = shadeSoft(N, V, vWorld, vis);
+  else {
+    vec3 em;
+    vec3 lin = shadePBR(N, V, vWorld, vLocal, vLocalN, vis, em);
+    col = toSrgb(tonemap((lin + em) * uLook.z));
+    glow = em * uLook.w;
   }
   if (uHighlightOn > 0.5) col = mix(col, uHighlight, 0.38);
-  oColor = vec4(col, 1.0);
+  oColor = vec4(col + glow, 1.0);
   oNormal = vec4(N * 0.5 + 0.5, uId);
 }`;
 
@@ -845,22 +1698,82 @@ void main() {
   oColor = vec4(col * a, a);
 }`;
 
-  const VS_SHADOW = `#version 300 es
-uniform mat4 uViewProj; uniform vec3 uCenter; uniform vec2 uRadii;
-out vec2 vUv;
+  // Glass: refracts the finished opaque picture behind it (with a little dispersion),
+  // reflects the environment by Fresnel, absorbs a tint along its thickness, and writes
+  // depth and normals so its edges get ink like any solid.
+  const FS_GLASS = `#version 300 es
+${G_COMMON}
+${G_ENV}
+in vec3 vWorld; in vec3 vNormal;
+uniform vec3 uColor; uniform vec3 uEye; uniform vec3 uLight; uniform vec3 uKeyCol;
+uniform vec4 uCut; uniform float uCutOn; uniform float uId; uniform vec3 uHighlight; uniform float uHighlightOn;
+uniform sampler2D uScene; uniform vec2 uSceneInv; uniform vec2 uSceneSize;
+uniform mat4 uViewProj; uniform vec4 uGlass; uniform vec4 uLook;
+layout(location=0) out vec4 oColor;
+layout(location=1) out vec4 oNormal;
+vec2 screenOf(vec3 w) { vec4 c = uViewProj * vec4(w, 1.0); return (c.xy / c.w * 0.5 + 0.5) * uSceneSize; }
+void main() {
+  if (uCutOn > 0.5 && dot(vWorld, uCut.xyz) > uCut.w) discard;
+  vec3 N = normalize(vNormal);
+  if (!gl_FrontFacing) N = -N;
+  vec3 V = normalize(uEye - vWorld);
+  float NoV = clamp(dot(N, V), 0.0, 1.0);
+  float ior = uGlass.x, thick = uGlass.y, disp = uGlass.z, rough = uGlass.w;
+  float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+  float F = f0 + (1.0 - f0) * pow(1.0 - NoV, 5.0);
+  vec2 here = gl_FragCoord.xy;
+  vec3 behind = vec3(0.0); float behindA = 0.0;
+  float tir = 0.0;
+  for (int c = 0; c < 3; c++) {
+    float n = ior + (float(c) - 1.0) * disp;
+    vec3 Tr = refract(-V, N, 1.0 / n);
+    if (dot(Tr, Tr) < 1e-6) { tir += 1.0; continue; }
+    // Where the bent ray leaves the body, approximately, and the opaque picture there.
+    vec2 at = screenOf(vWorld + Tr * thick * (1.0 + 0.6 * (1.0 - NoV)));
+    vec4 s = texture(uScene, clamp(at, vec2(0.5), uSceneSize - 0.5) * uSceneInv);
+    behind[c] = s[c];
+    behindA += s.a / 3.0;
+  }
+  // Absorption: a faint tint, stronger where the light crosses more glass (edges).
+  vec3 tint = pow(clamp(uColor, 0.02, 1.0), vec3(0.6 + 1.6 * (1.0 - NoV)));
+  float T = (1.0 - F) * (1.0 - tir / 3.0);
+  vec3 R = reflect(-V, N);
+  vec3 refl = envSpec(R, rough) * uLook.y;
+  vec3 H = normalize(V + uLight);
+  refl += uKeyCol * pow(max(dot(N, H), 0.0), 600.0) * 4.0;
+  float Fr = mix(F, 1.0, tir / 3.0);
+  vec3 reflD = toSrgb(tonemap(refl * uLook.z));
+  vec3 col = behind * tint * T + reflD * Fr;
+  float alpha = clamp(behindA * T + (1.0 - T * (0.55 + 0.45 * dot(tint, vec3(0.333)))), 0.0, 1.0);
+  col = min(col, vec3(alpha + Fr));
+  if (uHighlightOn > 0.5) col = mix(col, uHighlight * alpha, 0.3);
+  oColor = vec4(col, max(alpha, Fr * 0.6));
+  oNormal = vec4(N * 0.5 + 0.5, uId);
+}`;
+
+  // The ground: invisible except for the shadow it catches, a soft contact shadow right
+  // under the model plus the cast shadow of the key light, fading out with distance.
+  const VS_GROUND = `#version 300 es
+uniform mat4 uViewProj; uniform vec3 uCenter; uniform float uHalf;
+out vec3 vWorld;
 void main() {
   vec2 c = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1)) * 2.0 - 1.0;
-  vUv = c;
-  gl_Position = uViewProj * vec4(uCenter + vec3(c.x * uRadii.x, 0.0, c.y * uRadii.y), 1.0);
+  vWorld = uCenter + vec3(c.x * uHalf, 0.0, c.y * uHalf);
+  gl_Position = uViewProj * vec4(vWorld, 1.0);
 }`;
-  const FS_SHADOW = `#version 300 es
-precision highp float;
-in vec2 vUv; uniform float uOpacity;
-layout(location=0) out vec4 oColor;
+  const FS_GROUND = `#version 300 es
+${G_COMMON}
+${G_SHADOW}
+in vec3 vWorld;
+uniform vec3 uCenter; uniform vec2 uRadii; uniform vec4 uGround;
+out vec4 o;
 void main() {
-  float d = length(vUv);
-  float a = uOpacity * pow(1.0 - smoothstep(0.0, 1.0, d), 1.7);
-  oColor = vec4(0.0, 0.0, 0.0, a);
+  vec2 q = (vWorld.xz - uCenter.xz) / uRadii;
+  float blob = uGround.x * pow(1.0 - smoothstep(0.0, 1.0, length(q)), 1.7);
+  float fade = 1.0 - smoothstep(0.55, 1.0, length(vWorld.xz - uCenter.xz) / uGround.z);
+  float castS = (1.0 - shadowAt(vWorld, vec3(0.0, 1.0, 0.0))) * uGround.y * fade;
+  float a = 1.0 - (1.0 - blob) * (1.0 - castS);
+  o = vec4(0.0, 0.0, 0.0, a);
 }`;
 
   const VS_FULL = `#version 300 es
@@ -868,23 +1781,23 @@ void main() {
   vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
-  // Composite: ink outlines from depth, normal, and part-id discontinuities, then a box
-  // filter over uSS x uSS render pixels per output pixel (the engine supersamples itself).
+
+  // Composite: ink outlines from depth, normal, and part-id discontinuities over a filter
+  // of the render pixels behind each output pixel (supersampled, or a smooth upscale at
+  // reduced render scale), ambient occlusion, the effects layer, and bloom.
   const FS_COMPOSITE = `#version 300 es
-precision highp float;
-uniform sampler2D uColor; uniform sampler2D uNormal; uniform sampler2D uDepth;
-uniform vec2 uInvSize; uniform float uStep; uniform vec2 uNearFar; uniform float uOrtho; uniform float uInk;
-uniform int uSS; uniform float uAo; uniform float uAoR;
+${G_COMMON}
+uniform sampler2D uColor; uniform sampler2D uNormal; uniform sampler2D uDepth; uniform sampler2D uFx; uniform sampler2D uBloom;
+uniform vec2 uInvSize; uniform float uStep; uniform float uInk;
+uniform vec2 uScale; uniform int uTaps; uniform float uAo; uniform float uAoR;
+uniform vec2 uFxInv; uniform vec2 uBloomInv; uniform vec4 uPost;
+uniform mat3 uViewRot; uniform vec2 uTanHalf; uniform vec2 uSize;
 out vec4 o;
-float lin(float d) {
-  if (uOrtho > 0.5) return uNearFar.x + d * (uNearFar.y - uNearFar.x);
-  float z = d * 2.0 - 1.0;
-  return 2.0 * uNearFar.x * uNearFar.y / (uNearFar.y + uNearFar.x - z * (uNearFar.y - uNearFar.x));
-}
 vec4 shade(vec2 px) {
   vec4 c0 = texture(uColor, px * uInvSize);
+  c0.rgb = min(c0.rgb, vec3(c0.a));
   vec4 n0 = texture(uNormal, px * uInvSize);
-  float d0 = lin(texture(uDepth, px * uInvSize).r);
+  float d0 = linDepth(texture(uDepth, px * uInvSize).r);
   bool bg0 = n0.a < 0.5 / 255.0;
   float edge = 0.0;
   float inkDepth = bg0 ? 1e20 : d0;
@@ -895,7 +1808,7 @@ vec4 shade(vec2 px) {
     vec2 q = (px + offs[i] * uStep) * uInvSize;
     vec4 n1 = texture(uNormal, q);
     bool bg1 = n1.a < 0.5 / 255.0;
-    float d1 = lin(texture(uDepth, q).r);
+    float d1 = linDepth(texture(uDepth, q).r);
     float e = 0.0;
     if (bg0 != bg1) e = 1.0;
     else if (!bg0) {
@@ -908,7 +1821,7 @@ vec4 shade(vec2 px) {
     if (e > 0.0 && !bg1 && d1 < inkDepth) {
       vec4 c1 = texture(uColor, q);
       inkDepth = d1;
-      inkSrc = c1.rgb / max(c1.a, 1e-3);
+      inkSrc = min(c1.rgb / max(c1.a, 1e-3), vec3(1.0));
     }
     edge = max(edge, e);
   }
@@ -917,41 +1830,624 @@ vec4 shade(vec2 px) {
   float a = clamp(edge * uInk, 0.0, 1.0);
   return vec4(ink * a, a) + c0 * (1.0 - a);
 }
-// Ambient occlusion from the depth buffer: surfaces with nearer surfaces close around
-// them (the crease between two packed atoms, the inside of a socket) get a little darker,
-// which is what makes a crowded model read as solid shapes rather than flat discs.
+// View-space position of a render pixel.
+vec3 viewPos(vec2 px, float d) {
+  vec2 ndc = px / uSize * 2.0 - 1.0;
+  return uOrtho > 0.5 ? vec3(ndc * uTanHalf, -d) : vec3(ndc * uTanHalf * d, -d);
+}
+// Ambient occlusion: a normal-oriented hemisphere test against the depth buffer, 16 taps
+// on a fixed spiral (no noise, so nothing to blur), with a range check so far-off
+// surfaces don't darken what's in front of them.
 float occlusion(vec2 px) {
   vec4 n0 = texture(uNormal, px * uInvSize);
   if (n0.a < 0.5 / 255.0) return 1.0;
-  float d0 = lin(texture(uDepth, px * uInvSize).r);
-  // A fixed two-ring kernel (no per-pixel noise, so no grain to blur away).
-  float occ = 0.0, wsum = 0.0;
-  for (int ring = 1; ring <= 2; ring++) {
-    float r = uAoR * float(ring) * 0.5;
-    for (int i = 0; i < 10; i++) {
-      float a = (float(i) + 0.5 * float(ring)) * 0.6283185;
-      vec2 q = (px + vec2(cos(a), sin(a)) * r) * uInvSize;
-      float w = ring == 1 ? 1.0 : 0.6;
-      wsum += w;
-      if (texture(uNormal, q).a < 0.5 / 255.0) continue;
-      float dz = (d0 - lin(texture(uDepth, q).r)) / d0;
-      occ += w * smoothstep(0.002, 0.02, dz) * (1.0 - smoothstep(0.05, 0.12, dz));
-    }
+  float d0 = linDepth(texture(uDepth, px * uInvSize).r);
+  vec3 P = viewPos(px, d0), N = normalize(uViewRot * (n0.xyz * 2.0 - 1.0));
+  float rpx = uOrtho > 0.5 ? uAoR / (2.0 * uTanHalf.y) * uSize.y : uAoR / (2.0 * uTanHalf.y * d0) * uSize.y;
+  rpx = clamp(rpx, 2.0, uSize.y * 0.08);
+  float occ = 0.0;
+  for (int i = 0; i < 16; i++) {
+    float f = (float(i) + 0.5) / 16.0;
+    float ang = float(i) * 2.39996323;
+    vec2 q = px + vec2(cos(ang), sin(ang)) * rpx * sqrt(f);
+    vec4 nq = texture(uNormal, q * uInvSize);
+    if (nq.a < 0.5 / 255.0) continue;
+    vec3 Q = viewPos(q, linDepth(texture(uDepth, q * uInvSize).r));
+    vec3 v = Q - P;
+    float L = length(v);
+    float h = max(dot(N, v) / max(L, 1e-5) - 0.12, 0.0);
+    occ += h * (1.0 - smoothstep(uAoR * 0.6, uAoR * 1.6, L));
   }
-  return 1.0 - uAo * clamp(occ / wsum * 1.4, 0.0, 1.0);
+  return 1.0 - uAo * clamp(occ / 16.0 * 2.2, 0.0, 1.0);
 }
 void main() {
-  vec2 base = floor(gl_FragCoord.xy) * float(uSS);
+  vec2 o0 = floor(gl_FragCoord.xy);
   vec4 sum = vec4(0.0);
+  float N = float(uTaps);
   for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
-    if (i < uSS && j < uSS) sum += shade(base + vec2(float(i), float(j)) + 0.5);
+    if (i < uTaps && j < uTaps) sum += shade((o0 + (vec2(float(i), float(j)) + 0.5) / N) * uScale);
   }
-  o = sum / float(uSS * uSS);
-  if (uAo > 0.0) o.rgb *= occlusion(base + float(uSS) * 0.5);
+  vec4 sc = sum / (N * N);
+  if (uAo > 0.0) sc.rgb *= occlusion((o0 + 0.5) * uScale);
+  vec4 res = sc;
+  if (uPost.x > 0.5) {
+    vec4 fx = texture(uFx, (o0 + 0.5) * uFxInv);
+    res = vec4(min(fx.rgb, vec3(1.0)) + sc.rgb * (1.0 - fx.a), fx.a + sc.a * (1.0 - fx.a));
+  }
+  if (uPost.y > 0.0) {
+    vec3 b = texture(uBloom, (o0 + 0.5) * uBloomInv).rgb * uPost.y;
+    res.rgb += b;
+  }
+  res.a = clamp(max(res.a, max(res.r, max(res.g, res.b))), 0.0, 1.0);
+  float dz = (fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) - 0.5) / 255.0;
+  res.rgb = clamp(res.rgb + dz * step(0.002, res.a), 0.0, res.a);
+  o = res;
 }`;
 
+  // Bloom: pick out what's brighter than its own coverage (glowing parts, fire, plumes),
+  // halve it down a chain, and add it back up with a tent filter.
+  const FS_BLOOM_EXTRACT = `#version 300 es
+precision highp float;
+uniform sampler2D uColor; uniform sampler2D uFx; uniform vec2 uColorInv; uniform vec2 uColorScale; uniform vec2 uFxInv; uniform float uFxOn;
+out vec4 o;
+vec3 over(vec4 c) { return max(c.rgb - vec3(c.a), 0.0); }
+void main() {
+  vec2 p = gl_FragCoord.xy * 2.0;
+  vec3 s = vec3(0.0);
+  for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
+    vec2 q = p + vec2(float(i), float(j)) - 0.5;
+    s += over(texture(uColor, q * uColorScale * uColorInv));
+    if (uFxOn > 0.5) s += over(texture(uFx, q * uFxInv)) * 0.8;
+  }
+  o = vec4(min(s * 0.25, vec3(16.0)), 1.0);
+}`;
+  const FS_DOWN = `#version 300 es
+precision highp float;
+uniform sampler2D uSrc; uniform vec2 uSrcInv;
+out vec4 o;
+void main() {
+  vec2 p = gl_FragCoord.xy * 2.0;
+  vec3 s = texture(uSrc, (p + vec2(-1.0, -1.0)) * uSrcInv).rgb + texture(uSrc, (p + vec2(1.0, -1.0)) * uSrcInv).rgb
+         + texture(uSrc, (p + vec2(-1.0, 1.0)) * uSrcInv).rgb + texture(uSrc, (p + vec2(1.0, 1.0)) * uSrcInv).rgb;
+  s = s * 0.5 + texture(uSrc, p * uSrcInv).rgb * 2.0;
+  o = vec4(s / 4.0, 1.0);
+}`;
+  const FS_UP = `#version 300 es
+precision highp float;
+uniform sampler2D uSrc; uniform vec2 uSrcInv; uniform float uWeight;
+out vec4 o;
+void main() {
+  vec2 p = gl_FragCoord.xy * 0.5;
+  vec3 s = vec3(0.0);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    float w = (i == 0 ? 2.0 : 1.0) * (j == 0 ? 2.0 : 1.0);
+    s += texture(uSrc, (p + vec2(float(i), float(j)) * 0.75) * uSrcInv).rgb * w;
+  }
+  o = vec4(s / 16.0 * uWeight, 1.0);
+}`;
+
+  // The procedural environment, made once per look and page theme: soft boxes around a
+  // neutral sweep (studio), a dark room with cool rim strips (night), or a sky (outdoor).
+  const FS_ENV = `#version 300 es
+${G_COMMON}
+uniform vec2 uSize; uniform int uKind; uniform float uDark; uniform vec3 uSun; uniform float uOutScale;
+out vec4 o;
+float softbox(vec3 d, vec3 c, vec3 up, vec2 size, float soft) {
+  float k = dot(d, c);
+  if (k <= 0.05) return 0.0;
+  vec3 u = normalize(up - c * dot(up, c)), v = cross(c, u);
+  vec2 q = vec2(dot(d, v), dot(d, u)) / k;
+  vec2 e = abs(q) - size;
+  float dist = length(max(e, 0.0)) + min(max(e.x, e.y), 0.0);
+  return 1.0 - smoothstep(-soft, soft, dist);
+}
+vec3 env(vec3 d) {
+  float y = d.y;
+  if (uKind == 2) {
+    vec3 zen = vec3(0.16, 0.32, 0.72), hor = vec3(0.78, 0.84, 0.92), gnd = vec3(0.26, 0.24, 0.21);
+    if (uDark > 0.5) { zen *= 0.35; hor *= 0.35; gnd *= 0.4; }
+    vec3 col = y > 0.0 ? mix(hor, zen, pow(y, 0.55)) * 1.3 : mix(hor * 0.75, gnd, smoothstep(0.0, 0.2, -y));
+    float s = max(dot(d, uSun), 0.0);
+    col += vec3(1.0, 0.9, 0.75) * (pow(s, 1200.0) * 60.0 + pow(s, 24.0) * 0.6);
+    return col;
+  }
+  if (uKind == 1) {
+    vec3 col = y > 0.0 ? mix(vec3(0.016, 0.018, 0.026), vec3(0.03, 0.035, 0.05), y) : vec3(0.008, 0.008, 0.01);
+    col += vec3(0.55, 0.65, 1.0) * 3.2 * softbox(d, normalize(vec3(-0.85, 0.2, -0.5)), vec3(0, 1, 0), vec2(0.06, 0.7), 0.04);
+    col += vec3(0.55, 0.65, 1.0) * 2.6 * softbox(d, normalize(vec3(0.85, 0.25, -0.45)), vec3(0, 1, 0), vec2(0.06, 0.7), 0.04);
+    col += vec3(0.7, 0.75, 0.9) * 0.9 * softbox(d, normalize(vec3(0.05, 1.0, 0.1)), vec3(0, 0, 1), vec2(0.5, 0.3), 0.15);
+    return col;
+  }
+  vec3 wall = uDark > 0.5 ? vec3(0.05, 0.052, 0.058) : vec3(0.54, 0.55, 0.57);
+  vec3 ceilc = uDark > 0.5 ? vec3(0.03, 0.032, 0.036) : vec3(0.42, 0.43, 0.45);
+  vec3 flo = uDark > 0.5 ? vec3(0.018, 0.018, 0.02) : vec3(0.2, 0.2, 0.205);
+  vec3 col = y > 0.0 ? mix(wall, ceilc, smoothstep(0.0, 0.9, y)) : mix(wall * 0.8, flo, smoothstep(0.0, 0.18, -y));
+  col += (uDark > 0.5 ? 0.04 : 0.18) * exp(-abs(y) * 22.0);
+  float bright = uDark > 0.5 ? 0.8 : 1.0;
+  col += vec3(1.0, 0.97, 0.93) * 7.0 * bright * softbox(d, normalize(vec3(-0.5, 0.62, 0.6)), vec3(0, 1, 0), vec2(0.36, 0.26), 0.05);
+  col += vec3(1.0, 0.99, 0.97) * 3.0 * bright * softbox(d, normalize(vec3(0.15, 1.0, 0.2)), vec3(0, 0, 1), vec2(0.55, 0.32), 0.08);
+  col += vec3(0.93, 0.96, 1.0) * 1.5 * bright * softbox(d, normalize(vec3(0.92, 0.12, 0.38)), vec3(0, 1, 0), vec2(0.28, 0.5), 0.12);
+  col += vec3(1.0) * 4.5 * bright * softbox(d, normalize(vec3(-0.78, 0.18, -0.6)), vec3(0, 1, 0), vec2(0.06, 0.62), 0.03);
+  col += vec3(1.0) * 3.5 * bright * softbox(d, normalize(vec3(0.8, 0.28, -0.52)), vec3(0, 1, 0), vec2(0.06, 0.62), 0.03);
+  return col;
+}
+vec3 dirOf(vec2 uv) {
+  float ph = (uv.x - 0.5) * 2.0 * PI, th = uv.y * PI;
+  return vec3(sin(th) * sin(ph), cos(th), -sin(th) * cos(ph));
+}
+void main() { o = vec4(env(dirOf(gl_FragCoord.xy / uSize)) * uOutScale, 1.0); }`;
+
+  // Prefilters the environment for one roughness (GGX importance sampling, reading lower
+  // mips of the source for wide lobes so small bright boxes don't sparkle), or, with
+  // uMode 1, convolves it with a cosine lobe for diffuse light.
+  const FS_PREFILTER = `#version 300 es
+${G_COMMON}
+uniform sampler2D uSrc; uniform vec2 uSize; uniform float uRough; uniform int uMode; uniform float uSrcW; uniform float uScale;
+out vec4 o;
+vec3 dirOf(vec2 uv) { float ph = (uv.x - 0.5) * 2.0 * PI, th = uv.y * PI; return vec3(sin(th) * sin(ph), cos(th), -sin(th) * cos(ph)); }
+vec2 uvOf(vec3 d) { return vec2(atan(d.x, -d.z) * (0.5 / PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) / PI); }
+vec2 hamm(uint i, uint n) { uint b = i; b = (b << 16u) | (b >> 16u); b = ((b & 0x55555555u) << 1u) | ((b & 0xAAAAAAAAu) >> 1u); b = ((b & 0x33333333u) << 2u) | ((b & 0xCCCCCCCCu) >> 2u); b = ((b & 0x0F0F0F0Fu) << 4u) | ((b & 0xF0F0F0F0u) >> 4u); b = ((b & 0x00FF00FFu) << 8u) | ((b & 0xFF00FF00u) >> 8u); return vec2(float(i) / float(n), float(b) * 2.3283064365386963e-10); }
+void main() {
+  vec3 N = dirOf(gl_FragCoord.xy / uSize);
+  vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  vec3 tx = normalize(cross(up, N)), ty = cross(N, tx);
+  vec3 sum = vec3(0.0); float w = 0.0;
+  const uint S = 96u;
+  float texel = 4.0 * PI / (uSrcW * uSrcW * 0.5);
+  if (uMode == 1) {
+    for (uint i = 0u; i < S; i++) {
+      vec2 xi = hamm(i, S);
+      float ph = 2.0 * PI * xi.y, ct = sqrt(1.0 - xi.x), st = sqrt(xi.x);
+      vec3 L = tx * (st * cos(ph)) + ty * (st * sin(ph)) + N * ct;
+      float pdf = ct / PI;
+      float lod = clamp(0.5 * log2(1.0 / (float(S) * pdf * texel)) + 1.0, 0.0, 8.0);
+      sum += textureLod(uSrc, uvOf(L), lod).rgb;
+      w += 1.0;
+    }
+    o = vec4(sum / w * uScale, 1.0);
+    return;
+  }
+  float a = uRough * uRough;
+  for (uint i = 0u; i < S; i++) {
+    vec2 xi = hamm(i, S);
+    float ph = 2.0 * PI * xi.y, ct = sqrt((1.0 - xi.x) / (1.0 + (a * a - 1.0) * xi.x)), st = sqrt(1.0 - ct * ct);
+    vec3 H = tx * (st * cos(ph)) + ty * (st * sin(ph)) + N * ct;
+    vec3 L = 2.0 * dot(N, H) * H - N;
+    float NoL = dot(N, L);
+    if (NoL <= 0.0) continue;
+    float a2 = a * a, f = (ct * a2 - ct) * ct + 1.0, D = a2 / (PI * f * f);
+    float pdf = D * 0.25 + 1e-4;
+    float lod = uRough < 0.02 ? 0.0 : clamp(0.5 * log2(1.0 / (float(S) * pdf * texel)) + 1.0, 0.0, 8.0);
+    sum += textureLod(uSrc, uvOf(L), lod).rgb * NoL;
+    w += NoL;
+  }
+  o = vec4(sum / max(w, 1e-4) * uScale, 1.0);
+}`;
+
+  // ---------- particle shaders ----------
+  // Shared slot bookkeeping: generation, age, life, and hashed randoms per (slot, generation).
+  const G_SLOT = `
+uniform uint uSeed; uniform vec4 uLife;
+float rnd(int i, float k, uint c) { return float(hashu(uint(i) * 0x9E3779B1u ^ hashu(uint(int(k)) + c * 0x632BE5ABu + uSeed)) >> 8) / 16777216.0; }
+void slotAt(int i, float t, float P, out float k, out float age) {
+  if (P <= 0.0) { k = 0.0; age = t; return; }
+  float ph = fract(float(i) * 0.6180339887) * P;
+  k = floor((t - ph) / P);
+  age = t - (ph + k * P);
+}
+float lifeOf(int i, float k) { return uLife.y <= 0.0 ? 1e9 : mix(uLife.x, uLife.y, rnd(i, k, 1u)); }`;
+
+  // Flow fields, the same formulas as E3.flow: uniform, cylinder, Joukowski airfoil.
+  const G_FLOW = `
+uniform vec4 uFlowA; uniform vec4 uFlowB; uniform vec4 uFlowC;
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+vec2 cdiv(vec2 a, vec2 b) { float d = max(dot(b, b), 1e-30); return vec2(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / d; }
+vec2 csqrt(vec2 a) { float r = length(a), t = atan(a.y, a.x) * 0.5; return sqrt(r) * vec2(cos(t), sin(t)); }
+// uFlowA: kind, U, alpha, S. uFlowB: center xyz, mid. uFlowC: mu.x, mu.y, a, gamma. Returns w = 0 inside the body.
+vec4 flowAt(vec3 p) {
+  int kind = int(uFlowA.x + 0.5);
+  float U = uFlowA.y;
+  if (kind == 0) return vec4(U, 0.0, 0.0, 1.0);
+  float al = uFlowA.z, ca = cos(al), sa = sin(al);
+  vec2 x = (p.xy - uFlowB.xy) / uFlowA.w;
+  float g = uFlowC.w / (2.0 * PI);
+  if (kind == 1) {
+    float R = uFlowC.z;
+    if (dot(x, x) < R * R) return vec4(0.0);
+    vec2 t = cdiv(vec2(R * R, 0.0), cmul(x, x));
+    vec2 w = vec2(U * (1.0 - t.x), -U * t.y) + cdiv(vec2(0.0, g), x);
+    return vec4(w.x, -w.y, 0.0, 1.0);
+  }
+  vec2 z = vec2(x.x * ca - x.y * sa + uFlowB.w, x.x * sa + x.y * ca);
+  vec2 s = csqrt(vec2(z.x * z.x - z.y * z.y - 4.0, 2.0 * z.x * z.y));
+  vec2 z1 = (z + s) * 0.5, z2 = (z - s) * 0.5, mu = uFlowC.xy;
+  float d1 = length(z1 - mu), d2 = length(z2 - mu);
+  vec2 ze = d1 >= d2 ? z1 : z2;
+  if (max(d1, d2) < uFlowC.z * 1.002) return vec4(0.0);
+  vec2 zm = ze - mu;
+  vec2 t = cdiv(cmul(vec2(uFlowC.z * uFlowC.z, 0.0), vec2(cos(al), sin(al))), cmul(zm, zm));
+  vec2 dW = U * (vec2(cos(al), -sin(al)) - t) + cdiv(vec2(0.0, g), zm);
+  vec2 iz = cdiv(vec2(1.0, 0.0), cmul(ze, ze));
+  vec2 dw = cdiv(dW, vec2(1.0 - iz.x, -iz.y));
+  float u = dw.x, v = -dw.y;
+  return vec4(u * ca + v * sa, -u * sa + v * ca, 0.0, 1.0);
+}`;
+
+  // One fixed step of the particle simulation, run by transform feedback.
+  const VS_PUPDATE = `#version 300 es
+${G_COMMON}
+${G_SLOT}
+${G_FLOW}
+layout(location=0) in vec4 aP; layout(location=1) in vec4 aV;
+out vec4 oP; out vec4 oV;
+uniform float uT; uniform float uH; uniform mat4 uEmitM;
+uniform vec4 uEm0; uniform vec4 uEm1; uniform vec4 uEm2; uniform vec4 uEm3; uniform vec4 uEm4;
+uniform highp sampler2D uSamples;
+uniform vec4 uGrav; uniform vec4 uWind; uniform vec4 uTurb; uniform vec4 uVortA; uniform vec4 uVortB; uniform vec4 uVortC;
+uniform vec4 uAttr[4]; uniform vec4 uAttrR; uniform int uNAttr;
+uniform vec4 uPlane[8]; uniform vec4 uPlaneB[8]; uniform int uNPlane;
+uniform vec4 uSph[4]; uniform vec4 uSphB[4]; uniform int uNSph;
+uniform vec4 uKillMin; uniform vec4 uKillMax;
+// uEm0: shape, radius, thickness/angle, rake lanes. uEm1: position xyz, spread. uEm2: direction xyz, speed0.
+// uEm3: speed1, thermal, along (0 dir, 1 normal, 2 radial), surface. uEm4: size xyz (box) or line end xyz, nSamples.
+void emit(int i, float k, out vec3 p, out vec3 v) {
+  float shape = uEm0.x, R = uEm0.y;
+  vec3 dir = normalize(uEm2.xyz);
+  vec3 tmp = abs(dir.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  vec3 u = normalize(cross(dir, tmp)), w = cross(dir, u);
+  float lanes = uEm0.w;
+  vec3 n = dir; p = vec3(0.0);
+  if (shape > 0.5 && shape < 3.5) { // 1 disk, 2 ring, 3 cone
+    float a = 6.2831853 * rnd(i, k, 10u);
+    float rr = shape > 1.5 && shape < 2.5 ? R + uEm0.z * (rnd(i, k, 11u) - 0.5) : R * sqrt(rnd(i, k, 11u));
+    vec3 radial = u * cos(a) + w * sin(a);
+    p = radial * rr;
+    if (shape > 2.5) n = normalize(dir + radial * tan(uEm0.z) * (R > 0.0 ? rr / R : 1.0));
+    if (shape > 1.5 && shape < 2.5 && uEm3.z > 1.5) n = radial;
+  } else if (shape > 3.5 && shape < 4.5) { // sphere
+    float z = 2.0 * rnd(i, k, 10u) - 1.0, a = 6.2831853 * rnd(i, k, 11u), q = sqrt(1.0 - z * z);
+    n = vec3(q * cos(a), z, q * sin(a));
+    p = n * (uEm3.w > 0.5 ? R : R * pow(rnd(i, k, 12u), 1.0 / 3.0));
+  } else if (shape > 4.5 && shape < 5.5) { // box
+    float ry = rnd(i, k, 11u);
+    if (lanes > 0.5) ry = (floor(ry * lanes) + 0.5) / lanes;
+    p = (vec3(rnd(i, k, 10u), ry, rnd(i, k, 12u)) - 0.5) * uEm4.xyz;
+  } else if (shape > 5.5 && shape < 6.5) { // line from position to end
+    float t = rnd(i, k, 10u);
+    if (lanes > 0.5) t = (floor(t * lanes) + 0.5) / lanes;
+    p = (uEm4.xyz - uEm1.xyz) * t;
+  } else if (shape > 6.5) { // mesh samples
+    int j = min(int(uEm4.w) - 1, int(rnd(i, k, 10u) * uEm4.w));
+    p = texelFetch(uSamples, ivec2(j % 1024, (j / 1024) * 2), 0).xyz - uEm1.xyz;
+    n = texelFetch(uSamples, ivec2(j % 1024, (j / 1024) * 2 + 1), 0).xyz;
+  }
+  p += uEm1.xyz;
+  vec3 d = (uEm3.z > 0.5 || (shape > 2.5 && shape < 3.5)) ? n : dir;
+  float spread = uEm1.w;
+  if (spread > 0.0) {
+    float ct = 1.0 - rnd(i, k, 13u) * (1.0 - cos(spread)), st = sqrt(max(0.0, 1.0 - ct * ct)), a = 6.2831853 * rnd(i, k, 14u);
+    vec3 du = normalize(cross(d, abs(d.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))), dw = cross(d, du);
+    d = d * ct + du * st * cos(a) + dw * st * sin(a);
+  }
+  v = d * mix(uEm2.w, uEm3.x, rnd(i, k, 15u));
+  if (uEm3.y > 0.0) {
+    vec3 gs;
+    for (int c = 0; c < 3; c++) gs[c] = sqrt(-2.0 * log(max(1e-7, rnd(i, k, uint(16 + c * 2))))) * cos(6.2831853 * rnd(i, k, uint(17 + c * 2)));
+    v += gs * uEm3.y;
+  }
+  p = (uEmitM * vec4(p, 1.0)).xyz;
+  v = mat3(uEmitM) * v;
+}
+void main() {
+  int i = gl_VertexID;
+  float k, age;
+  slotAt(i, uT, uLife.y, k, age);
+  float life = lifeOf(i, k);
+  vec3 p = aP.xyz, v = aV.xyz;
+  float gen = aP.w, hit = 0.0, h = uH;
+  if (floor(gen) != k) {
+    if (age > uH + 1e-5 && uLife.y > 0.0) { oP = vec4(p, k + 0.5); oV = vec4(v, 0.0); return; }
+    emit(i, k, p, v);
+    gen = k;
+    h = clamp(age, 0.0, uH);
+  }
+  if (gen != k || age > life) { oP = vec4(p, gen); oV = vec4(v, 0.0); return; }
+  if (uFlowA.x > -0.5) {
+    vec4 f1 = flowAt(p);
+    if (f1.w < 0.5) { oP = vec4(p, k + 0.5); oV = vec4(v, 0.0); return; }
+    vec4 f2 = flowAt(p + f1.xyz * h * 0.5);
+    v = f2.w > 0.5 ? f2.xyz : f1.xyz;
+    if (uTurb.x > 0.0) v += curl(p * uTurb.y + vec3(0.0, 0.0, uT * uTurb.z)) * uTurb.x;
+    p += v * h;
+  } else {
+    vec3 acc = uGrav.xyz + uGrav.w * (uWind.xyz - v);
+    acc.y += uWind.w * max(0.0, 1.0 - age / life);
+    if (uTurb.x > 0.0) acc += curl(p * uTurb.y + vec3(0.0, 0.0, uT * uTurb.z)) * uTurb.x;
+    if (uVortC.y > 0.5) {
+      vec3 r = p - uVortA.xyz, ax = uVortB.xyz;
+      vec3 rp = r - ax * dot(r, ax);
+      acc += uVortA.w * cross(ax, rp) / (dot(rp, rp) + uVortB.w * uVortB.w) - rp * uVortC.x;
+    }
+    for (int j = 0; j < 4; j++) {
+      if (j >= uNAttr) break;
+      vec3 d = uAttr[j].xyz - p;
+      acc += d * uAttr[j].w / pow(dot(d, d) + uAttrR[j] * uAttrR[j], 1.5);
+    }
+    v += acc * h;
+    p += v * h;
+  }
+  for (int j = 0; j < 8; j++) {
+    if (j >= uNPlane) break;
+    vec3 n = uPlane[j].xyz;
+    float s = dot(n, p) - uPlane[j].w;
+    if (s >= 0.0) continue;
+    p -= n * s;
+    float vn = dot(n, v) - uPlaneB[j].z;
+    if (vn < 0.0) {
+      float jj = -(1.0 + uPlaneB[j].x) * vn;
+      v += n * jj;
+      if (uPlaneB[j].y > 0.0) { float vn2 = dot(n, v); v -= (v - n * vn2) * uPlaneB[j].y; }
+      hit += jj;
+    }
+  }
+  for (int j = 0; j < 4; j++) {
+    if (j >= uNSph) break;
+    vec3 d = p - uSph[j].xyz;
+    float L = max(length(d), 1e-9), sg = uSphB[j].y, s = (L - uSph[j].w) * sg;
+    if (s >= 0.0) continue;
+    vec3 n = d * (sg / L);
+    p -= n * s;
+    float vn = dot(n, v);
+    if (vn < 0.0) { float jj = -(1.0 + uSphB[j].x) * vn; v += n * jj; hit += jj; }
+  }
+  if (uKillMin.w > 0.5 && (any(lessThan(p, uKillMin.xyz)) || any(greaterThan(p, uKillMax.xyz)))) gen = k + 0.5;
+  oP = vec4(p, gen);
+  oV = vec4(v, hit);
+}`;
+  const FS_NULL = `#version 300 es
+precision highp float;
+out vec4 o;
+void main() { o = vec4(0.0); }`;
+
+  // Particle sprites. Styles: 0 smoke (soft lit puffs), 1 fire (additive, black-body color
+  // over life), 2 spark (additive streaks), 3 streak (tracer dashes along the velocity),
+  // 4 sphere (lit balls with depth and ink, drawn with the solids), 5 dot (flat discs).
+  const VS_PARTICLE = `#version 300 es
+${G_COMMON}
+${G_SLOT}
+layout(location=0) in vec4 aP; layout(location=1) in vec4 aV;
+uniform mat4 uViewProj; uniform vec3 uEye; uniform vec3 uCamR; uniform vec3 uCamU;
+uniform vec4 uTime; uniform vec4 uSize; uniform int uStyle; uniform vec4 uShape;
+out vec2 vUv; out float vAge; out float vRnd; out vec3 vWorld; out vec3 vCenter; out float vSize; out vec3 vVel;
+flat out int vAlive;
+void main() {
+  int i = gl_InstanceID;
+  float k, age;
+  slotAt(i, uTime.x, uLife.y, k, age);
+  float life = lifeOf(i, k);
+  float r = rnd(i, k, 7u);
+  vAlive = 0;
+  vUv = vec2(0.0); vAge = 0.0; vRnd = r; vWorld = vec3(0.0); vCenter = vec3(0.0); vSize = 0.0; vVel = vec3(0.0);
+  if (aP.w != k || age < 0.0 || age > life || r > uTime.w) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vAlive = 1;
+  float dtR = uTime.y - uTime.x;
+  vec3 p = aP.xyz + aV.xyz * dtR;
+  age += dtR;
+  float t01 = uLife.y <= 0.0 ? 0.0 : clamp(age / life, 0.0, 1.0);
+  float size = mix(uSize.x, uSize.y, sqrt(t01)) * (1.0 + uSize.z * (rnd(i, k, 8u) - 0.5));
+  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  vUv = c; vAge = t01; vCenter = p; vSize = size; vVel = aV.xyz;
+  vec3 w;
+  if (uStyle == 2 || uStyle == 3) {
+    vec3 v = aV.xyz; float sp = length(v);
+    vec3 dir = sp > 1e-5 ? v / sp : uCamU;
+    float len = max(sp * uShape.x, size);
+    vec3 side = cross(dir, normalize(uEye - p));
+    side = length(side) > 1e-5 ? normalize(side) : uCamR;
+    float wd = uShape.y > 0.0 ? uShape.y : size * 0.3;
+    w = p + dir * (c.y * 0.5 - 0.5) * len + side * c.x * wd * 0.5;
+  } else {
+    float ang = uStyle == 0 ? r * 6.2831853 + age * (r - 0.5) * 0.6 : 0.0;
+    vec2 rc = mat2(cos(ang), sin(ang), -sin(ang), cos(ang)) * c;
+    float s = uStyle == 4 ? size * 1.25 : size * 0.5;
+    w = p + (uCamR * rc.x + uCamU * rc.y) * s;
+    if (uStyle == 4) vUv = c;
+  }
+  vWorld = w;
+  gl_Position = uViewProj * vec4(w, 1.0);
+}`;
+
+  const FS_PARTICLE = `#version 300 es
+${G_COMMON}
+${G_ENV}
+in vec2 vUv; in float vAge; in float vRnd; in vec3 vWorld; in vec3 vCenter; in float vSize; in vec3 vVel;
+flat in int vAlive;
+uniform int uStyle; uniform vec4 uShape; uniform vec3 uEye; uniform vec3 uCamR; uniform vec3 uCamU; uniform mat4 uView;
+uniform sampler2D uDepth; uniform vec2 uDepthScale;
+uniform vec3 uColA; uniform vec3 uColB; uniform vec4 uColorBy; uniform vec4 uHeatP; uniform vec4 uFade;
+uniform vec3 uLight; uniform vec3 uKeyCol; uniform vec4 uPtPos[2]; uniform vec3 uPtCol[2]; uniform vec4 uLook;
+out vec4 o;
+vec3 colorAt() {
+  float t = uColorBy.x > 1.5 ? clamp((length(vVel) - uColorBy.y) / max(uColorBy.z - uColorBy.y, 1e-6), 0.0, 1.0) : (uColorBy.x > 0.5 ? vAge : 0.0);
+  return mix(uColA, uColB, t);
+}
+void main() {
+  if (vAlive == 0) discard;
+  float sceneZ = linDepth(texture(uDepth, gl_FragCoord.xy * uDepthScale).r);
+  float fragZ = -(uView * vec4(vWorld, 1.0)).z;
+  if (fragZ > sceneZ) discard;
+  float soft = clamp((sceneZ - fragZ) / max(uFade.z, 1e-5), 0.0, 1.0);
+  float life = smoothstep(0.0, max(uFade.x, 1e-4), vAge) * (1.0 - smoothstep(1.0 - max(uFade.y, 1e-4), 1.0, vAge));
+  float d2 = dot(vUv, vUv);
+  if (uStyle == 0) {
+    float n = vnoise(vec3(vUv * 1.8 + vRnd * 13.0, vRnd * 7.0 + vAge * 1.5));
+    float puff = smoothstep(1.0, 0.15, d2 + 0.45 * n);
+    float a = puff * life * soft * uFade.w;
+    if (a < 0.002) discard;
+    vec3 toEye = normalize(uEye - vCenter);
+    vec3 nrm = normalize(uCamR * vUv.x + uCamU * vUv.y + toEye * sqrt(max(1.0 - d2, 0.05)));
+    vec3 alb = toLin(colorAt());
+    vec3 lit = envDiff(nrm) * uLook.x + uKeyCol * (0.35 + 0.65 * max(dot(nrm, uLight), 0.0)) / PI;
+    for (int i = 0; i < 2; i++) {
+      if (uPtPos[i].w <= 0.0) continue;
+      vec3 d = uPtPos[i].xyz - vCenter;
+      float att = 1.0 / (1.0 + dot(d, d) / (uPtPos[i].w * uPtPos[i].w));
+      lit += uPtCol[i] * att * (0.4 + 0.6 * max(dot(nrm, normalize(d)), 0.0)) / PI;
+    }
+    vec3 col = toSrgb(tonemap(alb * lit * uLook.z));
+    o = vec4(col * a, a);
+  } else if (uStyle == 1 || uStyle == 2) {
+    float T = mix(uHeatP.x, uHeatP.y, vAge);
+    vec3 e = blackbody(T) * glowOf(T) * uHeatP.z;
+    float shape = uStyle == 1 ? pow(max(1.0 - d2, 0.0), 1.5) * (0.75 + 0.25 * vnoise(vec3(vUv * 2.5, vRnd * 9.0 + vAge * 3.0)))
+                              : (1.0 - vUv.x * vUv.x) * smoothstep(-1.0, 0.4, vUv.y);
+    float a = shape * life * soft;
+    if (a < 0.002) discard;
+    vec3 c = toSrgb(tonemap(e)) * a;
+    o = vec4(c + e * a * uLook.w * 0.15, 0.0);
+  } else if (uStyle == 3) {
+    float across = 1.0 - smoothstep(0.35, 1.0, abs(vUv.x));
+    float along = smoothstep(-1.0, 0.6, vUv.y);
+    float a = across * along * life * uFade.w;
+    if (a < 0.003) discard;
+    o = vec4(colorAt() * a, a);
+  } else {
+    float edge = 1.0 - smoothstep(0.8, 1.0, sqrt(d2));
+    float a = edge * life * uFade.w;
+    if (a < 0.003) discard;
+    o = vec4(colorAt() * a, a);
+  }
+}`;
+
+  // Sphere particles are drawn with the solids: an exact ray-sphere hit per pixel, porcelain
+  // shading, real depth, and a part id, so molecules get ink outlines and occlude properly.
+  const FS_PSPHERE = `#version 300 es
+${G_COMMON}
+${G_SHADOW}
+in vec2 vUv; in float vAge; in float vRnd; in vec3 vWorld; in vec3 vCenter; in float vSize; in vec3 vVel;
+flat in int vAlive;
+uniform vec3 uEye; uniform mat4 uViewProj; uniform vec3 uLight; uniform float uId; uniform float uOrthoCam; uniform vec3 uCamF;
+uniform vec3 uColA; uniform vec3 uColB; uniform vec4 uColorBy; uniform float uPartShadow;
+layout(location=0) out vec4 oColor;
+layout(location=1) out vec4 oNormal;
+void main() {
+  if (vAlive == 0) discard;
+  vec3 ro = uOrthoCam > 0.5 ? vWorld - uCamF * 1e3 : uEye;
+  vec3 rd = uOrthoCam > 0.5 ? uCamF : normalize(vWorld - uEye);
+  vec3 oc = ro - vCenter;
+  float b = dot(oc, rd), c = dot(oc, oc) - vSize * vSize, h = b * b - c;
+  if (h < 0.0) discard;
+  float t = -b - sqrt(h);
+  vec3 P = ro + rd * t, N = normalize(P - vCenter), V = -rd;
+  float tc = uColorBy.x > 1.5 ? clamp((length(vVel) - uColorBy.y) / max(uColorBy.z - uColorBy.y, 1e-6), 0.0, 1.0) : 0.0;
+  vec3 base = mix(uColA, uColB, tc);
+  float vis = mix(1.0, shadowAt(P, N), uPartShadow);
+  float ndl = dot(N, uLight);
+  float wrap = clamp((ndl + 0.5) / 1.5, 0.0, 1.0);
+  wrap = wrap * wrap * (3.0 - 2.0 * wrap);
+  vec3 col = mix(base * vec3(0.84, 0.86, 0.90), base, wrap * vis);
+  col *= 0.92 + 0.08 * (0.5 + 0.5 * N.y);
+  col += vec3(pow(max(dot(N, normalize(uLight + V)), 0.0), 40.0) * 0.08) * vis;
+  col = mix(col, vec3(1.0), pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0) * 0.1);
+  vec4 clip = uViewProj * vec4(P, 1.0);
+  gl_FragDepth = clip.z / clip.w * 0.5 + 0.5;
+  oColor = vec4(col, 1.0);
+  oNormal = vec4(N * 0.5 + 0.5, uId);
+}`;
+
+  // The plume: march the view ray through a cylinder around the jet, stopping at the first
+  // solid (read from the depth buffer), adding emission and absorbing along the way.
+  const FS_PLUME = `#version 300 es
+${G_COMMON}
+in vec3 vWorld;
+uniform mat4 uInvModel; uniform vec3 uEye; uniform mat4 uView; uniform vec3 uCamF;
+uniform sampler2D uDepth; uniform vec2 uDepthScale;
+uniform vec4 uP0; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uP3; uniform vec4 uLook;
+out vec4 o;
+// uP0: exit radius, length, bound radius, time. uP1: throttle, cell length, core T, steps.
+// uP2: spread, turbulence, intensity, fuel. uP3: world-to-local scale, flow speed, _, _.
+float fbm(vec3 x) { return 0.55 * vnoise(x) + 0.3 * vnoise(x * 2.03 + 17.0) + 0.15 * vnoise(x * 4.1 + 41.0); }
+vec3 field(vec3 q, out float sigma) {
+  float r0 = uP0.x, L = uP0.y, lam = uP1.y, thr = uP1.x;
+  float s = -q.y, r = length(q.xz);
+  float R = r0 * (1.0 + uP2.x * s / r0);
+  float cells = s / lam;
+  R *= 1.0 - 0.12 * (0.5 + 0.5 * cos(6.2831853 * cells)) * exp(-s / (lam * 4.0));
+  float turb = uP2.y * smoothstep(0.0, lam * 2.5, s);
+  vec3 nq = vec3(q.x, q.y + uP0.w * uP3.y, q.z) / r0 * 1.4;
+  float n = turb > 0.001 ? fbm(nq) : 0.0;
+  float rr = r / R + turb * n * 0.45;
+  float body = smoothstep(1.08, 0.5, rr) * smoothstep(0.0, 0.08 * r0, s);
+  float fade = 1.0 - smoothstep(0.55 * L, L, s);
+  float T = uP1.z * (0.5 + 0.5 * exp(-s / (L * 0.35))) * (1.0 - 0.3 * smoothstep(0.35, 1.0, rr));
+  float dia = 0.0;
+  for (int k = 0; k < 7; k++) {
+    float sk = (float(k) + 0.62) * lam;
+    float dk = (s - sk) / (0.14 * lam);
+    dia += exp(-dk * dk - pow(r / (0.38 * R), 2.0)) * pow(0.74, float(k));
+  }
+  float coreLen = lam * 0.85;
+  float core = s < coreLen ? exp(-pow(r / (0.8 * r0 * (1.0 - s / coreLen) + 1e-3), 2.0)) : 0.0;
+  int fuel = int(uP2.w + 0.5);
+  vec3 bb = blackbody(T) * glowOf(T);
+  vec3 tint = fuel == 1 ? vec3(0.55, 0.62, 1.0) : fuel == 2 ? vec3(0.75, 0.62, 1.0) : vec3(1.0);
+  float bodyGain = fuel == 2 ? 0.08 : fuel == 1 ? 0.35 : 1.0;
+  vec3 e = bb * body * fade * bodyGain * mix(vec3(1.0), tint, 0.6);
+  vec3 hot = blackbody(T * 1.35) * glowOf(T * 1.35);
+  e += hot * dia * (fuel == 2 ? 0.9 : 0.55) * fade * mix(vec3(1.0), tint, 0.5);
+  e += hot * core * 0.9 * mix(vec3(1.0), tint, 0.7);
+  sigma = body * fade * (fuel == 0 ? 0.35 : 0.08) * (0.6 + 0.4 * smoothstep(0.3 * L, L, s));
+  return e * uP2.z * thr * 0.16;
+}
+void main() {
+  vec3 rdw = normalize(vWorld - uEye);
+  vec3 eye = uEye;
+  if (uOrtho > 0.5) { rdw = uCamF; eye = vWorld - rdw * dot(vWorld - uEye, rdw); }
+  vec3 ro = (uInvModel * vec4(eye, 1.0)).xyz;
+  vec3 rd = mat3(uInvModel) * rdw;
+  float Rb = uP0.z, L = uP0.y;
+  float a = dot(rd.xz, rd.xz), b = 2.0 * dot(ro.xz, rd.xz), c = dot(ro.xz, ro.xz) - Rb * Rb;
+  float t0 = -1e9, t1 = 1e9;
+  if (a > 1e-9) {
+    float disc = b * b - 4.0 * a * c;
+    if (disc < 0.0) discard;
+    float sq = sqrt(disc);
+    t0 = (-b - sq) / (2.0 * a); t1 = (-b + sq) / (2.0 * a);
+  } else if (c > 0.0) discard;
+  if (abs(rd.y) > 1e-9) {
+    float ya = (0.0 - ro.y) / rd.y, yb = (-L - ro.y) / rd.y;
+    t0 = max(t0, min(ya, yb)); t1 = min(t1, max(ya, yb));
+  } else if (ro.y > 0.0 || ro.y < -L) discard;
+  t0 = max(t0, 0.0);
+  float sceneZ = linDepth(texture(uDepth, gl_FragCoord.xy * uDepthScale).r);
+  float dz = uOrtho > 0.5 ? 1.0 : dot(rdw, uCamF);
+  float tScene = uOrtho > 0.5 ? sceneZ - dot(eye - uEye, uCamF) : sceneZ / max(dz, 1e-4);
+  t1 = min(t1, tScene);
+  if (t1 <= t0) discard;
+  int steps = int(uP1.w);
+  float dt = (t1 - t0) / float(steps);
+  float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  vec3 E = vec3(0.0); float Tr = 1.0;
+  float scale = uP3.x;
+  for (int i = 0; i < 96; i++) {
+    if (i >= steps || Tr < 0.01) break;
+    float t = t0 + (float(i) + jit) * dt;
+    vec3 q = ro + rd * t;
+    if (length(q.xz) > Rb) continue;
+    float sig;
+    vec3 e = field(q, sig);
+    float ds = dt * scale / uP0.x;
+    E += Tr * e * ds;
+    Tr *= exp(-sig * ds);
+  }
+  float alpha = 1.0 - Tr;
+  vec3 col = toSrgb(tonemap(E * uLook.z));
+  o = vec4(col + E * uLook.w * 0.12, alpha);
+}`;
+
+  // ---------- WebGL renderer ----------
   let R = null;
-  function compile(gl, vs, fs) {
+  function compile(gl, vs, fs, varyings) {
     const make = (type, src) => {
       const s = gl.createShader(type);
       gl.shaderSource(s, src);
@@ -962,16 +2458,48 @@ void main() {
     const p = gl.createProgram();
     gl.attachShader(p, make(gl.VERTEX_SHADER, vs));
     gl.attachShader(p, make(gl.FRAGMENT_SHADER, fs));
+    if (varyings) gl.transformFeedbackVaryings(p, varyings, gl.SEPARATE_ATTRIBS);
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`program: ${gl.getProgramInfoLog(p)}`);
     const u = {};
     const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
     for (let i = 0; i < n; i++) {
-      const name = gl.getActiveUniform(p, i).name;
-      u[name] = gl.getUniformLocation(p, name);
+      const info = gl.getActiveUniform(p, i);
+      const loc = gl.getUniformLocation(p, info.name);
+      const entry = { loc, type: info.type, size: info.size };
+      u[info.name] = entry;
+      if (info.name.endsWith("[0]")) u[info.name.slice(0, -3)] = entry;
     }
     return { p, u };
   }
+  // Sets a uniform by name from a number or array, whatever its GLSL type; unused names are ignored.
+  function setU(P, name, v) {
+    const e = P.u[name];
+    if (!e || v == null) return;
+    const { gl } = R, l = e.loc;
+    switch (e.type) {
+      case gl.FLOAT: e.size > 1 ? gl.uniform1fv(l, v) : gl.uniform1f(l, v); break;
+      case gl.FLOAT_VEC2: gl.uniform2fv(l, v); break;
+      case gl.FLOAT_VEC3: gl.uniform3fv(l, v); break;
+      case gl.FLOAT_VEC4: gl.uniform4fv(l, v); break;
+      case gl.FLOAT_MAT3: gl.uniformMatrix3fv(l, false, v); break;
+      case gl.FLOAT_MAT4: gl.uniformMatrix4fv(l, false, v); break;
+      case gl.UNSIGNED_INT: gl.uniform1ui(l, v >>> 0); break;
+      default: gl.uniform1i(l, v | 0);
+    }
+  }
+  const setAll = (P, o) => { for (const k in o) setU(P, k, o[k]); };
+
+  const PROGRAMS = {
+    main: () => [VS, FS_MAIN], depth: () => [VS, FS_DEPTH], ghost: () => [VS, FS_GHOST], glass: () => [VS, FS_GLASS],
+    ground: () => [VS_GROUND, FS_GROUND], composite: () => [VS_FULL, FS_COMPOSITE],
+    extract: () => [VS_FULL, FS_BLOOM_EXTRACT], down: () => [VS_FULL, FS_DOWN], up: () => [VS_FULL, FS_UP],
+    env: () => [VS_FULL, FS_ENV], prefilter: () => [VS_FULL, FS_PREFILTER],
+    pupdate: () => [VS_PUPDATE, FS_NULL, ["oP", "oV"]], particle: () => [VS_PARTICLE, FS_PARTICLE], psphere: () => [VS_PARTICLE, FS_PSPHERE],
+    plume: () => [VS, FS_PLUME],
+  };
+  // Programs compile the first time a frame needs them, so a page without particles never pays for them.
+  const prog = name => R.prog[name] || (R.prog[name] = compile(R.gl, ...PROGRAMS[name]()));
 
   // One WebGL context serves every figure. It renders into an OffscreenCanvas and each
   // frame is handed over with transferToImageBitmap(), which is exact; reading a shared
@@ -982,45 +2510,187 @@ void main() {
     const canvas = offscreen ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
     const gl = canvas.getContext("webgl2", { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: !offscreen, depth: true });
     if (!gl) throw new Error("this figure needs WebGL 2, which this browser doesn't provide");
+    const hdr = !!gl.getExtension("EXT_color_buffer_float");
     R = {
-      canvas, gl, offscreen, fw: 0, fh: 0,
-      main: compile(gl, VS, FS_MAIN),
-      ghost: compile(gl, VS, FS_GHOST),
-      shadow: compile(gl, VS_SHADOW, FS_SHADOW),
-      composite: compile(gl, VS_FULL, FS_COMPOSITE),
+      canvas, gl, offscreen, hdr, prog: {}, env: new Map(), cw: 0, ch: 0,
+      maxSamples: Math.min(4, gl.getParameter(gl.MAX_SAMPLES) || 0),
       empty: gl.createVertexArray(),
+      main: null, msaa: null, scene: null, fx: null, bloom: [], shadow: {},
     };
-    canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); R = null; });
+    R.colorFmt = hdr ? [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT] : [gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE];
+    const sampler = (cmp, filter) => {
+      const s = gl.createSampler();
+      gl.samplerParameteri(s, gl.TEXTURE_MIN_FILTER, filter);
+      gl.samplerParameteri(s, gl.TEXTURE_MAG_FILTER, filter);
+      gl.samplerParameteri(s, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.samplerParameteri(s, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      if (cmp) { gl.samplerParameteri(s, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE); gl.samplerParameteri(s, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL); }
+      return s;
+    };
+    R.sCmp = sampler(true, gl.LINEAR);
+    R.sRaw = sampler(false, gl.NEAREST);
+    R.dummyDepth = texture(1, 1, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST);
+    R.dummyColor = texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
+    if (canvas.addEventListener) canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); R = null; });
     return R;
   }
 
-  function targets(w, h) {
+  function texture(w, h, internal, format, type, filter, levels = 1) {
     const { gl } = R;
-    if (R.fbo && R.fw >= w && R.fh >= h) return;
-    const fw = Math.max(w, R.fw), fh = Math.max(h, R.fh);
-    if (R.fbo) { gl.deleteFramebuffer(R.fbo); [R.tColor, R.tNormal, R.tDepth].forEach(t => gl.deleteTexture(t)); }
-    const tex = (internal, format, type) => {
-      const t = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.texImage2D(gl.TEXTURE_2D, 0, internal, fw, fh, 0, format, type, null);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      return t;
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    if (levels > 1) gl.texStorage2D(gl.TEXTURE_2D, levels, internal, w, h);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, levels > 1 ? gl.LINEAR_MIPMAP_LINEAR : filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  }
+  function framebuffer(colors, depth) {
+    const { gl } = R;
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    colors.forEach((c, i) => {
+      if (c.rb) gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.RENDERBUFFER, c.rb);
+      else gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, c.tex || c, c.level ?? 0);
+    });
+    if (depth) {
+      if (depth.rb) gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth.rb);
+      else gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depth, 0);
+    }
+    gl.drawBuffers(colors.length ? colors.map((_, i) => gl.COLOR_ATTACHMENT0 + i) : [gl.NONE]);
+    if (!colors.length) gl.readBuffer(gl.NONE);
+    return fb;
+  }
+  const drop = (list, del) => list.forEach(x => x && del(x));
+
+  // Render targets grow to the largest figure and are shared; each frame uses a corner.
+  function targets(W, H, Wo, Ho, samples, needScene) {
+    const { gl } = R;
+    const [ci, cf, ct] = R.colorFmt;
+    let M = R.main;
+    if (!M || M.w < W || M.h < H) {
+      if (M) { gl.deleteFramebuffer(M.fb); drop([M.color, M.normal, M.depth], t => gl.deleteTexture(t)); }
+      const w = Math.max(W, M?.w ?? 0), h = Math.max(H, M?.h ?? 0);
+      M = R.main = { w, h };
+      M.color = texture(w, h, ci, cf, ct, gl.LINEAR);
+      M.normal = texture(w, h, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
+      M.depth = texture(w, h, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST);
+      M.fb = framebuffer([M.color, M.normal], M.depth);
+      if (R.scene) { gl.deleteFramebuffer(R.scene.fb); gl.deleteTexture(R.scene.tex); R.scene = null; }
+    }
+    if (needScene && (!R.scene || R.scene.w < M.w || R.scene.h < M.h)) {
+      if (R.scene) { gl.deleteFramebuffer(R.scene.fb); gl.deleteTexture(R.scene.tex); }
+      const tex = texture(M.w, M.h, ci, cf, ct, gl.LINEAR);
+      R.scene = { w: M.w, h: M.h, tex, fb: framebuffer([tex]) };
+    }
+    if (samples > 1) {
+      let S = R.msaa;
+      if (!S || S.w < W || S.h < H || S.samples !== samples) {
+        if (S) { gl.deleteFramebuffer(S.fb); drop([S.color, S.normal, S.depth], x => gl.deleteRenderbuffer(x.rb)); }
+        const w = Math.max(W, S?.w ?? 0), h = Math.max(H, S?.h ?? 0);
+        const rb = fmt => { const r = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, r); gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, fmt, w, h); return { rb: r }; };
+        S = R.msaa = { w, h, samples, color: rb(ci), normal: rb(gl.RGBA8), depth: rb(gl.DEPTH_COMPONENT24) };
+        S.fb = framebuffer([S.color, S.normal], S.depth);
+      }
+    }
+    let F = R.fx;
+    if (!F || F.w < Wo || F.h < Ho) {
+      if (F) { gl.deleteFramebuffer(F.fb); gl.deleteTexture(F.tex); }
+      const w = Math.max(Wo, F?.w ?? 0), h = Math.max(Ho, F?.h ?? 0);
+      const tex = texture(w, h, ci, cf, ct, gl.LINEAR);
+      F = R.fx = { w, h, tex, fb: framebuffer([tex]) };
+    }
+    if (R.cw < Wo || R.ch < Ho) {
+      R.cw = Math.max(R.cw, Wo); R.ch = Math.max(R.ch, Ho);
+      R.canvas.width = R.cw; R.canvas.height = R.ch;
+    }
+  }
+  function bloomTargets(Wo, Ho) {
+    const { gl } = R;
+    const [ci, cf, ct] = R.colorFmt;
+    let w = Math.ceil(Wo / 2), h = Math.ceil(Ho / 2);
+    const out = [];
+    for (let i = 0; i < 5 && w >= 4 && h >= 4; i++) {
+      let L = R.bloom[i];
+      if (!L || L.w < w || L.h < h) {
+        if (L) { gl.deleteFramebuffer(L.fb); gl.deleteTexture(L.tex); }
+        const tw = Math.max(w, L?.w ?? 0), th = Math.max(h, L?.h ?? 0);
+        const tex = texture(tw, th, ci, cf, ct, gl.LINEAR);
+        L = R.bloom[i] = { w: tw, h: th, tex, fb: framebuffer([tex]) };
+      }
+      out.push({ ...L, vw: w, vh: h });
+      w = Math.ceil(w / 2); h = Math.ceil(h / 2);
+    }
+    return out;
+  }
+
+  // The environment for a look and theme, made on the GPU the first time it's needed:
+  // a 512x256 lat-long source, then six prefiltered roughness levels and an irradiance map.
+  function environment(kind, dark, sun) {
+    const key = `${kind}|${dark ? 1 : 0}|${kind === 2 ? sun.map(v => v.toFixed(2)).join(",") : ""}`;
+    let E = R.env.get(key);
+    if (E) return E;
+    const { gl } = R;
+    const [ci, cf, ct] = R.colorFmt;
+    const enc = R.hdr ? 1 : 1 / 8;
+    const src = texture(512, 256, ci, cf, ct, gl.LINEAR, 9);
+    gl.bindTexture(gl.TEXTURE_2D, src);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    let fb = framebuffer([src]);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+    gl.viewport(0, 0, 512, 256);
+    const pe = prog("env");
+    gl.useProgram(pe.p);
+    setAll(pe, { uSize: [512, 256], uKind: kind, uDark: dark ? 1 : 0, uSun: sun, uOutScale: enc });
+    gl.bindVertexArray(R.empty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.deleteFramebuffer(fb);
+    gl.bindTexture(gl.TEXTURE_2D, src);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    const LEVELS = 6;
+    const spec = texture(256, 128, ci, cf, ct, gl.LINEAR, LEVELS);
+    gl.bindTexture(gl.TEXTURE_2D, spec);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    const irr = texture(64, 32, ci, cf, ct, gl.LINEAR);
+    gl.bindTexture(gl.TEXTURE_2D, irr);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    const pf = prog("prefilter");
+    gl.useProgram(pf.p);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src);
+    setAll(pf, { uSrc: 0, uSrcW: 512, uScale: 1 });
+    for (let l = 0; l <= LEVELS; l++) {
+      const isIrr = l === LEVELS;
+      const w = isIrr ? 64 : 256 >> l, h = isIrr ? 32 : 128 >> l;
+      fb = framebuffer([isIrr ? irr : { tex: spec, level: l }]);
+      gl.viewport(0, 0, w, h);
+      setAll(pf, { uSize: [w, h], uRough: l / (LEVELS - 1), uMode: isIrr ? 1 : 0 });
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.deleteFramebuffer(fb);
+    }
+    gl.deleteTexture(src);
+    gl.bindVertexArray(null);
+    E = { spec, irr, scale: 1 / enc, lod: LEVELS - 1 };
+    R.env.set(key, E);
+    return E;
+  }
+
+  function shadowMaps(size, glass) {
+    const { gl } = R;
+    const S = R.shadow;
+    const make = () => {
+      const t = texture(size, size, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST);
+      return { tex: t, fb: framebuffer([], t) };
     };
-    R.tColor = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
-    R.tNormal = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
-    R.tDepth = tex(gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT);
-    R.fbo = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, R.fbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, R.tColor, 0);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, R.tNormal, 0);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, R.tDepth, 0);
-    R.fw = fw;
-    R.fh = fh;
-    R.canvas.width = fw;
-    R.canvas.height = fh;
+    if (S.size !== size) {
+      if (S.main) { gl.deleteFramebuffer(S.main.fb); gl.deleteTexture(S.main.tex); }
+      if (S.glass) { gl.deleteFramebuffer(S.glass.fb); gl.deleteTexture(S.glass.tex); }
+      S.main = make(); S.glass = null; S.size = size;
+    }
+    if (glass && !S.glass) S.glass = make();
+    return S;
   }
 
   function upload(m) {
@@ -1042,13 +2712,15 @@ void main() {
     return m._gpu;
   }
 
-  // Collects visible mesh nodes with world matrices and world-space bounds.
+  // Collects visible mesh nodes with world matrices and world-space bounds, and the
+  // particle systems and plumes, which draw themselves.
   function collect(scene) {
-    const items = [];
+    const items = [], fx = [];
     const walk = (node, parentM) => {
       if (!node.visible) return;
       const world = m4.multiply(parentM, node.local());
-      if (node.mesh && node.mesh.indices.length) {
+      if (node.isParticles || node.isPlume) fx.push({ node, world, center: m4.apply(world, [0, 0, 0]) });
+      else if (node.mesh && node.mesh.indices.length) {
         const b = node.mesh.bounds;
         const c = m4.apply(world, b.center);
         const sx = Math.hypot(world[0], world[1], world[2]), sy = Math.hypot(world[4], world[5], world[6]), sz = Math.hypot(world[8], world[9], world[10]);
@@ -1057,6 +2729,7 @@ void main() {
       for (const c of node.children) walk(c, world);
     };
     walk(scene, m4.identity());
+    items.fx = fx;
     return items;
   }
 
@@ -1129,26 +2802,185 @@ void main() {
     if (fov > 0) distance /= zoom;
     const eye = v3.add(target, v3.scale(dir, distance));
     const view = m4.lookAt(eye, target, [0, 1, 0]);
-    const reach = v3.dist(target, bounds.center) + bounds.radius;
+    const reach = v3.dist(target, bounds.center) + bounds.radius * (cam.reach ?? 1);
     const near = Math.max(distance - reach * 1.5, distance * 0.02), far = distance + reach * 1.5;
-    let proj, worldPerPx;
+    let proj, worldPerPx, tanHalf;
     if (fov > 0) {
       proj = m4.perspective(fov, aspect, near, far);
       worldPerPx = 2 * distance * Math.tan(fov / 2);
+      tanHalf = [Math.tan(fov / 2) * aspect, Math.tan(fov / 2)];
     } else {
       const hh = half / zoom;
       proj = m4.ortho(-hh * aspect, hh * aspect, -hh, hh, near, far);
       worldPerPx = 2 * hh;
+      tanHalf = [hh * aspect, hh];
     }
-    return { eye, target, view, proj, vp: m4.multiply(proj, view), near, far, ortho: !(fov > 0), worldPerPx, distance };
+    const forward = v3.norm(v3.sub(target, eye));
+    return { eye, target, view, proj, vp: m4.multiply(proj, view), near, far, ortho: !(fov > 0), worldPerPx, distance, tanHalf, forward };
   }
 
+  // Camera-locked light directions (view space to world), or the scene's fixed key.
   function lightDir(scene, cam) {
     if (Array.isArray(scene.light)) return v3.norm(scene.light);
     const inv = m4.invert(cam.view);
     return v3.norm(m4.applyDir(inv, [-0.45, 0.75, 0.55]));
   }
+  const viewToWorld = (cam, d) => v3.norm(m4.applyDir(m4.invert(cam.view), d));
 
+  // ---------- particles on the GPU ----------
+  // Transform feedback ping-pongs two buffer sets: each step reads one and writes the other.
+  function particleGPU(sys, n) {
+    const { gl } = R;
+    let G = sys._gpu;
+    if (G && G.gl === gl && G.count === sys.count) return G;
+    const count = sys.count;
+    G = sys._gpu = { gl, count, sets: [], cur: 0 };
+    for (let s = 0; s < 2; s++) {
+      const p = gl.createBuffer(), v = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, p); gl.bufferData(gl.ARRAY_BUFFER, count * 16, gl.DYNAMIC_COPY);
+      gl.bindBuffer(gl.ARRAY_BUFFER, v); gl.bufferData(gl.ARRAY_BUFFER, count * 16, gl.DYNAMIC_COPY);
+      const vao = divisor => {
+        const a = gl.createVertexArray();
+        gl.bindVertexArray(a);
+        gl.bindBuffer(gl.ARRAY_BUFFER, p); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(0, divisor);
+        gl.bindBuffer(gl.ARRAY_BUFFER, v); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(1, divisor);
+        gl.bindVertexArray(null);
+        return a;
+      };
+      G.sets.push({ p, v, update: vao(0), draw: vao(1) });
+    }
+    G.tf = gl.createTransformFeedback();
+    if (sys._samples) {
+      const S = sys._samples, N = S.length / 6, rows = Math.ceil(N / 1024) * 2, data = new Float32Array(1024 * rows * 4);
+      for (let j = 0; j < N; j++) {
+        const x = j % 1024, y = Math.floor(j / 1024) * 2;
+        data.set([S[j * 6], S[j * 6 + 1], S[j * 6 + 2], 1], (y * 1024 + x) * 4);
+        data.set([S[j * 6 + 3], S[j * 6 + 4], S[j * 6 + 5], 0], ((y + 1) * 1024 + x) * 4);
+      }
+      G.samples = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, G.samples);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1024, rows, 0, gl.RGBA, gl.FLOAT, data);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      G.nSamples = N;
+    }
+    return G;
+  }
+  // A buffer the CPU integrator's state is copied into each frame, laid out like the GPU's.
+  function particleCPUBuffer(sys) {
+    const { gl } = R;
+    let G = sys._cpuGpu;
+    if (G && G.gl === gl && G.count === sys.count) return G;
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, sys.count * 32, gl.DYNAMIC_DRAW);
+    const a = gl.createVertexArray();
+    gl.bindVertexArray(a);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0); gl.vertexAttribDivisor(0, 1);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16); gl.vertexAttribDivisor(1, 1);
+    gl.bindVertexArray(null);
+    G = sys._cpuGpu = { gl, count: sys.count, buffer: b, draw: a };
+    return G;
+  }
+  const SHAPE_ID = { point: 0, disk: 1, ring: 2, cone: 3, sphere: 4, box: 5, line: 6, mesh: 7 };
+  function emitterUniforms(sys) {
+    const E = sys.emitter, sp = E.speed ?? 1, s = Array.isArray(sp) ? sp : [sp, sp];
+    const along = E.along === "normal" ? 1 : E.along === "radial" ? 2 : 0;
+    const pos = E.position || [0, 0, 0];
+    const end = E.shape === "line" ? (E.to || [0.5, 0, 0]) : E.size || [1, 1, 1];
+    const start = E.shape === "line" ? (E.from || pos) : pos;
+    return {
+      uEm0: [SHAPE_ID[E.shape] ?? 0, E.radius ?? 0.5, E.shape === "cone" ? (E.angle ?? 0.4) : (E.thickness ?? 0), E.rake | 0],
+      uEm1: [...start, E.spread ?? 0],
+      uEm2: [...(E.direction || [0, 1, 0]), s[0]],
+      uEm3: [s[1], E.thermal ?? 0, along, E.surface ? 1 : 0],
+      uEm4: [...end, sys._samples ? sys._samples.length / 6 : 0],
+    };
+  }
+  function forceUniforms(F) {
+    const u = {
+      uGrav: [...F.g, F.drag], uWind: [...F.wind, F.buoyancy], uTurb: [...F.turb, 0],
+      uVortA: F.vortex ? [...F.vortex.c, F.vortex.s] : [0, 0, 0, 0], uVortB: F.vortex ? [...F.vortex.a, F.vortex.core] : [0, 1, 0, 0.2],
+      uVortC: [F.vortex ? F.vortex.pull : 0, F.vortex ? 1 : 0, 0, 0],
+      uNAttr: F.attractors.length, uNPlane: F.planes.length, uNSph: F.spheres.length,
+      uKillMin: F.kill ? [...F.kill.min, 1] : [0, 0, 0, 0], uKillMax: F.kill ? [...F.kill.max, 0] : [0, 0, 0, 0],
+      uFlowA: F.flow ? [F.flow.kind, F.flow.U, F.flow.alpha, F.flow.S] : [-1, 0, 0, 1],
+      uFlowB: F.flow ? [...F.flow.center, F.flow.mid] : [0, 0, 0, 0],
+      uFlowC: F.flow ? [F.flow.mu[0], F.flow.mu[1], F.flow.kind === 1 ? F.flow.R : F.flow.a, F.flow.gamma] : [0, 0, 0, 0],
+    };
+    const attr = new Float32Array(16), attrR = [0.1, 0.1, 0.1, 0.1];
+    F.attractors.forEach((a, j) => { attr.set([...a.p, a.s], j * 4); attrR[j] = a.r; });
+    const pl = new Float32Array(32), plb = new Float32Array(32);
+    F.planes.forEach((c, j) => { pl.set([...c.n, c.d], j * 4); plb.set([c.e, c.fr, c.u, 0], j * 4); });
+    const sp = new Float32Array(16), spb = new Float32Array(16);
+    F.spheres.forEach((c, j) => { sp.set([...c.c, c.r], j * 4); spb.set([c.e, c.inside, 0, 0], j * 4); });
+    return Object.assign(u, { uAttr: attr, uAttrR: attrR, uPlane: pl, uPlaneB: plb, uSph: sp, uSphB: spb });
+  }
+  // Brings a system to its time, on the GPU unless it asked for the CPU (or measures hits).
+  function stepParticles(sys, n) {
+    const t = sys.time ?? sys.scene().time ?? 0;
+    sys.prepare();
+    if (sys.cpu || sys.measure) { sys.simulate(t, n); sys._mode = "cpu"; return; }
+    sys._mode = "gpu";
+    const { gl } = R;
+    const G = particleGPU(sys, n);
+    const P = prog("pupdate");
+    const M = sys.world(), F = sys.params(), h = sys.step;
+    let ready = false;
+    const setup = () => {
+      if (ready) return;
+      ready = true;
+      gl.useProgram(P.p);
+      setAll(P, { uSeed: sys.seed, uLife: [sys.lifeRange[0], sys.period, 0, 0], uH: h, uEmitM: M, ...emitterUniforms(sys), ...forceUniforms(F) });
+      if (G.samples) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, G.samples); setU(P, "uSamples", 0); }
+      else { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.dummyColor); setU(P, "uSamples", 0); }
+    };
+    sys.advanceWith(t, n, () => {
+      const init = new Float32Array(G.count * 4);
+      for (let i = 0; i < G.count; i++) init[i * 4 + 3] = -1e6;
+      for (const s of G.sets) { gl.bindBuffer(gl.ARRAY_BUFFER, s.p); gl.bufferSubData(gl.ARRAY_BUFFER, 0, init); gl.bindBuffer(gl.ARRAY_BUFFER, s.v); gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(G.count * 4)); }
+      G.cur = 0;
+    }, tEnd => {
+      setup();
+      const src = G.sets[G.cur], dst = G.sets[1 - G.cur];
+      setU(P, "uT", tEnd);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      gl.bindVertexArray(src.update);
+      gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, G.tf);
+      gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, dst.p);
+      gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 1, dst.v);
+      gl.enable(gl.RASTERIZER_DISCARD);
+      gl.beginTransformFeedback(gl.POINTS);
+      gl.drawArrays(gl.POINTS, 0, n);
+      gl.endTransformFeedback();
+      gl.disable(gl.RASTERIZER_DISCARD);
+      gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, null);
+      gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 1, null);
+      gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+      gl.bindVertexArray(null);
+      G.cur = 1 - G.cur;
+    });
+  }
+  // The draw VAO holding the current state, and the time that state is at.
+  function particleSource(sys) {
+    if (sys._mode === "cpu") {
+      const G = particleCPUBuffer(sys), { gl } = R;
+      gl.bindBuffer(gl.ARRAY_BUFFER, G.buffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, sys._state);
+      return G.draw;
+    }
+    return sys._gpu.sets[sys._gpu.cur].draw;
+  }
+  function particleColors(sys) {
+    const c = sys.color ?? (sys.style === "smoke" ? (pageDark() ? "#9a9894" : "#c9c6c0") : sys.style === "streak" ? "blue" : sys.style === "sphere" ? "porcelain" : "ink");
+    const pal = (typeof window !== "undefined" && window.palette) || {};
+    const one = x => (ACCENTS.includes(x) ? hexRgb(pal[x] || "#888888") : colorOf(x === "ink" ? (pal.ink || "#222222") : x, true));
+    const [a, b] = Array.isArray(c) ? c.map(one) : [one(c), one(c)];
+    const by = sys.colorBy === "speed" ? 2 : sys.colorBy === "life" || Array.isArray(c) ? 1 : 0;
+    return { uColA: a, uColB: b, uColorBy: [by, ...(sys.range || [0, 1]), 0] };
+  }
+
+  // ---------- render ----------
   // Renders the scene into the shared WebGL canvas; returns a view for projection and picking.
   // outScale: output pixels per CSS pixel (the screen's density). ss: supersampling
   // factor (1 to 3); the frame is rendered ss times larger and filtered down in the
@@ -1156,20 +2988,132 @@ void main() {
   function render(scene, cam = {}, cssW, cssH, outScale = 1, ss = 2) {
     renderer();
     const { gl } = R;
-    ss = Math.max(1, Math.min(3, Math.round(ss)));
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const q = qualityFor(scene, cam, Math.max(1, Math.min(3, Math.round(ss))), now);
+    ss = q.ss;
     const Wo = Math.max(1, Math.round(cssW * outScale)), Ho = Math.max(1, Math.round(cssH * outScale));
-    const W = Wo * ss, H = Ho * ss, scale = outScale * ss;
-    targets(W, H);
+    const W = Math.max(1, Math.round(Wo * ss * q.scale)), H = Math.max(1, Math.round(Ho * ss * q.scale));
+    const scale = (W / Wo) * outScale;
     const items = collect(scene);
+    const fxNodes = items.fx;
     const bounds = sceneBounds(items);
     const C = camera(cam, scene, bounds, cssW / cssH);
+    const look = lookOf(scene), dark = pageDark();
     const L = lightDir(scene, C);
     const cut = scene.cutPlane ? (Array.isArray(scene.cutPlane) ? scene.cutPlane : [...scene.cutPlane.normal, scene.cutPlane.offset ?? 0]) : null;
     const cutN = cut ? v3.norm(cut.slice(0, 3)) : null;
     const cutV = cut ? [...cutN, cut[3] / v3.len(cut.slice(0, 3))] : [0, 1, 0, 1e9];
     const hatch = (C.worldPerPx / cssH) * 7;
+    const pal = (typeof window !== "undefined" && window.palette) || {};
+    const hiDefault = hexRgb(pal.orange || "#d9800f");
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, R.fbo);
+    const mats = new Map();
+    const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node))); return m; };
+    const opaque = items.filter(it => matOf(it).kind === "opaque");
+    const glassItems = items.filter(it => matOf(it).kind === "glass");
+    const ghosts = items.filter(it => matOf(it).kind === "ghost").sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
+    opaque.concat(glassItems).forEach((it, i) => { it.id = ((i * 97) % 254) + 1; });
+
+    // Environment, its turn with the camera, and the light rig.
+    const fwd = v3.sub(C.eye, C.target);
+    let ez = v3.norm([fwd[0], 0, fwd[2]]);
+    if (!Number.isFinite(ez[0]) || v3.len([fwd[0], 0, fwd[2]]) < 1e-6) ez = [0, 0, 1];
+    const ex = v3.norm(v3.cross([0, 1, 0], ez));
+    const envRot = new Float32Array([ex[0], 0, ez[0], ex[1], 1, ez[1], ex[2], 0, ez[2]]);
+    const sunEnv = [v3.dot(L, ex), L[1], v3.dot(L, ez)];
+    const env = environment(look.env, dark, sunEnv);
+    const kc = look.keyColor.map(v => v * look.key), fc = look.fillColor.map(v => v * look.fill), rc = [1, 1, 1].map(v => v * look.rim);
+    const fillDir = viewToWorld(C, [0.8, 0.1, 0.55]), rimDir = viewToWorld(C, [0.25, 0.5, -0.85]);
+    const points = [];
+    for (const f of fxNodes) if (f.node.isPlume) { const gl_ = f.node.glowLight(); if (gl_) points.push(gl_); }
+    for (const p of scene.lights || []) points.push({ position: p.position, color: colorOf(p.color || "#ffffff", true).map(v => (v ** 2.2) * (p.intensity ?? 1)), range: p.range ?? bounds.radius });
+    const ptPos = new Float32Array(8), ptCol = new Float32Array(6);
+    points.slice(0, 2).forEach((p, i) => { ptPos.set([...p.position, p.range], i * 4); ptCol.set(p.color, i * 3); });
+    const hasGlow = items.some(it => matOf(it).glow) || fxNodes.some(f => f.node.isPlume || (f.node.isParticles && (f.node.style === "fire" || f.node.style === "spark")));
+    const bloomK = (scene.bloom === false ? 0 : typeof scene.bloom === "number" ? scene.bloom : look.bloom) * (R.hdr && q.bloom ? 1 : 0);
+    const exposure = (scene.exposure ?? 1) * look.exposure;
+    const lookU = [look.diffuse, look.specular, exposure, bloomK > 0 ? 0.12 : 0];
+    const envU = { uEnvSpec: 3, uEnvIrr: 4, uEnvRot: envRot, uEnvInfo: [env.scale, env.lod] };
+    const bindEnv = () => {
+      gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, env.spec);
+      gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, env.irr);
+    };
+
+    // Particles step before anything is drawn (sphere particles draw with the solids).
+    const tierFrac = q.particles;
+    for (const f of fxNodes) if (f.node.isParticles) {
+      const sys = f.node, n = Math.max(1, Math.min(sys.count, Math.ceil(sys.count * (sys.quality === false ? 1 : tierFrac))));
+      sys._drawN = n;
+      stepParticles(sys, n);
+    }
+    const spheres = fxNodes.filter(f => f.node.isParticles && f.node.style === "sphere");
+
+    // Shadow maps from the key light, fitted around the scene.
+    const sh = scene.shadow === false ? null : typeof scene.shadow === "object" ? scene.shadow : {};
+    const shadowOn = !!sh && sh.cast !== false && items.length > 0;
+    let shadowU = { uShadowA: [0, 0, 0, 0], uShadowB: [0, 0, 0, 0], uShadowVP: m4.identity(), uShadowCmp: 5, uShadowRaw: 6, uShadowGlass: 7 };
+    let SM = null;
+    if (shadowOn) {
+      const size = q.shadow;
+      SM = shadowMaps(size, glassItems.length > 0);
+      let Ls = L.slice();
+      if (Ls[1] < 0.3) Ls = v3.norm([Ls[0], 0.3 + (0.3 - Ls[1]) * 0.2, Ls[2]]);
+      const ext = bounds.radius * 1.35, ctr = bounds.center;
+      const lv = m4.lookAt(v3.add(ctr, v3.scale(Ls, bounds.radius * 3)), ctr, Math.abs(Ls[1]) > 0.98 ? [0, 0, 1] : [0, 1, 0]);
+      const lp = m4.ortho(-ext, ext, -ext, ext, bounds.radius * 0.5, bounds.radius * 5.5);
+      const vp = m4.multiply(lp, lv);
+      const depthRange = bounds.radius * 5;
+      const texelW = (2 * ext) / size;
+      const soft = (sh.softness ?? 1) * look.soft;
+      const lightAngle = 0.045 * soft;
+      shadowU = {
+        uShadowVP: vp,
+        uShadowA: [1, (texelW * 0.8) / depthRange, texelW * 1.6, glassItems.length ? 0.55 : 0],
+        uShadowB: [1.2 / size, Math.min(0.06, (0.012 + 0.02 * soft)), (depthRange * Math.tan(lightAngle)) / (2 * ext), 0],
+        uShadowCmp: 5, uShadowRaw: 6, uShadowGlass: 7,
+      };
+      const P = prog("depth");
+      gl.useProgram(P.p);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1.5, 3);
+      setAll(P, { uViewProj: vp, uCut: cutV });
+      const pass = (fb, list) => {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.viewport(0, 0, size, size);
+        gl.clearBufferfv(gl.DEPTH, 0, [1]);
+        for (const it of list) {
+          if (it.node.castShadow === false) continue;
+          const g = upload(it.node.mesh);
+          setAll(P, { uModel: it.world, uCutOn: cut && it.node.cut ? 1 : 0 });
+          gl.bindVertexArray(g.vao);
+          gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
+        }
+      };
+      pass(SM.main.fb, opaque);
+      if (glassItems.length) pass(SM.glass.fb, glassItems);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+      gl.bindVertexArray(null);
+    }
+    const bindShadow = () => {
+      gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, SM ? SM.main.tex : R.dummyDepth); gl.bindSampler(5, R.sCmp);
+      gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, SM ? SM.main.tex : R.dummyDepth); gl.bindSampler(6, R.sRaw);
+      gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, SM && SM.glass ? SM.glass.tex : R.dummyDepth); gl.bindSampler(7, R.sCmp);
+    };
+    const unbindSamplers = () => { for (const u of [5, 6, 7]) gl.bindSampler(u, null); };
+
+    const samples = q.moving && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
+    targets(W, H, Wo, Ho, samples, glassItems.length > 0);
+    const target = samples ? R.msaa.fb : R.main.fb;
+    const partShadow = shadowOn ? (sh.parts ?? 1) * look.parts : 0;
+    const common = {
+      uViewProj: C.vp, uEye: C.eye, uLight: L, uCut: cutV, uSun: scene.lighting === "sun" ? 1 : 0, uHatch: hatch,
+      uKeyCol: kc, uFillDir: fillDir, uFillCol: fc, uRimDir: rimDir, uRimCol: rc, uPtPos: ptPos, uPtCol: ptCol, uLook: lookU,
+      uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0,
+      ...envU, ...shadowU,
+    };
+
+    // Opaque pass: color, normal + part id, depth.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target);
     gl.viewport(0, 0, W, H);
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
@@ -1179,113 +3123,267 @@ void main() {
     gl.depthFunc(gl.LEQUAL);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
-
-    const mats = new Map();
-    const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node))); return m; };
-    const pal = window.palette || {};
-    const hiDefault = hexRgb(pal.orange || "#d9800f");
-
-    // Opaque pass
-    const { main } = R;
-    gl.useProgram(main.p);
-    gl.uniformMatrix4fv(main.u.uViewProj, false, C.vp);
-    gl.uniform3fv(main.u.uLight, L);
-    gl.uniform3fv(main.u.uEye, C.eye);
-    gl.uniform4fv(main.u.uCut, cutV);
-    gl.uniform1f(main.u.uSun, scene.lighting === "sun" ? 1 : 0);
-    gl.uniform1f(main.u.uHatch, hatch);
-    const opaque = items.filter(it => matOf(it).opacity >= 0.999);
-    opaque.forEach((it, i) => {
-      const m = matOf(it), g = upload(it.node.mesh);
-      it.id = ((i * 97) % 254) + 1;
+    bindEnv();
+    bindShadow();
+    const drawSurface = (P, it, m) => {
+      const g = upload(it.node.mesh);
       const cutOn = cut && it.node.cut ? 1 : 0;
       if (cutOn) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
-      gl.uniformMatrix4fv(main.u.uModel, false, it.world);
-      gl.uniformMatrix3fv(main.u.uNormalMat, false, m4.normalMatrix(it.world));
-      gl.uniform3fv(main.u.uColor, m.rgb);
-      gl.uniform1f(main.u.uMetal, m.metal ? 1 : 0);
-      gl.uniform1f(main.u.uId, it.id / 255);
-      gl.uniform1f(main.u.uCutOn, cutOn);
+      const r = it.node.mesh.bounds.radius || 1, wr = it.radius || 1;
+      const T = m.temp;
+      const tS = [0, 0, 0, 0], tT = [0, 0, 0, 0];
+      if (T) T.stops.forEach(([s, t], j) => { tS[j] = s; tT[j] = t; });
+      for (let j = T ? T.stops.length : 0; j < 4; j++) { tS[j] = (tS[j - 1] ?? 0) + 1; tT[j] = tT[j - 1] ?? 0; }
       const hl = it.node.highlight;
-      gl.uniform1f(main.u.uHighlightOn, hl ? 1 : 0);
-      gl.uniform3fv(main.u.uHighlight, typeof hl === "string" ? hexRgb(pal[hl] || hl) : hiDefault);
+      setAll(P, {
+        uModel: it.world, uNormalMat: m4.normalMatrix(it.world), uColor: m.rgb, uId: it.id / 255, uCutOn: cutOn,
+        uMat: [m.physical ? 1 : 0, m.metal, m.roughness, m.clearcoat], uF0: m.f0,
+        uBrush: [...m.brushAxis, m.anisotropy], uDetail: [m.brush, m.anisotropy > 0 ? 70 / wr : 0, m.weave ? 1 : 0, 9 / r],
+        uEmit: m.emissive, uTempAxis: [...(T ? T.axis : [0, 1, 0]), T ? T.stops.length : 0], uTempS: tS, uTempT: tT,
+        uHeat: [m.heatShift != null ? 1 : 0, m.heatShift ?? 0, 0, partShadow],
+        uHighlightOn: hl ? 1 : 0, uHighlight: typeof hl === "string" ? hexRgb(pal[hl] || hl) : hiDefault,
+        uOpacity: m.opacity, uGlass: [m.ior, m.thickness ?? wr * 0.9, m.dispersion, m.roughness],
+      });
       gl.bindVertexArray(g.vao);
       gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
-    });
-    gl.bindVertexArray(null);
+    };
+    if (opaque.length) {
+      const P = prog("main");
+      gl.useProgram(P.p);
+      setAll(P, { ...common, uEnvSpec: 3, uEnvIrr: 4 });
+      for (const it of opaque) drawSurface(P, it, matOf(it));
+    }
     gl.disable(gl.CULL_FACE);
+    if (spheres.length) {
+      const P = prog("psphere");
+      gl.useProgram(P.p);
+      const camR = viewToWorld(C, [1, 0, 0]), camU = viewToWorld(C, [0, 1, 0]);
+      setAll(P, { ...common, uCamR: camR, uCamU: camU, uCamF: C.forward, uOrthoCam: C.ortho ? 1 : 0, uPartShadow: partShadow });
+      spheres.forEach((f, j) => {
+        const sys = f.node, t = sys._t ?? 0, tr = sys.simTime(sys.time ?? scene.time ?? 0);
+        const sz = Array.isArray(sys.size) ? sys.size : [sys.size, sys.size];
+        setAll(P, {
+          uTime: [t, Math.max(t, Math.min(tr, t + sys.step)), 0, sys.density], uLife: [sys.lifeRange[0], sys.period, 0, 0], uSeed: sys.seed,
+          uSize: [sz[0], sz[1], sys.sizeJitter ?? 0, 0], uStyle: 4, uShape: [sys.trail, sys.width, 0, 0], uId: (250 - j) / 255,
+          ...particleColors(sys),
+        });
+        gl.bindVertexArray(particleSource(sys));
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, sys._drawN);
+      });
+    }
 
-    // Ground shadow and see-through parts only touch the color buffer.
+    // Ground shadow: a contact shadow plus the key light's cast shadow, on an invisible floor.
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
-    if (scene.shadow && items.length) {
-      const s = typeof scene.shadow === "object" ? scene.shadow : {};
+    if (sh && sh.ground !== false && items.length) {
       const ext = [(bounds.max[0] - bounds.min[0]) / 2, (bounds.max[2] - bounds.min[2]) / 2];
-      const k = s.scale ?? 1.25;
-      gl.useProgram(R.shadow.p);
-      gl.uniformMatrix4fv(R.shadow.u.uViewProj, false, C.vp);
-      gl.uniform3fv(R.shadow.u.uCenter, [bounds.center[0], s.y ?? bounds.min[1] - bounds.radius * 0.01, bounds.center[2]]);
-      gl.uniform2fv(R.shadow.u.uRadii, [Math.max(ext[0], ext[1] * 0.35) * k, Math.max(ext[1], ext[0] * 0.35) * k]);
-      gl.uniform1f(R.shadow.u.uOpacity, s.opacity ?? 0.16);
+      const k = sh.scale ?? 1.25;
+      const P = prog("ground");
+      gl.useProgram(P.p);
+      setAll(P, {
+        ...shadowU, uViewProj: C.vp, uHalf: bounds.radius * 4,
+        uCenter: [bounds.center[0], sh.y ?? bounds.min[1] - bounds.radius * 0.01, bounds.center[2]],
+        uRadii: [Math.max(ext[0], ext[1] * 0.35) * k, Math.max(ext[1], ext[0] * 0.35) * k],
+        uGround: [sh.opacity ?? 0.16, shadowOn ? (sh.strength ?? look.ground) * (dark ? 0.75 : 1) : 0, bounds.radius * 2.2, 0],
+      });
       gl.bindVertexArray(R.empty);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
-    const ghosts = items.filter(it => matOf(it).opacity < 0.999)
-      .sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
+
+    // Glass refracts the opaque picture, so take a copy of it first.
+    if (glassItems.length) {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, R.scene.fb);
+      gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
+      const P = prog("glass");
+      gl.useProgram(P.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.scene.tex);
+      setAll(P, { ...common, uScene: 0, uSceneInv: [1 / R.scene.w, 1 / R.scene.h], uSceneSize: [W, H] });
+      for (const it of glassItems.sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye))) drawSurface(P, it, matOf(it));
+      gl.disable(gl.CULL_FACE);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+      gl.enable(gl.BLEND);
+      gl.depthMask(false);
+    }
     if (ghosts.length) {
-      const { ghost } = R;
-      gl.useProgram(ghost.p);
-      gl.uniformMatrix4fv(ghost.u.uViewProj, false, C.vp);
-      gl.uniform3fv(ghost.u.uEye, C.eye);
-      gl.uniform3fv(ghost.u.uLight, L);
-      gl.uniform4fv(ghost.u.uCut, cutV);
+      const P = prog("ghost");
+      gl.useProgram(P.p);
+      setAll(P, { uViewProj: C.vp, uEye: C.eye, uLight: L, uCut: cutV });
       gl.enable(gl.CULL_FACE);
       gl.cullFace(gl.BACK);
       for (const it of ghosts) {
         const m = matOf(it), g = upload(it.node.mesh);
-        gl.uniformMatrix4fv(ghost.u.uModel, false, it.world);
-        gl.uniformMatrix3fv(ghost.u.uNormalMat, false, m4.normalMatrix(it.world));
-        gl.uniform3fv(ghost.u.uColor, m.rgb);
-        gl.uniform1f(ghost.u.uOpacity, m.opacity);
-        gl.uniform1f(ghost.u.uCutOn, cut && it.node.cut ? 1 : 0);
+        setAll(P, { uModel: it.world, uNormalMat: m4.normalMatrix(it.world), uColor: m.rgb, uOpacity: m.opacity, uCutOn: cut && it.node.cut ? 1 : 0 });
         gl.bindVertexArray(g.vao);
         gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
       }
       gl.disable(gl.CULL_FACE);
-      gl.bindVertexArray(null);
     }
+    gl.bindVertexArray(null);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
+    unbindSamplers();
+
+    // MSAA: resolve color, normals and depth into the textures the later passes read.
+    if (samples) {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, R.msaa.fb);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, R.main.fb);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+      gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.readBuffer(gl.COLOR_ATTACHMENT1);
+      gl.drawBuffers([gl.NONE, gl.COLOR_ATTACHMENT1]);
+      gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, R.main.fb);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    }
+
+    // Effects layer at output resolution: plumes and sprite particles, back to front,
+    // depth-tested by hand against the solids' depth buffer.
+    const fxDraw = fxNodes.filter(f => f.node.isPlume || (f.node.isParticles && f.node.style !== "sphere"))
+      .sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, R.fx.fb);
+    gl.viewport(0, 0, Wo, Ho);
+    gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+    if (fxDraw.length) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      bindEnv();
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, R.main.depth);
+      const depthScale = [(W / Wo) / R.main.w, (H / Ho) / R.main.h];
+      const camR = viewToWorld(C, [1, 0, 0]), camU = viewToWorld(C, [0, 1, 0]);
+      for (const f of fxDraw) {
+        const node = f.node;
+        if (node.isPlume) {
+          const P = prog("plume");
+          gl.useProgram(P.p);
+          const Lp = node.lengthNow, r0 = node.radius, thr = clamp01(node.throttle);
+          const Rb = r0 * (1 + node.spread * Lp / r0) * 1.7;
+          const proxy = R.unitCyl || (R.unitCyl = transformMesh(mesh.cylinder(1, 1, { segments: 28 }), m4.translation([0, -0.5, 0])));
+          const g = upload(proxy);
+          const ws = Math.hypot(f.world[0], f.world[1], f.world[2]) || 1;
+          setAll(P, {
+            uModel: m4.multiply(f.world, m4.scaling([Rb, Lp * 1.02, Rb])), uViewProj: C.vp, uNormalMat: m4.normalMatrix(f.world),
+            uInvModel: m4.invert(f.world), uEye: C.eye, uView: C.view, uCamF: C.forward, uDepth: 2, uDepthScale: depthScale,
+            uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0, uLook: lookU,
+            uP0: [r0, Lp, Rb, node.time ?? scene.time ?? 0], uP1: [thr, node.cells * 2 * r0 * Math.sqrt(0.4 + 0.6 * thr), node.temperature, q.steps],
+            uP2: [node.spread, node.turbulence, node.intensity, FUELS[node.fuel] ?? 0], uP3: [1 / ws, node.speed * r0 * 6, 0, 0],
+          });
+          gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT);
+          gl.bindVertexArray(g.vao);
+          gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
+          gl.disable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+          continue;
+        }
+        const sys = node, P = prog("particle");
+        gl.useProgram(P.p);
+        const t = sys._t ?? 0, tr = sys.simTime(sys.time ?? scene.time ?? 0);
+        const sz = Array.isArray(sys.size) ? sys.size : [sys.size, sys.size];
+        const fade = Array.isArray(sys.fade) ? sys.fade : [sys.fade, sys.fade];
+        const temps = Array.isArray(sys.temperature) ? sys.temperature : [sys.temperature, sys.temperature];
+        setAll(P, {
+          ...envU, uViewProj: C.vp, uView: C.view, uEye: C.eye, uCamR: camR, uCamU: camU, uDepth: 2, uDepthScale: depthScale,
+          uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0, uLight: L, uKeyCol: kc, uPtPos: ptPos, uPtCol: ptCol, uLook: lookU,
+          uTime: [t, Math.max(t, Math.min(tr, t + sys.step)), 0, sys.density], uLife: [sys.lifeRange[0], sys.period, 0, 0], uSeed: sys.seed,
+          uSize: [sz[0], sz[1], sys.sizeJitter ?? 0.5, 0], uStyle: STYLE_ID[sys.style] ?? 0, uShape: [sys.trail, sys.width, 0, 0],
+          uFade: [fade[0], fade[1], sys.soft ?? bounds.radius * 0.04, sys.opacity],
+          uHeatP: [temps[0], temps[1], sys.intensity, 0],
+          ...particleColors(sys),
+        });
+        gl.bindVertexArray(particleSource(sys));
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, sys._drawN);
+      }
+      gl.bindVertexArray(null);
+      gl.disable(gl.BLEND);
+    }
+
+    // Bloom from whatever glows.
+    let bloomTex = null, bloomInv = [0, 0];
+    if (bloomK > 0 && hasGlow) {
+      const levels = bloomTargets(Wo, Ho);
+      if (levels.length) {
+        gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+        gl.bindVertexArray(R.empty);
+        const Px = prog("extract");
+        gl.useProgram(Px.p);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.main.color);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, R.fx.tex);
+        setAll(Px, { uColor: 0, uFx: 1, uColorInv: [1 / R.main.w, 1 / R.main.h], uColorScale: [W / Wo, H / Ho], uFxInv: [1 / R.fx.w, 1 / R.fx.h], uFxOn: fxDraw.length ? 1 : 0 });
+        for (const Lv of levels) { gl.bindFramebuffer(gl.FRAMEBUFFER, Lv.fb); gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, levels[0].fb);
+        gl.viewport(0, 0, levels[0].vw, levels[0].vh);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        const Pd = prog("down");
+        gl.useProgram(Pd.p);
+        gl.activeTexture(gl.TEXTURE0);
+        for (let i = 1; i < levels.length; i++) {
+          gl.bindTexture(gl.TEXTURE_2D, levels[i - 1].tex);
+          setAll(Pd, { uSrc: 0, uSrcInv: [1 / levels[i - 1].w, 1 / levels[i - 1].h] });
+          gl.bindFramebuffer(gl.FRAMEBUFFER, levels[i].fb);
+          gl.viewport(0, 0, levels[i].vw, levels[i].vh);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+        const Pu = prog("up");
+        gl.useProgram(Pu.p);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+        for (let i = levels.length - 1; i > 0; i--) {
+          gl.bindTexture(gl.TEXTURE_2D, levels[i].tex);
+          setAll(Pu, { uSrc: 0, uSrcInv: [1 / levels[i].w, 1 / levels[i].h], uWeight: 1 });
+          gl.bindFramebuffer(gl.FRAMEBUFFER, levels[i - 1].fb);
+          gl.viewport(0, 0, levels[i - 1].vw, levels[i - 1].vh);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+        gl.disable(gl.BLEND);
+        bloomTex = levels[0].tex;
+        bloomInv = [0.5 / levels[0].w, 0.5 / levels[0].h];
+      }
+    }
 
     // Composite with ink outlines into the canvas.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, R.fw, R.fh);
+    gl.viewport(0, 0, R.cw, R.ch);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.viewport(0, 0, Wo, Ho);
     gl.disable(gl.DEPTH_TEST);
-    const cp = R.composite;
+    gl.disable(gl.BLEND);
+    const cp = prog("composite");
     gl.useProgram(cp.p);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.tColor); gl.uniform1i(cp.u.uColor, 0);
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, R.tNormal); gl.uniform1i(cp.u.uNormal, 1);
-    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, R.tDepth); gl.uniform1i(cp.u.uDepth, 2);
-    gl.uniform2fv(cp.u.uInvSize, [1 / R.fw, 1 / R.fh]);
-    gl.uniform1f(cp.u.uStep, Math.max(0.75, 0.62 * scale * (scene.ink ?? 1)));
-    gl.uniform2fv(cp.u.uNearFar, [C.near, C.far]);
-    gl.uniform1f(cp.u.uOrtho, C.ortho ? 1 : 0);
-    gl.uniform1f(cp.u.uInk, scene.ink === 0 ? 0 : 0.9);
-    gl.uniform1i(cp.u.uSS, ss);
-    gl.uniform1f(cp.u.uAo, scene.ao === false ? 0 : typeof scene.ao === "number" ? scene.ao : 0.5);
-    gl.uniform1f(cp.u.uAoR, 9 * scale);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.main.color);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, R.main.normal);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, R.main.depth);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, R.fx.tex);
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, bloomTex || R.fx.tex);
+    const v = C.view;
+    setAll(cp, {
+      uColor: 0, uNormal: 1, uDepth: 2, uFx: 3, uBloom: 4,
+      uInvSize: [1 / R.main.w, 1 / R.main.h], uScale: [W / Wo, H / Ho], uTaps: Math.max(1, Math.min(3, Math.round(W / Wo))),
+      uStep: Math.max(0.75, 0.62 * scale * (scene.ink ?? 1)), uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0,
+      uInk: scene.ink === 0 ? 0 : 0.9 * look.ink,
+      uAo: scene.ao === false ? 0 : typeof scene.ao === "number" ? scene.ao : 0.5, uAoR: bounds.radius * 0.09,
+      uFxInv: [1 / R.fx.w, 1 / R.fx.h], uBloomInv: bloomInv, uPost: [fxDraw.length ? 1 : 0, bloomTex ? bloomK : 0, 0, 0],
+      uViewRot: new Float32Array([v[0], v[1], v[2], v[4], v[5], v[6], v[8], v[9], v[10]]), uTanHalf: C.tanHalf, uSize: [W, H],
+    });
     gl.bindVertexArray(R.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.activeTexture(gl.TEXTURE0);
 
     const image = R.offscreen ? R.canvas.transferToImageBitmap() : R.canvas;
-    return makeView(scene, items, C, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.fh - Ho, sw: Wo, sh: Ho });
+    const view = makeView(scene, items, C, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.ch - Ho, sw: Wo, sh: Ho });
+    view.quality = q.name;
+    return view;
   }
 
   function makeView(scene, items, C, w, h, cut, source) {
@@ -1351,7 +3449,6 @@ void main() {
       source,
     };
   }
-
   // ---------- chemistry ----------
   // Covalent radius (Å) for bond lengths and ball sizes, van der Waals radius for space-filling,
   // and a color that reads well in the porcelain style.
@@ -1556,12 +3653,1730 @@ void main() {
     v3, m4, mesh, smooth, triangulate, inset,
     scene: o => new Scene(o),
     node: (m, o) => new Node(m, o),
-    Node, Scene,
+    particles: o => new Particles(o),
+    plume: o => new Plume(o),
+    Node, Scene, Particles, Plume,
+    flow,
     render,
-    molecule, ELEMENTS, MATERIALS,
+    molecule, ELEMENTS, MATERIALS, LOOKS,
     ramp, axes3,
+    // Black-body color at T kelvin as #hex (display), its glow in engine units, and the temper color of hot steel.
+    blackbody: T => toHex(blackbody(T).map(v => v ** (1 / 2.2))),
+    glow: glowOf,
+    heatTint: (T, shift = 0) => { const h = heatTint(T, shift); return { color: toHex(h.color), amount: h.amount }; },
+    // Adaptive quality: E3.quality.tier is the current tier; E3.quality.force("low" | "medium" | "high" | null).
+    quality: {
+      get tier() { return TIER_NAMES[Q.rank ?? startRank()]; },
+      force(name) { Q.forced = TIERS[name] ? name : null; },
+      tiers: TIERS,
+    },
     get canvas() { return R && R.canvas; },
     available() { try { renderer(); return true; } catch { return false; } },
+    // For tests: the pure functions the shaders mirror.
+    _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS },
+  };
+})();
+
+;
+
+/* E3.parts: parametric machine parts and assemblies for E3 figures.
+   Everything is built in millimeters on E3's axes: y is up, and anything round
+   turns about y (the way E3.mesh.lathe does). Parts come back as meshes or as
+   group nodes with named children; assemblies add pose(), explode(), labels(),
+   notes, and attachment points. It uses only E3's public API.
+   Reference: references/parts3d.md in the skill. */
+(() => {
+  "use strict";
+  const E3 = window.E3;
+  if (!E3 || !E3.mesh || E3.parts) return;
+  const { v3, m4, mesh } = E3;
+  const TAU = Math.PI * 2, DEG = Math.PI / 180;
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  const mul = (...ms) => ms.reduce((a, b) => m4.multiply(a, b));
+  const T = p => m4.translation(p);
+  const RX = a => m4.rotationX(a), RY = a => m4.rotationY(a), RZ = a => m4.rotationZ(a);
+  const SC = s => m4.scaling(typeof s === "number" ? [s, s, s] : s);
+  const xf = (m, ...ms) => mesh.transform(m, mul(...ms));
+  const merge = (...ms) => { const l = ms.flat(Infinity).filter(Boolean); return l.length ? mesh.merge(...l) : null; };
+  // Cylindrical point in E3's lathe convention: angle a counterclockwise seen from +y.
+  const cyl = (r, a, y) => [r * Math.cos(a), y, -r * Math.sin(a)];
+  // Turns a part built along y so its axis runs along x or z.
+  const ALONG = { x: RZ(-Math.PI / 2), y: m4.identity(), z: RX(Math.PI / 2) };
+
+  // ---------- triangle soup ----------
+  // Builders emit triangles; build() welds them with E3's crease rule. Closed solids are
+  // flipped as a whole if they came out inside out, so callers only need consistent winding.
+  class Soup {
+    constructor() { this.p = []; }
+    tri(a, b, c) {
+      if (v3.dist(a, b) < 1e-7 || v3.dist(b, c) < 1e-7 || v3.dist(c, a) < 1e-7) return;
+      this.p.push(a, b, c);
+    }
+    quad(a, b, c, d) { this.tri(a, b, c); this.tri(a, c, d); }
+    // A planar 2D polygon mapped into 3D by fn, wound so its normal points along dir.
+    cap(poly, fn, dir, holes = []) {
+      for (const t of E3.triangulate(poly, holes)) {
+        const P = t.map(fn);
+        const n = v3.cross(v3.sub(P[1], P[0]), v3.sub(P[2], P[0]));
+        if (v3.dot(n, dir) >= 0) this.tri(P[0], P[1], P[2]); else this.tri(P[0], P[2], P[1]);
+      }
+    }
+    build({ crease = 35, closed = true } = {}) {
+      let p = this.p;
+      if (closed) {
+        let vol = 0;
+        for (let i = 0; i < p.length; i += 3) vol += v3.dot(p[i], v3.cross(p[i + 1], p[i + 2]));
+        if (vol < 0) { p = p.slice(); for (let i = 0; i < p.length; i += 3) { const t = p[i + 1]; p[i + 1] = p[i + 2]; p[i + 2] = t; } }
+      }
+      return mesh.custom(p, p.map((_, i) => i), { crease });
+    }
+  }
+
+  // Turns a closed mesh inside out (the inner skin of a hollow casing).
+  function flip(m) {
+    const c = mesh.merge(m);
+    for (let i = 0; i < c.normals.length; i++) c.normals[i] = -c.normals[i];
+    for (let i = 0; i < c.indices.length; i += 3) { const t = c.indices[i + 1]; c.indices[i + 1] = c.indices[i + 2]; c.indices[i + 2] = t; }
+    return c;
+  }
+
+  // ---------- 2D profiles ----------
+  const area2 = pts => { let a = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; a += p[0] * q[1] - q[0] * p[1]; } return a / 2; };
+  const circle2 = (r, n = 32, cx = 0, cy = 0, a0 = 0) => Array.from({ length: n }, (_, i) => [cx + r * Math.cos(a0 + (i / n) * TAU), cy + r * Math.sin(a0 + (i / n) * TAU)]);
+  const arc2 = (cx, cy, r, a0, a1, n = 8) => Array.from({ length: n + 1 }, (_, i) => { const a = a0 + ((a1 - a0) * i) / n; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; });
+  function roundRect2(w, h, r = 0, n = 5, cx = 0, cy = 0) {
+    r = Math.min(r, w / 2 - 1e-6, h / 2 - 1e-6);
+    if (r <= 0) return [[cx - w / 2, cy - h / 2], [cx + w / 2, cy - h / 2], [cx + w / 2, cy + h / 2], [cx - w / 2, cy + h / 2]];
+    const x = w / 2 - r, y = h / 2 - r;
+    return [
+      ...arc2(cx + x, cy - y, r, -Math.PI / 2, 0, n), ...arc2(cx + x, cy + y, r, 0, Math.PI / 2, n),
+      ...arc2(cx - x, cy + y, r, Math.PI / 2, Math.PI, n), ...arc2(cx - x, cy - y, r, Math.PI, Math.PI * 1.5, n),
+    ];
+  }
+  function hull2(pts) {
+    const p = pts.map(q => [q[0], q[1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lo = [], hi = [];
+    for (const q of p) { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+    for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (hi.length > 1 && cr(hi[hi.length - 2], hi[hi.length - 1], q) <= 0) hi.pop(); hi.push(q); }
+    return lo.slice(0, -1).concat(hi.slice(0, -1));
+  }
+  // Rounds the corners of a polyline. Points are [x, y] or [x, y, r], r being that corner's fillet radius.
+  function fillet(pts, { closed = false, steps = 6 } = {}) {
+    const n = pts.length, out = [];
+    for (let i = 0; i < n; i++) {
+      const P = pts[i], r = P[2] || 0;
+      if (!r || (!closed && (i === 0 || i === n - 1))) { out.push([P[0], P[1]]); continue; }
+      const A = pts[(i - 1 + n) % n], B = pts[(i + 1) % n];
+      let ux = A[0] - P[0], uy = A[1] - P[1], wx = B[0] - P[0], wy = B[1] - P[1];
+      const la = Math.hypot(ux, uy), lb = Math.hypot(wx, wy);
+      ux /= la; uy /= la; wx /= lb; wy /= lb;
+      const th = Math.acos(clamp(ux * wx + uy * wy, -1, 1));
+      if (th < 1e-3 || th > Math.PI - 1e-3) { out.push([P[0], P[1]]); continue; }
+      let t = r / Math.tan(th / 2), rr = r;
+      const tmax = 0.5 * Math.min(la, lb);
+      if (t > tmax) { t = tmax; rr = t * Math.tan(th / 2); }
+      const bx = ux + wx, by = uy + wy, bl = Math.hypot(bx, by), d = rr / Math.sin(th / 2);
+      const C = [P[0] + (bx / bl) * d, P[1] + (by / bl) * d];
+      const a0 = Math.atan2(P[1] + uy * t - C[1], P[0] + ux * t - C[0]);
+      let da = Math.atan2(P[1] + wy * t - C[1], P[0] + wx * t - C[0]) - a0;
+      while (da > Math.PI) da -= TAU;
+      while (da < -Math.PI) da += TAU;
+      const k = Math.max(2, Math.ceil((steps * Math.abs(da)) / (Math.PI / 2)));
+      for (let s = 0; s <= k; s++) { const a = a0 + (da * s) / k; out.push([C[0] + rr * Math.cos(a), C[1] + rr * Math.sin(a)]); }
+    }
+    return out;
+  }
+  // Offsets an open 2D polyline sideways by d (positive: to the left of travel).
+  function offset2(pts, d) {
+    const n = pts.length;
+    return pts.map((p, i) => {
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+      const tx = b[0] - a[0], ty = b[1] - a[1], l = Math.hypot(tx, ty) || 1;
+      return [p[0] - (ty / l) * d, p[1] + (tx / l) * d];
+    });
+  }
+  // Samples y(x) or r(y) style polylines at even arc length.
+  function resample(pts, n) {
+    const L = [0];
+    for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const total = L[L.length - 1], out = [];
+    let j = 0;
+    for (let k = 0; k <= n; k++) {
+      const s = (total * k) / n;
+      while (j < pts.length - 2 && L[j + 1] < s) j++;
+      const t = (s - L[j]) / (L[j + 1] - L[j] || 1);
+      out.push([lerp(pts[j][0], pts[j + 1][0], t), lerp(pts[j][1], pts[j + 1][1], t)]);
+    }
+    return out;
+  }
+
+  // ---------- revolve ----------
+  // Revolves a profile [[r, y], ...] about y. loop: the profile is a closed outline (a wall
+  // with thickness). arc < 2π leaves a wedge open, with flat caps on the cut faces.
+  function revolve(profile, { segments = 64, arc = TAU, start = 0, loop = false, crease = 35, caps = true } = {}) {
+    let pr = profile.map(p => [Math.max(0, p[0]), p[1]]);
+    const n = pr.length, poles = pr[0][0] < 1e-9 && pr[n - 1][0] < 1e-9;
+    if ((loop || poles) && area2(pr) < 0) pr = pr.reverse();
+    const full = arc >= TAU - 1e-6;
+    const ang = j => start + (arc * j) / segments;
+    const at = (i, j) => { const [r, y] = pr[i % n]; return cyl(r, ang(j), y); };
+    const S = new Soup();
+    const rows = loop ? n : n - 1;
+    for (let i = 0; i < rows; i++) for (let j = 0; j < segments; j++) {
+      const j1 = full ? (j + 1) % segments : j + 1;
+      S.quad(at(i, j), at(i, j1), at(i + 1, j1), at(i + 1, j));
+    }
+    if (!full && caps && (loop || poles)) {
+      for (const [a, sgn] of [[start, -1], [start + arc, 1]]) {
+        const dir = v3.scale([-Math.sin(a), 0, -Math.cos(a)], sgn);
+        S.cap(pr, ([r, y]) => cyl(r, a, y), dir);
+      }
+    }
+    return S.build({ crease, closed: loop || poles });
+  }
+  // ---------- paths and tubes ----------
+  function frames(path, closed = false) {
+    const n = path.length, Tg = [], N = [], B = [];
+    for (let i = 0; i < n; i++) {
+      const a = path[closed ? (i - 1 + n) % n : Math.max(0, i - 1)], b = path[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
+      Tg.push(v3.norm(v3.sub(b, a)));
+    }
+    let Nv = v3.norm(v3.cross(Tg[0], Math.abs(Tg[0][1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]));
+    for (let i = 0; i < n; i++) {
+      if (i) { Nv = v3.sub(Nv, v3.scale(Tg[i], v3.dot(Nv, Tg[i]))); Nv = v3.len(Nv) < 1e-9 ? N[i - 1] : v3.norm(Nv); }
+      N.push(Nv);
+      B.push(v3.cross(Tg[i], Nv));
+    }
+    return { T: Tg, N, B };
+  }
+  // A tube along a path: solid, or hollow when ri > 0 (pipes show a ring when cut).
+  // ro may be a function of t in [0, 1].
+  function tubeShell(path, ro, ri = 0, { segments = 20, crease = 60, closed = false } = {}) {
+    const { T: Tg, N, B } = frames(path, closed), n = path.length;
+    const rad = typeof ro === "function" ? ro : () => ro, irad = typeof ri === "function" ? ri : () => ri;
+    const ring = (i, r) => Array.from({ length: segments }, (_, j) => {
+      const a = (j / segments) * TAU;
+      return v3.add(path[i], v3.add(v3.scale(N[i], r * Math.cos(a)), v3.scale(B[i], r * Math.sin(a))));
+    });
+    const O = path.map((_, i) => ring(i, rad(i / (n - 1))));
+    const I = (typeof ri === "function" || ri > 0) ? path.map((_, i) => ring(i, irad(i / (n - 1)))) : null;
+    const S = new Soup();
+    const segs = closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+      const i1 = (i + 1) % n;
+      for (let j = 0; j < segments; j++) {
+        const k = (j + 1) % segments;
+        S.quad(O[i][j], O[i][k], O[i1][k], O[i1][j]);
+        if (I) S.quad(I[i][j], I[i1][j], I[i1][k], I[i][k]);
+      }
+    }
+    if (!closed) {
+      for (const [i, start] of [[0, true], [n - 1, false]]) {
+        for (let j = 0; j < segments; j++) {
+          const k = (j + 1) % segments;
+          if (I) { if (start) S.quad(O[i][j], I[i][j], I[i][k], O[i][k]); else S.quad(O[i][j], O[i][k], I[i][k], I[i][j]); }
+          else if (start) S.tri(path[i], O[i][k], O[i][j]);
+          else S.tri(path[i], O[i][j], O[i][k]);
+        }
+      }
+    }
+    return S.build({ crease, closed: true });
+  }
+  // Straight runs through the given points, joined by true circular bends of radius `bend`
+  // (shrunk where a run is too short to fit it).
+  function route(points, bend = 50) {
+    const out = [points[0]], n = points.length;
+    for (let i = 1; i < n - 1; i++) {
+      const A = points[i - 1], P = points[i], Bq = points[i + 1];
+      const d0 = v3.norm(v3.sub(P, A)), d1 = v3.norm(v3.sub(Bq, P));
+      const cos = clamp(v3.dot(d0, d1), -1, 1), th = Math.acos(cos);
+      if (th < 1e-3) { out.push(P); continue; }
+      let R = typeof bend === "function" ? bend(i) : bend;
+      const room = Math.min(v3.dist(A, P) * (i === 1 ? 0.95 : 0.5), v3.dist(P, Bq) * (i === n - 2 ? 0.95 : 0.5));
+      let t = R * Math.tan(th / 2);
+      if (t > room) { t = room; R = t / Math.tan(th / 2); }
+      const S0 = v3.sub(P, v3.scale(d0, t)), nIn = v3.norm(v3.sub(d1, v3.scale(d0, cos))), C = v3.add(S0, v3.scale(nIn, R));
+      const steps = Math.max(3, Math.ceil(th / (7 * DEG)));
+      for (let s = 0; s <= steps; s++) {
+        const f = (th * s) / steps;
+        out.push(v3.add(C, v3.add(v3.scale(nIn, -R * Math.cos(f)), v3.scale(d0, R * Math.sin(f)))));
+      }
+    }
+    out.push(points[n - 1]);
+    return out;
+  }
+  const pathLength = p => p.reduce((s, q, i) => (i ? s + v3.dist(p[i - 1], q) : 0), 0);
+  // Point and tangent at arc length s along a polyline.
+  function along(path, s, closed = false) {
+    const n = path.length, segs = closed ? n : n - 1;
+    let total = 0;
+    const L = [];
+    for (let i = 0; i < segs; i++) { const l = v3.dist(path[i], path[(i + 1) % n]); L.push(l); total += l; }
+    if (closed) s = ((s % total) + total) % total; else s = clamp(s, 0, total);
+    for (let i = 0; i < segs; i++) {
+      if (s <= L[i] || i === segs - 1) {
+        const a = path[i], b = path[(i + 1) % n], t = L[i] ? clamp(s / L[i], 0, 1) : 0;
+        return { at: v3.lerp(a, b, t), dir: v3.norm(v3.sub(b, a)) };
+      }
+      s -= L[i];
+    }
+    return { at: path[0], dir: [1, 0, 0] };
+  }
+  // Placement matrix: local origin at p, local +y along dir.
+  const aim = (p, dir) => mul(T(p), m4.alignY(dir));
+
+  // ---------- part nodes and assemblies ----------
+  const MATERIALS = new Set(["porcelain", "ceramic", "steel", "brushed", "aluminum", "titanium", "copper", "brass", "inconel", "carbon", "rubber", "paint", "glass", "ghost", "hot", "graphite", "paper", "gold"]);
+  // Picks a part's material: o.materials[role] wins, o.plain turns every metal to porcelain.
+  function matFor(o, role, fallback) {
+    const m = (o.materials && o.materials[role]) || fallback;
+    if (o.plain && m !== "glass" && m !== "ghost" && !(o.materials && o.materials[role])) return "porcelain";
+    return m;
+  }
+  const NODE_KEYS = new Set(["name", "position", "rotation", "scale", "pivot", "matrix", "material", "color", "opacity", "visible", "cut", "highlight", "pickable"]);
+  function nodeOpts(o) { const r = {}; for (const k in o) if (NODE_KEYS.has(k)) r[k] = o[k]; return r; }
+  // A group node for a multi-part part (a flange with its bolts, a bearing).
+  function group(name, kids = []) {
+    const g = E3.node(null, { name });
+    for (const [m, o] of kids) if (m) g.add(m, nodeOpts(o));
+    return g;
+  }
+
+  // An assembly: a group node that knows its named parts, how they come apart, where
+  // their labels go, and how its moving parts are driven.
+  function assembly(name, o = {}) {
+    const root = E3.node(null, { name });
+    const parts = {}, notes = {}, labels = [], exploding = [];
+    let ex = 0;
+    root.parts = parts;
+    root.notes = notes;
+    root.info = {};
+    root.ports = {};
+    // Adds a part. opts: node options plus explode [x, y, z] (offset at explode 1, in the
+    // parent's frame), label (text, or { text, at } with at in the part's own frame),
+    // note (one line for readouts), parent (a node in this assembly).
+    root.part = (nameOrMesh, m, opts = {}) => {
+      if (typeof nameOrMesh !== "string") { opts = m || {}; m = nameOrMesh; nameOrMesh = opts.name || ""; }
+      const parent = opts.parent || root;
+      const node = parent.add(m, { ...nodeOpts(opts), name: nameOrMesh });
+      if (nameOrMesh && !parts[nameOrMesh]) parts[nameOrMesh] = node;
+      if (opts.note && nameOrMesh) notes[nameOrMesh] = opts.note;
+      if (opts.explode) { node._ex = opts.explode; node._home = (opts.position || [0, 0, 0]).slice(); exploding.push(node); }
+      if (opts.label) {
+        const L = typeof opts.label === "string" ? { text: opts.label } : opts.label;
+        labels.push({ node, text: L.text, at: L.at || null, color: L.color });
+      }
+      return node;
+    };
+    const nodeGroup = root.group.bind(root);
+    root.group = (gname, opts = {}) => (typeof gname === "string" ? root.part(gname, null, opts) : nodeGroup(gname));
+    // Moves a part's resting place (for parts the pose drives), keeping the explode offset.
+    root.home = (node, p) => { node._home = p.slice(); if (!node._ex) node.position = p.slice(); else node.position = v3.add(p, v3.scale(node._ex, ex)); };
+    root.homeMatrix = (node, M) => { node._m0 = M; node.matrix = node._ex ? mul(T(v3.scale(node._ex, ex)), M) : M; };
+    root.explode = (t = 0) => {
+      ex = t;
+      for (const n of exploding) {
+        const off = v3.scale(n._ex, t);
+        if (n._m0) n.matrix = mul(T(off), n._m0);
+        else n.position = v3.add(n._home, off);
+      }
+      return root;
+    };
+    Object.defineProperty(root, "exploded", { get: () => ex });
+    // Label anchors in world coordinates: [{ text, at, color, node }]. Hidden parts are skipped.
+    root.labels = () => {
+      const out = [];
+      for (const L of labels) {
+        let vis = true;
+        for (let n = L.node; n; n = n.parent) if (!n.visible) { vis = false; break; }
+        if (!vis) continue;
+        let at = L.at;
+        if (!at) {
+          const b = L.node.mesh ? L.node.mesh.bounds : null;
+          at = b ? b.center : [0, 0, 0];
+        }
+        out.push({ text: L.text, at: L.node.toWorld(at), color: L.color, node: L.node });
+      }
+      return out;
+    };
+    // A port is a circular opening: { center, normal, radius } in world coordinates.
+    // root.portLocal(name) gives the same port in the assembly's own frame (for building on it).
+    const portData = {};
+    const rel = node => { let Mx = m4.identity(); for (let n = node; n && n !== root; n = n.parent) Mx = mul(n.local(), Mx); return Mx; };
+    root.portLocal = pname => {
+      const d = portData[pname], Mx = rel(d.node);
+      return { center: m4.apply(Mx, d.center), normal: v3.norm(m4.applyDir(Mx, d.normal)), radius: d.radius, ...d.extra };
+    };
+    root.port = (pname, node, center, normal, radius, extra = {}) => {
+      portData[pname] = { node, center, normal, radius, extra };
+      Object.defineProperty(root.ports, pname, {
+        enumerable: true,
+        get() {
+          const W = node.world();
+          return { center: m4.apply(W, center), normal: v3.norm(m4.applyDir(W, normal)), radius: radius * Math.hypot(W[0], W[1], W[2]), ...extra };
+        },
+      });
+      if (!(pname in root)) Object.defineProperty(root, pname, { get: () => root.ports[pname] });
+    };
+    root.pose = state => { if (root.onPose) root.onPose(state || {}); return root; };
+    return root;
+  }
+  // Highlights the parts named in `names` (or matching a predicate); handy with hover and g.lit.
+  function highlight(root, test) {
+    const f = typeof test === "function" ? test : n => n && (Array.isArray(test) ? test.includes(n) : n === test);
+    root.traverse(n => { if (n !== root) n.highlight = !!f(n.name, n); });
+  }
+
+  // ---------- fasteners ----------
+  const hexagon = (s, a0 = Math.PI / 6) => circle2(s / Math.sqrt(3), 6, 0, 0, a0);
+  // A plate outline (xy, with holes) extruded to thickness t, lying flat: y from y0 to y0 + t.
+  function plate(outline, t, { holes = [], bevel = 0, y0 = 0, bevelSegments = 2 } = {}) {
+    return xf(mesh.extrude(outline, t, { holes, bevel, bevelSegments }), T([0, y0 + t / 2, 0]), RX(-Math.PI / 2));
+  }
+  // Hex bolt: the head's bearing face sits at y = 0, head up, shank down to y = -length.
+  function bolt(o = {}) {
+    const d = o.d ?? o.diameter ?? 10, L = o.length ?? 4 * d, s = o.across ?? 1.6 * d, k = o.head ?? 0.65 * d;
+    const seg = o.segments ?? 18;
+    const head = plate(hexagon(s), k, { bevel: 0.1 * d, bevelSegments: o.lite ? 1 : 2 });
+    const r = d / 2, prof = [[0, 0.3 * k], [r, 0.3 * k]];
+    const thread = o.thread ?? true, tl = Math.min(L - 0.5 * d, o.threadLength ?? Math.max(2 * d, L * 0.6));
+    const p = o.pitch ?? 0.15 * d;
+    if (thread && L > 2 * d) {
+      prof.push([r, -(L - tl)]);
+      for (let y = -(L - tl); y > -L + 1.5 * p; y -= p) prof.push([r * 0.9, y - p * 0.5], [r, y - p]);
+    }
+    prof.push([r, -L + 0.12 * d], [r - 0.12 * d, -L], [0, -L]);
+    return merge(head, revolve(prof, { segments: seg }));
+  }
+  // Hex nut sitting on y = 0, up to its height.
+  function nut(o = {}) {
+    const d = o.d ?? o.diameter ?? 10, s = o.across ?? 1.6 * d, m = o.height ?? 0.8 * d;
+    return plate(hexagon(s), m, { holes: [circle2(d * 0.5, o.lite ? 8 : 16)], bevel: 0.1 * d, bevelSegments: o.lite ? 1 : 2 });
+  }
+  function washer(o = {}) {
+    const d = o.d ?? o.diameter ?? 10, t = o.thickness ?? 0.18 * d;
+    return revolve([[0.54 * d, 0], [d, 0], [d, t], [0.54 * d, t]], { loop: true, segments: o.segments ?? 24 });
+  }
+  // n bolts on a circle in the xz plane at height y (heads up), with nuts `grip` below.
+  function boltCircle(n, radius, o = {}) {
+    const d = o.d ?? 8, grip = o.grip ?? 2 * d, a0 = o.start ?? Math.PI / n;
+    const b = bolt({ d, length: o.length ?? grip + d * 1.3, thread: o.thread ?? false, segments: o.segments ?? 10, lite: true });
+    const nt = o.nuts === false ? null : xf(nut({ d, lite: true }), T([0, -grip - 0.8 * d, 0]));
+    const one = merge(b, nt);
+    const out = [];
+    for (let i = 0; i < n; i++) { const a = a0 + (i / n) * TAU; out.push(xf(one, T(cyl(radius, a, o.y ?? 0)), RY(a))); }
+    return merge(out);
+  }
+
+  // ---------- flange ----------
+  // Weld-neck flange on a pipe of outer radius `pipe`. The mating face is at y = 0 and
+  // the flange runs down the pipe (toward -y). Proportions follow ASME B16.5 class 150.
+  function flange(o = {}) {
+    const rp = o.pipe ?? o.radius ?? 30, ri = o.bore ?? rp * 0.88;
+    const R = o.outer ?? Math.max(rp * 2, rp + 30), t = o.thickness ?? Math.max(6, rp * 0.42);
+    const n = o.bolts ?? (rp > 120 ? 16 : rp > 70 ? 12 : 8), rb = o.boltCircle ?? (R + Math.max(rp * 1.15, rp + 6)) / 2;
+    const hr = o.hole ?? Math.max(2.5, Math.min((R - rp) * 0.17, (Math.PI * rb) / n * 0.32));
+    const holes = [circle2(ri, 32)];
+    for (let i = 0; i < n; i++) { const a = Math.PI / n + (i / n) * TAU; holes.push(circle2(hr, 10, rb * Math.cos(a), rb * Math.sin(a))); }
+    const body = xf(mesh.extrude(circle2(R, 48), t, { holes, bevel: t * 0.12, bevelSegments: 1 }), T([0, -t / 2, 0]), RX(-Math.PI / 2));
+    const neckL = o.neck ?? t * 1.6, rh = Math.max(rp * 1.18, rp + 4);
+    const neck = revolve(fillet([[ri, -t + 0.5], [rh, -t + 0.5], [rh, -t - neckL * 0.15, rh * 0.06], [rp, -t - neckL], [ri, -t - neckL]], { steps: 2 }), { loop: true, segments: 32 });
+    const face = revolve([[ri, -0.3], [rp * 1.45, -0.3], [rp * 1.45, t * 0.06], [ri, t * 0.06]], { loop: true, segments: 32 });
+    const m = merge(body, neck, face);
+    m.flange = { radius: R, thickness: t, bolts: n, boltCircle: rb, hole: hr, bore: ri };
+    return m;
+  }
+
+  // ---------- pipe ----------
+  // A pipe through 3D points with true bends, hollow, with a flange and bolts at each end.
+  // Returns a group: pipe, flanges, bolts. group.path is the centerline; group.ends the ends.
+  function pipe(points, o = {}) {
+    const r = o.radius ?? 25, w = o.wall ?? Math.max(1.2, r * 0.12), bend = o.bend ?? r * 3;
+    const path = route(points, bend);
+    const g = group(o.name ?? "pipe");
+    g.add(tubeShell(path, r, r - w, { segments: o.segments ?? 24 }), { name: o.name ?? "pipe", material: o.material ?? "brushed" });
+    const n = path.length;
+    const ends = [
+      { at: path[0], dir: v3.norm(v3.sub(path[0], path[1])) },
+      { at: path[n - 1], dir: v3.norm(v3.sub(path[n - 1], path[n - 2])) },
+    ];
+    const which = o.flanges === false ? [] : o.flanges === "start" ? [0] : o.flanges === "end" ? [1] : [0, 1];
+    const fl = [], bl = [];
+    for (const e of which) {
+      const f = flange({ pipe: r, bore: r - w, ...(o.flange || {}) });
+      const M = aim(ends[e].at, ends[e].dir);
+      fl.push(mesh.transform(f, M));
+      if (o.bolts !== false) {
+        const info = f.flange, d = Math.max(3, info.hole * 1.6);
+        bl.push(mesh.transform(boltCircle(info.bolts, info.boltCircle, { d, grip: info.thickness * 2, y: info.thickness }), mul(M, RX(Math.PI))));
+      }
+    }
+    if (fl.length) g.add(merge(fl), { name: `${o.name ?? "pipe"} flange`, material: o.flangeMaterial ?? "steel" });
+    if (bl.length) g.add(merge(bl), { name: `${o.name ?? "pipe"} bolts`, material: o.boltMaterial ?? "steel" });
+    g.path = path;
+    g.ends = ends;
+    g.length = pathLength(path);
+    return g;
+  }
+
+  // ---------- small parts ----------
+  // L bracket: base plate on y = 0 along +x, upright plate at x = 0, inner fillet, gusset, holes.
+  function bracket(o = {}) {
+    const w = o.width ?? 60, h = o.height ?? 70, l = o.depth ?? 70, t = o.thickness ?? 6, hr = o.hole ?? Math.max(2.5, w * 0.07);
+    const rr = Math.min(w, l) * 0.12;
+    const base = xf(mesh.extrude(roundRect2(l, w, rr, 4, l / 2, 0), t, { holes: [circle2(hr, 16, l * 0.68, w * 0.27), circle2(hr, 16, l * 0.68, -w * 0.27)], bevel: t * 0.15 }), T([0, t / 2, 0]), RX(-Math.PI / 2));
+    const up = xf(mesh.extrude(roundRect2(w, h, rr, 4, 0, h / 2), t, { holes: [circle2(hr, 16, w * 0.27, h * 0.68), circle2(hr, 16, -w * 0.27, h * 0.68)], bevel: t * 0.15 }), T([t / 2, 0, 0]), RY(Math.PI / 2));
+    const rf = t * 1.2;
+    const fil = mesh.extrude([[t - 0.3, t - 0.3], [t + rf, t - 0.3], ...arc2(t + rf, t + rf, rf, -Math.PI / 2, -Math.PI, 6).slice(1, -1), [t - 0.3, t + rf]], w * 0.98);
+    const parts = [base, up, fil];
+    if (o.gusset !== false) parts.push(mesh.extrude([[t - 0.3, t - 0.3], [l * 0.62, t - 0.3], [t - 0.3, h * 0.62]], t * 0.8, { bevel: t * 0.12 }));
+    return merge(parts);
+  }
+
+  // Ball bearing on y = 0..width: inner ring, outer ring, balls, cage (a group).
+  function bearing(o = {}) {
+    const ri = o.bore ?? 20, ro = o.outer ?? ri * 1.9, w = o.width ?? (ro - ri) * 0.75;
+    const rp = (ri + ro) / 2, rb = o.ball ?? Math.min((ro - ri) * 0.28, w * 0.42), n = o.balls ?? Math.max(7, Math.floor((TAU * rp) / (rb * 2.7)));
+    const c = Math.min(w, ro - ri) * 0.07, rho = rb * 1.04, sh = rb * 0.62;
+    const dy = Math.sqrt(rho * rho - sh * sh), al = Math.atan2(dy, sh);
+    const rIn = rp - sh, rOut = rp + sh;
+    const innerP = fillet([[ri, 0, c], [rIn, 0, c * 0.6], [rIn, w / 2 - dy], ...arc2(rp, w / 2, rho, Math.PI + al, Math.PI - al, 10).slice(1, -1), [rIn, w / 2 + dy], [rIn, w, c * 0.6], [ri, w, c]], { closed: true, steps: 3 });
+    const outerP = fillet([[rOut, 0, c * 0.6], [ro, 0, c], [ro, w, c], [rOut, w, c * 0.6], [rOut, w / 2 + dy], ...arc2(rp, w / 2, rho, al, -al, 10).slice(1, -1), [rOut, w / 2 - dy]], { closed: true, steps: 3 });
+    const ball = mesh.sphere(rb, { segments: o.ballSegments ?? 8 });
+    const balls = merge(Array.from({ length: n }, (_, i) => xf(ball, T(cyl(rp, (i / n) * TAU, w / 2)))));
+    const cw = rb * 0.22;
+    const cage = revolve([[rp - cw, w / 2 - rb * 1.02], [rp + cw, w / 2 - rb * 1.02], [rp + cw, w / 2 - rb * 0.8], [rp - cw, w / 2 - rb * 0.8]], { loop: true, segments: 48 });
+    const g = group(o.name ?? "bearing", [
+      [revolve(outerP, { loop: true, segments: o.segments ?? 64 }), { name: "outer ring", material: o.material ?? "steel" }],
+      [revolve(innerP, { loop: true, segments: o.segments ?? 64 }), { name: "inner ring", material: o.material ?? "steel" }],
+      [balls, { name: "balls", material: o.material ?? "steel" }],
+      [cage, { name: "cage", material: "brass" }],
+    ]);
+    g.info = { bore: ri, outer: ro, width: w, balls: n, ball: rb, pitch: rp };
+    return g;
+  }
+
+  // Stepped shaft along y from y = 0: steps [[length, diameter], ...], chamfered ends,
+  // filleted shoulders, optional bore (hollow shafts nest inside each other).
+  function shaft(o = {}) {
+    const steps = o.steps ?? [[40, 30], [120, 40], [30, 50], [80, 40]];
+    const bore = (o.bore ?? 0) / 2, fr = o.fillet ?? 1.5;
+    const ch = o.chamfer ?? Math.min(1.5, steps[0][1] * 0.04);
+    const r0 = steps[0][1] / 2, pts = [[bore, 0], [r0 - ch, 0], [r0, ch]];
+    let y = 0;
+    steps.forEach(([len, dia], i) => {
+      const r = dia / 2;
+      y += len;
+      const next = steps[i + 1];
+      if (!next) { pts.push([r, y - ch], [r - ch, y], [bore, y]); return; }
+      const rn = next[1] / 2;
+      if (rn > r + 1e-6) pts.push([r, y, fr], [rn - ch, y], [rn, y + ch]);
+      else if (rn < r - 1e-6) pts.push([r, y - ch], [r - ch, y], [rn, y, fr]);
+    });
+    const m = revolve(fillet(pts, { steps: 3 }), { loop: bore > 0, segments: o.segments ?? 40 });
+    m.shaft = { length: y };
+    return m;
+  }
+
+  // Helical compression spring along y from 0 to length, with closed ends.
+  function spring(o = {}) {
+    const R = o.radius ?? 15, w = o.wire ?? R * 0.16, L = o.length ?? 60, coils = o.coils ?? 7, closed = o.closedEnds ?? true;
+    const pts = [], steps = Math.round(coils * 28);
+    const endTurn = closed ? 0.9 : 0, active = coils - 2 * endTurn;
+    const free = L - w * (closed ? 2 * endTurn + 1 : 1);
+    for (let i = 0; i <= steps; i++) {
+      const c = (i / steps) * coils;
+      let y;
+      if (c < endTurn) y = w / 2 + c * w;
+      else if (c > coils - endTurn) y = L - w / 2 - (coils - c) * w;
+      else y = w / 2 + endTurn * w + ((c - endTurn) / active) * free;
+      pts.push(cyl(R, c * TAU, y));
+    }
+    return tubeShell(pts, w / 2, 0, { segments: 10, crease: 70 });
+  }
+
+  // E3's spur gear (axis y, centered on y = 0), with an optional raised hub.
+  function gear(o = {}) {
+    const g = mesh.gear(o);
+    if (!o.hubRadius) return g;
+    const t = o.thickness ?? 2, hl = o.hubLength ?? t * 1.6, bore = o.hole ?? 0;
+    const hub = revolve([[bore, -hl / 2], [o.hubRadius, -hl / 2], [o.hubRadius, hl / 2], [bore, hl / 2]], { loop: bore > 0, segments: 40 });
+    return merge(g, hub);
+  }
+
+  // A strut between two points with rod-end fittings (frames, trusses, links).
+  function strut(a, b, o = {}) {
+    const r = o.radius ?? 8, L = v3.dist(a, b), e = o.end ?? r * 1.7;
+    const body = revolve(fillet([[0, e * 0.8], [r * 0.8, e * 0.8], [r, e * 1.5, r * 0.5], [r, L - e * 1.5, r * 0.5], [r * 0.8, L - e * 0.8], [0, L - e * 0.8]], { steps: 2 }), { segments: 12 });
+    const eye = xf(mesh.torus(e * 0.62, e * 0.36, { segments: 14, tube: 6 }), RX(Math.PI / 2));
+    return mesh.transform(merge(body, eye, xf(eye, T([0, L, 0]))), aim(a, v3.sub(b, a)));
+  }
+
+  // Housing: a hollow rounded box (outer skin and an inner skin), for gearboxes and covers.
+  function housing(o = {}) {
+    const w = o.width ?? 200, h = o.height ?? 150, d = o.depth ?? 120, t = o.wall ?? 8, r = o.round ?? t * 1.5;
+    const outer = mesh.box(w, h, d, { round: r, segments: 3 });
+    if (o.solid) return outer;
+    const inner = flip(mesh.box(w - 2 * t, h - 2 * t, d - 2 * t, { round: Math.max(0, r - t), segments: 2 }));
+    return merge(outer, inner);
+  }
+
+  // Coil spring, bellows, and cable bundle helpers ----------
+  // Cable harness: a bundle of wires along a smooth path, with ties and end connectors.
+  function harness(points, o = {}) {
+    const wires = o.wires ?? 7, wr = o.wire ?? 2, ties = o.ties ?? 6;
+    const path = E3.smooth(points, { steps: o.steps ?? 10 });
+    const { T: Tg, N, B } = frames(path);
+    const L = pathLength(path);
+    const slots = [[0, 0]];
+    for (let k = 0; slots.length < wires; k++) { const ring = 1 + Math.floor(k / 6), a = ((k % 6) / 6) * TAU + ring * 0.3; slots.push([ring * 2.05 * wr, a]); }
+    const lay = o.lay ?? 1 / 120;
+    let s = 0;
+    const S = [0];
+    for (let i = 1; i < path.length; i++) S.push((s += v3.dist(path[i - 1], path[i])));
+    const wireMeshes = slots.map(([rr, a]) => tubeShell(path.map((p, i) => {
+      const ang = a + S[i] * lay * TAU;
+      return v3.add(p, v3.add(v3.scale(N[i], rr * Math.cos(ang)), v3.scale(B[i], rr * Math.sin(ang))));
+    }), wr, 0, { segments: 8 }));
+    const R = (slots.length > 1 ? slots[slots.length - 1][0] : 0) + wr;
+    const tieRing = revolve([[R + 0.2, -wr * 0.7], [R + wr * 0.7, -wr * 0.7], [R + wr * 0.7, wr * 0.7], [R + 0.2, wr * 0.7]], { loop: true, segments: 16 });
+    const tieM = [];
+    for (let k = 1; k <= ties; k++) {
+      const { at, dir } = along(path, (L * k) / (ties + 1));
+      tieM.push(mesh.transform(tieRing, aim(at, dir)));
+    }
+    const conn = revolve(fillet([[0, -R * 2.6], [R * 1.5, -R * 2.6], [R * 1.5, -R * 1.2, 0.5], [R * 1.9, -R * 1.2, 0.5], [R * 1.9, 0, 0.5], [R * 1.2, R * 1.4, R * 0.4], [R * 1.05, R * 2.8], [0, R * 2.8]]), { segments: 24 });
+    const ends = [
+      mesh.transform(conn, aim(path[0], v3.scale(Tg[0], 1))),
+      mesh.transform(conn, aim(path[path.length - 1], v3.scale(Tg[path.length - 1], -1))),
+    ];
+    const g = group(o.name ?? "harness", [
+      [merge(wireMeshes), { name: "wires", material: o.material ?? "rubber" }],
+      [ties ? merge(tieM) : null, { name: "ties", material: "graphite" }],
+      [o.connectors === false ? null : merge(ends), { name: "connectors", material: "brushed" }],
+    ]);
+    g.path = path;
+    return g;
+  }
+
+  // ---------- rocket parts ----------
+  // Rao's thrust-optimized bell: initial and exit wall angles from his charts for an 80% bell.
+  const RAO = { eps: [4, 5, 10, 20, 30, 40, 50, 100], tn: [21.5, 23, 26.3, 28.8, 30, 31, 31.5, 33.5], te: [14, 13, 11, 9, 8.5, 8, 7.5, 7] };
+  function raoAngles(eps) {
+    const L = Math.log(clamp(eps, 4, 100)), xs = RAO.eps.map(Math.log);
+    let i = 0;
+    while (i < xs.length - 2 && L > xs[i + 1]) i++;
+    const t = (L - xs[i]) / (xs[i + 1] - xs[i]);
+    return { thetaN: lerp(RAO.tn[i], RAO.tn[i + 1], t), thetaE: lerp(RAO.te[i], RAO.te[i + 1], t) };
+  }
+  // Gas-side contour of a bell from the throat (y = 0) down to the exit (y = -length):
+  // a 0.382 Rt arc out of the throat, then a parabola (quadratic Bezier) to the exit lip.
+  function bellContour(o = {}) {
+    const Rt = o.throat ?? 100, eps = o.expansion ?? 16, f = o.lengthFraction ?? 0.8;
+    const Re = Math.sqrt(eps) * Rt, R1 = 0.382 * Rt, ang = raoAngles(eps);
+    const tn = (o.thetaN ?? ang.thetaN) * DEG, te = (o.thetaE ?? ang.thetaE) * DEG;
+    const Ln = (f * (Re - Rt + R1 * (1 / Math.cos(15 * DEG) - 1))) / Math.tan(15 * DEG);
+    const pts = [], na = o.arcSteps ?? 8, nb = o.steps ?? 40;
+    for (let k = 0; k <= na; k++) { const a = (tn * k) / na; pts.push([R1 * Math.sin(a), Rt + R1 * (1 - Math.cos(a))]); }
+    const N = pts[pts.length - 1], E = [Ln, Re], m1 = Math.tan(tn), m2 = Math.tan(te);
+    const c1 = N[1] - m1 * N[0], c2 = E[1] - m2 * E[0];
+    const Q = [(c2 - c1) / (m1 - m2), (m1 * c2 - m2 * c1) / (m1 - m2)];
+    for (let k = 1; k <= nb; k++) {
+      const t = k / nb, u = 1 - t;
+      pts.push([u * u * N[0] + 2 * u * t * Q[0] + t * t * E[0], u * u * N[1] + 2 * u * t * Q[1] + t * t * E[1]]);
+    }
+    const points = pts.map(([x, r]) => [r, -x]);
+    // Radius at height y (y from 0 down to -length).
+    const radiusAt = y => {
+      if (y >= 0) return Rt;
+      for (let i = 1; i < points.length; i++) if (points[i][1] <= y) { const a = points[i - 1], b = points[i]; return lerp(a[0], b[0], (y - a[1]) / (b[1] - a[1])); }
+      return Re;
+    };
+    return { points, radiusAt, throat: Rt, exit: Re, length: Ln, thetaN: tn / DEG, thetaE: te / DEG, expansion: eps };
+  }
+  // A ring hugging a revolved surface: inner side follows rAt(y) from y0 to y1, `h` proud of it.
+  function collar(rAt, y0, y1, h, { segments = 96, round = 0.3, embed = 0.6, steps = 4 } = {}) {
+    const n = Math.max(2, steps), lo = Math.min(y0, y1), hi = Math.max(y0, y1);
+    const inner = Array.from({ length: n + 1 }, (_, i) => { const y = lerp(lo, hi, i / n); return [rAt(y) - embed, y]; });
+    const top = Math.max(...inner.map(p => p[0])) + embed + h, rr = Math.min(h, hi - lo) * round;
+    const prof = fillet([...inner, [top, hi, rr], [top, lo, rr]], { closed: true, steps: 3 });
+    return revolve(prof, { loop: true, segments });
+  }
+
+  // Bell nozzle with an optional regeneratively cooled tube wall, an inlet manifold where
+  // the tubes end, hat-band stiffeners, and an exit lip. Throat at y = 0, exit at y = -length.
+  // Returns a group (wall, tubes, manifold, stiffeners, lip) with .contour and .exit.
+  function bellNozzle(o = {}) {
+    const C = bellContour(o), Rt = C.throat, t = o.wall ?? Math.max(1.5, Rt * 0.05), seg = o.segments ?? 96;
+    const inner = C.points;
+    const outer = inner.map(([r, y]) => [r + t * (1 + 0.6 * clamp(1 + y / C.length, 0, 1)), y]);
+    const rOut = y => { const r = C.radiusAt(y); return r + t * (1 + 0.6 * clamp(1 + y / C.length, 0, 1)); };
+    const wallM = revolve([...inner, ...outer.reverse()], { loop: true, segments: o.wallSegments ?? 80 });
+    const g = group(o.name ?? "nozzle", [[wallM, { name: "nozzle wall", material: o.material ?? "inconel" }]]);
+    const tubes = o.tubes ?? { count: 96, from: 0.05, to: 0.55 };
+    let manifoldY = null;
+    if (tubes) {
+      const N = tubes.count ?? 96, k = 4, cols = N * k, rows = tubes.rows ?? 28;
+      const y0 = -C.length * (tubes.from ?? 0.05), y1 = -C.length * (tubes.to ?? 0.55);
+      const S = new Soup(), O = [], I = [];
+      for (let i = 0; i <= rows; i++) {
+        const y = lerp(y0, y1, i / rows), base = rOut(y), rt = (Math.PI * base) / N;
+        const ring = [], iring = [];
+        for (let j = 0; j < cols; j++) {
+          const u = (j % k) / k, h = Math.sqrt(Math.max(0, 1 - (2 * u - 1) ** 2));
+          ring.push(cyl(base + rt * (0.12 + 0.88 * h), (j / cols) * TAU, y));
+        }
+        for (let j = 0; j < N; j++) iring.push(cyl(base - 0.4, (j / N) * TAU, y));
+        O.push(ring); I.push(iring);
+      }
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) { const j1 = (j + 1) % cols; S.quad(O[i][j], O[i][j1], O[i + 1][j1], O[i + 1][j]); }
+        for (let j = 0; j < N; j++) { const j1 = (j + 1) % N; S.quad(I[i][j], I[i + 1][j], I[i + 1][j1], I[i][j1]); }
+      }
+      // End rings: zip the corrugated outer ring to the coarse inner ring.
+      for (const [i, sg] of [[0, 1], [rows, -1]]) {
+        for (let j = 0; j < N; j++) {
+          const j1 = (j + 1) % N;
+          for (let q = 0; q < k; q++) {
+            const a = O[i][j * k + q], b = O[i][(j * k + q + 1) % cols];
+            if (sg > 0) S.tri(I[i][j], b, a); else S.tri(I[i][j], a, b);
+          }
+          if (sg > 0) S.tri(I[i][j], I[i][j1], O[i][(j1 * k) % cols]); else S.tri(I[i][j], O[i][(j1 * k) % cols], I[i][j1]);
+        }
+      }
+      g.add(S.build({ crease: 50 }), { name: "regen tubes", material: o.tubeMaterial ?? o.material ?? "inconel" });
+      manifoldY = y1;
+      const mh = Rt * 0.16;
+      const man = collar(y => rOut(y) + (Math.PI * rOut(y)) / N, y1 + mh * 0.2, y1 - mh * 1.4, mh, { segments: seg });
+      const top = collar(rOut, y0 + Rt * 0.12, y0 - Rt * 0.02, Rt * 0.08, { segments: seg });
+      g.add(merge(man, top), { name: "manifold", material: o.manifoldMaterial ?? "steel" });
+    }
+    const bands = o.stiffeners ?? 2, below = manifoldY ?? -C.length * 0.3, sm = [];
+    for (let b = 1; b <= bands; b++) {
+      const y = lerp(below, -C.length, b / (bands + 1));
+      sm.push(collar(rOut, y + Rt * 0.035, y - Rt * 0.035, Rt * 0.05, { segments: seg }));
+    }
+    sm.push(collar(rOut, -C.length + Rt * 0.09, -C.length, Rt * 0.06, { segments: seg, embed: 0.3 }));
+    g.add(merge(sm), { name: "stiffeners", material: o.material ?? "inconel" });
+    g.contour = C;
+    g.outerRadiusAt = rOut;
+    g.manifoldY = manifoldY;
+    g.exit = { center: [0, -C.length, 0], normal: [0, -1, 0], radius: C.exit };
+    return g;
+  }
+
+  // Combustion chamber from the injector face (top) to the throat (y = 0): cylinder, a
+  // 1.5 Rt arc into the throat, a straight convergence, and a bolted flange on top.
+  // Chamber length follows L* (characteristic length, mm) when no cylinder length is given.
+  function combustionChamber(o = {}) {
+    const Rt = o.throat ?? 100, cr = o.contraction ?? 3, Rc = Rt * Math.sqrt(cr), th = (o.convergence ?? 30) * DEG;
+    const tw = o.wall ?? Rt * 0.11, Lstar = o.lstar ?? 1000;
+    const pts = [];
+    for (let k = 0; k <= 8; k++) { const f = (th * k) / 8; pts.push([Rt + 1.5 * Rt * (1 - Math.cos(f)), 1.5 * Rt * Math.sin(f)]); }
+    const e = pts[pts.length - 1], yK = e[1] + (Rc - e[0]) / Math.tan(th);
+    const At = Math.PI * Rt * Rt, Ac = Math.PI * Rc * Rc, hc = (Rc - Rt) / Math.tan(th);
+    const Vconv = (Math.PI / 3) * hc * (Rc * Rc + Rc * Rt + Rt * Rt);
+    const Lcyl = o.cylinder ?? Math.max(0.4 * Rc, (Lstar * At - Vconv) / Ac);
+    const top = yK + Lcyl;
+    const inner = fillet([...pts, [Rc, yK, Rc * 0.7], [Rc, top]], { steps: 8 });
+    const outer = inner.map(([r, y]) => [r + tw, y]);
+    const fw = o.flangeWidth ?? Rc * 0.32, fh = o.flangeHeight ?? Rt * 0.22;
+    const prof = fillet([...inner, [Rc + tw + fw, top, 1.5], [Rc + tw + fw, top - fh, 1.5], [Rc + tw, top - fh * 2.2, fh * 0.6], ...outer.slice(0, -1).reverse().filter(p => p[1] < top - fh * 2.2)], { closed: true, steps: 4 });
+    const g = group(o.name ?? "combustion chamber", [[revolve(prof, { loop: true, segments: o.segments ?? 96 }), { name: "chamber", material: o.material ?? "inconel" }]]);
+    const nb = o.bolts ?? 24, d = Math.max(4, fh * 0.45);
+    g.add(boltCircle(nb, Rc + tw + fw * 0.55, { d, y: top, grip: fh * 2, nuts: false }), { name: "chamber bolts", material: "steel" });
+    g.info = { throat: Rt, chamberRadius: Rc, top, cylinder: Lcyl, flangeRadius: Rc + tw + fw, flangeHeight: fh, wall: tw };
+    g.radiusAt = y => { for (let i = 1; i < inner.length; i++) if (inner[i][1] >= y) { const a = inner[i - 1], b = inner[i]; return lerp(a[0], b[0], (y - a[1]) / (b[1] - a[1] || 1)) + tw; } return Rc + tw; };
+    return g;
+  }
+
+  // Injector plate: a disc whose face (y = 0, facing down) carries rings of coaxial
+  // elements. The body runs from y = 0 up to the thickness. Returns a group (plate, elements).
+  function injectorPlate(o = {}) {
+    const Rc = o.radius ?? 170, R = o.outer ?? Rc * 1.4, t = o.thickness ?? Rc * 0.14, pitch = o.pitch ?? Rc * 0.115;
+    const rings = o.rings ?? Math.max(2, Math.round(Rc / pitch) - 1), er = o.element ?? pitch * 0.22;
+    const body = revolve(fillet([[0, 0], [Rc, 0], [Rc + 2, -1.2], [R, -1.2, 1], [R, t, 1.5], [0, t]], { steps: 3 }), { segments: o.segments ?? 96 });
+    const post = revolve([[0, -0.8], [er, -0.8], [er, 1], [0, 1]], { segments: 10 });
+    const sleeve = revolve([[er * 1.2, -0.4], [er * 1.6, -0.4], [er * 1.6, 1], [er * 1.2, 1]], { loop: true, segments: 10 });
+    const posts = [xf(post, T([0, 0, 0]))], sleeves = o.sleeves ? [xf(sleeve, T([0, 0, 0]))] : [];
+    for (let k = 1; k <= rings; k++) {
+      const r = (Rc * 0.9 * k) / rings, n = Math.max(6, Math.round((TAU * r) / pitch));
+      for (let i = 0; i < n; i++) { const p = cyl(r, (i + (k % 2) * 0.5) / n * TAU, 0); posts.push(xf(post, T(p))); if (o.sleeves) sleeves.push(xf(sleeve, T(p))); }
+    }
+    const g = group(o.name ?? "injector", [
+      [body, { name: "injector plate", material: o.material ?? "copper" }],
+      [sleeves.length ? merge(sleeves) : null, { name: "injector elements", material: "steel" }],
+      [merge(posts), { name: "orifices", material: "graphite" }],
+    ]);
+    g.info = { elements: posts.length, radius: Rc, outer: R, thickness: t };
+    return g;
+  }
+
+  // Centrifugal impeller with backswept vanes on a hub; the back face sits on y = 0 and the
+  // eye faces +y. exitAngle is the vane angle from the tangent at the tip (degrees).
+  function impeller(o = {}) {
+    const R2 = o.radius ?? 80, R1 = o.eye ?? R2 * 0.45, nb = o.vanes ?? 6, b2 = o.width ?? R2 * 0.14;
+    const beta = (o.exitAngle ?? 24) * DEG, tb = o.back ?? R2 * 0.07, H = o.length ?? R2 * 0.62, Rn = R1 * 0.42, tv = o.vane ?? R2 * 0.045;
+    const hubY = r => tb + H * Math.pow(clamp((R2 - r) / (R2 - Rn), 0, 1), 2.2);
+    const prof = [[0, 0], [R2 - 1, 0], [R2, 1], [R2, tb]];
+    for (let i = 1; i <= 16; i++) { const r = lerp(R2, Rn, i / 16); prof.push([r, hubY(r)]); }
+    prof.push(...arc2(0, hubY(Rn), Rn, 0, Math.PI / 2, 6).slice(1));
+    const hub = revolve(prof, { segments: o.segments ?? 64 });
+    const S = new Soup(), st = 18, r0 = R1 * 0.92;
+    const tipH = r => lerp(R1 * 0.95, b2, Math.pow((r - r0) / (R2 - r0), 0.7));
+    const vane = (phase, rs) => {
+      const rings = [];
+      for (let i = 0; i <= st; i++) {
+        const r = lerp(rs, R2, i / st), phi = phase - Math.log(r / R1) / Math.tan(beta) * (o.sweep ?? 1);
+        const da = tv / 2 / r, yh = hubY(r) - 1.5, yt = hubY(r) + tipH(r);
+        rings.push([cyl(r, phi - da, yh), cyl(r, phi + da, yh), cyl(r, phi + da, yt), cyl(r, phi - da, yt)]);
+      }
+      for (let i = 0; i < st; i++) for (let q = 0; q < 4; q++) { const q1 = (q + 1) % 4; S.quad(rings[i][q], rings[i + 1][q], rings[i + 1][q1], rings[i][q1]); }
+      S.quad(rings[0][0], rings[0][1], rings[0][2], rings[0][3]);
+      S.quad(rings[st][3], rings[st][2], rings[st][1], rings[st][0]);
+    };
+    for (let k = 0; k < nb; k++) {
+      vane((k / nb) * TAU, r0);
+      if (o.splitters !== false) vane(((k + 0.5) / nb) * TAU, (R1 + R2) / 2);
+    }
+    const m = merge(hub, S.build({ crease: 40 }));
+    m.impeller = { radius: R2, eye: R1, vanes: nb, height: hubY(Rn) + Rn, tipWidth: b2, hubY, tipY: r => hubY(r) + tipH(clamp(r, r0, R2)), back: tb };
+    return m;
+  }
+
+  // Volute (spiral casing) around an impeller of radius `radius`, centered on y, discharging
+  // along -z from the +x side. Section area grows linearly with angle. Hollow.
+  function volute(o = {}) {
+    const R2 = o.radius ?? 80, R3 = o.base ?? R2 * 1.12, r0 = o.start ?? R2 * 0.12, r1 = o.end ?? R2 * 0.4, yc = o.y ?? 0, t = o.wall ?? R2 * 0.05;
+    const Ld = o.discharge ?? R2 * 1.6, path = [], rs = [], n = 64;
+    for (let i = 0; i <= n; i++) {
+      const a = 0.35 + ((TAU - 0.35) * i) / n, r = Math.sqrt(lerp(r0 * r0, r1 * r1, (a - 0.35) / (TAU - 0.35)));
+      path.push(cyl(R3 + r * 0.75, a, yc)); rs.push(r);
+    }
+    const end = path[path.length - 1];
+    for (let i = 1; i <= 8; i++) { path.push(v3.add(end, [0, 0, (-Ld * i) / 8])); rs.push(r1 * (1 + 0.18 * (i / 8))); }
+    const N = path.length - 1, rr = t2 => { const f = t2 * N, i = Math.min(N - 1, Math.floor(f)); return lerp(rs[i], rs[i + 1], f - i); };
+    const m = tubeShell(path, rr, t2 => rr(t2) - t, { segments: o.segments ?? 22 });
+    m.volute = { exit: { center: path[N], normal: [0, 0, -1], radius: rs[N] }, outer: R3 + r1 * 1.75 };
+    return m;
+  }
+
+  // Gimbal: a universal joint. upper yoke (fixed), cross (turns for pitch about x), lower
+  // yoke (turns for yaw about z, carries the engine). Pivot at the origin.
+  function gimbal(o = {}) {
+    const s = o.size ?? 50, t = s * 0.28;
+    const ear = (w, h, hole) => mesh.extrude([...arc2(0, 0, w / 2, Math.PI, TAU, 10), [w / 2, h], [-w / 2, h]], t, { holes: [circle2(hole, 20)], bevel: t * 0.15 });
+    const up = xf(ear(s * 1.15, s * 1.5, s * 0.34), RX(Math.PI));
+    const upper = merge(
+      revolve(fillet([[0, s * 1.3], [s * 1.7, s * 1.3, s * 0.1], [s * 1.7, s * 1.75, s * 0.12], [0, s * 1.75]]), { segments: 48 }),
+      xf(up, T([s * 1.15, 0, 0]), RY(Math.PI / 2)), xf(up, T([-s * 1.15, 0, 0]), RY(Math.PI / 2)),
+    );
+    const low = ear(s * 1.15, s * 1.5, s * 0.34);
+    const lower = merge(
+      revolve(fillet([[0, -s * 1.75], [s * 1.7, -s * 1.75, s * 0.12], [s * 1.7, -s * 1.3, s * 0.1], [0, -s * 1.3]]), { segments: 48 }),
+      xf(low, T([0, 0, s * 1.15]), RX(Math.PI)), xf(low, T([0, 0, -s * 1.15]), RX(Math.PI)),
+    );
+    const pin = mesh.cylinder(s * 0.32, s * 3.1, { segments: 24 });
+    const cross = merge(mesh.box(s * 1.25, s * 1.25, s * 1.25, { round: s * 0.18 }), xf(pin, RZ(Math.PI / 2)), xf(pin, RX(Math.PI / 2)));
+    const g = E3.node(null, { name: o.name ?? "gimbal" });
+    g.add(upper, { name: "gimbal upper yoke", material: o.material ?? "steel" });
+    const c = g.add(cross, { name: "gimbal cross", material: o.material ?? "steel" });
+    const l = c.add(lower, { name: "gimbal lower yoke", material: o.material ?? "steel" });
+    g.cross = c; g.lower = l;
+    g.set2 = (pitch = 0, yaw = 0) => { c.rotation = [pitch, 0, 0]; l.rotation = [0, 0, yaw]; return g; };
+    g.info = { size: s, top: s * 1.75, bottom: -s * 1.75 };
+    return g;
+  }
+
+  // Linear actuator (hydraulic or electromechanical): barrel, rod, clevis eyes.
+  // span(a, b) stretches it between two points in its parent's frame.
+  function actuator(o = {}) {
+    const bore = o.bore ?? 30, Lc = o.length ?? 320, stroke = o.stroke ?? Math.min(110, Lc * 0.4);
+    const Lb = Lc * 0.72, Lr = stroke + Lc * 0.32, e = bore * 0.42;
+    const eye = merge(xf(mesh.torus(e * 0.75, e * 0.32, { segments: 24, tube: 10 }), RX(Math.PI / 2)), xf(mesh.cylinder(e * 0.45, e * 0.9, { segments: 16 }), RX(Math.PI / 2)));
+    const rb = bore * 0.62;
+    const barrel = merge(
+      revolve(fillet([[0, e * 0.9], [rb * 0.7, e * 0.9], [rb * 0.78, e * 1.6, 2], [rb, e * 1.7, 2], [rb, Lb * 0.94, 3], [rb * 0.92, Lb, 2], [bore * 0.36, Lb + 2], [0, Lb + 2]]), { segments: 32 }),
+      revolve([[rb - 0.5, Lb * 0.3], [rb + bore * 0.08, Lb * 0.3], [rb + bore * 0.08, Lb * 0.36], [rb - 0.5, Lb * 0.36]], { loop: true, segments: 32 }),
+      xf(mesh.cylinder(bore * 0.12, bore * 0.4, { segments: 12 }), T([rb + bore * 0.15, Lb * 0.75, 0]), RZ(Math.PI / 2)),
+      eye,
+    );
+    const rod = merge(revolve([[0, 0], [bore * 0.24, 0], [bore * 0.24, Lr - e * 1.4], [bore * 0.33, Lr - e * 1.1], [bore * 0.33, Lr - e * 0.8], [0, Lr - e * 0.8]], { segments: 24 }), xf(eye, T([0, Lr, 0])));
+    const g = E3.node(null, { name: o.name ?? "actuator" });
+    const bN = g.add(barrel, { name: `${o.name ?? "actuator"} barrel`, material: o.material ?? "steel" });
+    const rN = g.add(rod, { name: `${o.name ?? "actuator"} rod`, material: o.rodMaterial ?? "brushed" });
+    g.barrel = bN; g.rod = rN;
+    g.span = (a, b) => {
+      const d = v3.dist(a, b);
+      g.matrix = aim(a, v3.sub(b, a));
+      rN.position = [0, d - Lr, 0];
+      g.extension = (d - Lc) / stroke;
+      return g;
+    };
+    g.span([0, 0, 0], [0, Lc, 0]);
+    g.info = { length: Lc, stroke, bore };
+    return g;
+  }
+
+  // Propellant tank: cylinder with elliptical domes (dome height = ratio x radius), as a
+  // hollow shell, with weld lands and ports. Centered on y = 0.
+  function tank(o = {}) {
+    const R = o.radius ?? 400, L = o.length ?? 800, k = o.dome ?? 1 / Math.SQRT2, t = o.wall ?? Math.max(2, R * 0.012), seg = o.segments ?? 72;
+    const shell = (Rr, kk) => {
+      const pts = [];
+      for (let i = 0; i <= 16; i++) { const a = -Math.PI / 2 + (Math.PI / 2) * (i / 16); pts.push([Rr * Math.cos(a), -L / 2 + kk * Math.sin(a)]); }
+      for (let i = 0; i <= 16; i++) { const a = (Math.PI / 2) * (i / 16); pts.push([Rr * Math.cos(a), L / 2 + kk * Math.sin(a)]); }
+      return pts;
+    };
+    const out = shell(R, k * R), inn = shell(R - t, k * R - t).reverse();
+    const body = revolve([...out, ...inn], { loop: true, segments: seg });
+    const land = y => revolve(fillet([[R - 1, y - t * 4], [R + t * 0.8, y - t * 3, t * 0.8], [R + t * 0.8, y + t * 3, t * 0.8], [R - 1, y + t * 4]]), { loop: true, segments: seg });
+    const rp = o.port ?? R * 0.12, top = L / 2 + k * R, bot = -L / 2 - k * R;
+    const boss = y => revolve(fillet([[0, y - rp * 0.6 * Math.sign(y)], [rp * 1.6, y - rp * 0.3 * Math.sign(y), rp * 0.2], [rp * 1.6, y + rp * 0.25 * Math.sign(y)], [0, y + rp * 0.25 * Math.sign(y)]]), { loop: false, segments: 32 });
+    const g = group(o.name ?? "tank", [
+      [body, { name: "tank", material: o.material ?? "aluminum" }],
+      [merge(land(-L / 2), land(L / 2), ...(o.rings ? Array.from({ length: o.rings }, (_, i) => land(lerp(-L / 2, L / 2, (i + 1) / (o.rings + 1)))) : [])), { name: "weld lands", material: o.material ?? "aluminum" }],
+      [merge(boss(top), boss(bot)), { name: "ports", material: "steel" }],
+    ]);
+    g.info = { radius: R, length: L, height: L + 2 * k * R, volume: Math.PI * R * R * L + (4 / 3) * Math.PI * R * R * k * R };
+    g.ports = { top: { center: [0, top + rp * 0.25, 0], normal: [0, 1, 0], radius: rp }, bottom: { center: [0, bot - rp * 0.25, 0], normal: [0, -1, 0], radius: rp } };
+    return g;
+  }
+
+  // ---------- turbomachinery parts ----------
+  // NACA 4-digit section (m camber, p camber position, t thickness, all fractions of chord),
+  // closed trailing edge, cosine spacing: a loop of 2n points, TE -> upper -> LE -> lower.
+  function nacaMPT(m, p, t, n = 16) {
+    const f = x => {
+      const yt = 5 * t * (0.2969 * Math.sqrt(x) - 0.126 * x - 0.3516 * x * x + 0.2843 * x ** 3 - 0.1036 * x ** 4);
+      let yc = 0, dy = 0;
+      if (m > 0 && p > 0) {
+        if (x < p) { yc = (m / (p * p)) * (2 * p * x - x * x); dy = ((2 * m) / (p * p)) * (p - x); }
+        else { yc = (m / (1 - p) ** 2) * (1 - 2 * p + 2 * p * x - x * x); dy = ((2 * m) / (1 - p) ** 2) * (p - x); }
+      }
+      const th = Math.atan(dy);
+      return { xu: x - yt * Math.sin(th), yu: yc + yt * Math.cos(th), xl: x + yt * Math.sin(th), yl: yc - yt * Math.cos(th) };
+    };
+    const P = Array.from({ length: n + 1 }, (_, i) => f((1 - Math.cos((Math.PI * i) / n)) / 2));
+    const pts = [];
+    for (let i = n; i >= 0; i--) pts.push([P[i].xu, P[i].yu]);
+    for (let i = 1; i < n; i++) pts.push([P[i].xl, P[i].yl]);
+    return pts;
+  }
+  function naca(code = "2412", n = 16) {
+    const s = String(code).padStart(4, "0");
+    return nacaMPT(+s[0] / 100, +s[1] / 10, +s.slice(2) / 100, n);
+  }
+  // A value that varies along the span: a number, [root, ..., tip] (piecewise linear), or s => value.
+  const spanVal = (v, s) => {
+    if (typeof v === "function") return v(s);
+    if (!Array.isArray(v)) return v;
+    if (v.length === 1) return v[0];
+    const f = clamp(s, 0, 1) * (v.length - 1), i = Math.min(v.length - 2, Math.floor(f));
+    return lerp(v[i], v[i + 1], f - i);
+  };
+  const centroid = pts => v3.scale(pts.reduce((a, p) => v3.add(a, p), [0, 0, 0]), 1 / pts.length);
+  // Lofts NACA sections into a closed blade. sec(s) -> { m, p, t, chord, angle, dx, dz, pivot };
+  // map(X, s, Z) places a section point: X chordwise (axial), Z across, s the span fraction.
+  function loft(sec, map, { stations = 9, n = 14, hand = 1 } = {}) {
+    const rings = [], flat = [];
+    for (let k = 0; k < stations; k++) {
+      const s = k / (stations - 1), q = sec(s), ca = Math.cos(q.angle), sa = Math.sin(q.angle);
+      const loop = nacaMPT(q.m, q.p ?? 0.4, q.t, n).map(([x, y]) => {
+        const xx = (x - (q.pivot ?? 0.4)) * q.chord, yy = y * q.chord;
+        return [xx * ca - yy * sa + (q.dx || 0), hand * (-xx * sa - yy * ca) + (q.dz || 0)];
+      });
+      flat.push(loop);
+      rings.push(loop.map(([X, Z]) => map(X, s, Z)));
+    }
+    const m = rings[0].length, S = new Soup();
+    for (let k = 0; k < stations - 1; k++) for (let j = 0; j < m; j++) {
+      const j1 = (j + 1) % m;
+      S.quad(rings[k][j], rings[k][j1], rings[k + 1][j1], rings[k + 1][j]);
+    }
+    // Caps must run their edges against the sides': backward along the root ring, forward
+    // along the tip ring. E3.triangulate returns counterclockwise triangles, so check the
+    // section's own winding to know which way they run. build() then turns the whole
+    // closed blade outward.
+    for (const [k, forward] of [[0, false], [stations - 1, true]]) {
+      const s = k / (stations - 1), ccw = area2(flat[k]) > 0, fn = ([X, Z]) => map(X, s, Z);
+      for (const [p, q, r] of E3.triangulate(flat[k])) {
+        if (ccw === forward) S.tri(fn(p), fn(q), fn(r)); else S.tri(fn(p), fn(r), fn(q));
+      }
+    }
+    return S.build({ crease: 45, closed: true });
+  }
+
+  // A single blade standing on y = 0 (span up +y, chord along x). twist is the section
+  // angle from the x axis at root and tip (degrees); thickness and camber are fractions of chord.
+  function blade(o = {}) {
+    const span = o.span ?? 200, chord = o.chord ?? [80, 50], twist = o.twist ?? [10, 40];
+    const thick = o.thickness ?? (o.airfoil ? null : [0.12, 0.06]), camber = o.camber ?? [0.04, 0.02];
+    const codes = o.airfoil ? (Array.isArray(o.airfoil) ? o.airfoil : [o.airfoil, o.airfoil]) : null;
+    const dig = (c, i) => { const s = String(c).padStart(4, "0"); return [+s[0] / 100, +s[1] / 10, +s.slice(2) / 100][i]; };
+    const sec = s => ({
+      m: codes ? lerp(dig(codes[0], 0), dig(codes[codes.length - 1], 0), s) : spanVal(camber, s),
+      p: codes ? lerp(dig(codes[0], 1), dig(codes[codes.length - 1], 1), s) || 0.4 : 0.4,
+      t: codes ? lerp(dig(codes[0], 2), dig(codes[codes.length - 1], 2), s) : spanVal(thick, s),
+      chord: spanVal(chord, s), angle: spanVal(twist, s) * DEG, dx: spanVal(o.sweep ?? 0, s), dz: spanVal(o.lean ?? 0, s), pivot: o.pivot ?? 0.4,
+    });
+    const m = loft(sec, (X, s, Z) => [X, s * span, Z], { stations: o.stations ?? 9, n: o.points ?? 16, hand: o.hand ?? 1 });
+    m.blade = { span };
+    return m;
+  }
+
+  // n blades around the y axis between hub and tip radii, stacked at y = o.y. Blades follow
+  // the hub and casing (hubSlope, tipSlope = dr/dy) and twist from root to tip. Returns a
+  // group: blades, disk (optional), shroud (optional).
+  function rotorStage(o = {}) {
+    const n = o.blades ?? 24, hub = o.hub ?? 100, tip = o.tip ?? 200, y0 = o.y ?? 0, h = tip - hub;
+    const embed = o.embed ?? Math.max(0.6, h * 0.05), hs = o.hubSlope ?? 0, ts = o.tipSlope ?? 0;
+    const sec = s => ({
+      m: spanVal(o.camber ?? [0.05, 0.03], s), p: 0.45, t: spanVal(o.thickness ?? [0.1, 0.05], s),
+      chord: spanVal(o.chord ?? [h * 0.6, h * 0.5], s), angle: spanVal(o.stagger ?? o.twist ?? [30, 55], s) * DEG,
+      dx: spanVal(o.sweep ?? 0, s), dz: spanVal(o.lean ?? 0, s), pivot: o.pivot ?? 0.45,
+    });
+    const map = (X, s, Z) => {
+      const R = lerp(hub + hs * X - embed, tip + ts * X - (o.clearance ?? 0), s);
+      return cyl(R, Z / R, y0 + X);
+    };
+    const one = loft(sec, map, { stations: o.stations ?? 3, n: o.points ?? 6, hand: o.hand ?? 1 });
+    const a0 = o.phase ?? 0;
+    const g = E3.node(null, { name: o.name ?? "rotor" });
+    g.add(merge(Array.from({ length: n }, (_, k) => xf(one, RY(a0 + (k / n) * TAU)))), { name: o.bladeName ?? `${o.name ?? "rotor"} blades`, material: o.material ?? "titanium" });
+    const cx = spanVal(o.chord ?? [h * 0.6, h * 0.5], 0) * 0.55;
+    if (o.disk !== false) {
+      const w = o.diskWidth ?? cx * 1.3, bore = o.bore ?? hub * 0.35, rim = hub - Math.max(1, h * 0.03);
+      const prof = fillet([[bore, y0 - w * 0.45], [bore + w * 0.3, y0 - w * 0.45, w * 0.1], [lerp(bore, rim, 0.45), y0 - w * 0.14, w * 0.25], [rim * 0.86, y0 - w * 0.14, w * 0.2], [rim * 0.86, y0 - w * 0.5, w * 0.05], [rim, y0 - w * 0.5, w * 0.05], [rim, y0 + w * 0.5, w * 0.05], [rim * 0.86, y0 + w * 0.5, w * 0.05], [rim * 0.86, y0 + w * 0.14, w * 0.2], [lerp(bore, rim, 0.45), y0 + w * 0.14, w * 0.25], [bore + w * 0.3, y0 + w * 0.45, w * 0.1], [bore, y0 + w * 0.45]], { closed: true, steps: 3 });
+      g.add(revolve(prof, { loop: true, segments: o.segments ?? 64 }), { name: `${o.name ?? "rotor"} disk`, material: o.diskMaterial ?? o.material ?? "titanium" });
+    }
+    if (o.shroud) {
+      const w = cx * 1.6, t = Math.max(1, h * 0.06);
+      g.add(revolve([[tip - t * 0.6, y0 - w / 2], [tip + t * 0.4, y0 - w / 2], [tip + t * 0.4 + ts * w, y0 + w / 2], [tip - t * 0.6 + ts * w, y0 + w / 2]], { loop: true, segments: o.segments ?? 96 }), { name: `${o.name ?? "rotor"} shroud`, material: o.material ?? "inconel" });
+    }
+    g.info = { blades: n, hub, tip, y: y0 };
+    return g;
+  }
+
+  // Stator stage: vanes between an inner and an outer band (y = o.y).
+  function statorStage(o = {}) {
+    const n = o.vanes ?? 30, inner = o.inner ?? 100, outer = o.outer ?? 200, y0 = o.y ?? 0, h = outer - inner;
+    const chord = o.chord ?? h * 0.55, emb = Math.max(0.8, h * 0.06), is = o.innerSlope ?? 0, os = o.outerSlope ?? 0;
+    const sec = s => ({ m: spanVal(o.camber ?? 0.05, s), p: 0.4, t: spanVal(o.thickness ?? 0.08, s), chord: spanVal(chord, s), angle: spanVal(o.stagger ?? -20, s) * DEG, dx: 0, dz: 0, pivot: 0.5 });
+    const map = (X, s, Z) => { const R = lerp(inner + is * X - emb, outer + os * X + emb, s); return cyl(R, Z / R, y0 + X); };
+    const one = loft(sec, map, { stations: o.stations ?? 2, n: o.points ?? 6, hand: o.hand ?? -1 });
+    const g = E3.node(null, { name: o.name ?? "stator" });
+    g.add(merge(Array.from({ length: n }, (_, k) => xf(one, RY((o.phase ?? 0) + (k / n) * TAU)))), { name: o.vaneName ?? `${o.name ?? "stator"} vanes`, material: o.material ?? "titanium" });
+    const cw = spanVal(chord, 0.5) * 0.62, t = Math.max(1, h * 0.05);
+    const band = (r, sl, sgn) => {
+      const at = y => r + sl * (y - y0);
+      return revolve([[at(y0 - cw), y0 - cw], [at(y0 - cw) + sgn * t, y0 - cw], [at(y0 + cw) + sgn * t, y0 + cw], [at(y0 + cw), y0 + cw]], { loop: true, segments: o.segments ?? 96 });
+    };
+    if (o.bands !== false) g.add(merge(band(inner, is, -1), o.outerBand === false ? null : band(outer, os, 1)), { name: `${o.name ?? "stator"} bands`, material: o.bandMaterial ?? o.material ?? "titanium" });
+    g.info = { vanes: n, inner, outer, y: y0 };
+    return g;
+  }
+
+  // Spinner (nose cone) with its tip at y = 0 and its base (radius R) at y = length.
+  function spinner(o = {}) {
+    const R = o.radius ?? 250, L = o.length ?? R * 1.35, shape = o.shape ?? "ogive", n = 28, pts = [[0, 0]];
+    const rho = (R * R + L * L) / (2 * R);
+    for (let i = 1; i <= n; i++) {
+      const y = (L * i) / n;
+      let r;
+      if (shape === "cone") r = R * Math.min(1, (y / L) * 1.04);
+      else if (shape === "ellipse") r = R * Math.sqrt(1 - (1 - y / L) ** 2);
+      else r = Math.sqrt(Math.max(0, rho * rho - (L - y) ** 2)) + R - rho;
+      pts.push([r, y]);
+    }
+    const back = o.back ?? R * 0.12;
+    pts.push([R, L + back], [R * 0.6, L + back], [0, L + back]);
+    const m = revolve(pts, { segments: o.segments ?? 64 });
+    m.spinner = { radius: R, length: L };
+    return m;
+  }
+
+  // Nacelle as a revolved wall: inlet lip, diffuser to the fan case, a pocket the fan case
+  // fills, the bypass duct, and a boat tail to the fan nozzle. Fan face at y = 0, flow +y.
+  // arc/start leave a wedge open (a cutaway).
+  function nacelleProfile(o = {}) {
+    const Rf = o.fan ?? 900, Rc = o.caseInner ?? Rf * 1.006, Rco = o.caseOuter ?? Rf * 1.075;
+    const yH = o.inlet ?? -Rf * 0.86, Rh = o.highlight ?? Rf * 1.045, Rth = o.throat ?? Rf * 0.965;
+    const Rmax = o.max ?? Rf * 1.18, yMax = o.maxAt ?? yH + Rf * 0.62, yE = o.exit ?? Rf * 1.75, RE = o.exitRadius ?? Rf * 0.9;
+    const yCF = o.caseFront ?? -Rf * 0.32, yCR = o.caseRear ?? Rf * 0.52, ductR = o.duct ?? Rf * 0.985, te = o.trailing ?? Rf * 0.006;
+    const ai = o.lipLength ?? Rf * 0.13, bi = Rh - Rth, k = o.forebody ?? 2.3;
+    const outer = [];
+    for (let i = 0; i <= 28; i++) { const u = i / 28; outer.push([Rh + (Rmax - Rh) * Math.pow(1 - Math.pow(1 - u, k), 1 / k), yH + (yMax - yH) * u]); }
+    for (let i = 1; i <= 28; i++) { const u = i / 28; outer.push([Rmax - (Rmax - RE) * Math.pow(u, 1.7), yMax + (yE - yMax) * u]); }
+    const inner = [];
+    for (let i = 1; i <= 10; i++) { const a = Math.PI + (Math.PI / 2) * (i / 10); inner.push([Rh + bi * Math.sin(a), yH + ai + ai * Math.cos(a)]); }
+    const yT = yH + ai;
+    for (let i = 1; i <= 14; i++) { const u = i / 14; inner.push([Rth + ((Rc - Rth) * (1 - Math.cos(Math.PI * u))) / 2, yT + (yCF - yT) * u]); }
+    inner.push([Rco, yCF], [Rco, yCR], [ductR, yCR]);
+    for (let i = 1; i <= 20; i++) { const u = i / 20; inner.push([ductR - (ductR - (RE - te)) * Math.pow(u, 1.8), yCR + (yE - te * 3 - yCR) * u]); }
+    const loop = [...outer, ...inner.reverse()];
+    return { loop, Rf, Rc, Rco, yCF, yCR, ductR, yE, RE, te, yH, Rh, Rmax };
+  }
+  function nacelle(o = {}) {
+    const P = nacelleProfile(o);
+    const m = revolve(P.loop, { loop: true, segments: o.segments ?? 128, arc: o.arc ?? TAU, start: o.start ?? 0 });
+    m.nacelle = P;
+    return m;
+  }
+
+  // ---------- plumbing extras ----------
+  // Bellows (flex joint) along y from 0 to length: a convoluted tube with plain cuffs.
+  function bellows(o = {}) {
+    const r = o.radius ?? 25, L = o.length ?? 60, n = o.convolutions ?? 8, h = o.depth ?? r * 0.18, t = o.wall ?? Math.max(0.8, r * 0.05);
+    const cuff = L * 0.14, pts = [[r, 0], [r, cuff]];
+    for (let i = 0; i <= n * 6; i++) { const u = i / (n * 6), y = cuff + u * (L - 2 * cuff); pts.push([r + h * 0.5 * (1 - Math.cos(u * n * TAU)), y]); }
+    pts.push([r, L]);
+    const inner = pts.map(([rr, y]) => [rr - t, y]).reverse();
+    return revolve([...pts, ...inner], { loop: true, segments: o.segments ?? 32, crease: 70 });
+  }
+  // Inline ball valve on a pipe of radius `pipe`, flow along y, centered on y = 0, with its
+  // actuator on +x. Returns a group: valve body, valve actuator.
+  function valve(o = {}) {
+    const rp = o.pipe ?? 25, L = o.length ?? rp * 4.2, rb = rp * 1.55;
+    const body = revolve(fillet([[rp * 0.88, -L / 2], [rp * 1.25, -L / 2], [rp * 1.25, -L * 0.36, 2], [rb, -L * 0.2, rp * 0.4], [rb, L * 0.2, rp * 0.4], [rp * 1.25, L * 0.36, 2], [rp * 1.25, L / 2], [rp * 0.88, L / 2]]), { loop: true, segments: 40 });
+    const fl = flange({ pipe: rp * 1.25, bore: rp * 0.88 });
+    const bonnet = xf(revolve(fillet([[0, rb * 0.6], [rp * 0.5, rb * 0.6], [rp * 0.5, rb * 1.25, 2], [rp * 0.8, rb * 1.3, 2], [rp * 0.8, rb * 1.45], [0, rb * 1.45]]), { segments: 24 }), RZ(-Math.PI / 2));
+    const act = xf(mesh.box(rp * 1.4, rp * 2.2, rp * 1.8, { round: rp * 0.25 }), T([rb * 1.45 + rp * 0.7, 0, 0]));
+    const g = group(o.name ?? "valve", [
+      [merge(body, xf(fl, T([0, L / 2, 0])), xf(fl, T([0, -L / 2, 0]), RX(Math.PI)), bonnet), { name: o.name ?? "valve", material: o.material ?? "steel" }],
+      [act, { name: `${o.name ?? "valve"} actuator`, material: o.actuatorMaterial ?? "porcelain" }],
+    ]);
+    g.info = { length: L };
+    return g;
+  }
+
+  // ---------- turbopump ----------
+  // Impeller, casing (front cover, back plate, inlet neck) and volute for a centrifugal
+  // pump, impeller axis y, back face on y = 0. Shared by turbopump() and pump().
+  function pumpCasing(o = {}) {
+    const R2 = o.radius ?? 75;
+    const imp = impeller({ radius: R2, vanes: o.vanes ?? 6, exitAngle: o.exitAngle ?? 24 }), I = imp.impeller;
+    const c = R2 * 0.04, tc = R2 * 0.075, Ri = I.eye * 1.08, R3 = R2 * 1.12, r0 = R2 * 0.12, rs = R2 * 0.2, tb2 = R2 * 0.12;
+    const yTip = r => I.tipY(Math.min(r, R2));
+    const yIn = I.height + R2 * (o.neck ?? 0.5);
+    const shIn = [], shOut = [];
+    for (let i = 0; i <= 12; i++) { const r = lerp(Ri, R2 + c, i / 12); shIn.push([r, yTip(r) + c]); }
+    for (let i = 0; i <= 12; i++) { const r = lerp(R2 + c, Ri + tc, i / 12); shOut.push([r, yTip(r) + c + tc]); }
+    const casing = revolve(fillet([[Ri, yIn], ...shIn, [R3, yTip(R2) + c, 2], [R3, -c, 2], [rs, -c], [rs, -c - tb2], [R3 + r0 * 0.6, -c - tb2, 3], [R3 + r0 * 0.6, yTip(R2) + c + tc, 4], ...shOut, [Ri + tc, yIn]], { closed: true, steps: 3 }), { loop: true, segments: 72 });
+    const yc = (I.back + yTip(R2)) / 2;
+    const vol = volute({ radius: R2, base: R3, y: yc, start: r0, end: R2 * 0.36, wall: tc * 0.8, discharge: o.discharge });
+    const ex = vol.volute.exit;
+    const inFl = flange({ pipe: Ri + tc, bore: Ri });
+    const disFl = flange({ pipe: ex.radius, bore: ex.radius - tc * 0.8 });
+    return { imp, I, c, tc, Ri, R3, yIn, yc, casing, vol, ex, inFl, disFl, tb2 };
+  }
+
+  // A turbine-driven centrifugal pump on one shaft: axial inlet on top, impeller and volute,
+  // bearing housing, turbine below with its hot-gas manifold and exhaust. Origin: the
+  // impeller's back face. pose({ spin }) turns the rotor (impeller, shaft, turbine).
+  function turbopump(o = {}) {
+    const R2 = o.impeller ?? 75, A = assembly(o.name ?? "turbopump", o), M = (r, f) => matFor(o, r, f);
+    const CP = pumpCasing({ radius: R2, vanes: o.vanes ?? 6, exitAngle: o.exitAngle ?? 24 });
+    const { imp, I, c, tc, Ri, yIn, casing, vol, ex, inFl, disFl, tb2 } = CP;
+    const hx = [2.6 * R2, 0, 0];
+    A.part("pump housing", merge(casing, vol), { material: M("housing", "aluminum"), explode: [0, 2.6 * R2, 0], label: { text: "volute", at: v3.add(ex.center, [0, 0, R2 * 0.5]) }, note: "the spiral casing slows the flow leaving the impeller and turns speed into pressure" });
+    A.part("pump flanges", merge(xf(inFl, T([0, yIn, 0])), mesh.transform(disFl, aim(ex.center, ex.normal))), { material: M("flange", "steel"), explode: [0, 2.6 * R2, 0] });
+    const rotor = A.group("rotor");
+    A.rotor = rotor;
+    A.part("impeller", imp, { parent: rotor, material: M("impeller", "aluminum"), explode: [0, 1.4 * R2, 0], label: { text: "impeller", at: [R2 * 0.8, I.tipY(R2 * 0.8), 0] }, note: "backswept vanes fling the propellant outward and raise its pressure" });
+    const yT = -2.35 * R2, yB = yT - 0.28 * R2, yTop = I.height * 0.55, Ls = yTop - yB;
+    const sh = shaft({ steps: [[0.32 * R2, 0.26 * R2], [0.32 * R2, 0.36 * R2], [Ls - 1.6 * R2, 0.32 * R2], [0.32 * R2, 0.36 * R2], [0.64 * R2, 0.26 * R2]], segments: 24 });
+    A.part("shaft", xf(sh, T([0, yB, 0])), { parent: rotor, material: M("shaft", "steel"), label: { text: "shaft", at: [0, yT + R2 * 0.9, 0] }, note: "one shaft carries the turbine and the impeller, so they turn together" });
+    const br = { bore: 0.18 * R2, outer: 0.34 * R2, width: 0.26 * R2 };
+    const yb1 = yB + 0.35 * R2, yb2 = yTop - 0.94 * R2;
+    A.part("lower bearing", bearing({ ...br, name: "lower bearing" }), { position: [0, yb1, 0], explode: [0, -0.9 * R2, 0] });
+    A.part("upper bearing", bearing({ ...br, name: "upper bearing" }), { position: [0, yb2, 0], explode: [0, 0.75 * R2, 0], label: { text: "bearing", at: [br.outer, br.width / 2, 0] }, note: "ball bearings hold the spinning shaft centered in its housing" });
+    const hT = -c - tb2, hB = yT + 0.46 * R2;
+    const bh = revolve(fillet([[br.outer, hT], [0.62 * R2, hT], [0.62 * R2, hT - 0.07 * R2, 1], [0.42 * R2, hT - 0.16 * R2, 0.06 * R2], [0.42 * R2, hB + 0.16 * R2, 0.06 * R2], [0.62 * R2, hB + 0.07 * R2, 1], [0.62 * R2, hB], [br.outer, hB]], { closed: true, steps: 3 }), { loop: true, segments: 48 });
+    const ribs = Array.from({ length: 4 }, (_, k) => xf(mesh.box(0.2 * R2, hT - hB - 0.3 * R2, 0.05 * R2, { round: 0.5 }), RY((k / 4) * TAU + Math.PI / 4), T([0.48 * R2, (hT + hB) / 2, 0])));
+    A.part("bearing housing", merge(bh, ribs), { material: M("bearingHousing", "steel"), explode: hx, label: { text: "bearing housing", at: [0.42 * R2, (hT + hB) / 2, 0] }, note: "holds both bearings and keeps hot turbine gas away from the cold pump" });
+    const turb = rotorStage({ name: "turbine", blades: o.turbineBlades ?? 56, hub: 0.6 * R2, tip: 0.8 * R2, y: yT, chord: [0.17 * R2], stagger: [0], camber: [0.13], thickness: [0.16], hand: -1, shroud: true, diskWidth: 0.24 * R2, bore: 0.14 * R2, material: M("turbine", "inconel") });
+    A.part("turbine rotor", turb, { parent: rotor, explode: [0, -1.25 * R2, 0], label: { text: "turbine", at: [0.8 * R2, yT, 0] }, note: "hot gas from the gas generator pushes on these blades and spins the shaft" });
+    const nz = statorStage({ name: "turbine nozzle", vanes: 26, inner: 0.6 * R2, outer: 0.8 * R2, y: yT + 0.21 * R2, chord: 0.15 * R2, stagger: 58, camber: 0.08, thickness: 0.14, material: M("turbine", "inconel") });
+    A.part("turbine nozzle", nz, { explode: [0, -1.75 * R2, 0], note: "fixed vanes that aim the hot gas at the turbine blades" });
+    const yEx = yT - 0.95 * R2, tw = tc;
+    const th = revolve(fillet([[0.4 * R2, yT + 0.38 * R2], [0.82 * R2, yT + 0.38 * R2, 3], [0.82 * R2, yT - 0.12 * R2, 4], [0.5 * R2, yT - 0.62 * R2, 6], [0.5 * R2, yEx], [0.5 * R2 + tw, yEx], [0.5 * R2 + tw, yT - 0.62 * R2 + tw * 0.4, 6], [0.82 * R2 + tw, yT - 0.12 * R2 + tw * 0.4, 4], [0.82 * R2 + tw, yT + 0.38 * R2 + tw, 3], [0.4 * R2, yT + 0.38 * R2 + tw]], { closed: true, steps: 3 }), { loop: true, segments: 64 });
+    const yM = yT + 0.3 * R2, rM = 0.9 * R2, rt = 0.17 * R2;
+    const man = xf(mesh.torus(rM, rt, { segments: 64, tube: 14 }), T([0, yM, 0]));
+    const inlet = tubeShell([cyl(rM, Math.PI / 2, yM), cyl(rM + 0.7 * R2, Math.PI / 2, yM)], rt, 0, { segments: 20 });
+    const tin = { center: cyl(rM + 0.7 * R2, Math.PI / 2, yM), normal: [0, 0, -1], radius: rt };
+    const tinFl = mesh.transform(flange({ pipe: rt, bore: rt * 0.85 }), aim(tin.center, tin.normal));
+    const exFl = xf(flange({ pipe: 0.5 * R2 + tw, bore: 0.5 * R2 }), T([0, yEx, 0]), RX(Math.PI));
+    A.part("turbine housing", merge(th, man, inlet), { material: M("turbineHousing", "inconel"), explode: [0, -2.5 * R2, 0], label: { text: "turbine housing", at: cyl(rM + rt, Math.PI / 4, yM) }, note: "a ring manifold spreads the hot gas evenly around the turbine" });
+    A.part("turbine flanges", merge(tinFl, exFl), { material: M("flange", "steel"), explode: [0, -2.5 * R2, 0] });
+    A.port("inlet", A, [0, yIn, 0], [0, 1, 0], Ri);
+    A.port("discharge", A, ex.center, ex.normal, ex.radius);
+    A.port("turbineInlet", A, tin.center, tin.normal, rt);
+    A.port("exhaust", A, [0, yEx, 0], [0, -1, 0], 0.5 * R2);
+    A.info = { impeller: R2, top: yIn, bottom: yEx, volute: vol.volute.outer, flange: inFl.flange, yc: CP.yc };
+    A.onPose = s => { if (s.spin != null) rotor.rotation = [0, s.spin, 0]; };
+    return A;
+  }
+
+  // ---------- rocket engine ----------
+  // A gas-generator cycle engine: bell nozzle with regen tubes, chamber, injector, LOX dome,
+  // gimbal with two actuators, two turbopumps, a gas generator, feed lines with bellows,
+  // valves, turbine exhaust ducts, harness, and a thrust frame. The nozzle exit is at y = 0.
+  // pose({ pitch, yaw, spin, fuelSpin }) gimbals the engine (radians) and spins the pumps.
+  function rocketEngine(o = {}) {
+    const A = assembly(o.name ?? "rocket engine", o), M = (r, f) => matFor(o, r, f);
+    const Rt = o.throat ?? 110, eps = o.expansion ?? 16;
+    const noz = bellNozzle({ throat: Rt, expansion: eps, steps: 28, segments: 72, tubes: o.tubes === false ? false : { count: o.tubeCount ?? 84, from: 0.04, to: 0.5 }, material: M("nozzle", "inconel"), tubeMaterial: M("tubes", "inconel"), manifoldMaterial: M("manifold", "steel") });
+    const C = noz.contour, yT = C.length, Ln = C.length;
+    const ch = combustionChamber({ throat: Rt, contraction: o.contraction ?? 3, material: M("chamber", "inconel") });
+    const CI = ch.info, Rc = CI.chamberRadius, top = yT + CI.top, Rfl = CI.flangeRadius;
+    const eng = A.group("engine");
+    A.engine = eng;
+    const H = top + Rc * 0.6;
+    A.part("nozzle", noz, { parent: eng, position: [0, yT, 0], explode: [0, -0.32 * H, 0], label: { text: "nozzle", at: [0, -Ln * 0.82, 0] }, note: `a bell that expands the gas ${eps} times in area, turning pressure into speed` });
+    A.part("combustion chamber", ch, { parent: eng, position: [0, yT, 0], label: { text: "combustion chamber", at: [Rc + CI.wall, CI.top * 0.6, 0] }, note: "propellants burn here at high pressure; the throat below sets the flow" });
+    const inj = injectorPlate({ radius: Rc, outer: Rfl, thickness: Rc * 0.13, material: M("injector", "steel") });
+    const ti = inj.info.thickness;
+    A.part("injector", inj, { parent: eng, position: [0, top, 0], explode: [0, 0.14 * H, 0], label: { text: "injector", at: [Rfl, ti / 2, 0] }, note: "hundreds of small elements spray and mix fuel and oxidizer" });
+    // LOX dome: an elliptical shell over the injector with a side inlet and a gimbal boss.
+    const fh = CI.flangeHeight * 1.1, hd = Rc * 0.55, tw = CI.wall * 0.8, domeY = top + ti;
+    const outArc = Array.from({ length: 17 }, (_, i) => { const a = (Math.PI / 2) * (i / 16); return [(Rc + tw) * Math.cos(a), fh + hd * Math.sin(a)]; });
+    const inArc = Array.from({ length: 17 }, (_, i) => { const a = (Math.PI / 2) * (1 - i / 16); return [Rc * Math.cos(a), fh + (hd - tw) * Math.sin(a)]; });
+    const dome = revolve(fillet([[Rc, 0], [Rfl, 0, 1], [Rfl, fh, 1.5], ...outArc, ...inArc, [Rc, 0]].filter((p, i, a) => i === 0 || v3.dist([p[0], p[1], 0], [a[i - 1][0], a[i - 1][1], 0]) > 1e-6).slice(0, -1), { closed: true, steps: 3 }), { loop: true, segments: 72 });
+    const portY = fh + hd * 0.42, portR = Rc * 0.16, portX = (Rc + tw) * Math.cos(Math.asin(0.42)) - 6;
+    const stub = tubeShell([[portX, portY, 0], [Rfl + Rc * 0.08, portY, 0]], portR, portR * 0.85, { segments: 24 });
+    const stubFl = mesh.transform(flange({ pipe: portR, bore: portR * 0.85 }), aim([Rfl + Rc * 0.08, portY, 0], [1, 0, 0]));
+    const boss = revolve(fillet([[0, fh + hd - 8], [Rc * 0.36, fh + hd - 14, 4], [Rc * 0.36, fh + hd + 10, 2], [0, fh + hd + 10]]), { segments: 48 });
+    const domeBolts = boltCircle(24, (Rc + tw + Rfl) / 2 + 2, { d: Math.max(4, fh * 0.42), y: fh, grip: fh + ti + CI.flangeHeight, nuts: true });
+    A.part("LOX dome", merge(dome, stub, boss), { parent: eng, position: [0, domeY, 0], material: M("dome", "steel"), explode: [0, 0.24 * H, 0], label: { text: "oxidizer dome", at: [Rc * 0.5, fh + hd * 0.9, 0] }, note: "a manifold that spreads liquid oxygen across the back of the injector" });
+    A.part("dome flanges", merge(stubFl, domeBolts), { parent: eng, position: [0, domeY, 0], material: M("flange", "steel"), explode: [0, 0.24 * H, 0] });
+    const apex = domeY + fh + hd + 10;
+    // Gimbal and frame.
+    const s = o.gimbalSize ?? Rc * 0.24, pivot = apex + 1.75 * s;
+    const gim = gimbal({ size: s, material: M("gimbal", "steel") });
+    A.part("gimbal", gim, { position: [0, pivot, 0], explode: [0, 0.34 * H, 0], label: { text: "gimbal", at: [s * 1.3, 0, 0] }, note: "a universal joint: the whole engine tilts on it to steer the rocket" });
+    A.gimbalNode = gim;
+    const yF = pivot + 1.75 * s + Rc * 1.15, RF = Rc * 1.9;
+    const ring = revolve(fillet([[RF - Rc * 0.13, yF - Rc * 0.09, 2], [RF + Rc * 0.13, yF - Rc * 0.09, 2], [RF + Rc * 0.13, yF + Rc * 0.09, 2], [RF - Rc * 0.13, yF + Rc * 0.09, 2]], { closed: true }), { loop: true, segments: 96 });
+    const struts = [], plateY = pivot + 1.55 * s;
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * TAU + Math.PI / 6, p = cyl(s * 1.45, a, plateY);
+      for (const d of [-0.36, 0.36]) struts.push(strut(p, cyl(RF, a + d, yF - Rc * 0.09), { radius: Rc * 0.045 }));
+    }
+    const actA = [Math.PI / 4, (3 * Math.PI) / 4];
+    const lugs = actA.map(a => xf(mesh.box(Rc * 0.22, Rc * 0.2, Rc * 0.22, { round: 3 }), T(cyl(RF, a, yF - Rc * 0.17))));
+    A.part("thrust frame", merge(ring, struts, lugs), { material: M("frame", "titanium"), explode: [0, 0.48 * H, 0], label: { text: "thrust frame", at: cyl(RF + Rc * 0.13, Math.PI * 1.75, yF) }, note: "carries the thrust into the rocket; the engine hangs from it" });
+    // Actuator brackets on the chamber, actuators from the frame to them.
+    const attachY = top - CI.cylinder * 0.45 - yT * 0 , attachR = Rc + CI.wall + Rc * 0.24;
+    const brk = actA.map(a => merge(xf(mesh.box(Rc * 0.28, Rc * 0.34, Rc * 0.12, { round: 3 }), T(cyl(Rc + CI.wall + Rc * 0.1, a, attachY)), RY(a)), xf(mesh.box(Rc * 0.12, Rc * 0.24, Rc * 0.22, { round: 2 }), T(cyl(attachR, a, attachY)), RY(a))));
+    A.part("actuator brackets", merge(brk), { parent: eng, material: M("chamber", "inconel") });
+    const anchors = actA.map(a => cyl(RF, a, yF - Rc * 0.24)), attach = actA.map(a => cyl(attachR, a, attachY));
+    const Lc = v3.dist(anchors[0], attach[0]), acts = [];
+    actA.forEach((a, i) => {
+      const act = actuator({ name: i ? "yaw actuator" : "pitch actuator", bore: Rc * 0.17, length: Lc - Rc * 0.25, stroke: Rc * 0.5, material: M("actuator", "steel"), rodMaterial: "brushed" });
+      acts.push(A.part(i ? "yaw actuator" : "pitch actuator", act, { label: { text: i ? "actuator" : "actuator", at: [0, Lc * 0.4, 0] }, note: "pushes or pulls on the chamber to tilt the engine" }));
+    });
+    // Turbopumps: oxidizer at +x, fuel at -x (turned half a turn so its discharge faces +z).
+    const R2 = o.pumpSize ?? Rc * 0.5;
+    const yP = yT + CI.top * 0.5, pR = Rc + CI.wall + R2 * 1.9;
+    const ox = turbopump({ name: "oxidizer turbopump", impeller: R2, materials: o.materials, plain: o.plain });
+    const fu = turbopump({ name: "fuel turbopump", impeller: R2 * 0.92, materials: o.materials, plain: o.plain });
+    A.part("oxidizer turbopump", ox, { parent: eng, position: [pR, yP, 0], explode: [0.3 * H, 0, 0], label: { text: "oxidizer pump", at: [R2 * 1.2, R2 * 0.3, R2 * 0.6] }, note: "pumps liquid oxygen up to chamber pressure" });
+    A.part("fuel turbopump", fu, { parent: eng, position: [-pR, yP, 0], rotation: [0, Math.PI, 0], explode: [-0.3 * H, 0, 0], label: { text: "fuel pump", at: [R2 * 1.2, R2 * 0.3, R2 * 0.6] }, note: "pumps fuel, which cools the nozzle on its way to the injector" });
+    A.pumps = [ox, fu];
+    A.shafts = [ox.rotor, fu.rotor];
+    // Positions in engine coordinates of points on the pumps.
+    const at = (pump, p, flipX) => v3.add(flipX ? [-p[0], p[1], -p[2]] : p, [flipX ? -pR : pR, yP, 0]);
+    const lp = (pump, name, flipX) => at(pump, pump.portLocal(name).center, flipX);
+    const oxEx = lp(ox, "discharge"), fuEx = lp(fu, "discharge", true);
+    const pr = R2 * 0.36 * 1.18;
+    // Oxidizer discharge to the dome inlet, through the main oxidizer valve.
+    const domePort = [Rfl + Rc * 0.08, domeY + portY, 0];
+    const oxPipe = pipe([oxEx, v3.add(oxEx, [0, 0, -R2 * 0.6]), [oxEx[0], domeY + portY, oxEx[2] - R2 * 0.6], [oxEx[0], domeY + portY, 0], domePort.map((v, i) => (i === 0 ? v + 0.01 : v))], { radius: pr, bend: pr * 2.4, name: "oxidizer line", material: M("pipe", "brushed"), flanges: false });
+    A.part("oxidizer line", oxPipe, { parent: eng, explode: [0.18 * H, 0.04 * H, 0], label: { text: "oxidizer line", at: [oxEx[0], (oxEx[1] + domeY + portY) / 2, oxEx[2] - R2 * 0.6] }, note: "high-pressure oxidizer from the pump to the dome" });
+    // Fuel discharge down to the regen manifold on the nozzle.
+    const mY = yT + noz.manifoldY - Rt * 0.07, mR = noz.outerRadiusAt(noz.manifoldY) + Rt * 0.2;
+    const fuelIn = [-(mR + Rt * 0.35), mY, 0];
+    const stubM = tubeShell([[-(mR - 4), mY, 0], fuelIn], pr, pr * 0.85, { segments: 24 });
+    A.part("manifold inlet", merge(stubM, mesh.transform(flange({ pipe: pr, bore: pr * 0.85 }), aim(fuelIn, [-1, 0, 0]))), { parent: eng, material: M("manifold", "steel"), explode: [0, -0.32 * H, 0] });
+    const fuPipe = pipe([fuEx, v3.add(fuEx, [0, 0, R2 * 0.7]), [fuEx[0] - R2 * 0.3, mY + R2, fuEx[2] + R2 * 0.7], [fuelIn[0] - R2 * 0.3, mY, fuEx[2] + R2 * 0.7], [fuelIn[0] - R2 * 0.3, mY, 0], fuelIn], { radius: pr, bend: pr * 2.6, name: "fuel line", material: M("pipe", "brushed"), flanges: "end" });
+    A.part("fuel line", fuPipe, { parent: eng, explode: [-0.18 * H, -0.1 * H, 0], label: { text: "fuel line", at: [fuEx[0] - R2 * 0.3, (fuEx[1] + mY) / 2, fuEx[2] + R2 * 0.7] }, note: "fuel runs to the nozzle manifold, then up through the tubes to cool the wall" });
+    // Main valves sit on the vertical runs.
+    const mov = valve({ pipe: pr, name: "main oxidizer valve" });
+    A.part("main oxidizer valve", mov, { parent: eng, position: [oxEx[0], (oxEx[1] + domeY + portY) / 2 + R2 * 0.2, oxEx[2] - R2 * 0.6], rotation: [0, -Math.PI / 2, 0], explode: [0.18 * H, 0.04 * H, 0], label: "main oxidizer valve", note: "opens to start the engine and closes to shut it down" });
+    const mfv = valve({ pipe: pr, name: "main fuel valve" });
+    A.part("main fuel valve", mfv, { parent: eng, position: [fuEx[0] - R2 * 0.3 * 0.5, lerp(fuEx[1], mY + R2, 0.45), fuEx[2] + R2 * 0.7], rotation: [0, Math.PI / 2, 0], explode: [-0.18 * H, -0.1 * H, 0], label: "main fuel valve", note: "lets fuel through to the cooling tubes" });
+    // Gas generator at -z, feeding both turbines.
+    const gR = Rc + CI.wall + R2 * 1.25, tinO = lp(ox, "turbineInlet"), tinF = lp(fu, "turbineInlet", true);
+    const gy = tinO[1] + R2 * 1.1, gr = R2 * 0.42;
+    const gg = revolve(fillet([[0, gy + gr * 2.6], [gr * 0.5, gy + gr * 2.6, 2], [gr, gy + gr * 2.1, gr * 0.5], [gr, gy + gr * 0.2, 3], [gr * 0.55, gy - gr * 0.6, 3], [gr * 0.55, gy - gr * 1.2], [0, gy - gr * 1.2]]), { segments: 40 });
+    const ggN = A.part("gas generator", xf(gg, T([0, 0, -gR])), { parent: eng, material: M("gasGenerator", "inconel"), explode: [0, 0, -0.32 * H], label: { text: "gas generator", at: [gr, gy + gr, -gR] }, note: "burns a little propellant fuel-rich to make the gas that drives the turbines" });
+    const ggOut = [0, gy - gr * 1.2, -gR], rd = R2 * 0.17;
+    const ducts = [tinO, tinF].map(tp => pipe([ggOut, [0, tp[1], -gR], [tp[0] * 0.55, tp[1], -gR], [tp[0], tp[1], tp[2] - R2 * 0.55], v3.add(tp, [0, 0, -0.01])], { radius: rd, bend: rd * 2.5, name: "hot gas duct", material: M("hotDuct", "inconel"), flanges: "end" }));
+    A.part("hot gas ducts", ducts[0], { parent: eng, explode: [0, 0, -0.22 * H] });
+    A.part("hot gas ducts 2", ducts[1], { parent: eng, explode: [0, 0, -0.22 * H] });
+    // Turbine exhaust: a duct from each turbine down beside the nozzle, ending in a small flared exit.
+    const exs = [];
+    for (const [pump, flipX] of [[ox, false], [fu, true]]) {
+      const e = lp(pump, "exhaust", flipX), sgn = flipX ? -1 : 1, er = pump.portLocal("exhaust").radius + R2 * 0.075;
+      const yEnd = yT - Ln * 0.42, xEnd = sgn * (noz.outerRadiusAt(-Ln * 0.42) + er * 2.6);
+      const p = pipe([e, [e[0], e[1] - R2 * 0.6, 0], [xEnd, yEnd + R2 * 1.2, 0], [xEnd, yEnd, 0]], { radius: er, bend: er * 3, flanges: "start", name: "turbine exhaust", material: M("exhaust", "inconel") });
+      const flare = revolve(fillet([[er - 1.5, 0], [er, 0], [er * 1.6, -er * 1.4, 3], [er * 1.6 - 2, -er * 1.4], [er - 3.5, 0]].map(q => [q[0], q[1]])), { loop: true, segments: 40 });
+      exs.push(p, flare);
+      A.part(flipX ? "fuel turbine exhaust" : "oxidizer turbine exhaust", p, { parent: eng, explode: [sgn * 0.3 * H, 0, 0], label: flipX ? undefined : { text: "turbine exhaust", at: [xEnd, yEnd + R2, 0] }, note: "spent turbine gas dumps overboard here" });
+      A.part(flipX ? "fuel exhaust exit" : "oxidizer exhaust exit", flare, { parent: eng, position: [xEnd, yEnd, 0], material: M("exhaust", "inconel"), explode: [sgn * 0.3 * H, 0, 0] });
+    }
+    // Feed lines from the vehicle interface (top) to the pump inlets, each with a bellows.
+    const feeds = [];
+    for (const [pump, flipX, nm] of [[ox, false, "oxidizer feed"], [fu, true, "fuel feed"]]) {
+      const pin = lp(pump, "inlet", flipX), r = pump.portLocal("inlet").radius + R2 * 0.075;
+      const yb = yF - Rc * 0.1, bl = Rc * 0.4;
+      const p = pipe([pin, [pin[0], yb - bl - R2 * 0.05, 0]], { radius: r, flanges: "start", name: nm, material: M("pipe", "brushed") });
+      const bel = bellows({ radius: r * 1.02, length: bl, convolutions: 9 });
+      const topFl = flange({ pipe: r, bore: r * 0.85 });
+      const node = A.part(nm, p, { parent: eng, explode: [(flipX ? -1 : 1) * 0.3 * H, 0.1 * H, 0], label: { text: flipX ? "fuel inlet" : "oxidizer inlet", at: [pin[0], yb - bl * 1.6, 0] }, note: "propellant arrives from the tank through this line" });
+      A.part(`${nm} bellows`, merge(xf(bel, T([pin[0], yb - bl, 0])), xf(topFl, T([pin[0], yb, 0]))), { parent: eng, material: M("bellows", "steel"), explode: [(flipX ? -1 : 1) * 0.3 * H, 0.14 * H, 0] });
+      feeds.push(node);
+      A.port(flipX ? "fuelInlet" : "oxidizerInlet", eng, [pin[0], yb, 0], [0, 1, 0], r);
+    }
+    // A small harness from the frame down to the gas generator igniter.
+    const hz = harness([[0, yF - Rc * 0.2, -RF * 0.8], [0, pivot, -Rc * 1.5], [R2 * 0.3, gy + gr * 4, -gR - R2 * 0.3], [0, gy + gr * 2.65, -gR]], { wires: 7, wire: Math.max(1.2, Rc * 0.012), ties: 5 });
+    A.part("harness", hz, { parent: eng, explode: [0, 0.1 * H, -0.3 * H], note: "wires for the igniter and the valve sensors" });
+    A.port("nozzleExit", A.parts["nozzle"], [0, -Ln, 0], [0, -1, 0], C.exit);
+    A.info = { throat: Rt, exit: C.exit, expansion: eps, nozzleLength: Ln, chamberRadius: Rc, height: yF + Rc * 0.1, pivot, thetaN: C.thetaN, thetaE: C.thetaE };
+    const st = { pitch: 0, yaw: 0, spin: 0, fuelSpin: null };
+    A.gimbal = { pitch: 0, yaw: 0, range: o.gimbalRange ?? 6 * DEG };
+    A.onPose = p => {
+      Object.assign(st, p);
+      const lim = A.gimbal.range, pitch = clamp(st.pitch, -lim, lim), yaw = clamp(st.yaw, -lim, lim);
+      A.gimbal.pitch = pitch; A.gimbal.yaw = yaw;
+      const Mg = mul(T([0, pivot, 0]), RX(pitch), RZ(yaw), T([0, -pivot, 0]));
+      eng.matrix = Mg;
+      gim.set2(pitch, yaw);
+      const e = A.exploded, fOff = [0, 0.48 * H * e, 0];
+      acts.forEach((act, i) => act.span(v3.add(anchors[i], fOff), m4.apply(Mg, attach[i])));
+      ox.pose({ spin: st.spin });
+      fu.pose({ spin: st.fuelSpin ?? st.spin * 1.35 });
+    };
+    const baseExplode = A.explode;
+    A.explode = t => { baseExplode(t); A.onPose({}); return A; };
+    A.onPose({});
+    return A;
+  }
+
+  // ---------- turbofan ----------
+  // A two-spool high-bypass turbofan, axis along +x (flow left to right), fan face at x = 0.
+  // Static casings can be shown with a quarter cut away; the low spool (spinner, fan,
+  // booster, LP shaft, LP turbine) and the high spool (HP compressor, HP shaft, HP turbine)
+  // turn independently. pose({ low, high }) sets their angles in radians.
+  function turbofan(o = {}) {
+    const A = assembly(o.name ?? "turbofan", o), M = (r, f) => matFor(o, r, f);
+    const Rf = o.fanRadius ?? 900, k = Rf / 900;
+    const cutStart = o.cutStart ?? Math.PI * 1.5, cutArc = TAU * 0.75;
+    // The engine is modeled about local y (flow +y) and turned so local y becomes world x.
+    const axis = A.group("axis", { matrix: RZ(-Math.PI / 2) });
+    const cases = [];
+    // A static revolved part, built whole and with the cutaway wedge removed.
+    const shell = (name, profile, opts = {}) => {
+      const g = A.part(name, null, { parent: opts.parent || axis, explode: opts.explode, label: opts.label, note: opts.note });
+      const full = g.add(revolve(profile, { loop: true, segments: opts.segments ?? 96 }), { name, material: opts.material });
+      const cut = g.add(revolve(profile, { loop: true, segments: Math.round((opts.segments ?? 96) * 0.75), arc: cutArc, start: cutStart }), { name, material: opts.material, visible: false });
+      cases.push([full, cut]);
+      return g;
+    };
+    const low = A.group("low spool", { parent: axis }), high = A.group("high spool", { parent: axis });
+    A.spools = { low, high };
+    // ---- flowpath (mm at a 900 mm fan radius) ----
+    const s = v => v * k;
+    // Core flowpath stations: [y, hub, tip].
+    const core = [[300, 338, 440], [360, 345, 432], [640, 352, 410], [720, 300, 365], [800, 232, 300], [840, 222, 292], [1340, 222, 244], [1390, 230, 250]].map(r => r.map(s));
+    const coreAt = (y, i) => { for (let j = 1; j < core.length; j++) if (core[j][0] >= y) { const a = core[j - 1], b = core[j]; return lerp(a[i], b[i], (y - a[0]) / (b[0] - a[0])); } return core[core.length - 1][i]; };
+    const hubAt = y => coreAt(y, 1), tipAt = y => coreAt(y, 2);
+    // ---- nacelle and fan case ----
+    const P = nacelleProfile({ fan: Rf });
+    shell("nacelle", P.loop, { material: M("nacelle", "porcelain"), segments: 128, explode: [0, -s(1500), 0], label: { text: "nacelle", at: cyl(P.Rmax, Math.PI * 0.62, s(-100)) }, note: "the smooth outer cowl; its lip and inlet slow the air before the fan" });
+    const caseProf = fillet([[P.Rc, P.yCF], [P.Rco, P.yCF], [P.Rco, P.yCR], [P.ductR, P.yCR], [P.ductR, s(260), s(30)], [P.Rc, s(200), s(20)]], { steps: 3 });
+    shell("fan case", caseProf, { material: M("fanCase", "aluminum"), segments: 128, explode: [0, -s(1500), 0], label: { text: "fan case", at: cyl(P.Rc, Math.PI * 0.85, s(-150)) }, note: "a thick ring around the fan that would contain a broken blade" });
+    // ---- spinner, fan, fan disk ----
+    const hubR = s(275), yS = s(-420);
+    const sp = spinner({ radius: hubR, length: s(380), shape: "ellipse", back: s(10) });
+    A.part("spinner", sp, { parent: low, position: [0, yS, 0], material: M("spinner", "porcelain"), explode: [0, -s(1100), 0], label: { text: "spinner", at: [hubR * 0.5, s(200), 0] }, note: "a nose cone that guides air smoothly onto the fan blade roots" });
+    const fanHub = revolve(fillet([[0, s(-40)], [hubR, s(-40)], [s(300), s(80), s(80)], [s(338), s(240)], [s(338), s(300)], [s(120), s(300)], [s(120), s(200)], [0, s(200)]], { steps: 4 }), { segments: 96 });
+    A.part("fan disk", fanHub, { parent: low, material: M("fanDisk", "titanium"), explode: [0, -s(900), 0], note: "holds the fan blades by their dovetail roots" });
+    const fan = rotorStage({
+      name: "fan", blades: o.fanBlades ?? 18, hub: s(292), tip: Rf - s(3), y: s(40), hubSlope: 0.18, embed: s(14),
+      chord: [s(300), s(380), s(445)], stagger: [24, 44, 61], camber: [0.075, 0.05, 0.028], thickness: [0.1, 0.06, 0.032],
+      sweep: t => s(70) * t * t, lean: t => s(-30) * t * t, stations: 13, points: 16, disk: false, material: M("fanBlades", "titanium"),
+    });
+    A.part("fan", fan, { parent: low, explode: [0, -s(900), 0], label: { text: "fan blades", at: cyl(Rf * 0.75, Math.PI * 0.3, s(60)) }, note: `${o.fanBlades ?? 18} wide-chord blades; the fan makes most of the thrust` });
+    // ---- splitter, core cowl, OGVs ----
+    const yE = P.yE, cowl = [];
+    for (let i = 0; i <= 30; i++) { const u = i / 30, y = lerp(s(300), s(2420), u); cowl.push([s(440) + s(125) * Math.sin(Math.min(1, u / 0.3) * Math.PI / 2) - s(150) * sstep(0.3, 1, u), y]); }
+    const cowlIn = cowl.slice(3).map(([r, y]) => [r - s(16), y]).reverse();
+    const splitIn = [[tipAt(s(640)) + 1, s(640)], [tipAt(s(360)) + 1, s(360)], [s(434), s(304)]];
+    shell("core cowl", fillet([...cowl, [cowl[30][0] - s(14), s(2420)], ...cowlIn.filter(p => p[1] > s(700)), [s(400), s(700)], ...splitIn], { closed: false, steps: 2 }), { material: M("coreCowl", "porcelain"), segments: 96, explode: [0, s(250), 0], label: { text: "core cowl", at: cyl(s(560), Math.PI * 0.7, s(1200)) }, note: "the inner wall of the bypass duct; the core engine is inside it" });
+    const cowlR = y => { for (let i = 1; i < cowl.length; i++) if (cowl[i][1] >= y) return lerp(cowl[i - 1][0], cowl[i][0], (y - cowl[i - 1][1]) / (cowl[i][1] - cowl[i - 1][1])); return cowl[30][0]; };
+    const ogv = statorStage({ name: "outlet guide vanes", vanes: o.ogvs ?? 44, inner: cowlR(s(640)), outer: P.ductR, y: s(640), chord: s(170), stagger: -8, camber: 0.06, thickness: 0.08, innerSlope: (cowlR(s(700)) - cowlR(s(580))) / s(120), bands: false, material: M("ogv", "aluminum") });
+    A.part("outlet guide vanes", ogv, { parent: axis, explode: [0, s(250), 0], label: { text: "outlet guide vanes", at: cyl(s(760), Math.PI * 0.25, s(640)) }, note: "fixed vanes that straighten the swirling bypass air" });
+    // ---- booster (low-pressure compressor) ----
+    const boost = [];
+    [[360, 64, "s"], [410, 52, "r"], [455, 72, "s"], [500, 56, "r"], [545, 76, "s"], [590, 60, "r"], [630, 80, "s"]].forEach(([y, n, kind], i) => {
+      const yy = s(y), hb = hubAt(yy), tp = tipAt(yy), sl = (tipAt(yy + 10) - tipAt(yy - 10)) / 20, hl = (hubAt(yy + 10) - hubAt(yy - 10)) / 20;
+      if (kind === "r") boost.push(A.part(`booster rotor ${i}`, rotorStage({ name: "booster", blades: n, hub: hb, tip: tp - 1.5, y: yy, chord: [s(42), s(38)], stagger: [35, 48], hubSlope: hl, tipSlope: sl, diskWidth: s(30), bore: s(150), material: M("compressor", "titanium") }), { parent: low, explode: [0, -s(500), 0] }));
+      else boost.push(A.part(`booster stator ${i}`, statorStage({ name: "booster stator", vanes: n, inner: hb, outer: tp, y: yy, chord: s(36), stagger: -25, innerSlope: hl, outerSlope: sl, material: M("compressor", "titanium") }), { parent: axis, explode: [0, -s(500), 0] }));
+    });
+    A.parts["booster"] = boost[1];
+    A.part("booster label", null, { parent: axis, label: { text: "booster", at: cyl(s(400), Math.PI * 0.75, s(500)) }, note: "a few low-pressure compressor stages on the fan shaft" });
+    // ---- core casings: transition duct, HPC case, combustor case, turbine case ----
+    const caseIn = [], caseT = s(14);
+    for (let i = 0; i <= 24; i++) { const y = lerp(s(640), s(1390), i / 24); caseIn.push([tipAt(y) + 1, y]); }
+    shell("compressor case", [...caseIn, ...caseIn.slice().reverse().map(([r, y]) => [r + caseT, y])], { material: M("compressorCase", "steel"), segments: 80, explode: [0, s(120), 0], note: "the casing around the compressor; its inner wall sits just clear of the blade tips" });
+    // Flanges and a bleed manifold on the HP compressor case.
+    const cf = [s(830), s(1050), s(1250)].map(y => collar(yy => tipAt(yy) + caseT, y - s(8), y + s(8), s(16), { segments: 72 }));
+    const bleed = xf(mesh.torus(tipAt(s(1150)) + caseT + s(28), s(20), { segments: 72, tube: 12 }), T([0, s(1150), 0]));
+    A.part("case flanges", merge(cf, bleed), { parent: axis, material: M("compressorCase", "steel"), explode: [0, s(120), 0] });
+    // Inner wall of the transition duct (static).
+    const ductIn = []; for (let i = 0; i <= 12; i++) { const y = lerp(s(640), s(820), i / 12); ductIn.push([hubAt(y) - 1, y]); }
+    shell("transition duct", [...ductIn, ...ductIn.slice().reverse().map(([r, y]) => [r - s(12), y])], { material: M("compressorCase", "steel"), segments: 72, explode: [0, s(120), 0] });
+    // ---- HP compressor ----
+    const hpcN = [38, 44, 50, 56, 60, 64, 68, 72, 76];
+    hpcN.forEach((n, i) => {
+      const yr = s(850 + i * 54), ys = yr + s(27), sl = (tipAt(yr + 10) - tipAt(yr - 10)) / 20;
+      A.part(`hpc rotor ${i + 1}`, rotorStage({ name: "high-pressure compressor", blades: n, hub: hubAt(yr), tip: tipAt(yr) - 1, y: yr, chord: [s(30 - i * 1.4), s(26 - i * 1.2)], stagger: [38, 52], tipSlope: sl, diskWidth: s(22), bore: s(118), material: M("compressor", "titanium") }), { parent: high, explode: [0, s(120), 0] });
+      A.part(`hpc stator ${i + 1}`, statorStage({ name: "hpc stator", vanes: Math.round(n * 1.3), inner: hubAt(ys), outer: tipAt(ys), y: ys, chord: s(24 - i), stagger: -28, outerSlope: sl, material: M("compressor", "titanium") }), { parent: axis, explode: [0, s(120), 0] });
+    });
+    A.parts["high-pressure compressor"] = A.parts["hpc rotor 1"];
+    const drum = []; for (let i = 0; i <= 10; i++) { const y = lerp(s(830), s(1330), i / 10); drum.push([hubAt(y) - s(1.5), y]); }
+    A.part("hpc drum", revolve([...drum, ...drum.slice().reverse().map(([r, y]) => [r - s(8), y])], { loop: true, segments: 72 }), { parent: high, material: M("compressor", "titanium"), explode: [0, s(120), 0] });
+    A.part("hpc label", null, { parent: axis, label: { text: "high-pressure compressor", at: cyl(s(260), Math.PI * 0.75, s(1100)) }, note: "nine stages squeeze the core air about 20 times" });
+    // ---- combustor ----
+    const yC0 = s(1400), yC1 = s(1640);
+    shell("combustor case", fillet([[s(250), yC0 - s(20)], [s(372), s(1440), s(30)], [s(372), yC1 + s(20), s(10)], [s(330), yC1 + s(40)], [s(330) - s(12), yC1 + s(40)], [s(360), yC1 + s(20)], [s(360), s(1450), s(20)], [s(250), yC0 - s(8)]], { closed: true, steps: 3 }), { material: M("combustorCase", "steel"), explode: [0, s(300), 0], note: "the pressure casing around the combustor" });
+    const step = (r0, r1, sgn) => { const pts = []; for (let i = 0; i < 6; i++) { const y = lerp(s(1440), yC1, i / 6), y2 = lerp(s(1440), yC1, (i + 1) / 6), r = lerp(r0, r1, i / 6), r2 = lerp(r0, r1, (i + 1) / 6); pts.push([r, y], [r2 + sgn * s(4), y2 - s(6)], [r2, y2 - s(2)]); } return pts; };
+    const outerLiner = step(s(322), s(302), 1), innerLiner = step(s(232), s(258), -1);
+    const linerT = s(4);
+    A.part("combustor", merge(
+      revolve([...outerLiner, ...outerLiner.slice().reverse().map(([r, y]) => [r + linerT, y])], { loop: true, segments: 72, crease: 50 }),
+      revolve([...innerLiner, ...innerLiner.slice().reverse().map(([r, y]) => [r - linerT, y])], { loop: true, segments: 72, crease: 50 }),
+      revolve(fillet([[s(232), s(1440)], [s(250), s(1405), s(14)], [s(305), s(1405), s(14)], [s(322), s(1440)], [s(322) + linerT, s(1440)], [s(305), s(1405) - linerT, s(14)], [s(250), s(1405) - linerT, s(14)], [s(232) - linerT, s(1440)]], { closed: true, steps: 3 }), { loop: true, segments: 96 }),
+    ), { parent: axis, material: M("combustor", "inconel"), explode: [0, s(300), 0], label: { text: "combustor", at: cyl(s(320), Math.PI * 0.75, s(1540)) }, note: "an annular chamber where fuel burns in the compressed air" });
+    const nozzleStem = revolve(fillet([[0, 0], [s(14), 0], [s(14), s(70)], [s(9), s(80)], [s(9), s(118)], [s(16), s(122)], [s(16), s(134)], [0, s(134)]]), { segments: 14 });
+    const nzz = Array.from({ length: o.fuelNozzles ?? 20 }, (_, i) => xf(nozzleStem, RY((i / (o.fuelNozzles ?? 20)) * TAU), T([s(395), s(1415), 0]), RZ(Math.PI / 2 + 0.25)));
+    A.part("fuel nozzles", merge(nzz), { parent: axis, material: M("fuelNozzles", "steel"), explode: [0, s(300), 0], label: { text: "fuel nozzles", at: cyl(s(380), Math.PI * 0.62, s(1420)) }, note: "spray fuel into the front of the combustor" });
+    // ---- turbines ----
+    const turb = [[1655, 255, 300, "s", 40], [1695, 255, 302, "r", 72], [1740, 258, 312, "s", 44], [1780, 258, 318, "r", 76]];
+    turb.forEach(([y, h, t, kind, n], i) => {
+      const yy = s(y);
+      if (kind === "r") A.part(`hpt rotor ${i}`, rotorStage({ name: "high-pressure turbine", blades: n, hub: s(h), tip: s(t) - 1, y: yy, chord: [s(30), s(28)], stagger: [-30, -40], camber: [0.12, 0.1], thickness: [0.16, 0.12], hand: -1, diskWidth: s(34), bore: s(110), material: M("turbine", "inconel") }), { parent: high, explode: [0, s(450), 0] });
+      else A.part(`hpt nozzle ${i}`, statorStage({ name: "hpt nozzle", vanes: n, inner: s(h), outer: s(t), y: yy, chord: s(30), stagger: 40, camber: 0.12, thickness: 0.18, hand: 1, material: M("turbine", "inconel") }), { parent: axis, explode: [0, s(450), 0] });
+    });
+    A.parts["high-pressure turbine"] = A.parts["hpt rotor 1"];
+    A.part("hpt label", null, { parent: axis, label: { text: "high-pressure turbine", at: cyl(s(300), Math.PI * 0.8, s(1720)) }, note: "two stages that drive the compressor through the HP shaft" });
+    const lptHub = y => lerp(s(265), s(300), (y - s(1830)) / s(450)), lptTip = y => lerp(s(335), s(455), (y - s(1830)) / s(450));
+    for (let i = 0; i < 5; i++) {
+      const ys = s(1840 + i * 90), yr = ys + s(45), tsl = (lptTip(s(100)) - lptTip(0)) / s(100);
+      A.part(`lpt nozzle ${i + 1}`, statorStage({ name: "lpt nozzle", vanes: 70 + i * 6, inner: lptHub(ys), outer: lptTip(ys), y: ys, chord: s(36), stagger: 38, camber: 0.1, thickness: 0.14, hand: 1, innerSlope: (lptHub(s(100)) - lptHub(0)) / s(100), outerSlope: tsl, material: M("turbine", "inconel") }), { parent: axis, explode: [0, s(700), 0] });
+      A.part(`lpt rotor ${i + 1}`, rotorStage({ name: "low-pressure turbine", blades: 80 + i * 8, hub: lptHub(yr), tip: lptTip(yr) - 2, y: yr, chord: [s(34), s(30)], stagger: [-32, -46], camber: [0.1, 0.08], thickness: [0.12, 0.08], hand: -1, tipSlope: tsl, shroud: true, diskWidth: s(30), bore: s(70), material: M("turbine", "inconel") }), { parent: low, explode: [0, s(700), 0] });
+    }
+    A.parts["low-pressure turbine"] = A.parts["lpt rotor 1"];
+    A.part("lpt label", null, { parent: axis, label: { text: "low-pressure turbine", at: cyl(lptTip(s(2100)), Math.PI * 0.8, s(2100)) }, note: "five stages that drive the fan through the LP shaft" });
+    const tcase = []; for (let i = 0; i <= 16; i++) { const y = lerp(s(1640), s(2330), i / 16); tcase.push([(y < s(1820) ? s(322) + (y - s(1640)) * 0.05 : lptTip(y)) + 2, y]); }
+    shell("turbine case", [...tcase, ...tcase.slice().reverse().map(([r, y]) => [r + s(14), y])], { material: M("turbineCase", "inconel"), segments: 96, explode: [0, s(600), 0], note: "the casing around both turbines" });
+    // Turbine rear frame struts and the exhaust plug.
+    const trf = statorStage({ name: "turbine rear frame", vanes: 12, inner: s(300), outer: s(460), y: s(2330), chord: s(60), stagger: 0, camber: 0, thickness: 0.16, material: M("turbineCase", "inconel") });
+    A.part("turbine rear frame", trf, { parent: axis, explode: [0, s(850), 0] });
+    const plug = revolve([[0, s(2860)], ...Array.from({ length: 16 }, (_, i) => { const u = 1 - i / 15; return [s(300) * Math.pow(u, 0.8), lerp(s(2300), s(2860), 1 - u)]; }).reverse().reverse(), [s(300), s(2300)], [0, s(2300)]].sort((a, b) => b[1] - a[1]).map(p => p), { segments: 72 });
+    A.part("exhaust cone", plug, { parent: axis, material: M("exhaustCone", "inconel"), explode: [0, s(950), 0], label: { text: "exhaust cone", at: [s(150), s(2600), 0] }, note: "the plug that shapes the hot core exhaust" });
+    // ---- shafts and bearings ----
+    const lpS = shaft({ steps: [[s(200), s(110)], [s(2150), s(90)], [s(100), s(110)]], bore: s(60), segments: 32 });
+    A.part("LP shaft", xf(lpS, T([0, s(150), 0])), { parent: low, material: M("shaft", "steel"), label: { text: "LP shaft", at: [0, s(1900), s(55)] }, note: "the inner shaft: LP turbine to fan, turning slower" });
+    const hpS = shaft({ steps: [[s(60), s(236)], [s(940), s(200)], [s(60), s(220)]], bore: s(150), segments: 40 });
+    A.part("HP shaft", xf(hpS, T([0, s(800), 0])), { parent: high, material: M("shaft", "steel"), label: { text: "HP shaft", at: [0, s(1450), s(100)] }, note: "the outer, hollow shaft: HP turbine to compressor, turning faster" });
+    for (const [y, bore, outer, nm] of [[260, 55, 85, "No. 1 bearing"], [770, 118, 150, "No. 3 bearing"], [2250, 55, 85, "No. 5 bearing"]]) A.part(nm, bearing({ bore: s(bore), outer: s(outer), width: s(24), name: nm, segments: 40, ballSegments: 6 }), { parent: axis, position: [0, s(y), 0], explode: [0, y < 1000 ? -s(300) : s(600), 0] });
+    // ---- pylon mounts, test stand ----
+    const fwdMount = cyl(P.Rco, Math.PI, s(380)), aftMount = cyl(lptTip(s(2330)) + s(16), Math.PI, s(2330));
+    A.mounts = { forward: () => axis.toWorld(fwdMount), aft: () => axis.toWorld(aftMount) };
+    const lugs = merge(xf(mesh.box(s(70), s(60), s(90), { round: s(6) }), T(v3.add(fwdMount, [s(-20), 0, 0]))), xf(mesh.box(s(70), s(50), s(80), { round: s(6) }), T(v3.add(aftMount, [s(-20), 0, 0]))));
+    A.part("engine mounts", lugs, { parent: axis, material: M("mount", "steel"), explode: [0, s(250), 0], note: "the forward and aft mounts take the thrust into the pylon" });
+    // Accessory plumbing on the core: two pipes and a harness along the compressor case.
+    const ra = y => tipAt(y) + caseT + s(45);
+    const pipeA = pipe([cyl(ra(s(860)), Math.PI * 0.35, s(860)), cyl(ra(s(1150)), Math.PI * 0.35, s(1150)), cyl(s(330), Math.PI * 0.33, s(1700)), cyl(s(345), Math.PI * 0.33, s(2050))], { radius: s(10), bend: s(40), flanges: false, name: "bleed pipe", material: M("pipe", "brushed") });
+    A.part("bleed pipe", pipeA, { parent: axis, explode: [0, s(250), 0] });
+    const hz = harness([cyl(ra(s(850)), Math.PI * 1.18, s(850)), cyl(ra(s(1100)) + s(5), Math.PI * 1.2, s(1100)), cyl(s(400), Math.PI * 1.22, s(1500)), cyl(s(395), Math.PI * 1.2, s(1900))], { wires: 7, wire: s(2.4), ties: 6 });
+    A.part("harness", hz, { parent: axis, explode: [0, s(250), 0], note: "sensor and control wiring" });
+    if (o.testStand || o.pylon) {
+      const top = P.Rmax, bx0 = s(-500), bx1 = s(2600), beamY = top + s(520);
+      const st = A.group("test stand");
+      const pyl = mesh.extrude([[s(150), top - s(40)], [s(1500), top - s(40)], [s(2300), lptTip(s(2330)) + s(10)], [s(2300), beamY - s(60)], [s(150), beamY - s(60)]], s(170), { bevel: s(20) });
+      A.part("pylon", pyl, { parent: st, material: M("pylon", "porcelain"), label: { text: "pylon", at: [s(800), top + s(200), s(85)] }, note: "carries the engine's thrust and weight into the wing, or here the stand" });
+      if (o.testStand) {
+        const ground = -top - s(700);
+        const col = (x, z) => xf(mesh.box(s(110), beamY - ground, s(110), { round: s(6) }), T([x, (beamY + ground) / 2, z]));
+        const frame = merge(
+          xf(mesh.box(bx1 - bx0, s(140), s(240), { round: s(8) }), T([(bx0 + bx1) / 2, beamY, 0])),
+          col(bx0 + s(100), s(1050)), col(bx0 + s(100), s(-1050)), col(bx1 - s(100), s(1050)), col(bx1 - s(100), s(-1050)),
+          xf(mesh.box(s(110), s(110), s(2210), { round: s(6) }), T([bx0 + s(100), beamY, 0])), xf(mesh.box(s(110), s(110), s(2210), { round: s(6) }), T([bx1 - s(100), beamY, 0])),
+          strut([bx0 + s(100), ground + s(200), s(1050)], [bx0 + s(100), beamY - s(80), s(150)], { radius: s(26) }), strut([bx0 + s(100), ground + s(200), s(-1050)], [bx0 + s(100), beamY - s(80), s(-150)], { radius: s(26) }),
+          strut([bx1 - s(100), ground + s(200), s(1050)], [bx1 - s(100), beamY - s(80), s(150)], { radius: s(26) }), strut([bx1 - s(100), ground + s(200), s(-1050)], [bx1 - s(100), beamY - s(80), s(-150)], { radius: s(26) }),
+        );
+        A.part("stand frame", frame, { parent: st, material: M("stand", "porcelain"), note: "a thrust stand: the engine hangs from a beam that measures its pull" });
+        A.part("stand base", xf(mesh.box(bx1 - bx0 + s(400), s(60), s(2600), { round: s(10) }), T([(bx0 + bx1) / 2, ground - s(30), 0])), { parent: st, material: M("ground", "concrete") });
+      }
+    }
+    // ---- ports ----
+    A.port("inlet", axis, [0, P.yH, 0], [0, -1, 0], P.Rh);
+    A.port("fanFace", axis, [0, s(-60), 0], [0, -1, 0], Rf, { inner: hubR });
+    A.port("fanNozzle", axis, [0, yE, 0], [0, 1, 0], P.RE - P.te, { inner: cowlR(yE) });
+    A.port("nozzle", axis, [0, s(2420), 0], [0, 1, 0], cowl[30][0] - s(16), { inner: s(300) * Math.pow(1 - (s(2420) - s(2300)) / s(560), 0.8) });
+    const bypassArea = Math.PI * (P.ductR ** 2 - s(440) ** 2), coreArea = Math.PI * (s(440) ** 2 - s(338) ** 2);
+    A.info = { fanRadius: Rf, hubRadius: hubR, splitter: s(440), coreHub: s(338), bypassArea, coreArea, bypassRatio: bypassArea / coreArea, length: s(2860) - P.yH, fanBlades: o.fanBlades ?? 18, maxRadius: P.Rmax };
+    A.cutaway = (on = true) => { for (const [f, c] of cases) { f.visible = !on; c.visible = !!on; } return A; };
+    if (o.cutaway) A.cutaway(true);
+    A.onPose = p => { if (p.low != null) low.rotation = [0, p.low, 0]; if (p.high != null) high.rotation = [0, p.high, 0]; };
+    return A;
+  }
+
+  // ---------- belts and chains ----------
+  // A closed belt path around circles [{ c: [x, y], r, cw }] taken in travel order; cw: true
+  // wraps clockwise (seen from +z). Returns { points (closed polyline, xy), length, arcs }.
+  function beltPath(circles, { step = 4 } = {}) {
+    const n = circles.length, tang = [];
+    for (let i = 0; i < n; i++) {
+      const A0 = circles[i], B0 = circles[(i + 1) % n];
+      const d = [B0.c[0] - A0.c[0], B0.c[1] - A0.c[1]], L = Math.hypot(d[0], d[1]), e = [d[0] / L, d[1] / L], ep = [-e[1], e[0]];
+      let best = null;
+      for (const sa of [1, -1]) for (const sb of [1, -1]) {
+        const cosA = (sa * A0.r - sb * B0.r) / L;
+        if (Math.abs(cosA) > 1) continue;
+        for (const sg of [1, -1]) {
+          const sinA = sg * Math.sqrt(1 - cosA * cosA), nrm = [e[0] * cosA + ep[0] * sinA, e[1] * cosA + ep[1] * sinA];
+          const pa = [A0.c[0] + sa * A0.r * nrm[0], A0.c[1] + sa * A0.r * nrm[1]], pb = [B0.c[0] + sb * B0.r * nrm[0], B0.c[1] + sb * B0.r * nrm[1]];
+          const t = [pb[0] - pa[0], pb[1] - pa[1]];
+          const vel = (C, p, cw) => { const rx = p[0] - C.c[0], ry = p[1] - C.c[1]; return cw ? [ry, -rx] : [-ry, rx]; };
+          const va = vel(A0, pa, A0.cw), vb = vel(B0, pb, B0.cw);
+          if (va[0] * t[0] + va[1] * t[1] > 0 && vb[0] * t[0] + vb[1] * t[1] > 0) best = { pa, pb };
+        }
+      }
+      tang.push(best || { pa: A0.c, pb: B0.c });
+    }
+    const pts = [], arcs = [];
+    let length = 0;
+    for (let i = 0; i < n; i++) {
+      const C = circles[i], arrive = tang[(i - 1 + n) % n].pb, leave = tang[i].pa;
+      const a0 = Math.atan2(arrive[1] - C.c[1], arrive[0] - C.c[0]);
+      let da = Math.atan2(leave[1] - C.c[1], leave[0] - C.c[0]) - a0;
+      if (C.cw) { while (da > 0) da -= TAU; } else { while (da < 0) da += TAU; }
+      const m = Math.max(2, Math.ceil((Math.abs(da) * C.r) / step));
+      for (let k = 0; k < m; k++) { const a = a0 + (da * k) / m; pts.push([C.c[0] + C.r * Math.cos(a), C.c[1] + C.r * Math.sin(a)]); }
+      arcs.push({ start: length, angle: Math.abs(da) });
+      length += Math.abs(da) * C.r;
+      const L = Math.hypot(tang[i].pb[0] - leave[0], tang[i].pb[1] - leave[1]);
+      const m2 = Math.max(1, Math.ceil(L / (step * 6)));
+      for (let k = 0; k < m2; k++) pts.push([lerp(leave[0], tang[i].pb[0], k / m2), lerp(leave[1], tang[i].pb[1], k / m2)]);
+      length += L;
+    }
+    return { points: pts, length, arcs, tangents: tang };
+  }
+  // A belt (flat band) along a closed xy path at z = 0: width along z, thickness outward.
+  function belt(path2, { width = 20, thickness = 4 } = {}) {
+    const P = path2.map(([x, y]) => [x, y, 0]), n = P.length, S = new Soup();
+    let area = 0;
+    for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; area += a[0] * b[1] - b[0] * a[1]; }
+    const sgn = area > 0 ? 1 : -1;
+    const ring = P.map((p, i) => {
+      const a = P[(i - 1 + n) % n], b = P[(i + 1) % n], tx = b[0] - a[0], ty = b[1] - a[1], l = Math.hypot(tx, ty) || 1;
+      const nx = (ty / l) * sgn, ny = (-tx / l) * sgn;
+      return [[p[0], p[1], -width / 2], [p[0] + nx * thickness, p[1] + ny * thickness, -width / 2], [p[0] + nx * thickness, p[1] + ny * thickness, width / 2], [p[0], p[1], width / 2]];
+    });
+    for (let i = 0; i < n; i++) { const A0 = ring[i], B0 = ring[(i + 1) % n]; for (let q = 0; q < 4; q++) { const q1 = (q + 1) % 4; S.quad(A0[q], B0[q], B0[q1], A0[q1]); } }
+    return S.build({ crease: 50 });
+  }
+
+  // ---------- piston engine ----------
+  // An inline four-stroke engine with double overhead cams and two valves per cylinder.
+  // Crank axis along x at the origin, cylinders up (+y). Defaults are a 2.0 L inline four
+  // (86 x 86 mm, 143 mm rods). pose({ crank }) sets the crank angle in radians; pistons,
+  // rods, cams, and valves follow, with the cams at half crank speed.
+  function pistonEngine(o = {}) {
+    const A = assembly(o.name ?? "piston engine", o), M = (r, f) => matFor(o, r, f);
+    const n = o.cylinders ?? 4, B = o.bore ?? 86, Sk = o.stroke ?? 86, L = o.rod ?? Sk * 1.66, r = Sk / 2;
+    const pitch = o.spacing ?? B * 1.12, ch = B * 0.36, X = Array.from({ length: n }, (_, i) => (i - (n - 1) / 2) * pitch);
+    const FO = { 1: [1], 2: [1, 2], 3: [1, 3, 2], 4: [1, 3, 4, 2], 5: [1, 2, 4, 5, 3], 6: [1, 5, 3, 6, 2, 4] }[n] || Array.from({ length: n }, (_, i) => i + 1);
+    const firing = o.firingOrder ?? FO;
+    const phase = X.map((_, i) => ((firing.indexOf(i + 1) * 720) / n) * DEG);
+    const pinA = phase.map(p => -p);
+    const yDeck = r + L + ch + 0.6, Hh = B * 0.95, yHead = yDeck + Hh, len = n * pitch + B * 0.32, W = B * 1.5;
+    const yBlock0 = L - r - B * 0.3, yRail = -r - B * 0.55;
+    // Block with bores, open crankcase, bulkheads, oil pan.
+    const bores = X.map(x => circle2(B / 2, 48, x, 0));
+    A.part("block", plate(roundRect2(len, W, B * 0.12, 4), yDeck - yBlock0, { holes: bores, y0: yBlock0, bevelSegments: 1 }), { material: M("block", "aluminum"), explode: [0, 0, 0], label: { text: "cylinder block", at: [X[0] - pitch * 0.4, (yDeck + yBlock0) / 2, W / 2] }, note: `${n} cylinders, ${B} mm across, bored straight through the block` });
+    const cw = W * 1.12, inner = roundRect2(len - B * 0.16, cw - B * 0.16, B * 0.06, 3);
+    const bulk = X.concat(X[n - 1] + pitch).map(x0 => x0 - pitch / 2).map(x => xf(mesh.extrude([[-cw / 2 + 2, yBlock0 + 1], [-cw / 2 + 2, yRail + 6], [-B * 0.42, yRail + 6], [-B * 0.42, -B * 0.32], [B * 0.42, -B * 0.32], [B * 0.42, yRail + 6], [cw / 2 - 2, yRail + 6], [cw / 2 - 2, yBlock0 + 1]], B * 0.16, { holes: [circle2(B * 0.31, 32, 0, 0)], bevel: 1 }), T([x, 0, 0]), RY(-Math.PI / 2)));
+    A.part("crankcase", merge(plate(roundRect2(len, cw, B * 0.1, 4), yBlock0 - yRail, { holes: [inner], y0: yRail, bevelSegments: 1 }), bulk), { material: M("block", "aluminum"), label: { text: "crankcase", at: [X[n - 1] + pitch * 0.4, (yRail + yBlock0) / 2, cw / 2] }, note: "the lower block; bulkheads carry the main bearings" });
+    const pan = merge(plate(roundRect2(len - 8, cw - 8, B * 0.1, 4), B * 0.55, { holes: [roundRect2(len - 18, cw - 18, B * 0.06, 3)], y0: yRail - B * 0.55, bevelSegments: 1 }), plate(roundRect2(len - 8, cw - 8, B * 0.1, 4), 3, { y0: yRail - B * 0.55 - 3, bevel: 1, bevelSegments: 1 }));
+    A.part("oil pan", pan, { material: M("pan", "steel"), explode: [0, -B * 1.6, 0], label: { text: "oil pan", at: [0, yRail - B * 0.3, (cw - 8) / 2] }, note: "holds the oil the crank splashes and the pump draws up" });
+    // Head and cam cover.
+    A.part("cylinder head", xf(mesh.box(len, Hh, W * 0.98, { round: B * 0.05 }), T([0, yDeck + Hh / 2 + 0.3, 0])), { material: M("head", "aluminum"), explode: [0, B * 1.4, 0], label: { text: "cylinder head", at: [X[0] - pitch * 0.4, yDeck + Hh * 0.5, W * 0.49] }, note: "closes the cylinders; holds the valves, ports, and spark plugs" });
+    // Valves: pent-roof, intake on +z, exhaust on -z, tilted 20 degrees.
+    const tilt = (o.valveAngle ?? 20) * DEG, vz = B * 0.24;
+    const dI = [0, Math.cos(tilt), Math.sin(tilt)], dE = [0, Math.cos(tilt), -Math.sin(tilt)];
+    const seatY = yDeck + 1.2, Lv = Hh + B * 0.2, rb = B * 0.2, lift = o.valveLift ?? B * 0.11, half = 66 * DEG;
+    const valveMesh = rv => revolve(fillet([[0, 0], [rv, 0], [rv, 1.2], [rv - 2.2, 3.4, 1], [B * 0.045, rv * 0.95, rv * 0.5], [B * 0.045, Lv - 6], [B * 0.036, Lv - 5], [B * 0.036, Lv - 3], [B * 0.045, Lv - 2], [B * 0.045, Lv], [0, Lv]], { steps: 3 }), { segments: 24 });
+    const vI = valveMesh(B * 0.21), vE = valveMesh(B * 0.18);
+    const rs = B * 0.13, springL = Hh * 0.42;
+    const spr = spring({ radius: rs, wire: B * 0.035, length: springL, coils: 6.5 });
+    const bucketH = B * 0.24, bucketR = B * 0.16;
+    const bucket = revolve(fillet([[0, 0], [bucketR - 1, 0], [bucketR, 1], [bucketR, bucketH - 1], [bucketR - 1, bucketH], [0, bucketH]]), { segments: 24 });
+    const retainer = revolve([[B * 0.045, 0], [rs + 2, 0], [rs + 2, 2], [B * 0.08, 6], [B * 0.045, 6]], { loop: true, segments: 20 });
+    const camAxis = d => v3.add([0, seatY, 0], v3.scale(d, Lv + bucketH + rb + 1));
+    const camI = v3.add(camAxis(dI), [0, 0, vz]), camE = v3.add(camAxis(dE), [0, 0, -vz]);
+    // Cam lobe outline, nose toward +y in the (y, z) plane, made convex.
+    const lobe2 = hull2(Array.from({ length: 96 }, (_, i) => {
+      const a = (i / 96) * TAU, d = Math.abs(Math.atan2(Math.sin(a), Math.cos(a)));
+      const rr = rb + (d < half ? lift * Math.pow(0.5 + 0.5 * Math.cos((Math.PI * d) / half), 1.3) : 0);
+      return [rr * Math.cos(a), rr * Math.sin(a)];
+    }));
+    const lobeMesh = (beta, x) => xf(mesh.extrude(lobe2.map(([y, z]) => [z * Math.cos(beta) + y * Math.sin(beta), y * Math.cos(beta) - z * Math.sin(beta)]), B * 0.17, { bevel: 0.8, bevelSegments: 1 }), T([x, 0, 0]), RY(-Math.PI / 2));
+    // Nose angle: the lobe points at its follower (along -d) at the peak of its event.
+    const peakE = 255 * DEG, peakI = 465 * DEG;
+    const follow = d => Math.atan2(-d[2], -d[1]);
+    const cams = [], valves = [];
+    const camShaftMesh = (center, d, peak) => {
+      const parts = [xf(mesh.cylinder(B * 0.14, len + B * 0.3, { segments: 20 }), RZ(Math.PI / 2))];
+      X.forEach((x, i) => {
+        parts.push(lobeMesh(follow(d) - (phase[i] + peak) / 2, x));
+        parts.push(xf(mesh.cylinder(B * 0.19, B * 0.12, { segments: 24 }), T([x + pitch / 2, 0, 0]), RZ(Math.PI / 2)));
+      });
+      return merge(parts);
+    };
+    const lobeLift = (psi, d) => {
+      const fa = follow(d);
+      let m = -Infinity;
+      for (const [y, z] of lobe2) { const a = Math.atan2(z, y) + psi, rr = Math.hypot(y, z); m = Math.max(m, rr * Math.cos(a - fa)); }
+      return Math.max(0, m - rb);
+    };
+    for (const [nm, c, d, peak, vm, side] of [["intake camshaft", camI, dI, peakI, vI, 1], ["exhaust camshaft", camE, dE, peakE, vE, -1]]) {
+      const cam = A.part(nm, camShaftMesh(c, d, peak), { position: c, material: M("cam", "steel"), explode: [0, B * 2.6, side * B * 0.5], label: { text: side > 0 ? "camshaft" : "camshaft", at: [X[n - 1] + pitch * 0.25, 0, 0] }, note: "lobes open each valve once every two turns of the crank" });
+      cams.push({ node: cam, d, center: c });
+      X.forEach((x, i) => {
+        const seat = [x, seatY, side * vz], Mv = aim(seat, d);
+        const v = A.part(`${side > 0 ? "intake" : "exhaust"} valve ${i + 1}`, vm, { material: M(side > 0 ? "intakeValve" : "exhaustValve", "steel"), explode: [0, B * 1.4, 0], label: i === 0 ? (side > 0 ? "intake valve" : "exhaust valve") : undefined, note: side > 0 ? "lets the fuel-air mixture in" : "lets the burned gas out" });
+        const sp = A.part(`valve spring ${side}${i}`, spr, { material: M("spring", "steel"), explode: [0, B * 1.4, 0] });
+        const bk = A.part(`bucket ${side}${i}`, merge(bucket, xf(retainer, T([0, -B * 0.06, 0]))), { material: M("tappet", "steel"), explode: [0, B * 2, 0] });
+        valves.push({ v, sp, bk, Mv, d, i, side, cam: cams.length - 1 });
+      });
+    }
+    A.part("cam cover", xf(housing({ width: len - 4, height: B * 0.62, depth: W * 0.98, wall: 3.5, round: B * 0.1 }), T([0, yHead + B * 0.31, 0])), { material: M("cover", "porcelain"), explode: [0, B * 3.6, 0], label: { text: "cam cover", at: [X[n - 1], yHead + B * 0.62, 0] }, note: "keeps the oil in around the cams" });
+    // Spark plugs between the cams.
+    const plug = revolve(fillet([[0, 0], [B * 0.05, 0], [B * 0.05, B * 0.25], [B * 0.08, B * 0.27], [B * 0.08, B * 0.36], [B * 0.06, B * 0.4], [B * 0.055, B * 0.72, 2], [B * 0.04, B * 0.95], [B * 0.025, B * 1.0], [0, B * 1.0]], { steps: 2 }), { segments: 20 });
+    A.part("spark plugs", merge(X.map(x => xf(plug, T([x, yDeck + 1, 0])))), { material: M("sparkPlug", "ceramic"), explode: [0, B * 3, 0], label: { text: "spark plug", at: [X[0], yDeck + B * 0.9, 0] }, note: "fires the mixture just before the piston reaches the top" });
+    // Crankshaft: mains, pins, webs with counterweights, snout, flange.
+    const rm = B * 0.3, rp = B * 0.25, pinW = B * 0.26, webT = B * 0.19;
+    const web2 = hull2([...circle2(rp + B * 0.1, 24, 0, r), ...circle2(rm + B * 0.08, 24, 0, 0), ...arc2(0, 0, r * 1.38, -Math.PI / 2 - 1.15, -Math.PI / 2 + 1.15, 16)].map(([zz, yy]) => [zz, yy]));
+    const webM = (ang, x) => xf(mesh.extrude(web2.map(([zz, yy]) => [zz * Math.cos(ang) + yy * Math.sin(ang), yy * Math.cos(ang) - zz * Math.sin(ang)]), webT, { bevel: 1.2, bevelSegments: 1 }), T([x, 0, 0]), RY(-Math.PI / 2));
+    const cyx = (rad, x0, x1, at = [0, 0]) => xf(mesh.cylinder(rad, x1 - x0, { segments: 28 }), T([(x0 + x1) / 2, at[0], at[1]]), RZ(Math.PI / 2));
+    const crankParts = [];
+    X.forEach((x, i) => {
+      const a = pinA[i], py = r * Math.cos(a), pz = r * Math.sin(a);
+      crankParts.push(cyx(rp, x - pinW / 2 - 1, x + pinW / 2 + 1, [py, pz]), webM(-a, x - pinW / 2 - webT / 2), webM(-a, x + pinW / 2 + webT / 2));
+      crankParts.push(cyx(rm, x - pitch / 2 - B * 0.12, x - pinW / 2 - webT + 1));
+    });
+    crankParts.push(cyx(rm, X[n - 1] + pinW / 2 + webT - 1, X[n - 1] + pitch / 2 + B * 0.12));
+    const xF = X[0] - pitch / 2 - B * 0.12, xR = X[n - 1] + pitch / 2 + B * 0.12;
+    crankParts.push(cyx(B * 0.2, xF - B * 0.9, xF + 1), cyx(B * 0.55, xR - 1, xR + B * 0.12));
+    const crank = A.part("crankshaft", merge(crankParts), { material: M("crank", "steel"), explode: [0, -B * 0.9, 0], label: { text: "crankshaft", at: [X[0] - pitch / 2, -rm, 0] }, note: "turns the pistons' up-and-down push into rotation" });
+    // Flywheel, front pulley, timing sprockets and belt.
+    const fly = merge(xf(gear({ teeth: 120, module: B * 0.03, thickness: B * 0.14, hole: B * 0.2 }), RZ(Math.PI / 2)), xf(revolve(fillet([[B * 0.2, -B * 0.12], [B * 1.6, -B * 0.12, 2], [B * 1.6, B * 0.05, 2], [B * 0.8, B * 0.05, 4], [B * 0.6, B * 0.18, 4], [B * 0.2, B * 0.18]], { closed: true, steps: 2 }), { loop: true, segments: 64 }), RZ(Math.PI / 2)));
+    A.part("flywheel", fly, { parent: crank, position: [xR + B * 0.3, 0, 0], material: M("flywheel", "steel"), explode: [B * 1.2, 0, 0], label: { text: "flywheel", at: [0, B * 1.4, 0] }, note: "a heavy disc that smooths the four separate power pulses" });
+    const xS = xF - B * 0.35, zc = B * 0.03 * 21 / 2;
+    const tooth = B * 0.03 * 1.06;
+    const crankSp = xf(gear({ teeth: 21, module: tooth, thickness: B * 0.2, hole: B * 0.15 }), RZ(Math.PI / 2));
+    A.part("crank sprocket", crankSp, { parent: crank, position: [xS, 0, 0], material: M("sprocket", "steel"), explode: [-B * 1, 0, 0] });
+    const pulley = revolve(fillet([[B * 0.15, 0], [B * 0.85, 0, 1], [B * 0.85, B * 0.3, 1], [B * 0.15, B * 0.3]].concat([]), { closed: true }), { loop: true, segments: 48 });
+    const grooves = Array.from({ length: 5 }, (_, k) => revolve([[B * 0.8, B * (0.05 + k * 0.05)], [B * 0.86, B * (0.07 + k * 0.05)], [B * 0.8, B * (0.09 + k * 0.05)], [B * 0.78, B * (0.07 + k * 0.05)]], { loop: true, segments: 48 }));
+    A.part("crank pulley", xf(merge(pulley, grooves), T([xS - B * 0.5, 0, 0]), RZ(Math.PI / 2)), { parent: crank, material: M("pulley", "steel"), explode: [-B * 1.6, 0, 0], label: { text: "crank pulley", at: [xS - B * 0.65, B * 0.85, 0] }, note: "drives the alternator and water pump belt" });
+    const camSp = xf(gear({ teeth: 42, module: tooth, thickness: B * 0.2, hole: B * 0.15 }), RZ(Math.PI / 2));
+    const rsp = (42 * tooth) / 2, rcs = (21 * tooth) / 2;
+    cams.forEach(c => A.part("cam sprocket", camSp, { parent: c.node, position: [xS - c.center[0], 0, 0], material: M("sprocket", "steel"), explode: [-B, 0, 0] }));
+    const idler = [B * 0.0, (yDeck + yHead) * 0.45];
+    const bp = beltPath([
+      { c: [0, 0], r: rcs, cw: false },
+      { c: [camE[2], camE[1]], r: rsp, cw: false },
+      { c: [camI[2], camI[1]], r: rsp, cw: false },
+      { c: [B * 0.9, idler[1]], r: B * 0.32, cw: true },
+    ]);
+    // The path above is in (z, y); turn it into a band in the yz plane at the sprocket face.
+    const beltM = xf(belt(bp.points, { width: B * 0.22, thickness: B * 0.05 }), T([xS, 0, 0]), RY(-Math.PI / 2));
+    A.part("timing belt", beltM, { material: M("belt", "rubber"), explode: [-B * 2.2, 0, 0], label: { text: "timing belt", at: [xS, (yDeck) * 0.6, B * 0.6] }, note: "keeps the cams turning at exactly half the crank's speed" });
+    A.part("belt tensioner", xf(revolve(fillet([[B * 0.05, -B * 0.13], [B * 0.32, -B * 0.13, 2], [B * 0.32, B * 0.13, 2], [B * 0.05, B * 0.13]], { closed: true }), { loop: true, segments: 40 }), T([xS, idler[1], -B * 0.9]), RZ(Math.PI / 2)), { material: M("pulley", "steel"), explode: [-B * 2.2, 0, 0] });
+    // Pistons, rings, wrist pins, and rods.
+    const Rp = B / 2 - 0.25, sk = B * 0.32;
+    const pistonProf = [[0, ch], [Rp - 1.2, ch], [Rp, ch - 1.2]];
+    for (const [g0, g1] of [[ch - 5, ch - 7], [ch - 10, ch - 12], [ch - 15, ch - 18]]) pistonProf.push([Rp, g0], [Rp - 3.5, g0], [Rp - 3.5, g1], [Rp, g1]);
+    pistonProf.push([Rp, -sk + 1], [Rp - 1, -sk], [Rp - 4, -sk], [Rp - 4, ch - 8, 3], [0, ch - 8]);
+    const pistonM = revolve(fillet(pistonProf, { steps: 2 }), { segments: 48 });
+    const ringM = merge([[ch - 5, ch - 7], [ch - 10, ch - 12], [ch - 15, ch - 18]].map(([a, b]) => revolve([[Rp - 3.2, b + 0.1], [Rp - 0.05, b + 0.1], [Rp - 0.05, a - 0.1], [Rp - 3.2, a - 0.1]], { loop: true, segments: 48 })));
+    const wristR = B * 0.12;
+    const wrist = xf(mesh.cylinder(wristR, B * 0.78, { segments: 20 }), RZ(Math.PI / 2));
+    const Rb = B * 0.42, Rs = B * 0.2, wb = B * 0.32, wt = B * 0.2;
+    const rodShape = fillet([...arc2(0, 0, Rb, Math.PI + 0.45, TAU - 0.45, 14), [Rb * 0.9, Rb * 0.6], [wb / 2, Rb * 1.15, 6], [wt / 2, L - Rs * 1.1, 6], ...arc2(0, L, Rs, -0.3, Math.PI + 0.3, 12), [-wt / 2, L - Rs * 1.1, 6], [-wb / 2, Rb * 1.15, 6], [-Rb * 0.9, Rb * 0.6]], { closed: true, steps: 3 });
+    const rodM = merge(
+      xf(mesh.extrude(rodShape, pinW - 1.5, { holes: [circle2(rp + 0.4, 32), circle2(wristR + 0.3, 24, 0, L)], bevel: 1.2, bevelSegments: 1 }), RY(-Math.PI / 2)),
+      xf(mesh.cylinder(B * 0.05, Rb * 1.5, { segments: 10 }), T([0, -Rb * 0.2, Rb * 0.78])), xf(mesh.cylinder(B * 0.05, Rb * 1.5, { segments: 10 }), T([0, -Rb * 0.2, -Rb * 0.78])),
+    );
+    const pistons = [], rods = [];
+    X.forEach((x, i) => {
+      const pn = A.part(`piston ${i + 1}`, merge(pistonM, wrist), { material: M("piston", "aluminum"), explode: [0, B * 4.2, 0], label: i === n - 1 ? "piston" : undefined, note: "pushed down by the burning gas; four strokes make one cycle" });
+      A.part(`piston rings ${i + 1}`, ringM, { parent: pn, material: M("rings", "steel") });
+      pistons.push(pn);
+      rods.push(A.part(`connecting rod ${i + 1}`, rodM, { material: M("rod", "steel"), label: i === n - 1 ? "connecting rod" : undefined, note: "links the piston to the crank pin" }));
+    });
+    A.cylinders = X.map((x, i) => ({ x, firing: firing.indexOf(i + 1) + 1, phase: phase[i], bore: B, deck: yDeck }));
+    A.port("output", crank, [xR + B * 0.42, 0, 0], [1, 0, 0], B * 1.6);
+    A.info = { cylinders: n, bore: B, stroke: Sk, rod: L, displacement: (Math.PI / 4) * B * B * Sk * n / 1000, firingOrder: firing, compressionHeight: ch, deck: yDeck };
+    const state = { crank: 0 };
+    A.onPose = p => {
+      if (p.crank != null) state.crank = p.crank;
+      const th = state.crank;
+      crank.rotation = [th, 0, 0];
+      X.forEach((x, i) => {
+        const a = th + pinA[i], py = r * Math.cos(a), pz = r * Math.sin(a);
+        const yp = py + Math.sqrt(L * L - pz * pz);
+        A.home(pistons[i], [x, yp, 0]);
+        A.homeMatrix(rods[i], mul(T([x, py, pz]), RX(Math.atan2(-pz, yp - py))));
+      });
+      cams.forEach(c => { c.node.rotation = [th / 2, 0, 0]; });
+      for (const q of valves) {
+        const l = lobeLift(th / 2, q.d);
+        const Mv = mul(T(v3.scale(q.d, -l)), q.Mv);
+        A.homeMatrix(q.v, Mv);
+        A.homeMatrix(q.bk, mul(Mv, T([0, Lv, 0])));
+        const top = Lv - B * 0.06 - l, bottom = Hh * 0.38;
+        A.homeMatrix(q.sp, mul(q.Mv, T([0, bottom, 0]), SC([1, (top - bottom) / springL, 1])));
+      }
+    };
+    const baseExplode = A.explode;
+    A.explode = t => { baseExplode(t); A.onPose({}); return A; };
+    A.onPose({});
+    A.lift = (cyl, which, crankAngle) => lobeLift(crankAngle / 2, which === "intake" ? dI : dE);
+    return A;
+  }
+
+  // ---------- exports ----------
+  E3.parts = {
+    // profiles and geometry helpers
+    revolve, fillet, roundRect: roundRect2, circle: circle2, arc: arc2, hull: hull2, offset: offset2, resample,
+    route, tube: tubeShell, frames, along, aim, flip, Soup, naca, nacaMPT, loft, bellContour, raoAngles, collar,
+    // parts
+    bolt, nut, washer, boltCircle, flange, pipe, bracket, bearing, shaft, spring, gear, strut, housing, harness,
+    bellows, valve, bellNozzle, combustionChamber, injectorPlate, impeller, volute, gimbal, actuator, tank,
+    blade, rotorStage, statorStage, spinner, nacelle, nacelleProfile,
+    // assemblies
+    assembly, highlight, turbopump, rocketEngine, turbofan, pistonEngine, beltPath, belt,
+    materials: [...MATERIALS],
   };
 })();
 
