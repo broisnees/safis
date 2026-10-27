@@ -1,0 +1,9 @@
+# The site is prebuilt in site/, so there is nothing to build.
+[build]
+  publish = "site"
+  command = "echo 'site/ is prebuilt'"
+
+[[headers]]
+  for = "/*/thumb.png"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"

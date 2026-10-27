@@ -1,0 +1,40 @@
+# Publishes the prebuilt site/ folder to GitHub Pages.
+# Turn Pages on first: Settings > Pages > Source: GitHub Actions.
+# Runs by hand (Actions > Deploy site to GitHub Pages > Run workflow), or on every
+# push to main that touches site/ once the repository variable PAGES_AUTO_DEPLOY is "true".
+name: Deploy site to GitHub Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["site/**"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || vars.PAGES_AUTO_DEPLOY == 'true'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Pages
+        uses: actions/configure-pages@v5
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

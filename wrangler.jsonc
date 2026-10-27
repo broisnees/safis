@@ -1,0 +1,13 @@
+// Cloudflare Workers static assets: serves the prebuilt site/ folder.
+// Deploy with `npm run deploy` or `npx wrangler deploy` (log in once with `npx wrangler login`).
+// Live at https://safis.jotko.workers.dev
+{
+  "name": "safis",
+  "account_id": "16b2c363a412bfaaec2a5a2572964728",
+  "compatibility_date": "2026-10-26",
+  "assets": {
+    "directory": "./site",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  }
+}
