@@ -75,6 +75,10 @@ async function main() {
           for (const val of [false, true]) await shoot(c.label, `${c.label}: ${val ? "on" : "off"}`, { set: { [c.key]: val } });
           continue;
         }
+        if (c.type === "choice") {
+          for (const val of c.options) await shoot(c.label, `${c.label}: ${val}`, { set: { [c.key]: val } });
+          continue;
+        }
         for (let i = 0; i < opt.steps; i++) {
           const val = c.min + ((c.max - c.min) * i) / (opt.steps - 1);
           await shoot(c.label, `${c.label} = ${fmt(val)}`, { set: { [c.key]: val } });

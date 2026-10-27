@@ -2,7 +2,7 @@
 // Creates a new explainer page from assets/template.html with the title,
 // category, and one-sentence summary filled in and an empty article.
 //
-// Usage: node new-page.mjs --title "The Jaw Joint" --category Body --dek "..." --out site/jaw-joint/index.html [--force]
+// Usage: node new-page.mjs --title "The Jaw Joint" --category Body --dek "..." --out site/jaw-joint/index.html [--force] [--template <file>]
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -18,14 +18,14 @@ for (let i = 0; i < argv.length; i++) {
   else if (a.startsWith("--")) opt[a.slice(2)] = argv[++i];
 }
 if (!opt.title || !opt.out) {
-  console.error('usage: node new-page.mjs --title "..." --category <Body|Biology|Chemistry|Physics|Machines|Earth & Space|Computing|Math> --dek "..." --out <dir/index.html> [--force]');
+  console.error('usage: node new-page.mjs --title "..." --category <Body|Biology|Chemistry|Physics|Machines|Earth & Space|Computing|AI|Math> --dek "..." --out <dir/index.html> [--force]');
   process.exit(2);
 }
 const out = path.resolve(opt.out);
 if (existsSync(out) && !opt.force) { console.error(`${out} already exists (pass --force to overwrite)`); process.exit(1); }
 
 const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-let html = await readFile(path.join(here, "../assets/template.html"), "utf8");
+let html = await readFile(opt.template ? path.resolve(opt.template) : path.join(here, "../assets/template.html"), "utf8");
 html = html
   .replaceAll("{{TITLE}}", esc(opt.title))
   .replaceAll("{{CATEGORY}}", esc(opt.category ?? "Explainer"))
