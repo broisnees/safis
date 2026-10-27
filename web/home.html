@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Safis · Interactive explainers your agent writes</title>
+<meta name="description" content="An agent skill that writes long-form interactive explainers: prose that builds the idea step by step, with live 2D, 3D, map, optics, and sound figures. One HTML file that opens from disk.">
+<meta name="explainer:title" content="Safis">
+<meta name="explainer:site" content="home">
+<meta property="og:title" content="Safis · Interactive explainers your agent writes">
+<meta property="og:description" content="Long-form explainers with figures people drag, turn, cut open, and hear. An Agent Skill for Claude Code, Codex, OpenCode, and Cursor.">
+<meta property="og:url" content="https://safis.fyi">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23fcfcfc' stroke='%23111' stroke-width='2.5'/%3E%3Cpath d='M16 3v26' stroke='%23111' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%23bd4f08'/%3E%3C/svg%3E">
+<!-- explainer:theme -->
+<!-- explainer:runtime -->
+<style>
+  :root { --brand: var(--orange); --max: 74rem; }
+  body { font-family: var(--font-text); font-size: 17px; line-height: 1.6; }
+  main.product { max-width: none; margin: 0; padding: 0; }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+  a { color: inherit; }
+
+  /* Top bar */
+  .bar { position: sticky; top: 0; z-index: 12; backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent); border-bottom: 1px solid var(--chip-line); }
+  header.bar { margin: 0; }
+  header.bar::after { content: none; }
+  .bar .wrap { display: flex; align-items: center; gap: 28px; height: 60px; padding-right: 72px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font: 560 21px/1 var(--font-display); letter-spacing: -0.01em; }
+  .mark { width: 26px; height: 26px; color: var(--ink); flex: none; }
+  .bar nav { display: flex; gap: 22px; margin-left: auto; font-size: 15px; }
+  .bar nav a { text-decoration: none; color: var(--muted); transition: color 0.18s; }
+  .bar nav a:hover { color: var(--ink); }
+  .gh { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 9px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--chip-line); text-decoration: none; font-size: 14.5px; font-weight: 500; }
+  .gh svg { width: 16px; height: 16px; fill: currentColor; }
+  @media (max-width: 760px) { .bar nav { display: none; } .bar .wrap { padding-right: 64px; } .gh { margin-left: auto; } }
+
+  /* Hero */
+  .hero { padding: 84px 0 40px; }
+  .hero .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 56px; align-items: center; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; font: 600 13px/1 var(--font-text); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 22px; }
+  .eyebrow::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
+  .hero h1 { font: 560 clamp(2.5rem, 5.6vw, 4.1rem)/1.02 var(--font-display); letter-spacing: -0.02em; margin: 0 0 22px; text-wrap: balance; }
+  .hero h1 em { font-style: italic; color: var(--brand); }
+  .lead { font: 400 1.22rem/1.55 var(--font-serif); color: var(--muted); margin: 0 0 30px; max-width: 34rem; text-wrap: pretty; }
+  .install { display: flex; align-items: center; gap: 10px; max-width: 30rem; padding: 6px 6px 6px 16px; border-radius: 12px; background: var(--ink); color: var(--bg); font: 500 15px/1 var(--font-mono); box-shadow: 0 10px 30px -14px rgb(0 0 0 / 0.5); }
+  .install .prompt { opacity: 0.5; }
+  .install code { flex: 1; min-width: 0; background: none; padding: 0; color: inherit; font-size: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .copy { border: 0; border-radius: 8px; padding: 9px 13px; font: 600 13px/1 var(--font-text); cursor: pointer; background: color-mix(in srgb, var(--bg) 16%, transparent); color: inherit; transition: background-color 0.18s; }
+  .copy:hover { background: color-mix(in srgb, var(--bg) 26%, transparent); }
+  .ctas { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 26px; }
+  .button { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 10px; text-decoration: none; font: 600 15px/1 var(--font-text);
+    background: var(--chip); box-shadow: inset 0 0 0 1px var(--chip-line); transition: background-color 0.18s, translate 0.18s var(--ease-out); }
+  .button:hover { background: var(--chip-hover); translate: 0 -1px; }
+  .button.solid { background: var(--brand); color: #fff; box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--brand) 70%, transparent); }
+  .agents { font-size: 14px; color: var(--muted); margin: 0; }
+  .agents b { color: var(--ink); font-weight: 600; }
+  .stage-card { border-radius: 18px; padding: 8px 18px 4px; background: color-mix(in srgb, var(--ink) 2.5%, var(--bg)); box-shadow: inset 0 0 0 1px var(--chip-line), 0 30px 60px -40px rgb(0 0 0 / 0.45); }
+  .stage-card figure.demo { margin: 0; }
+  .stage-card figure.demo figcaption::before { content: none; }
+  .stage-card figcaption { text-align: center; }
+  @media (max-width: 960px) { .hero .wrap { grid-template-columns: 1fr; gap: 36px; } .hero { padding-top: 48px; } }
+
+  /* Stats */
+  .stats { border-block: 1px solid var(--chip-line); margin: 40px 0 0; }
+  .stats .wrap { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .stat { padding: 22px 0; text-align: center; }
+  .stat b { display: block; font: 560 2rem/1.1 var(--font-display); letter-spacing: -0.01em; font-variant-numeric: lining-nums; }
+  .stat span { color: var(--muted); font-size: 14px; }
+  @media (max-width: 640px) { .stats .wrap { grid-template-columns: repeat(2, 1fr); } }
+
+  /* Sections */
+  section.block { padding: 96px 0 0; scroll-margin-top: 64px; }
+  .kicker2 { font: 600 13px/1 var(--font-text); letter-spacing: 0.08em; text-transform: uppercase; color: var(--brand); margin: 0 0 14px; }
+  section.block h2 { font: 560 clamp(1.9rem, 3.6vw, 2.6rem)/1.1 var(--font-display); letter-spacing: -0.015em; margin: 0 0 14px; text-wrap: balance; }
+  .sub { font: 400 1.12rem/1.6 var(--font-serif); color: var(--muted); max-width: 40rem; margin: 0 0 40px; text-wrap: pretty; }
+
+  .kinds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .kind { padding: 22px 20px; border-radius: 14px; background: color-mix(in srgb, var(--ink) 2.5%, var(--bg)); box-shadow: inset 0 0 0 1px var(--chip-line); transition: translate 0.25s var(--ease-out), box-shadow 0.25s; }
+  .kind:hover { translate: 0 -3px; box-shadow: inset 0 0 0 1px var(--faint), 0 18px 36px -24px rgb(0 0 0 / 0.4); }
+  .kind i { display: block; width: 34px; height: 34px; border-radius: 10px; margin-bottom: 16px; background: color-mix(in srgb, var(--c) 16%, transparent); box-shadow: inset 0 0 0 1.5px var(--c); }
+  .kind h3 { font: 600 16.5px/1.3 var(--font-text); margin: 0 0 6px; }
+  .kind p { color: var(--muted); font-size: 14.5px; line-height: 1.5; margin: 0; }
+  @media (max-width: 1000px) { .kinds { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .kinds { grid-template-columns: 1fr; } }
+
+  .steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; counter-reset: step; border-top: 1px solid var(--chip-line); }
+  .steps li { counter-increment: step; padding: 22px 22px 26px 0; border-bottom: 1px solid var(--chip-line); margin: 0; }
+  .steps li::before { content: counter(step, decimal-leading-zero); display: block; font: 600 13px/1 var(--font-mono); color: var(--brand); margin-bottom: 12px; }
+  .steps b { display: block; font: 600 16.5px/1.3 var(--font-text); margin-bottom: 6px; }
+  .steps span { color: var(--muted); font-size: 14.5px; line-height: 1.5; }
+  @media (max-width: 900px) { .steps { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) { .steps { grid-template-columns: 1fr; } }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+  .split .code-block { margin: 0; }
+
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .tab { padding: 22px; border-radius: 14px; box-shadow: inset 0 0 0 1px var(--chip-line); }
+  .tab h3 { font: 600 16.5px/1.3 var(--font-text); margin: 0 0 6px; }
+  .tab p { color: var(--muted); font-size: 14.5px; margin: 0 0 14px; }
+  .tab pre { margin: 0; padding: 12px 14px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
+  @media (max-width: 900px) { .tabs { grid-template-columns: 1fr; } }
+  .req { margin: 22px 0 0; color: var(--muted); font-size: 14.5px; }
+
+  .prompts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .prompt-card { padding: 18px 20px; border-radius: 14px; background: color-mix(in srgb, var(--ink) 2.5%, var(--bg)); box-shadow: inset 0 0 0 1px var(--chip-line); font: italic 400 1.05rem/1.5 var(--font-serif); }
+  .prompt-card::before { content: "› "; color: var(--brand); font-style: normal; font-weight: 700; }
+  @media (max-width: 720px) { .prompts { grid-template-columns: 1fr; } }
+
+  /* Gallery (cards come from site.mjs) */
+  .cat { margin-top: 40px; }
+  .cat h3 { display: flex; align-items: baseline; gap: 14px; font: 600 13px/1 var(--font-text); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 18px; }
+  .cat h3::after { content: ""; flex: 1; height: 1px; background: var(--chip-line); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 30px 24px; }
+  .card { display: grid; align-content: start; gap: 6px; text-decoration: none; color: var(--ink); }
+  .card .thumb { display: block; border-radius: 12px; overflow: hidden; margin-bottom: 8px; background: color-mix(in srgb, var(--ink) 2.5%, var(--bg)); box-shadow: inset 0 0 0 1px var(--chip-line); transition: translate 0.25s var(--ease-out), box-shadow 0.25s; }
+  .card img, .card .noimg { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+  .card:hover .thumb { translate: 0 -3px; box-shadow: inset 0 0 0 1px var(--faint), 0 18px 36px -24px rgb(0 0 0 / 0.45); }
+  :root[data-theme="dark"] .card img { filter: brightness(0.92); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .card img { filter: brightness(0.92); } }
+  .card-title { font: 600 1.12rem/1.3 var(--font-serif); text-wrap: balance; }
+  .card:hover .card-title { text-decoration: underline; text-decoration-color: var(--brand); text-underline-offset: 0.18em; }
+  .card-dek { color: var(--muted); font-size: 14.5px; line-height: 1.5; }
+  .card-meta { font: 600 12px/1 var(--font-text); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+
+  .faq { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
+  .faq details { border-top: 1px solid var(--chip-line); padding: 16px 0; }
+  .faq summary { cursor: pointer; font: 600 16.5px/1.4 var(--font-text); list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after { content: "+"; color: var(--muted); font-weight: 400; transition: rotate 0.2s var(--ease-out); }
+  .faq details[open] summary::after { rotate: 45deg; }
+  .faq p { color: var(--muted); font-size: 15px; margin: 10px 0 0; }
+  @media (max-width: 800px) { .faq { grid-template-columns: 1fr; } }
+
+  .cta-end { margin: 110px 0 0; padding: 56px 24px; border-radius: 22px; text-align: center; background: var(--ink); color: var(--bg); }
+  .cta-end h2 { font: 560 clamp(1.8rem, 3.4vw, 2.5rem)/1.1 var(--font-display); margin: 0 0 12px; color: inherit; }
+  .cta-end p { opacity: 0.7; margin: 0 0 26px; font-family: var(--font-serif); font-size: 1.1rem; }
+  .cta-end .install { margin: 0 auto; background: color-mix(in srgb, var(--bg) 12%, var(--ink)); color: var(--bg); box-shadow: none; }
+
+  footer.site { padding: 48px 0 56px; color: var(--muted); font-size: 14px; }
+  footer.site .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; align-items: center; border-top: 1px solid var(--chip-line); padding-top: 26px; }
+  footer.site a { text-decoration: none; }
+  footer.site a:hover { color: var(--ink); }
+  footer.site .brand { font-size: 17px; color: var(--ink); margin-right: auto; }
+
+  /* Sections settle in as they scroll into view. */
+  .rise { opacity: 0; translate: 0 14px; transition: opacity 0.7s var(--ease-out), translate 0.8s var(--ease-out); }
+  .rise.in, .safis-checking .rise { opacity: 1; translate: none; }
+  @media (prefers-reduced-motion: reduce) { .rise { opacity: 1; translate: none; transition: none; } }
+  @media (max-width: 560px) { .wrap { padding: 0 16px; } section.block { padding-top: 72px; } }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="Safis home">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><defs><pattern id="mk-h" width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="3.2" stroke="currentColor" stroke-width="1.1"/></pattern><clipPath id="mk-c"><rect x="16" y="0" width="16" height="32"/></clipPath></defs><circle cx="16" cy="16" r="12.6" fill="url(#mk-h)" clip-path="url(#mk-c)" opacity="0.55"/><circle cx="16" cy="16" r="12.6" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M16 3.4v25.2" stroke="currentColor" stroke-width="2.2"/><circle cx="16" cy="16" r="3.4" fill="var(--brand)"/></svg>
+      Safis
+    </a>
+    <nav aria-label="Sections">
+      <a href="#kinds">What it makes</a>
+      <a href="#how">How it works</a>
+      <a href="#install">Install</a>
+      <a href="#examples">Examples</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="gh" href="https://github.com/broisnees/safis"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+  </div>
+</header>
+
+<main class="product">
+<section class="hero">
+  <div class="wrap">
+    <div class="rise">
+      <p class="eyebrow">An agent skill for interactive explainers</p>
+      <h1>Explain how anything works, with figures people can <em>touch</em>.</h1>
+      <p class="lead">Ask your agent about a jaw joint, a tide, or a hash table. Safis writes a long-form page that builds the idea step by step, with live figures the reader drags, turns, cuts open, and hears. One HTML file. No server.</p>
+      <div class="install"><span class="prompt">$</span><code>npx skills add broisnees/safis -g</code><button class="copy" type="button" data-copy="npx skills add broisnees/safis -g">Copy</button></div>
+      <div class="ctas">
+        <a class="button solid" href="#examples">Browse the examples</a>
+        <a class="button" href="#how">How it works</a>
+      </div>
+      <p class="agents">Works in <b>Claude Code</b>, <b>Codex</b>, <b>OpenCode</b>, <b>Cursor</b>, and any agent that reads Agent Skills.</p>
+    </div>
+    <div class="stage-card rise">
+      <figure class="demo" id="hero-gears" aria-label="Two meshing gears turning together. Drag to turn them, slide to cut them open."></figure>
+      <script>
+      {
+        const scene = E3.scene();
+        const big = scene.add(E3.mesh.gear({ teeth: 30, module: 1, thickness: 4, hole: 2, spokes: 5, bevel: 0.4 }), { name: "wheel" });
+        const small = scene.add(E3.mesh.gear({ teeth: 12, module: 1, thickness: 6, hole: 1.2, bevel: 0.4 }), { name: "pinion", material: "brass", position: [21, 0, 0] });
+        scene.add(E3.mesh.cylinder(1.6, 14), { material: "steel", position: [0, 0, 0] });
+        scene.add(E3.mesh.cylinder(1, 14), { material: "steel", position: [21, 0, 0] });
+        demo("hero-gears", {
+          aspect: 1.35,
+          orbit: { yaw: -0.5, pitch: 0.55 },
+          state: () => ({ angle: 0 }),
+          controls: [
+            { key: "cut", label: "Cut open", min: 0, max: 1, step: 0.01, value: 0.35, color: "orange" },
+            { key: "speed", label: "Speed", min: 0, max: 1, step: 0.01, value: 0.4, color: "blue" },
+          ],
+          step(dt, s, v) { s.angle += dt * v.speed; },
+          draw(g, s, v) {
+            big.rotation = [0, s.angle, 0];
+            small.rotation = [0, -s.angle * 30 / 12 + Math.PI / 12, 0];
+            scene.cutPlane = v.cut > 0 ? [0, 0, 1, 14 * (1 - v.cut) - 2] : null;
+            const view = g.render3d(scene, { ...s.view, target: [8, 0, 0] });
+            g.callouts([
+              { at: view.project([-10, 2, 9]), text: "wheel, 30 teeth" },
+              { at: view.project([23, 3, 3]), text: "pinion, 12 teeth", color: "brass" },
+            ]);
+          },
+        });
+      }
+      </script>
+    </div>
+  </div>
+</section>
+
+<div class="stats rise">
+  <div class="wrap">
+    <div class="stat"><b>{{PAGES}}</b><span>example explainers</span></div>
+    <div class="stat"><b>{{FIGURES}}</b><span>live figures</span></div>
+    <div class="stat"><b>1</b><span>HTML file per page</span></div>
+    <div class="stat"><b>0</b><span>dependencies</span></div>
+  </div>
+</div>
+
+<section class="block" id="kinds">
+  <div class="wrap">
+    <p class="kicker2">What it makes</p>
+    <h2>Every idea gets a figure you can move.</h2>
+    <p class="sub">A page has an abstract, numbered sections, and about 25 figures woven into the prose. A sentence says what to try, the figure lets you try it, and the next paragraph names what you saw.</p>
+    <div class="kinds rise">
+      <div class="kind" style="--c: var(--blue)"><i></i><h3>2D figures</h3><p>Cross-sections, graphs, fields, and step-throughs with sliders, knobs, presets, dragging, and hover readouts.</p></div>
+      <div class="kind" style="--c: var(--brass)"><i></i><h3>3D models</h3><p>Porcelain shading, ink outlines, section cuts with hatching, see-through parts, and orbiting with momentum.</p></div>
+      <div class="kind" style="--c: var(--green)"><i></i><h3>Maps and globes</h3><p>Five projections, 177 countries, cities, great-circle routes, and distances, for anything located on Earth.</p></div>
+      <div class="kind" style="--c: var(--purple)"><i></i><h3>Optics</h3><p>Rays through mirrors, lenses, prisms, raindrops, and the eye, with Fresnel reflection and dispersion.</p></div>
+      <div class="kind" style="--c: var(--red)"><i></i><h3>Sound and images</h3><p>Tones and plucked strings you hear, spectra, and pixels, filters, aliasing, dithering, and the DCT.</p></div>
+      <div class="kind" style="--c: var(--orange)"><i></i><h3>Effects</h3><p>Fire, rocket plumes, smoke, airflow, ripples, caustics, glow, and sparks, drawn with WebGL.</p></div>
+      <div class="kind" style="--c: var(--muted)"><i></i><h3>Diagrams and code</h3><p>Mermaid diagrams in the page's colors, Shiki-highlighted code, and diffs, pre-rendered.</p></div>
+      <div class="kind" style="--c: var(--ink)"><i></i><h3>Research furniture</h3><p>TeX as MathML, sidenotes, numbered citations, predictions, deep dives, contents, and dark mode.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="how">
+  <div class="wrap">
+    <p class="kicker2">How it works</p>
+    <h2>Planned like an article, checked like software.</h2>
+    <p class="sub">The skill gives your agent a page runtime, a writing and figure guide, and scripts that drive headless Chrome. Every figure gets played with before the page is called done.</p>
+    <ol class="steps rise">
+      <li><b>Plan</b><span>The question, one shared model, and a figure for every idea, with what the reader moves and notices.</span></li>
+      <li><b>Scaffold</b><span>A page from the template: fonts, theme, runtime, and an empty article.</span></li>
+      <li><b>Build in passes</b><span>Prose and figure together, a few sections at a time, checked as it goes.</span></li>
+      <li><b>Render</b><span>Mermaid diagrams and code turn into static SVG and HTML in the page.</span></li>
+      <li><b>Verify</b><span>Desktop and phone: errors, blank figures, dead controls, sideways scroll, words per figure.</span></li>
+      <li><b>Explore</b><span>Every slider swept, toggle flipped, preset pressed, and view turned, into contact sheets.</span></li>
+      <li><b>Fix</b><span>Each fault traced to its layer (model, figure, prose, or runtime) and fixed at the cause.</span></li>
+      <li><b>Report</b><span>The file, one line per figure, the checks, and what was simplified.</span></li>
+    </ol>
+    <div class="split" style="margin-top: 48px">
+      <div>
+        <h3 style="font: 600 1.25rem/1.3 var(--font-text); margin: 0 0 10px">A figure is a small spec.</h3>
+        <p style="color: var(--muted); margin: 0 0 14px">Controls, state, and a draw function. The runtime handles the canvas, the controls, dragging, keyboard, light and dark, the self-check, and the scripts that play with it.</p>
+        <p style="color: var(--muted); margin: 0">The same specs run in React, Vue, Svelte, and Astro through the packages in the repo.</p>
+      </div>
+<div class="code-block" data-lang="js" data-title="pendulum.js" data-src="demo(&quot;swing&quot;, {
+  controls: [{ key: &quot;L&quot;, label: &quot;Length&quot;, min: 0.2, max: 2, value: 1, unit: &quot;m&quot; }],
+  state: () =&gt; ({ th: 0.5, w: 0 }),
+  step(dt, s, v) {
+    s.w -= (9.81 / v.L) * Math.sin(s.th) * dt; // [!code highlight]
+    s.th += s.w * dt;
+  },
+  draw(g, s, v) {
+    const P = [g.w / 2 + 160 * v.L * Math.sin(s.th), 30 + 160 * v.L * Math.cos(s.th)];
+    g.line([g.w / 2, 30], P, { stroke: &quot;muted&quot; });
+    g.circle(P, 14, { fill: &quot;blue&quot; });
+  },
+});"><div class="code-title">pendulum.js</div><pre class="shiki shiki-themes github-light github-dark has-highlighted" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">demo</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"swing"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, {</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">  controls: [{ key: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"L"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, label: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"Length"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, min: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0.2</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, max: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">2</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, value: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">1</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, unit: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"m"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> }],</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">  state</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: () </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=></span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> ({ th: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0.5</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, w: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> }),</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">  step</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(</span><span style="--shiki-light:#E36209;--shiki-dark:#FFAB70">dt</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#E36209;--shiki-dark:#FFAB70">s</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#E36209;--shiki-dark:#FFAB70">v</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) {</span></span>
+<span class="line highlighted"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    s.w </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">-=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">9.81</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> /</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> v.</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">L</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> Math.</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">sin</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(s.th) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> dt; </span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    s.th </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> s.w </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> dt;</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">  },</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">  draw</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(</span><span style="--shiki-light:#E36209;--shiki-dark:#FFAB70">g</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#E36209;--shiki-dark:#FFAB70">s</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#E36209;--shiki-dark:#FFAB70">v</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) {</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    const</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> P</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> =</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> [g.w </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">/</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> +</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 160</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> *</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> v.</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">L</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> *</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> Math.</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">sin</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(s.th), </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">30</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> +</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 160</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> *</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> v.</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">L</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> *</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> Math.</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">cos</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(s.th)];</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    g.</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">line</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">([g.w </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">/</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">30</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">], </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">P</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, { stroke: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"muted"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> });</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    g.</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">circle</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">P</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">14</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, { fill: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"blue"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> });</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">  },</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">});</span></span></code></pre></div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="install">
+  <div class="wrap">
+    <p class="kicker2">Install</p>
+    <h2>One command, any agent.</h2>
+    <p class="sub">Safis follows the Agent Skills format, so any agent that reads skills can use it. Its paths are relative to its own folder.</p>
+    <div class="tabs rise">
+      <div class="tab"><h3>Any agent</h3><p>The skills CLI asks which agents to set up. Leave off <code>-g</code> to install for one project.</p><pre>npx skills add broisnees/safis -g</pre></div>
+      <div class="tab"><h3>Claude Code, by hand</h3><p>Clone the repo and link the skill folder.</p><pre>git clone https://github.com/broisnees/safis
+ln -s "$PWD/safis/skills/safis" ~/.claude/skills/safis</pre></div>
+      <div class="tab"><h3>Anything else</h3><p>Copy <code>skills/safis/</code> into the folder your agent reads skills from.</p><pre>cp -r safis/skills/safis &lt;skills-folder&gt;/</pre></div>
+    </div>
+    <p class="req">Needs Node 22 or newer, and Chrome, Chromium, or Edge for the checks. Pages need nothing: they carry their fonts and runtime. 3D and effects need WebGL 2.</p>
+  </div>
+</section>
+
+<section class="block" id="use">
+  <div class="wrap">
+    <p class="kicker2">Usage</p>
+    <h2>Ask for what you want to understand.</h2>
+    <p class="sub">Name the skill, or just ask. The default is an in-depth page; ask for a short piece and you get 8 to 12 figures. Several pages in one folder become a site with a home page and a sidebar.</p>
+    <div class="prompts rise">
+      <div class="prompt-card">/safis how DNS finds a website</div>
+      <div class="prompt-card">explain how a car's differential lets the outside wheel spin faster, I want to see the gears in 3D</div>
+      <div class="prompt-card">a short interactive page on why the Pythagorean theorem is true</div>
+      <div class="prompt-card">walk me through this paper's method with figures I can rerun</div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="examples">
+  <div class="wrap">
+    <p class="kicker2">Examples</p>
+    <h2>Pages the skill wrote.</h2>
+    <p class="sub">Every page here was built with Safis, from a single prompt and the checks above. Open one and play with the figures.</p>
+    <!-- explainer:gallery -->
+  </div>
+</section>
+
+<section class="block" id="faq">
+  <div class="wrap">
+    <p class="kicker2">Questions</p>
+    <h2>Before you try it.</h2>
+    <div class="faq">
+      <details><summary>Does a page need a server?</summary><p>No. Each page is one HTML file with its fonts and runtime inside, and it opens straight from disk. A site can share one runtime file instead, and it still opens from disk.</p></details>
+      <details><summary>Which agents does it work in?</summary><p>Any agent that reads the Agent Skills format: Claude Code, Codex, OpenCode, Cursor, and others. It needs a shell that can run Node and a Chrome-family browser for the checks.</p></details>
+      <details><summary>How long does a page take?</summary><p>An in-depth page is a big build, often many minutes, because every figure gets checked and played with. A short piece is quicker.</p></details>
+      <details><summary>Is it accurate?</summary><p>The skill asks for real, checkable sources and lists its simplifications in its report, but it can still be wrong. Have someone who knows the field review pages about medicine, law, or safety.</p></details>
+      <details><summary>Can I use the figures in my own app?</summary><p>Yes. The runtime ships as packages for React, Vue, Svelte, and Astro, with the same figure specs. See the repo's README.</p></details>
+      <details><summary>What does it cost?</summary><p>The skill is MIT licensed and free. Building pages uses your agent's model, so it costs what your agent costs.</p></details>
+    </div>
+  </div>
+</section>
+
+<div class="wrap">
+  <div class="cta-end rise">
+    <h2>Teach something today.</h2>
+    <p>Install it, then ask your agent how something works.</p>
+    <div class="install"><span class="prompt">$</span><code>npx skills add broisnees/safis -g</code><button class="copy" type="button" data-copy="npx skills add broisnees/safis -g">Copy</button></div>
+  </div>
+</div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span class="brand">Safis</span>
+    <a href="https://github.com/broisnees/safis">GitHub</a>
+    <a href="https://github.com/broisnees/safis/blob/main/LICENSE">MIT license</a>
+    <a href="https://github.com/broisnees/safis/blob/main/CONTRIBUTING.md">Contributing</a>
+    <a href="https://agentskills.io">Agent Skills</a>
+  </div>
+</footer>
+
+<script>
+// Copy buttons and sections that settle in as they scroll into view.
+for (const b of document.querySelectorAll(".copy")) b.addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { b.textContent = "Select it"; }
+  setTimeout(() => (b.textContent = "Copy"), 1400);
+});
+const rise = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { e.target.classList.add("in"); rise.unobserve(e.target); } }, { threshold: 0.1 });
+for (const el of document.querySelectorAll(".rise")) rise.observe(el);
+</script>
+</body>
+</html>

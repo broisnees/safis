@@ -4,12 +4,17 @@
 // sidebar. Pages live at <root>/<slug>/index.html. Links point at index.html
 // files so the site also works straight from disk.
 //
-// Usage: node site.mjs <root> [--title "Explainers"] [--intro "..."] [--thumbs] [--shared | --inline]
+// Usage: node site.mjs <root> [--title "Explainers"] [--intro "..."] [--thumbs] [--shared | --inline] [--home <template.html>]
 // --thumbs screenshots each page's first figure at 2x as thumb.webp (needs Chrome, like verify.mjs).
 // --shared writes one copy of the runtime to <root>/safis.css and <root>/safis.js
 // and links every page to it instead of carrying its own; the site still opens
 // from disk. --inline puts the runtime back in each page. The choice is kept in
 // the home page, so later runs don't need the flag.
+// --home uses your own home page (a product page, say) instead of the generated one.
+// In the template, <!-- explainer:theme --> and <!-- explainer:runtime --> become the
+// stylesheet and runtime, <!-- explainer:gallery --> the cards by category, and
+// {{PAGES}}, {{FIGURES}}, {{CATEGORIES}} the counts. <meta name="explainer:title">
+// names the site in every page's sidebar.
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -21,7 +26,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ORDER = ["Body", "Biology", "Chemistry", "Physics", "Machines", "Engineering", "Earth & Space", "Computing", "AI", "Math"];
 
 const argv = process.argv.slice(2);
-const opt = { root: null, title: null, intro: null, thumbs: false, shared: null };
+const opt = { root: null, title: null, intro: null, thumbs: false, shared: null, home: null };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === "--title") opt.title = argv[++i];
@@ -29,6 +34,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--thumbs") opt.thumbs = true;
   else if (a === "--shared") opt.shared = true;
   else if (a === "--inline") opt.shared = false;
+  else if (a === "--home") opt.home = argv[++i];
   else opt.root = a;
 }
 if (!opt.root) { console.error('usage: node site.mjs <root> [--title "..."] [--intro "..."] [--thumbs] [--shared | --inline]'); process.exit(2); }
@@ -41,7 +47,8 @@ const meta = (html, name) => unesc((html.match(new RegExp(`<meta name="${name}" 
 // Keep the title and intro from an existing home page unless new ones are given.
 const homeFile = path.join(root, "index.html");
 const oldHome = existsSync(homeFile) ? await readFile(homeFile, "utf8") : "";
-const siteTitle = opt.title ?? (unesc((oldHome.match(/<h1>([^<]*)<\/h1>/) || [])[1] ?? "") || "Explainers");
+const homeTemplate = opt.home ? await readFile(opt.home, "utf8") : null;
+const siteTitle = opt.title ?? (meta(homeTemplate ?? oldHome, "explainer:title") || unesc((oldHome.match(/<h1>([^<]*)<\/h1>/) || [])[1] ?? "") || "Explainers");
 const intro = opt.intro ?? (unesc((oldHome.match(/<p class="dek">([^<]*)<\/p>/) || [])[1] ?? "") || "Interactive explanations of how things work, built around figures you can turn, drag, and take apart.");
 const shared = opt.shared ?? oldHome.includes('<meta name="explainer:runtime" content="shared">');
 
@@ -211,7 +218,17 @@ ${cats.map(c => `<section class="cat"><h2>${esc(c)}</h2><div class="cards">${byC
 </html>
 `;
 const inlineTheme = `<style>${css}</style>`;
-await writeFile(homeFile, homePage(shared ? `<link rel="stylesheet" href="${cssHref}">` : inlineTheme));
+if (homeTemplate) {
+  const gallery = cats.map(c => `<section class="cat"><h3>${esc(c)}</h3><div class="cards">${byCat(c).map(card).join("")}</div></section>`).join("\n");
+  const scripts = [...block.matchAll(/<script>[\s\S]*?<\/script>/g)].map(m => m[0]).join("\n");
+  await writeFile(homeFile, homeTemplate
+    .replace("<!-- explainer:theme -->", () => (shared ? `<meta name="explainer:runtime" content="shared">\n<link rel="stylesheet" href="${cssHref}">` : inlineTheme))
+    .replace("<!-- explainer:runtime -->", () => (shared ? `<script src="${jsHref}"></script>` : scripts))
+    .replace("<!-- explainer:gallery -->", () => gallery)
+    .replaceAll("{{PAGES}}", String(pages.length))
+    .replaceAll("{{FIGURES}}", String(pages.reduce((n, p) => n + p.figures, 0)))
+    .replaceAll("{{CATEGORIES}}", String(cats.length)));
+} else await writeFile(homeFile, homePage(shared ? `<link rel="stylesheet" href="${cssHref}">` : inlineTheme));
 
 // A 404 page in the same style, for static hosts (Cloudflare, Netlify, Vercel, GitHub Pages).
 // It carries its own theme: hosts serve it at any path, where a relative link to safis.css would miss.
