@@ -114,6 +114,19 @@ The page should hold up to a careful reader.
 - **Show the evidence.** When a claim rests on data, put the data on the page: a table, a plot of measurements, a figure that runs the real experiment.
 - **Name the limits.** Each model breaks somewhere; say where, and what replaces it.
 
+## Research pages
+
+When the subject is a paper, a study, or an open question, the page reads like a good review article that lets the reader rerun the work:
+
+1. **The question**, in one sentence a newcomer can hold, and why it was open.
+2. **What was known**: the earlier model and the observation it couldn't explain, each as a figure.
+3. **The method** as figures the reader runs: the experiment's setup as a 3D model or a diagram, the estimator or algorithm stepping on real or faithfully simulated data.
+4. **The results reproduced live**: the paper's key plot rebuilt with `g.graph`, with error bars or bands where the paper had them, and a control that shows how the result depends on the choice the authors made.
+5. **The limits**: what the data can't say, what the authors assumed, and what later work found. Name disagreements; don't settle them by tone.
+6. **References** with DOIs or stable links, the paper itself first. Quote numbers with their uncertainty ("2.3 ± 0.4 K") and say which figure or table they come from.
+
+Keep the paper's own terms, but define each one where it first appears. Never present a reconstruction as the authors' figure: say "rebuilt from Table 2" in the caption.
+
 ## Before you finish
 
 Read the page top to bottom once as the reader and check:

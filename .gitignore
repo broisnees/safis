@@ -11,3 +11,10 @@ node_modules/
 .vercel/
 .netlify/
 dist/
+
+# Eval runs (skill-creator workspace and claude plugin eval results)
+skills/safis-workspace/
+skills/safis/evals/results/
+
+# Article drafts for unfinished example pages
+drafts/

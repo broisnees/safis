@@ -1,68 +1,134 @@
+<div align="center">
+
 # Safis
 
-Safis is a Claude skill that builds interactive explainer pages and small sites that collect them. Give it a topic and it writes a self-contained HTML page: long-form prose that builds the idea step by step, with 2D and 3D figures the reader drags, turns, cuts open, scrubs, and animates.
+**An agent skill that teaches an idea by building it as a page you can drag, turn, and cut open.**<br>
+Runs in Claude Code, Codex, OpenCode, Cursor, and other agents that read Agent Skills.<br>
+Long-form explainers with live 2D, 3D, map, optics, and sound figures, in one HTML file that opens from disk.
 
-The approach comes from studying long-form interactive articles in a headless browser, dragging their sliders and turning their models, and writing down what makes them work in `skills/safis/references/craft.md`. The skill borrows teaching techniques, not anyone's content, models, or design.
+[![Claude Code skill](https://img.shields.io/badge/Claude%20Code-skill-3a3a3a?logo=claude&logoColor=white)](#install)
+[![Agent Skills compatible](https://img.shields.io/badge/Agent%20Skills-compatible-3a3a3a)](https://agentskills.io)
+[![License MIT](https://img.shields.io/badge/license-MIT-3a3a3a)](LICENSE)
+[![Node 22+](https://img.shields.io/badge/node-%E2%89%A5%2022-3a3a3a?logo=nodedotjs&logoColor=white)](#requirements)
+[![Dependencies 0](https://img.shields.io/badge/dependencies-0-3a3a3a)](#how-it-works)
+[![CI](https://github.com/broisnischal/safis/actions/workflows/ci.yml/badge.svg)](https://github.com/broisnischal/safis/actions/workflows/ci.yml)
 
-## What a page gets
+[![Website](https://img.shields.io/badge/website-safis.fyi-111111?style=for-the-badge)](https://safis.fyi)
+[![Download ZIP](https://img.shields.io/badge/download-zip-111111?style=for-the-badge&logo=github)](https://github.com/broisnischal/safis/archive/refs/heads/main.zip)
+[![Install](https://img.shields.io/badge/install-npx%20skills%20add-e8e8e8?style=for-the-badge&logo=npm&logoColor=111111&labelColor=e8e8e8&color=111111)](#install)
 
-- **A book-like design.** Serif text on warm paper (Source Serif 4 and Source Sans 3, embedded), numbered sections, figures set as numbered plates with captions, light and dark themes with a switch, and print styles. Pages are single HTML files that open from disk with no network requests.
-- **Figures with real controls.** Sliders with marks, segmented choices, steppers, knobs, XY pads, switches, presets, and a play/step/speed transport, plus dragging with grab handles, hover, and full keyboard support.
-- **Prose that drives the figures.** Numbers in a sentence the reader drags, "try this" links that set a figure, and colored terms that light up their part.
-- **A plotting and science kit.** Function graphs with π ticks, areas, tangents, vector fields, streamlines and contours; numerics (ODEs, roots, statistics, small linear algebra, softmax); springs, charges, atoms and bonds, energy diagrams, bar charts, heatmaps, neural-network diagrams, tokens.
-- **Simulations.** Particle and rigid-body physics, waves and diffusion on grids, N-body gravity, random processes, classic ODE systems, and small neural networks trained live in the page.
-- **3D.** E3, a small WebGL 2 engine with porcelain shading, ink outlines, ambient occlusion, section cuts with hatching, see-through parts, molecules, surfaces, and orbiting with momentum.
-- **Math.** TeX in the prose rendered as MathML with a math font, symbols colored to match the figures, and formulas on the canvas.
-- **Research-style furniture.** An abstract, automatic contents, reading progress, sidenotes, numbered citations with previews, defined terms, callouts, collapsible deep dives, predictions, numbered tables, and highlighted code.
+[Quick start](#quick-start) · [Gallery](#gallery) · [What it makes](#what-it-makes) · [Install](#install) · [Usage](#usage) · [How it works](#how-it-works) · [Limits](#limits)
 
-## Layout
+<a href="https://safis.fyi"><img src="docs/hero.webp" alt="A porcelain 3D model of the lower jaw and its two joints, with the socket, condyle, and mandible labeled" width="860"></a>
 
-```
-skills/safis/                        the skill
-  SKILL.md                           workflow, including the fix loop
-  references/craft.md                study of the reference articles, mapped to the tools
-  references/figures.md              designing figures, 2D or 3D, the Porcelain look
-  references/writing.md              writing the prose: teaching method, words, rigor
-  references/article.md              sidenotes, citations, callouts, deep dives, predictions
-  references/categories.md           Body, Biology, Chemistry, Physics, Machines, Earth & Space, Computing, AI, Math
-  references/runtime.md              figures, controls, prose bindings, drawing helpers
-  references/plots.md                g.graph, Num, science and data helpers
-  references/simulations.md          Sim: physics, fields, N-body, random processes, neural nets
-  references/math.md                 TeX in prose and on the canvas
-  references/engine3d.md             E3, the 3D engine
-  references/fixing.md               symptoms, causes, and fixes
-  assets/template.html               everything above in one page template (built from src/)
-  scripts/new-page.mjs               new page from the template
-  scripts/verify.mjs                 headless check with screenshots (desktop, dark, phone)
-  scripts/explore.mjs                plays with every figure and saves a contact sheet per figure
-  scripts/site.mjs                   home page, 404, and sidebar index for a folder of pages
-  scripts/upgrade.mjs                moves older pages to the current runtime
-  scripts/lib/chrome.mjs             headless Chrome over the DevTools protocol, no dependencies
-.claude/skills/safis -> ../../skills/safis
-src/                                 sources: theme.css, article.css, fonts, runtime.js, engine3d.js, plot.js, sim.js, tex.js
-packages/                            npm packages: safis (core), @safis/react, @safis/vue, @safis/svelte, @safis/astro
-examples/                            react-vite, vue-vite, svelte-vite, astro-blog
-tools/                               build-template, build-packages, tests, font subsetting, the research browser
-site/                                the example site
-```
+</div>
 
-## Use the skill
-
-In a Claude Code session started in this folder:
+## Quick start
 
 ```
-/safis how the jaw joint works and what happens when it locks
+npx skills add broisnischal/safis -g
 ```
 
-Claude also loads it without the slash command when a request clearly asks for an interactive explainer. To have it in every project:
+The installer asks which agents to set up. Then ask for a page:
 
 ```
-ln -s "$PWD/skills/safis" ~/.claude/skills/safis
+/safis how a turbofan makes thrust
 ```
 
-## Open the example site
+Or just say what you want to understand ("make me an interactive page on why the sky is blue") and the agent picks the skill up. It plans the page, builds it section by section, checks every figure in headless Chrome, plays with each one to confirm it shows what the text claims, fixes what doesn't, and reports back with the file path.
 
-Open `site/index.html` in a browser. Everything works from disk; there's nothing to serve.
+## Gallery
+
+Every page in [`site/`](site) was built with the skill. Open the [live site](https://safis.fyi), or `site/index.html` straight from disk.
+
+| | | |
+|:-:|:-:|:-:|
+| [![](site/jaw-joint/thumb.webp)](https://safis.fyi/jaw-joint/)<br>**The jaw joint** | [![](site/neuron/thumb.webp)](https://safis.fyi/neuron/)<br>**How a neuron fires** | [![](site/ice/thumb.webp)](https://safis.fyi/ice/)<br>**Why ice floats** |
+| [![](site/pendulum/thumb.webp)](https://safis.fyi/pendulum/)<br>**How a pendulum keeps time** | [![](site/lock/thumb.webp)](https://safis.fyi/lock/)<br>**How a pin tumbler lock works** | [![](site/tides/thumb.webp)](https://safis.fyi/tides/)<br>**Why there are two tides a day** |
+| [![](site/hash-table/thumb.webp)](https://safis.fyi/hash-table/)<br>**How a hash table finds things** | [![](site/next-word/thumb.webp)](https://safis.fyi/next-word/)<br>**How a language model picks the next word** | [![](site/attention/thumb.webp)](https://safis.fyi/attention/)<br>**How attention works** |
+| [![](site/learning/thumb.webp)](https://safis.fyi/learning/)<br>**How a neural network learns** | [![](site/matrix/thumb.webp)](https://safis.fyi/matrix/)<br>**How a matrix transforms space** | |
+
+## What it makes
+
+One page per topic: a question in the title, an abstract, 7-12 numbered sections, and about 25 figures woven into the prose. Each figure has one idea and something to move. Sentences say what to try, the figure lets the reader try it, and the next paragraph names what they saw.
+
+| Figure kind | What it draws | Good for |
+|---|---|---|
+| **2D canvas** | Cross-sections, graphs, fields, simulations, step-throughs, with sliders, knobs, XY pads, presets, dragging, and hover readouts | Mechanisms, physics, algorithms, data |
+| **3D** | A small WebGL 2 engine: porcelain shading, ink outlines, section cuts with hatching, see-through parts, orbiting with momentum | Shapes that must turn freely, molecules, surfaces |
+| **Effects** | Fire and exhaust, smoke and steam, airflow streaks, ripples and caustics, glow, sparks, arcs, drawn with WebGL inside a figure | Showing what lines can't: heat, flow, light |
+| **Maps** | World maps and globes in five projections, countries, cities, great-circle routes, distances | Networks, earthquakes, tides, travel |
+| **Optics** | Rays through mirrors, lenses, prisms, raindrops, and the eye, with Fresnel reflection and dispersion | Rainbows, cameras, glasses, fiber |
+| **Sound and images** | Tones and plucked strings the reader hears, spectra; pixels, filters, aliasing, dithering, the DCT | Music, audio, photography, compression |
+| **Diagrams and code** | Mermaid diagrams in the page's colors, Shiki-highlighted code, and diffs, pre-rendered so the page makes no requests | Protocols, state machines, real code |
+
+Around the figures: prose numbers the reader drags, "try this" links that set a figure, colored terms that light their part, TeX rendered as MathML, sidenotes, numbered citations with previews, predictions before surprising figures, collapsible deep dives, a contents list, reading progress, light and dark themes, and print styles.
+
+## Install
+
+**Any agent, with the skills CLI** (Claude Code, Codex, OpenCode, Cursor, and more):
+
+```
+npx skills add broisnischal/safis -g
+```
+
+Leave off `-g` to install for the current project only.
+
+**Claude Code, by hand:**
+
+```
+git clone https://github.com/broisnischal/safis
+ln -s "$PWD/safis/skills/safis" ~/.claude/skills/safis
+```
+
+**Any other agent:** copy `skills/safis/` into the folder your agent reads skills from. The skill follows the [Agent Skills](https://agentskills.io) format, and its paths are relative to its own folder.
+
+### Requirements
+
+- Node 22 or newer, and Chrome, Chromium, or Edge for the checks (set `CHROME_PATH` if it isn't found).
+- Pages themselves need nothing: they're single HTML files with the fonts and runtime inside. 3D and effects need WebGL 2.
+- The first time a page has diagrams or code, `scripts/render.mjs` installs its pinned renderers into `~/.cache/safis` (needs npm and a network connection once).
+
+## Usage
+
+Ask for what you want to understand. These all work:
+
+```
+/safis how DNS finds a website
+explain how a car's differential lets the outside wheel spin faster, I want to see the gears in 3D
+a short interactive page on why the Pythagorean theorem is true
+make a small site of explainers on how batteries, motors, and solar panels work
+```
+
+- **In depth by default:** about 25 figures and 3,300-4,500 words. Ask for "a short piece" to get 8-12 figures.
+- **A site:** several pages in one folder get a home page grouped by category and a shared sidebar.
+- **Research pages:** for a paper or a study, the page follows the question, the method as figures the reader runs, the results rebuilt live, and the limits.
+- **Your own app:** the same figures run in React, Vue, Svelte, and Astro (see [Use in your app](#use-in-your-app)).
+
+## How it works
+
+```
+plan  ->  scaffold  ->  build in passes  ->  render  ->  verify  ->  explore  ->  fix  ->  report
+```
+
+| Script | What it does |
+|---|---|
+| `new-page.mjs` | A new page from the template, with the title, category, and summary filled in |
+| `put-article.mjs` | Splices the article, kept in its own file, into the page |
+| `render.mjs` | Pre-renders Mermaid diagrams and Shiki code into the page |
+| `verify.mjs` | Loads the page at desktop and phone widths: script errors, blank figures, controls that change nothing, frozen animations, unbound prose numbers, sideways scrolling, external requests, words per figure; saves screenshots in light and dark |
+| `explore.mjs` | Sweeps every slider, flips every toggle, presses every preset, turns every 3D view, and saves a contact sheet per figure |
+| `site.mjs` | Home page, 404, and sidebar for a folder of pages; `--shared` moves the runtime into one cached file |
+| `upgrade.mjs` | Moves older pages to the current runtime |
+
+The scripts use only Node built-ins and drive Chrome over the DevTools protocol. The runtime in `src/` is plain JavaScript with no dependencies, built into `skills/safis/assets/template.html`. The skill's guides in `skills/safis/references/` cover writing, figure design, each figure kind, and a symptom-to-cause list for fixing.
+
+## Limits
+
+- **Facts need a reader's eye.** The skill asks for real, checkable sources and lists the simplifications it made in its report, but it can still be wrong. A page about medicine, law, or safety needs review by someone who knows the field.
+- **Long pages take a while.** An in-depth page is a big build: plan on many minutes, and on one agent per page when building a site.
+- **WebGL 2** is needed for 3D figures and effects. Effects fall back to a plain 2D drawing without it.
+- **Standalone pages are about 850 KB** because they carry their fonts and runtime. A site built with `--shared` loads that once, then about 100 KB per page.
 
 ## Use in your app
 
@@ -112,11 +178,11 @@ import Tex from "@safis/astro/Tex.astro";
 
 ## Deploy the site
 
-`site/` is prebuilt static HTML, so every host just serves the folder. Nothing deploys automatically. The site is currently live on Cloudflare at https://safis.jotko.workers.dev.
+`site/` is prebuilt static HTML, so every host just serves the folder. Nothing deploys automatically. The site is built with `site.mjs --shared`: the runtime and fonts live once in `site/safis.css` and `site/safis.js` instead of in every page, so a page is about 100 KB instead of 950 KB and a reader downloads the runtime once. It still opens from disk. `--inline` turns that off again. The site is currently live on Cloudflare at https://safis.fyi.
 
 | Host | Config | Deploy |
 |---|---|---|
-| Cloudflare Workers | `wrangler.jsonc` | `npm run deploy` (live at https://safis.jotko.workers.dev) |
+| Cloudflare Workers | `wrangler.jsonc` | `npm run deploy` (live at https://safis.fyi) |
 | Vercel | `vercel.json` | `npx vercel --prod`, or import the repo |
 | Netlify | `netlify.toml` | `npx netlify deploy --prod`, or import the repo |
 | GitHub Pages | `.github/workflows/pages.yml` | Settings > Pages > Source: GitHub Actions, then run the workflow (set the repository variable `PAGES_AUTO_DEPLOY=true` to deploy on every push that changes `site/`) |
@@ -130,12 +196,18 @@ npm run build                                       # template + packages
 npm test                                            # engine, TeX, plot, and sim tests
 node skills/safis/scripts/upgrade.mjs site/*/index.html
 node skills/safis/scripts/verify.mjs site/jaw-joint/index.html
-npm run site                                        # home page, 404, sidebars, thumbnails
+npm run site                                        # home page, 404, sidebars, thumbnails, shared runtime
 npm run test:packages                               # builds and checks the four example apps
 ```
 
+`skills/safis/evals/` holds the eval suite for the skill itself: eight prompts, one per category, each with graders for what a good page has. `evals/README.md` explains how to run it and what the example pages score today.
+
 The scripts need Node 22+ and Chrome, Chromium, or Edge. `tools/subset-fonts.sh` rebuilds the embedded fonts (needs Python with fonttools and brotli).
 
-## Status
+## Contributing
 
-Unpublished. No license chosen yet. The embedded fonts are under the SIL Open Font License (`src/fonts/*-OFL.txt`).
+Bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has setup, layout, and how to check a change. Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report security issues privately, as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE). The embedded fonts (Source Serif 4, Source Sans 3, STIX Two Math) are under the SIL Open Font License (`src/fonts/*-OFL.txt`). Map data comes from Natural Earth (public domain).

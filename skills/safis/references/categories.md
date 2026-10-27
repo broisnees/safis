@@ -2,7 +2,7 @@
 
 Each category has its own kind of figure that works, its own accuracy traps, and its own colors. Read the section for the page's category before planning.
 
-Contents: [Body](#body), [Biology](#biology), [Chemistry](#chemistry), [Physics](#physics), [Machines](#machines), [Earth & Space](#earth--space), [Computing](#computing), [AI](#ai), [Math](#math).
+Contents: [Body](#body), [Biology](#biology), [Chemistry](#chemistry), [Physics](#physics), [Machines](#machines), [Engineering](#engineering), [Earth & Space](#earth--space), [Computing](#computing), [AI](#ai), [Math](#math).
 
 ## Body
 
@@ -46,15 +46,24 @@ Mechanics, waves, light, heat, electricity, fluids.
 Mechanisms and engineered things: engines, watches, locks, gearboxes, bicycles, bridges.
 
 - **Figures that work:** the hero assembly with an explode slider; build-up figures adding one part each; cutaways with hatched sections; one subsystem in color while the rest stays porcelain; motion arrows; a plot of output (torque, pressure) under the mechanism; a scale reference at the end.
-- **Build:** plates and brackets as `extrude` with holes and bevels, shafts as `cylinder`, wheels as `gear`, springs as `helix`, round parts as `lathe`. Drive every part from one kinematic model (a crank angle, a gear ratio) so they always mesh.
+- **Build:** for the hero machine, list 40 or more named parts first, cut away the casing where the inside matters, and put the readout (rpm, thrust, temperature) beside it. Add `Fx` only where the physics shows (the flame in a combustor, the airflow through a fan). In E3: plates and brackets as `extrude` with holes and bevels, shafts as `cylinder`, wheels as `gear`, springs as `helix`, round parts as `lathe`. Drive every part from one kinematic model (a crank angle, a gear ratio) so they always mesh.
 - **Accuracy:** gear ratios, strokes, and timings should be consistent with each other; if the model is simplified (fewer teeth, no clearances), say so.
 - **Example topics:** how a pin tumbler lock opens; how a differential lets wheels turn at different speeds; how a four-stroke engine breathes.
+
+## Engineering
+
+Systems people design and run: bridges and structures, electrical circuits and the power grid, control loops, sensors, networks of pipes and wires, manufacturing processes.
+
+- **Figures that work:** a structure under a load the reader drags, with forces as arrows and members colored by tension and compression; a circuit with current drawn as moving dots and a voltage plot under it; a feedback loop with a step response that changes as the reader tunes the gain; a 3D model of the real machine (a CNC table, a transformer, a pump) with a live readout; a map of the network when location matters (`Geo`).
+- **Build:** solve the system for real, as statics with `Num` linear algebra, circuits with Kirchhoff's laws, or control loops with `Num.ode`, and draw from the solution. A diagram of the block structure (`diagrams.md`) can come before the live figure, never instead of it.
+- **Accuracy:** units on every number, and state safety factors and simplifications ("pin joints, no self-weight"). Real ratings (a transformer's kVA, a cable's ampacity) need a source.
+- **Example topics:** why a truss bridge is made of triangles; how the grid keeps 50 Hz; how a PID controller holds a drone level; how a plasma cutter follows a path.
 
 ## Earth & Space
 
 Planets, orbits, seasons, tides, weather, geology.
 
-- **Figures that work:** dark-background 3D scenes with `lighting: "sun"`; orbits drawn from above and in 3D; a globe next to a sky view from one place on it; date and time scrubbers with `status` showing the date; time-lapse animations with an explicit speed-up.
+- **Figures that work:** maps and globes (`Geo`) for anything located on Earth, such as plate boundaries, quake epicenters, tide gauges, or the path of a storm, with the projection chosen for the question (a globe for routes and distances, Equal Earth for comparing areas); dark-background 3D scenes with `lighting: "sun"`; orbits drawn from above and in 3D; a globe next to a sky view from one place on it; date and time scrubbers with `status` showing the date; time-lapse animations with an explicit speed-up.
 - **Build:** planets as spheres with real proportions where possible and honest exaggeration where not ("the Moon is drawn 10 times closer"); orbits from Kepler's laws.
 - **Accuracy:** dates, angles, and periods are checkable; check them. Name the time scale whenever an animation speeds time up.
 - **Example topics:** why we have seasons; how tides work; why the Moon shows phases.
@@ -63,7 +72,7 @@ Planets, orbits, seasons, tides, weather, geology.
 
 Algorithms, data structures, networks, hardware.
 
-- **Figures that work:** step-throughs on an integer slider with the current step named in `status`; the data structure as boxes and arrows with the active part colored; a timeline or sequence diagram for protocols; cost plots (operations versus input size); hardware in 3D when the physical layout matters (a disk head, a chip's layers).
+- **Figures that work:** step-throughs on an integer slider with the current step named in `status`; the data structure as boxes and arrows with the active part colored; a live timeline of packets for protocols (a static Mermaid sequence diagram from `diagrams.md` is a fine overview before it); a world map (`Geo`) when distance is the point, with servers, cables, and round trips drawn as great circles and latency computed from the real distance; cost plots (operations versus input size) with hover readouts; the real code as a highlighted block, and a diff for what a fix changes; hardware in 3D when the physical layout matters (a disk head, a server rack, a chip's layers).
 - **Build:** 2D boxes with `g.rect`, arrows with `g.arrow`, code and data in `font: "mono"`; deterministic state per step so the slider can go backward; a stepper or the transport's step button for single steps.
 - **Accuracy:** run the real algorithm in the figure code rather than scripting its frames, so every step is correct.
 - **Example topics:** how a hash table finds things; how TCP recovers lost packets; how a B-tree stays balanced.
