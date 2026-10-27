@@ -171,7 +171,7 @@ Callbacks get it as their last argument (`fig`); `demo()` returns it.
 
 ## Globals
 
-`demo`, `palette` (live colors by name), `rgba(name, a)`, `clamp`, `lerp`, `smoothstep`, `TAU`, `E3` (the 3D engine), `Num` (numerics, [plots.md](plots.md)), `Sim` ([simulations.md](simulations.md)), `Geo` ([maps.md](maps.md)), `Optics` ([optics.md](optics.md)), `Sound` ([sound.md](sound.md)), `Img` ([images.md](images.md)), `Fx` ([effects.md](effects.md)), `SafisTeX` ([math.md](math.md)), and `Safis` (`{ demo, mount, enhance, typeset, version }`, for hosts that add figures after load). `window.__explainer` holds `check()`, `describe(id)`, `drive(id, action)`, and `ids()`, which the scripts use. Opening a page with `?check` shows the self-check in a panel.
+`demo`, `palette` (live colors by name), `rgba(name, a)`, `clamp`, `lerp`, `smoothstep`, `TAU`, `E3` (the 3D engine), `Num` (numerics, [plots.md](plots.md)), `Sim` ([simulations.md](simulations.md)), `Geo` ([maps.md](maps.md)), `Optics` ([optics.md](optics.md)), `Sound` ([sound.md](sound.md)), `Img` ([images.md](images.md)), `Fx` ([effects.md](effects.md)), `Iso` ([iso.md](iso.md)), `SafisTeX` ([math.md](math.md)), and `Safis` (`{ demo, mount, enhance, typeset, version }`, for hosts that add figures after load). `window.__explainer` holds `check()`, `describe(id)`, `drive(id, action)`, and `ids()`, which the scripts use. Opening a page with `?check` shows the self-check in a panel.
 
 Pages follow the reader's light or dark setting; a host can force one with `<html data-theme="light">` or `"dark"`.
 

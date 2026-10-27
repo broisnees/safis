@@ -81,7 +81,7 @@ export async function openBrowser({ viewport }) {
     `--user-data-dir=${profile}`,
     "--no-first-run",
     "--no-default-browser-check",
-    "--hide-scrollbars",
+    "--hide-scrollbars", "--disable-accelerated-2d-canvas",
     "--mute-audio",
     "--force-color-profile=srgb",
     // WebGL in headless mode runs on the SwiftShader software renderer.

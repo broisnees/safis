@@ -4,7 +4,7 @@
 
 **An agent skill that teaches an idea by building it as a page you can drag, turn, and cut open.**<br>
 Runs in Claude Code, Codex, OpenCode, Cursor, and other agents that read Agent Skills.<br>
-Long-form explainers with live 2D, 3D, map, optics, and sound figures, in one HTML file that opens from disk.
+Long-form explainers with live 2D, 3D, isometric, map, optics, and sound figures, in one HTML file that opens from disk.
 
 [![Claude Code skill](https://img.shields.io/badge/Claude%20Code-skill-3a3a3a?logo=claude&logoColor=white)](#install)
 [![Agent Skills compatible](https://img.shields.io/badge/Agent%20Skills-compatible-3a3a3a)](https://agentskills.io)
@@ -19,7 +19,7 @@ Long-form explainers with live 2D, 3D, map, optics, and sound figures, in one HT
 
 [Quick start](#quick-start) · [Gallery](#gallery) · [What it makes](#what-it-makes) · [Install](#install) · [Usage](#usage) · [How it works](#how-it-works) · [Limits](#limits)
 
-<a href="https://safis.fyi"><img src="docs/hero.webp" alt="A porcelain 3D model of the lower jaw and its two joints, with the socket, condyle, and mandible labeled" width="860"></a>
+<a href="https://safis.fyi"><img src="docs/hero.webp" alt="An isometric cutaway of a turbofan on a test stand, with air streaming into the fan and a glowing combustor inside" width="860"></a>
 
 </div>
 
@@ -58,6 +58,7 @@ One page per topic: a question in the title, an abstract, 7-12 numbered sections
 |---|---|---|
 | **2D canvas** | Cross-sections, graphs, fields, simulations, step-throughs, with sliders, knobs, XY pads, presets, dragging, and hover readouts | Mechanisms, physics, algorithms, data |
 | **3D** | A small WebGL 2 engine: porcelain shading, ink outlines, section cuts with hatching, see-through parts, orbiting with momentum | Shapes that must turn freely, molecules, surfaces |
+| **Isometric illustration** | Machines from many small solid parts with four-tone shading, painted back to front, cut away, see-through, and exported as a standalone SVG | Engines, instruments, devices, the hero figure |
 | **Effects** | Fire and exhaust, smoke and steam, airflow streaks, ripples and caustics, glow, sparks, arcs, drawn with WebGL inside a figure | Showing what lines can't: heat, flow, light |
 | **Maps** | World maps and globes in five projections, countries, cities, great-circle routes, distances | Networks, earthquakes, tides, travel |
 | **Optics** | Rays through mirrors, lenses, prisms, raindrops, and the eye, with Fresnel reflection and dispersion | Rainbows, cameras, glasses, fiber |
@@ -129,6 +130,7 @@ The scripts use only Node built-ins and drive Chrome over the DevTools protocol.
 
 - **Facts need a reader's eye.** The skill asks for real, checkable sources and lists the simplifications it made in its report, but it can still be wrong. A page about medicine, law, or safety needs review by someone who knows the field.
 - **Long pages take a while.** An in-depth page is a big build: plan on many minutes, and on one agent per page when building a site.
+- **Isometric drawings sort by painter's algorithm.** Parts that pass through each other need splitting; `Iso.audit` finds them.
 - **WebGL 2** is needed for 3D figures and effects. Effects fall back to a plain 2D drawing without it.
 - **Standalone pages are about 850 KB** because they carry their fonts and runtime. A site built with `--shared` loads that once, then about 100 KB per page.
 

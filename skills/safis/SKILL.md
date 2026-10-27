@@ -32,6 +32,7 @@ One self-contained HTML page per topic. Inline CSS and JS, no network requests, 
 - a **plotting and science kit**: `g.graph` for function plots, areas, tangents, vector fields, contours, and measured data with bands, error bars, histograms, and hover readouts; `Num` numerics (ODE integration, root finding, statistics, small linear algebra, softmax); helpers for springs, charges, atoms and bonds, bar charts, heatmaps, neural networks, and tokens;
 - **math typesetting**: TeX in the prose rendered as MathML, with symbols colored to match the figures, and `g.tex` for formulas on the canvas;
 - **E3**, a small WebGL 2 engine for 3D figures: procedural meshes (boxes, lathes, extrusions with holes, sweeps, tubes, gears, springs, arrows, molecules), a scene graph, ink outlines, section cuts with hatched faces, see-through parts, soft ground shadows, orbit with momentum, and picking;
+- **isometric illustration** (`Iso`): machines and devices drawn from many small solid parts with four-tone shading and ink outlines, crisp at any zoom, turnable, cut away, see-through, and exportable as a standalone SVG;
 - **effects** (`Fx`): fire and exhaust, smoke and steam, airflow streaks, water ripples and caustics, glow, sparks, and electric arcs, drawn with WebGL inside a figure;
 - **maps** (`Geo`): world maps and globes in several projections, countries, cities, great-circle routes, and distances;
 - **optics** (`Optics`): rays through mirrors, lenses, prisms, raindrops, and the eye, with reflection, refraction, total internal reflection, and dispersion;
@@ -80,7 +81,7 @@ Pick how each figure draws by what it has to show:
 | The figure shows | Draw it with | Reference |
 |---|---|---|
 | A mechanism in cross-section, a graph, a process that moves | the 2D canvas and plot kit | runtime.md, plots.md |
-| A machine or device made of many parts, a cutaway, an exploded view | E3 with section cuts and an explode slider | engine3d.md |
+| A machine or device made of many parts, a cutaway, an exploded view | `Iso` (E3 when it must turn freely in perspective) | iso.md |
 | A shape that must turn freely in 3D, a surface, a molecule | E3 | engine3d.md |
 | Anything located on Earth | `Geo` | maps.md |
 | Light: rays, lenses, mirrors, the eye | `Optics` | optics.md |
@@ -112,7 +113,7 @@ Leave the runtime block in `<head>` alone.
 
 ### 4. Build section by section
 
-Read [references/runtime.md](references/runtime.md) before the first 2D figure, [references/plots.md](references/plots.md) before the first graph or science diagram, [references/simulations.md](references/simulations.md) before the first simulation, [references/math.md](references/math.md) before the first equation, [references/article.md](references/article.md) before the first sidenote, citation, or callout, [references/engine3d.md](references/engine3d.md) before the first 3D figure, and the reference from the table in step 2 before the first figure of each other kind ([maps](references/maps.md), [optics](references/optics.md), [effects](references/effects.md), [sound](references/sound.md), [images](references/images.md), [diagrams and code](references/diagrams.md)). Then write each section's prose and figure together, in page order:
+Read [references/runtime.md](references/runtime.md) before the first 2D figure, [references/plots.md](references/plots.md) before the first graph or science diagram, [references/simulations.md](references/simulations.md) before the first simulation, [references/math.md](references/math.md) before the first equation, [references/article.md](references/article.md) before the first sidenote, citation, or callout, [references/engine3d.md](references/engine3d.md) before the first 3D figure, and the reference from the table in step 2 before the first figure of each other kind ([iso](references/iso.md), [maps](references/maps.md), [optics](references/optics.md), [effects](references/effects.md), [sound](references/sound.md), [images](references/images.md), [diagrams and code](references/diagrams.md)). Then write each section's prose and figure together, in page order:
 
 ```html
 <p>Open the mouth <span class="scrub" data-key="open"></span> and watch the <span class="c-green" data-part="condyle">condyle</span> slide:</p>

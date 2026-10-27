@@ -37,7 +37,11 @@
 
   /* Hero */
   .hero { padding: 84px 0 40px; }
-  .hero .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 56px; align-items: center; }
+  .hero .hero-copy { max-width: 50rem; margin: 0 auto; text-align: center; }
+  .hero .install { text-align: left; }
+  .hero .lead, .hero .install { margin-inline: auto; }
+  .hero .ctas { justify-content: center; }
+  .showcase { margin-top: 48px; padding: 14px 22px 8px; }
   .eyebrow { display: inline-flex; align-items: center; gap: 8px; font: 600 13px/1 var(--font-text); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 22px; }
   .eyebrow::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
   .hero h1 { font: 560 clamp(2.5rem, 5.6vw, 4.1rem)/1.02 var(--font-display); letter-spacing: -0.02em; margin: 0 0 22px; text-wrap: balance; }
@@ -59,7 +63,7 @@
   .stage-card figure.demo { margin: 0; }
   .stage-card figure.demo figcaption::before { content: none; }
   .stage-card figcaption { text-align: center; }
-  @media (max-width: 960px) { .hero .wrap { grid-template-columns: 1fr; gap: 36px; } .hero { padding-top: 48px; } }
+  @media (max-width: 960px) { .hero { padding-top: 48px; } .showcase { padding: 8px 10px 4px; } }
 
   /* Stats */
   .stats { border-block: 1px solid var(--chip-line); margin: 40px 0 0; }
@@ -173,7 +177,7 @@
 <main class="product">
 <section class="hero">
   <div class="wrap">
-    <div class="rise">
+    <div class="hero-copy rise">
       <p class="eyebrow">An agent skill for interactive explainers</p>
       <h1>Explain how anything works, with figures people can <em>touch</em>.</h1>
       <p class="lead">Ask your agent about a jaw joint, a tide, or a hash table. Safis writes a long-form page that builds the idea step by step, with live figures the reader drags, turns, cuts open, and hears. One HTML file. No server.</p>
@@ -184,37 +188,123 @@
       </div>
       <p class="agents">Works in <b>Claude Code</b>, <b>Codex</b>, <b>OpenCode</b>, <b>Cursor</b>, and any agent that reads Agent Skills.</p>
     </div>
-    <div class="stage-card rise">
-      <figure class="demo" id="hero-gears" aria-label="Two meshing gears turning together. Drag to turn them, slide to cut them open."></figure>
-      <script>
-      {
-        const scene = E3.scene();
-        const big = scene.add(E3.mesh.gear({ teeth: 30, module: 1, thickness: 4, hole: 2, spokes: 5, bevel: 0.4 }), { name: "wheel" });
-        const small = scene.add(E3.mesh.gear({ teeth: 12, module: 1, thickness: 6, hole: 1.2, bevel: 0.4 }), { name: "pinion", material: "brass", position: [21, 0, 0] });
-        scene.add(E3.mesh.cylinder(1.6, 14), { material: "steel", position: [0, 0, 0] });
-        scene.add(E3.mesh.cylinder(1, 14), { material: "steel", position: [21, 0, 0] });
-        demo("hero-gears", {
-          aspect: 1.35,
-          orbit: { yaw: -0.5, pitch: 0.55 },
-          state: () => ({ angle: 0 }),
-          controls: [
-            { key: "cut", label: "Cut open", min: 0, max: 1, step: 0.01, value: 0.35, color: "orange" },
-            { key: "speed", label: "Speed", min: 0, max: 1, step: 0.01, value: 0.4, color: "blue" },
-          ],
-          step(dt, s, v) { s.angle += dt * v.speed; },
-          draw(g, s, v) {
-            big.rotation = [0, s.angle, 0];
-            small.rotation = [0, -s.angle * 30 / 12 + Math.PI / 12, 0];
-            scene.cutPlane = v.cut > 0 ? [0, 0, 1, 14 * (1 - v.cut) - 2] : null;
-            const view = g.render3d(scene, { ...s.view, target: [8, 0, 0] });
-            g.callouts([
-              { at: view.project([-10, 2, 9]), text: "wheel, 30 teeth" },
-              { at: view.project([23, 3, 3]), text: "pinion, 12 teeth", color: "brass" },
-            ]);
-          },
-        });
+  </div>
+  <div class="wrap">
+    <div class="stage-card showcase rise">
+<script>
+// Shared model of a turbofan on a test stand. Meters; the engine axis runs along x at height HC.
+window.FAN = (() => {
+  const S = Iso.scene(), HC = 1.72, X = "x", cutNear = [0, 1, 0, 0];
+  const on = (x) => [x, 0, HC];
+  // Nacelle: a see-through shell around everything.
+  const nac = [[1.04, 0], [1.1, 0.06], [1.14, 0.25], [1.155, 0.7], [1.14, 1.5], [1.07, 2.2], [0.96, 2.72], [0.94, 2.72], [0.97, 2.2], [1.0, 1.4], [1.015, 0.6], [1.01, 0.18], [0.99, 0.06]];
+  // Coaxial shells share split planes, placed in the gaps between stages and at the nacelle's end,
+  // so each slice of one shell wraps a slice of the other and no stage straddles a plane.
+  const cuts = x0 => [0.72, 1.25, 2.0, 2.5, 2.62, 3.0].map(x => x - x0);
+  S.lathe({ name: "nacelle", at: on(-0.1), axis: X, profile: nac, closed: true, segments: 48, material: "ghost", splitAt: cuts(-0.1) });
+  // Fan, spinner, outlet guide vanes.
+  const lp = S.group({ name: "low-pressure spool" });
+  lp.lathe({ name: "spinner", at: on(-0.24), axis: X, profile: [[0, 0], [0.11, 0.08], [0.21, 0.2], [0.285, 0.34], [0.31, 0.42], [0, 0.42]], segments: 32, material: "steel" });
+  lp.cylinder({ name: "fan", at: on(0.18), axis: X, r: 0.31, length: 0.26, material: "steel" });
+  lp.blades({ name: "fan", at: on(0.31), axis: X, count: 20, r0: 0.31, r1: 0.985, chord: [0.3, 0.34], twist: [0.4, 1.0], spans: 3, thick: 0.014, material: "aluminum" });
+  S.blades({ name: "outlet guide vanes", at: on(0.92), axis: X, count: 30, r0: 0.6, r1: 1.0, chord: 0.13, twist: [0.12, 0.08], spans: 1, thick: 0.01, material: "aluminum" });
+  // Core casing, cut away on the near side.
+  const core = S.group({ name: "core", cut: cutNear });
+  core.lathe({ name: "core casing", at: on(0.72), axis: X, closed: true, segments: 40, material: "porcelain", splitAt: cuts(0.72),
+    profile: [[0.535, 0], [0.58, 0.12], [0.6, 0.6], [0.615, 1.4], [0.58, 2.1], [0.49, 2.7], [0.46, 2.7], [0.55, 2.1], [0.585, 1.4], [0.57, 0.6], [0.55, 0.12], [0.515, 0.03]] });
+  // Rotating stages: a disk and a ring of blades each.
+  const stage = (grp, name, x, rd, rt, n, tw, mat = "steel") => {
+    grp.cylinder({ name, at: on(x - 0.022), axis: X, r: rd, length: 0.044, segments: 24, material: mat });
+    grp.blades({ name, at: on(x), axis: X, count: n, r0: rd, r1: rt, chord: 0.075, twist: tw, spans: 1, thick: 0.008, material: mat });
+  };
+  const xs = [];
+  for (const [i, x] of [0.86, 1.0, 1.14].entries()) { stage(lp, "booster", x, 0.27, 0.5 - i * 0.012, 18, [0.6, 0.9]); xs.push(x); }
+  const hp = S.group({ name: "high-pressure spool" });
+  for (let i = 0; i < 6; i++) { const x = 1.34 + i * 0.12; stage(hp, "compressor", x, 0.22, 0.44 - i * 0.02, 20, [0.7, 1.0]); xs.push(x); }
+  S.lathe({ name: "combustor", at: on(2.05), axis: X, closed: true, segments: 32, material: "hot", profile: [[0.26, 0], [0.4, 0.04], [0.43, 0.2], [0.41, 0.38], [0.3, 0.4], [0.25, 0.22]] });
+  for (let i = 0; i < 2; i++) { const x = 2.56 + i * 0.12; stage(hp, "turbine", x, 0.22, 0.42, 18, [-0.9, -0.7], "steel"); xs.push(x); }
+  for (let i = 0; i < 4; i++) { const x = 2.82 + i * 0.12; stage(lp, "turbine", x, 0.2, 0.44 + i * 0.006, 18, [-0.8, -0.6], "steel"); xs.push(x); }
+  // Shaft pieces between the disks (nothing passes through a part), also cut at the shells' split planes.
+  const ends = [0.44, ...xs.flatMap(x => [x - 0.022, x + 0.022]), ...cuts(0)].sort((a, b) => a - b);
+  for (let i = 0; i + 1 < ends.length; i++) {
+    const a = ends[i], b = ends[i + 1], mid = (a + b) / 2;
+    if (b - a < 0.005 || xs.some(x => Math.abs(mid - x) < 0.022) || mid > xs[xs.length - 1]) continue;
+    (mid > 1.3 && mid < 2.62 ? hp : lp).cylinder({ name: "shaft", from: [a, 0, HC], to: [b, 0, HC], r: 0.06, segments: 16, material: "steel" });
+  }
+  S.lathe({ name: "exhaust cone", at: on(3.24), axis: X, profile: [[0, 0], [0.2, 0], [0.18, 0.2], [0.1, 0.45], [0, 0.56]], segments: 32, material: "steel" });
+  // Test stand: a base plate with a scale, T-slot frame, two pylons up to the nacelle.
+  const stand = S.group({ name: "stand" });
+  const base = stand.box({ name: "base plate", from: [-0.6, -1.0, 0], to: [4.0, 1.0, 0.06], material: "aluminum", bevel: 0.012, split: 1 });
+  base.ruler({ face: "+z", from: [-2.1, -0.9], to: [1.9, -0.9], step: 0.1, major: 10, tick: 0.035, size: 0.07, label: (x, i) => `${i / 10} m` });
+  for (const y of [-0.72, 0.72]) stand.tslot({ name: "stand rail", from: [0.1, y, 0.1], to: [3.0, y, 0.1], size: 0.08, material: "aluminum", split: 6 });
+  for (const x of [0.14, 1.5, 2.96]) stand.tslot({ name: "stand rail", from: [x, -0.68, 0.1], to: [x, 0.68, 0.1], size: 0.08, material: "aluminum", split: 3 });
+  const pyl = [[0.9, 1.158], [2.0, 1.1]];
+  for (const [x, r] of pyl) {
+    for (const y of [-0.72, 0.72]) stand.tslot({ name: "post", from: [x, y, 0.14], to: [x, y, 0.42], size: 0.08, material: "aluminum" });
+    stand.tslot({ name: "cross beam", from: [x, -0.76, 0.46], to: [x, 0.76, 0.46], size: 0.08, material: "aluminum", split: 3 });
+    stand.box({ name: "pylon", from: [x - 0.15, -0.08, 0.5], to: [x + 0.15, 0.08, HC - r - 0.004], material: "steel", bevel: 0.01 });
+    for (const y of [-0.72, 0.72]) for (const dx of [-0.08, 0.08]) stand.screw({ name: "anchor bolt", at: [x + dx, y + (y < 0 ? -0.07 : 0.07), 0.06], r: 0.014, head: "hex", material: "steel" });
+  }
+  // Throttle console with a lever that slides in a slot.
+  const con = stand.box({ name: "throttle console", from: [3.35, 0.35, 0.06], to: [3.75, 0.8, 0.36], bevel: 0.015 });
+  con.decal({ face: "+z", points: [[-0.16, -0.02], [0.16, -0.02], [0.16, 0.02], [-0.16, 0.02]], tone: "slot", line: true });
+  const screen = con.screen({ face: "+y", at: [0, 0.03], size: [0.3, 0.12], text: "", color: "green" });
+  con.vents({ face: "+x", at: [0, -0.04], size: [0.3, 0.14], count: 5 });
+  const lever = stand.group({ name: "throttle" });
+  lever.cylinder({ name: "throttle", at: [3.39, 0.575, 0.36], r: 0.012, length: 0.14, material: "steel", segments: 12 });
+  lever.sphere({ name: "throttle", at: [3.39, 0.575, 0.535], r: 0.035, color: "orange", segments: 20 });
+  const spin = S.find("low-pressure spool"), hpg = hp;
+  function pose(lpAngle, hpAngle, n1, thrust) {
+    for (const k of spin.kids) if (k.name !== "spinner") k.rotate = { axis: "x", angle: lpAngle, about: on(0) };
+    for (const k of hpg.kids) k.rotate = { axis: "x", angle: hpAngle, about: on(0) };
+    S.find("combustor").heat = 0.2 + 0.8 * n1;
+    lever.move = [0.3 * thrust / 100, 0, 0];
+  }
+  return { scene: S, pose, HC, screen, inlet: [-0.1, 0, HC], nozzle: [3.42, 0, HC] };
+})();
+</script>
+<figure class="demo" id="fan" aria-label="A turbofan on a test stand in a cutaway isometric drawing. The nacelle is translucent; the core casing is cut open to show compressor stages, an orange combustor, and turbine stages. Air streaks enter the fan and leave the nozzle. A throttle lever on the console sets thrust."></figure>
+<script>
+{
+  const M = FAN, S = M.scene;
+  const D = Iso.drag(S, { part: "throttle", axis: "x", key: "thrust", min: 0, max: 100, scale: 0.003 });
+  const phase = t => (t < 30 ? "idle" : t < 65 ? "approach" : t < 88 ? "climb" : "take-off");
+  const n1Of = thr => 21 + 0.78 * thr, frac = n1 => Math.max(0, (n1 - 21) / 74);
+  const read = (s, v) => { const n1 = s.n1.x, f = frac(n1); return { n1, kN: 334 * Math.pow(f, 1.6), tgt: 420 + 440 * Math.pow(f, 1.3), name: phase(v.thrust) }; };
+  demo("fan", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    orbit: Iso.orbit({ yaw: 2.3, pitch: 0.42, minPitch: 0.1, maxPitch: 1.1 }),
+    state: () => ({ n1: { x: n1Of(95), v: 0 }, lp: 0, hp: 0, t: 0, hover: null }),
+    controls: [{ key: "thrust", label: "Thrust", min: 0, max: 100, step: 1, value: 95, unit: "%", color: "orange" }],
+    presets: [{ label: "Idle", set: { thrust: 5 } }, { label: "Cruise", set: { thrust: 72 } }, { label: "Take-off", set: { thrust: 95 } }],
+    caption: "A turbofan cutaway on a test stand. The fan and spools turn far slower than life (a real fan turns about 50 times a second at take-off), and the air streaks follow a model flow, not a fluid simulation.",
+    hover: Iso.hover(S),
+    drag: D,
+    change(key, s, v, fig) { if (!fig.playing) s.n1 = { x: n1Of(v.thrust), v: 0 }; },   // paused: snap, so the still frame matches
+    step(dt, s, v) {
+      s.t += dt;
+      Iso.spring(s.n1, n1Of(v.thrust), dt, 0.55);
+      s.lp = (s.lp + dt * s.n1.x / 100 * 5.5) % (Math.PI * 2);
+      s.hp = (s.hp + dt * (0.4 + s.n1.x / 100) * 7) % (Math.PI * 2);
+    },
+    draw(g, s, v) {
+      const r = read(s, v);
+      M.pose(s.lp, s.hp, frac(r.n1), v.thrust);
+      M.screen.text = `N1 ${r.n1.toFixed(1)}%`;
+      const V = g.iso(S, { view: s.view, hover: s.hover, box: [0, 0, g.w, g.h] });
+      if (g.fx && g.fx.flow) {
+        const inlet = V.ellipse(M.inlet, [1, 0, 0], 1.02), nozzle = V.ellipse(M.nozzle, [1, 0, 0], 0.45);
+        g.fx.flow(null, { inlet, nozzle, throttle: frac(r.n1), temperature: r.tgt + 273, speed: 0.1, t: s.t, seed: 4, density: 0.35, trail: 0.3 });
       }
-      </script>
+      const x = 16, y = g.w < 560 ? 18 : g.h - 122, rows = [[r.name, ""], [`N1 ${r.n1.toFixed(1)}%`, "fan speed"], [`${r.kN.toFixed(0)} kN`, "thrust"], [`TGT ${r.tgt.toFixed(0)}°C`, "turbine gas"]];
+      rows.forEach(([a, b], i) => { g.text(a, [x, y + i * 31], { font: i ? "mono" : undefined, size: i ? 14.5 : 15, weight: 600, align: "left", color: i === 3 || !i ? "orange" : "ink" }); if (b) g.text(b, [x, y + 14 + i * 31], { size: 11.5, align: "left", color: "muted" }); });
+      if (s.hover) { const at = V.at(s.hover); if (at) g.callouts([{ at, text: s.hover }], { split: g.w * 0.5 }); }
+      g.wantsFrame = true;
+    },
+    status: (s, v) => { const r = read(s, v); return `${r.name} · N1 ${r.n1.toFixed(1)}% · ${r.kN.toFixed(0)} kN · TGT ${r.tgt.toFixed(0)}°C`; },
+  });
+}
+</script>
     </div>
   </div>
 </section>
@@ -235,7 +325,7 @@
     <p class="sub">A page has an abstract, numbered sections, and about 25 figures woven into the prose. A sentence says what to try, the figure lets you try it, and the next paragraph names what you saw.</p>
     <div class="kinds rise">
       <div class="kind" style="--c: var(--blue)"><i></i><h3>2D figures</h3><p>Cross-sections, graphs, fields, and step-throughs with sliders, knobs, presets, dragging, and hover readouts.</p></div>
-      <div class="kind" style="--c: var(--brass)"><i></i><h3>3D models</h3><p>Porcelain shading, ink outlines, section cuts with hatching, see-through parts, and orbiting with momentum.</p></div>
+      <div class="kind" style="--c: var(--brass)"><i></i><h3>3D and isometric</h3><p>Porcelain 3D with section cuts, and machine drawings from hundreds of parts, cut away and exportable as SVG.</p></div>
       <div class="kind" style="--c: var(--green)"><i></i><h3>Maps and globes</h3><p>Five projections, 177 countries, cities, great-circle routes, and distances, for anything located on Earth.</p></div>
       <div class="kind" style="--c: var(--purple)"><i></i><h3>Optics</h3><p>Rays through mirrors, lenses, prisms, raindrops, and the eye, with Fresnel reflection and dispersion.</p></div>
       <div class="kind" style="--c: var(--red)"><i></i><h3>Sound and images</h3><p>Tones and plucked strings you hear, spectra, and pixels, filters, aliasing, dithering, and the DCT.</p></div>

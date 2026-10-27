@@ -14,7 +14,7 @@
     "site": "node skills/safis/scripts/site.mjs site --thumbs --shared --home web/home.html",
     "verify": "node skills/safis/scripts/verify.mjs",
     "explore": "node skills/safis/scripts/explore.mjs",
-    "test": "node tools/test-engine.mjs && node tools/test-tex.mjs && node tools/test-plot.mjs && node tools/test-sim.mjs && node tools/test-geo.mjs && node tools/test-optics.mjs && node tools/test-sound.mjs && node tools/test-image.mjs && node tools/test-effects.mjs",
+    "test": "node tools/test-engine.mjs && node tools/test-tex.mjs && node tools/test-plot.mjs && node tools/test-sim.mjs && node tools/test-geo.mjs && node tools/test-optics.mjs && node tools/test-sound.mjs && node tools/test-image.mjs && node tools/test-effects.mjs && node tools/test-iso.mjs",
     "test:packages": "node tools/test-packages.mjs",
     "deploy": "npx -y wrangler@4 deploy",
     "deploy:examples": "npm run build:packages && npm run deploy -w examples/react-vite -w examples/vue-vite -w examples/svelte-vite -w examples/astro-blog"

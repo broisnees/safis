@@ -1,20 +1,8 @@
 # TODO
 
-## In progress
-
-- **Isometric illustration kit** (`src/iso.js`, `tools/test-iso.mjs`, `skills/safis/references/iso.md`), with the turbofan cutaway and the CNC plasma table as showcase figures. When it lands:
-  - add `node tools/test-iso.mjs` to `npm test`;
-  - put `Iso` back in `SKILL.md` (the "What to produce" list and the drawing table), `references/categories.md` (Machines, Engineering), `references/runtime.md` (Globals), and the README's feature table;
-  - rebuild the template with `node tools/build-template.mjs`;
-  - make the turbofan the hero of `web/home.html` and `docs/hero.webp`.
-
-## Then
-
-- Refresh every thumbnail with `npm run site`, then deploy with `tools/deploy-site.sh`.
-- Commit and push.
-
 ## Later
 
+- **Iso:** cable drag chain, spring, and gear builders; two cut planes per part; faster sorting for big turning models (6-20 ms now).
 - **Effects:** smoother airflow streaks, closer to the turbofan reference (thinner, longer, curling).
 - **Runtime:** a figure clock (`fig.t`) and a per-control `ease`, so effects don't need `s.t += dt` and `Fx.follow`. Let E3 and Fx share one WebGL context.
 - **Pages:**

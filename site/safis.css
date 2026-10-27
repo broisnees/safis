@@ -901,3 +901,5 @@ pre.mermaid { white-space: pre-wrap; color: var(--muted); }
   .code-block { margin-inline: -16px; border-radius: 0; box-shadow: inset 0 1px 0 var(--chip-line), inset 0 -1px 0 var(--chip-line); }
   .code-block pre.shiki { font-size: 12.5px; }
 }
+
+${css}
