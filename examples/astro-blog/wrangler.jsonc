@@ -1,0 +1,11 @@
+// Cloudflare Workers static assets for this example app.
+// Deploy with `npm run deploy` in this folder (builds first).
+{
+  "name": "safis-astro",
+  "account_id": "16b2c363a412bfaaec2a5a2572964728",
+  "compatibility_date": "2026-10-26",
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "auto-trailing-slash"
+  }
+}

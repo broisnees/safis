@@ -1,0 +1,5 @@
+/* The whole app area is a .safis element, so it takes the theme's paper and type, in light and dark. */
+body { margin: 0; }
+.app { min-height: 100vh; padding: 56px max(20px, calc(50% - 21rem)) 96px; }
+.app-bar { display: flex; gap: 12px; align-items: center; margin: 8px 0; font-family: var(--font-text); }
+.app-bar button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--faint); background: var(--panel); color: var(--ink); cursor: pointer; }

@@ -1,0 +1,27 @@
+---
+import { ClientRouter } from "astro:transitions";
+import ThemeToggle from "@safis/astro/ThemeToggle.astro";
+import "safis/style.css";
+
+interface Props { title: string; description?: string }
+const { title, description } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>{title}</title>
+    {description && <meta name="description" content={description} />}
+    <ClientRouter />
+  </head>
+  <body>
+    <slot />
+    <ThemeToggle />
+    <script>
+      // Mounts every <Figure name="..."> from its spec module in src/figures/.
+      import { mountFigures } from "@safis/astro/client";
+      mountFigures(import.meta.glob("../figures/*.js"));
+    </script>
+  </body>
+</html>

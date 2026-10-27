@@ -1,0 +1,27 @@
+---
+layout: ../../layouts/Post.astro
+title: A Pendulum and a Coil
+category: Physics
+description: Two things that keep time and take weight, and the simple rules behind them.
+---
+import Figure from "@safis/astro/Figure.astro";
+import Scrub from "@safis/astro/Scrub.astro";
+import SetLink from "@safis/astro/SetLink.astro";
+import Term from "@safis/astro/Term.astro";
+import Tex from "@safis/astro/Tex.astro";
+
+<p class="lede">A <Term color="green" part="rod" figure="pendulum">rod</Term> <Scrub k="length" figure="pendulum" /> long swings with the same beat whether the <Term color="blue" part="bob" figure="pendulum">bob</Term> swings <SetLink figure="pendulum" values={{ swing: 5 }}>a little</SetLink> or <SetLink figure="pendulum" values={{ swing: 30 }}>a lot</SetLink>. Make it <SetLink figure="pendulum" values={{ length: 0.25 }}>a quarter as long</SetLink> and the beat doubles:</p>
+
+<Figure name="pendulum" label="A pendulum swinging from a pivot, with its length marked." />
+
+The period depends on the length and on gravity, and not on the mass:
+
+<Tex src="T = 2\pi\sqrt{\frac{\green{L}}{g}}" display />
+
+## A coil under load
+
+Hang more weight on the coil and it shortens in proportion. Turn it to see the coils close up:
+
+<Figure name="coil" label="A steel coil spring under a brass weight." />
+
+Back: [springs and gears](/posts/springs-and-gears/).

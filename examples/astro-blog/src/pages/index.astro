@@ -1,0 +1,21 @@
+---
+import Base from "../layouts/Base.astro";
+const posts = Object.entries(import.meta.glob("./posts/*.mdx", { eager: true }))
+  .map(([file, post]) => ({ url: file.replace("./", "/").replace(/\.mdx$/, "/"), ...post.frontmatter }));
+---
+<Base title="A small blog of explainers">
+  <div class="page">
+    <main>
+      <header>
+        <p class="kicker">Example</p>
+        <h1>A small blog of explainers</h1>
+        <p class="dek">Astro and MDX posts with live safis figures.</p>
+      </header>
+      <article>
+        <ul>
+          {posts.map(p => <li><a href={p.url}>{p.title}</a>: {p.description}</li>)}
+        </ul>
+      </article>
+    </main>
+  </div>
+</Base>
