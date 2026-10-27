@@ -2,7 +2,6 @@
 
 ## In progress
 
-- **DNS page** (`site/dns/`): the last of the five new explainers. When it passes `verify.mjs`, delete `drafts/dns/`, run `tools/deploy-site.sh dns`, and add it to the README gallery.
 - **Isometric illustration kit** (`src/iso.js`, `tools/test-iso.mjs`, `skills/safis/references/iso.md`), with the turbofan cutaway and the CNC plasma table as showcase figures. When it lands:
   - add `node tools/test-iso.mjs` to `npm test`;
   - put `Iso` back in `SKILL.md` (the "What to produce" list and the drawing table), `references/categories.md` (Machines, Engineering), `references/runtime.md` (Globals), and the README's feature table;

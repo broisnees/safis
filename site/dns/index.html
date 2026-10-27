@@ -248,7 +248,7 @@
           continue;
         }
         const a = [X[m.from], Y(m.t0)], b = [X[m.to], Y(m.t1)];
-        const end = m.lost ? 0.55 : 1;
+        const end = m.lost ? 0.8 : 1;
         const f = clamp((now - m.t0) / Math.max(1e-6, m.t1 - m.t0), 0, 1);
         if (o.ghost !== false && f < end) g.line(a, lerp2(a, b, end), { stroke: m.color, width: 1, alpha: 0.18, dash: m.dash });
         if (f <= 0) continue;
@@ -374,7 +374,10 @@
     const rttFor = d => (2 * d * 1.5) / 200 + 1;
     const km = (a, b) => Geo.distance(a, b);
 
-    const dur = s => (s < 60 ? `${Math.round(s)} s` : s < 3600 ? `${+(s / 60).toFixed(s < 600 ? 1 : 0)} min` : s < 86400 ? `${+(s / 3600).toFixed(s < 36000 ? 1 : 0)} h` : `${+(s / 86400).toFixed(1)} days`);
+    const dur = s => {
+      const one = (x, d, u) => { const n = +x.toFixed(d); return `${n} ${u}${n === 1 || u === "s" || u === "min" || u === "h" ? "" : "s"}`; };
+      return s < 60 ? `${Math.round(s)} s` : s < 3600 ? one(s / 60, s < 600 ? 1 : 0, "min") : s < 86400 ? one(s / 3600, s < 36000 ? 1 : 0, "h") : one(s / 86400, 1, "day");
+    };
     const ms = x => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString("en-US")) + " ms";
 
     return { RTT, PARTY, ZONES, NOGLUE, OUTSIDE, strip, show, parent, zoneName, answer, resolve, trip, warm, seq, play,
@@ -393,7 +396,112 @@
 
 <p class="lede">Type example.com into a browser and press Enter. Before the browser can ask for the page, it needs a number. The internet delivers packets to addresses like 192.0.2.10, not to names, and the step that turns the name into that number is the Domain Name System, DNS. It usually finishes before the page has started to load.</p>
 
-<p>Here is one lookup, slowed down 20 times. Each arrow is a packet, and time runs down the page. Your computer asks a <span class="c-blue">resolver</span>, which asks three other servers in turn. Watch it from nothing, then switch to the case where <button class="set" data-set="known=res">the resolver has seen the name before</button>:</p>
+<p>In outline, the conversation goes like this. Your computer asks a <span class="c-blue">resolver</span>, and the resolver asks three servers in turn, each of which knows a little more of the answer:</p>
+
+<figure class="diagram">
+<div class="mermaid-svg" role="img" data-src="sequenceDiagram
+  participant C as Your computer
+  participant R as Resolver
+  participant Root as Root server
+  participant T as .com server
+  participant A as example.com server
+  C-&gt;&gt;R: example.com A?
+  R-&gt;&gt;Root: example.com A?
+  Root--&gt;&gt;R: ask the .com servers
+  R-&gt;&gt;T: example.com A?
+  T--&gt;&gt;R: ask example.com's servers
+  R-&gt;&gt;A: example.com A?
+  A--&gt;&gt;R: 192.0.2.10
+  R--&gt;&gt;C: 192.0.2.10"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 794.8075 440" width="794.8075" height="440" style="min-width: 572px">
+<style>
+  .mermaid-svg svg 500;600;700&amp;display=swap');
+  text { font-family: var(--font-text); }
+  .mermaid-svg svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="d1-seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  </marker>
+  <marker id="d1-seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  </marker>
+</defs>
+<line class="lifeline" data-actor="C" x1="90.3235" y1="70" x2="90.3235" y2="410" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="R" x1="235.039" y1="70" x2="235.039" y2="410" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Root" x1="375.039" y1="70" x2="375.039" y2="410" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="T" x1="519.384" y1="70" x2="519.384" y2="410" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="A" x1="688.182" y1="70" x2="688.182" y2="410" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="C" data-to="R" data-label="example.com A?" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="90.3235" y1="90" x2="235.039" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#d1-seq-arrow)" />
+  <text x="162.68124999999998" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">example.com A?</text>
+</g>
+<g class="message" data-from="R" data-to="Root" data-label="example.com A?" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="235.039" y1="130" x2="375.039" y2="130" stroke="var(--_line)" stroke-width="1" marker-end="url(#d1-seq-arrow)" />
+  <text x="305.039" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">example.com A?</text>
+</g>
+<g class="message" data-from="Root" data-to="R" data-label="ask the .com servers" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="375.039" y1="170" x2="235.039" y2="170" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#d1-seq-arrow)" />
+  <text x="305.039" y="160" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">ask the .com servers</text>
+</g>
+<g class="message" data-from="R" data-to="T" data-label="example.com A?" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="235.039" y1="210" x2="519.384" y2="210" stroke="var(--_line)" stroke-width="1" marker-end="url(#d1-seq-arrow)" />
+  <text x="377.2115" y="200" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">example.com A?</text>
+</g>
+<g class="message" data-from="T" data-to="R" data-label="ask example.com's servers" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="519.384" y1="250" x2="235.039" y2="250" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#d1-seq-arrow)" />
+  <text x="377.2115" y="240" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">ask example.com&#39;s servers</text>
+</g>
+<g class="message" data-from="R" data-to="A" data-label="example.com A?" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="235.039" y1="290" x2="688.182" y2="290" stroke="var(--_line)" stroke-width="1" marker-end="url(#d1-seq-arrow)" />
+  <text x="461.6105" y="280" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">example.com A?</text>
+</g>
+<g class="message" data-from="A" data-to="R" data-label="192.0.2.10" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="688.182" y1="330" x2="235.039" y2="330" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#d1-seq-arrow)" />
+  <text x="461.6105" y="320" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">192.0.2.10</text>
+</g>
+<g class="message" data-from="R" data-to="C" data-label="192.0.2.10" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="235.039" y1="370" x2="90.3235" y2="370" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#d1-seq-arrow)" />
+  <text x="162.68124999999998" y="360" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">192.0.2.10</text>
+</g>
+<g class="actor" data-id="d1-C" data-label="Your computer" data-type="participant">
+  <rect x="29.999999999999993" y="30" width="120.647" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="90.3235" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Your computer</text>
+</g>
+<g class="actor" data-id="d1-R" data-label="Resolver" data-type="participant">
+  <rect x="190.647" y="30" width="88.78399999999999" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="235.039" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Resolver</text>
+</g>
+<g class="actor" data-id="d1-Root" data-label="Root server" data-type="participant">
+  <rect x="322.8665" y="30" width="104.345" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="375.039" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Root server</text>
+</g>
+<g class="actor" data-id="d1-T" data-label=".com server" data-type="participant">
+  <rect x="467.2115" y="30" width="104.345" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="519.384" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">.com server</text>
+</g>
+<g class="actor" data-id="d1-A" data-label="example.com server" data-type="participant">
+  <rect x="611.5565" y="30" width="153.251" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="688.182" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">example.com server</text>
+</g>
+</svg></div>
+<figcaption>The messages in one lookup that starts from nothing. Only the last server knows the address; the others say where to ask next.</figcaption>
+</figure>
+
+<p>Here is the same lookup live, slowed down 20 times. Each arrow is a packet, and time runs down the page, so the slope of an arrow is the time it spends in flight. Watch it from nothing, then switch to the case where <button class="set" data-set="known=res">the resolver has seen the name before</button>:</p>
 
 <figure class="demo wide" id="trip" aria-label="A sequence diagram with five columns: your computer, the resolver, a root server, a .com server, and example.com's server. Arrows for each question and answer slope downward as time passes."></figure>
 <script>
@@ -472,7 +580,7 @@
 }
 </script>
 
-<p>Double the hosts and both the file and the number of copies double, so the traffic grows four times. At 1,024 hosts, a daily copy for everyone is 63 MB. At <button class="set" data-set="lg=4.45">28,174 hosts</button>, the count at the end of 1987, it would be 48 GB, more than 80 of the network's 50 kbit/s lines running flat out. The DNS specification names exactly this square law as its reason for being <a class="cite" href="#ref-rfc1034"></a>, along with a human one: every new machine waited for one office to edit the file.</p>
+<p>Double the hosts and both the file and the number of copies double, so the traffic grows four times. At 1,024 hosts, a daily copy for everyone is 63 MB. At <button class="set" data-set="lg=4.45">28,174 hosts</button>, the count at the end of 1987 <a class="cite" href="#ref-hobbes"></a>, it would be 48 GB, more than 80 of the network's 50 kbit/s lines running flat out. The DNS specification names exactly this square law as its reason for being <a class="cite" href="#ref-rfc1034"></a>, along with a human one: every new machine waited for one office to edit the file.</p>
 
 <p>The replacement, designed by Paul Mockapetris in 1983, splits the list into a tree and hands each branch to its owner. Pick a name and read it from right to left, starting at the <span class="c-purple">root</span>:</p>
 
@@ -681,6 +789,40 @@
 
 <p>The <span class="c-purple">root server</span> doesn't know example.com's address and doesn't guess. Its reply is a <dfn data-def="A reply that doesn't answer the question but names the servers one level further down the tree that can.">referral</dfn>: the answer section is empty, the authority section names the servers for <span class="c-orange">com</span>, and the additional section gives their addresses so the resolver can reach them. The com server does the same one level down. Only <span class="c-green">example.com's own server</span> fills the answer section, and it marks the reply authoritative: this comes from the zone's owner, not from someone's cache. Each line carries a TTL in seconds. The referrals say 172,800, two days, and the resolver keeps them that long.</p>
 
+<p>Here is the same first step for real: the question as I sent it to a.root-servers.net with <code>dig</code>, a command-line DNS tool, and the start of the reply. The real com zone has 13 servers, a.gtld-servers.net to m.gtld-servers.net, each with an IPv4 and an IPv6 address:</p>
+
+<div class="code-block" data-lang="text" data-title="dig +norecurse @a.root-servers.net example.com A" data-src=";; -&gt;&gt;HEADER&lt;&lt;- opcode: QUERY, status: NOERROR, id: 65455
+;; flags: qr; QUERY: 1, ANSWER: 0, AUTHORITY: 13, ADDITIONAL: 27
+
+;; QUESTION SECTION:
+;example.com.                 IN      A
+
+;; AUTHORITY SECTION:
+com.                    172800  IN      NS      l.gtld-servers.net.
+com.                    172800  IN      NS      j.gtld-servers.net.
+com.                    172800  IN      NS      h.gtld-servers.net.
+; (10 more NS records)
+
+;; ADDITIONAL SECTION:
+l.gtld-servers.net.     172800  IN      A       192.41.162.30
+l.gtld-servers.net.     172800  IN      AAAA    2001:500:d937::30
+; (25 more address records)"><div class="code-title">dig +norecurse @a.root-servers.net example.com A</div><pre class="shiki shiki-themes github-light github-dark" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span>;; ->>HEADER&#x3C;&#x3C;- opcode: QUERY, status: NOERROR, id: 65455</span></span>
+<span class="line"><span>;; flags: qr; QUERY: 1, ANSWER: 0, AUTHORITY: 13, ADDITIONAL: 27</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span>;; QUESTION SECTION:</span></span>
+<span class="line"><span>;example.com.                 IN      A</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span>;; AUTHORITY SECTION:</span></span>
+<span class="line"><span>com.                    172800  IN      NS      l.gtld-servers.net.</span></span>
+<span class="line"><span>com.                    172800  IN      NS      j.gtld-servers.net.</span></span>
+<span class="line"><span>com.                    172800  IN      NS      h.gtld-servers.net.</span></span>
+<span class="line"><span>; (10 more NS records)</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span>;; ADDITIONAL SECTION:</span></span>
+<span class="line"><span>l.gtld-servers.net.     172800  IN      A       192.41.162.30</span></span>
+<span class="line"><span>l.gtld-servers.net.     172800  IN      AAAA    2001:500:d937::30</span></span>
+<span class="line"><span>; (25 more address records)</span></span></code></pre></div>
+
 <p>That changes the next lookup. Here is one resolver handling six questions a minute apart, all sharing one cache, with what it knows listed on the right. Step through them:</p>
 
 <figure class="demo" id="second" aria-label="A sequence diagram of one lookup out of six handled by the same resolver, with the resolver's cache listed beside it. Later lookups skip the servers the cache already knows."></figure>
@@ -743,7 +885,7 @@
   const run = k => DNS.resolve("example.com.", "A", { zones: CASES[k].zones });
   const COLS = ["res", "root", { id: "tld", label: ".com, .net" }, "auth", { id: "auth2", label: "dnshost.net" }];
   demo("glue", {
-    aspect: w => (w < 560 ? 0.95 : 1.75),
+    aspect: w => (w < 560 ? 0.75 : 1.3),
     caption: "Without glue, the resolver can't reach servers named inside the zone they serve, and keeps getting the same referral. Servers named in another domain work, after a detour to look up their address.",
     controls: [{ key: "c", label: "Referral from .com", type: "choice", value: "none",
       options: Object.entries(CASES).map(([value, c]) => ({ value, label: c.label })) }],
@@ -769,9 +911,9 @@
   const Z = DNS.ZONES["example.com."];
   const ABOUT = { SOA: "the zone's settings", NS: "the zone's name servers", A: "an IPv4 address", AAAA: "an IPv6 address",
     MX: "a mail server, with its priority", TXT: "free text", CNAME: "an alias for another name" };
-  const shown = r => (r[1] === "SOA" ? "ns1.example.com hostmaster.example.com" : DNS.show(r[3]));
+  const shown = r => (r[1] === "SOA" ? "ns1.example.com hostmaster" : DNS.show(r[3]));
   demo("records", {
-    aspect: w => (w < 560 ? 0.78 : 1.6),
+    aspect: w => (w < 560 ? 0.95 : 1.95),
     caption: "Every record in one zone. A question names a name and a type; the lines that match both are the answer. A name with an alias answers any type with the alias.",
     controls: [
       { key: "name", label: "Name", type: "choice", value: "example.com.", options: ["example.com.", "www.example.com.", "mail.example.com."].map(n => ({ value: n, label: DNS.strip(n) })) },
@@ -830,14 +972,14 @@
   };
   const COLS = ["res", "root", { id: "tld", label: ".com, .net" }, "auth", "auth2"];
   demo("cname", {
-    aspect: w => (w < 560 ? 0.95 : 1.75),
+    aspect: w => (w < 560 ? 0.75 : 1.3),
     caption: "Following an alias. With nothing cached, the resolver walks two branches of the tree. Usually the alias is still cached and only the short-lived address at the end of it has to be fetched again.",
     controls: [{ key: "c", label: "Resolver knows", type: "choice", value: "empty",
       options: [{ value: "empty", label: "Nothing" }, { value: "servers", label: "Both zones' servers" }, { value: "alias", label: "The alias, 2 min ago" }] }],
     status: (s, v) => { const r = CASES[v.c](); return `${r.queries} ${r.queries === 1 ? "query" : "queries"}, ${r.t} ms`; },
     draw(g, s, v) {
       const r = CASES[v.c](), msgs = [...r.msgs];
-      if (v.c === "alias") msgs.unshift({ kind: "note", at: "res", t: 0, text: "alias in cache (1 h); address expired (60 s)", align: "left", dx: 9, dy: -2, color: "blue" });
+      if (v.c === "alias") msgs.push({ kind: "note", at: "res", t: 60, text: "the alias was cached (1 h); its address had expired (60 s)", align: "left", dx: 9, dy: 0, color: "blue" });
       DNS.seq(g, [0, 0, g.w, g.h], { cols: COLS, msgs, tmax: 160, tickStep: 40 });
     },
   });
@@ -937,7 +1079,9 @@
         xTicks: { values: [10, 60, 600, 3600, 86400] }, xFormat: DNS.dur, yTicks: [0, 0.25, 0.5, 0.75, 1], yFormat: y => `${Math.round(y * 100)}%` });
       for (const p of POP) {
         const on = p === v.pop;
-        P.fn(t => share(p, t), { color: on ? "blue" : "muted", width: on ? 2.8 : 1.3, label: `${p.toLocaleString("en-US")}/h`, labelAt: Math.min(70000, 3600 * 8 / p) });
+        // Label each curve where it crosses about 40%, or at the left edge for the most popular one.
+        const at = Math.max(14, (3600 * 0.67) / p);
+        P.fn(t => share(p, t), { color: on ? "blue" : "muted", width: on ? 2.8 : 1.3, label: `${p.toLocaleString("en-US")}/h`, labelAt: at, labelOffset: [10, 12] });
       }
       P.marker(T, share(v.pop, T), { color: "blue", drop: true, label: `${(100 * share(v.pop, T)).toFixed(0)}%`, pos: "nw" });
     },
@@ -950,6 +1094,8 @@
 <div class="tex">\text{share from cache} = \frac{\blue{\lambda}\green{T}}{1 + \blue{\lambda}\green{T}}</div>
 
 <p>A name asked a thousand times an hour is answered from the cache 94% of the time even with a one-minute TTL. A name asked once an hour barely benefits from anything shorter than a few hours. That's why big sites can afford short TTLs, and why a short TTL costs a small site very few extra queries: its name was rarely cached anyway.</p>
+
+<aside class="callout key"><p>Every answer says how long it may be kept, and a resolver shared by many people answers most lookups from a copy someone else's lookup fetched.</p></aside>
 
 <p>The same arithmetic, applied to referrals, explains how a few root servers can serve the whole internet. Here is a simulated resolver handling 20,000 lookups an hour for 50,000 domains, a few very popular and most rarely asked, starting with an empty cache. Slide through its first two days:</p>
 
@@ -998,10 +1144,14 @@
       const pb = narrow ? [0, 0, g.w, g.h * 0.56] : [0, 0, g.w * 0.6, g.h], bb = narrow ? [4, g.h * 0.62, g.w - 8, g.h * 0.36] : [g.w * 0.63, 22, g.w * 0.37 - 4, g.h - 40];
       const P = g.graph({ box: pb, x: [0, 48], y: [1, 50000], yScale: "log", axes: "frame", xLabel: "Hours since start", yLabel: "Per hour",
         xTicks: { values: [0, 12, 24, 36, 48] }, yFormat: y => fmt(y) });
+      // Each series as a line, broken where a bin had no queries at all (log scale has no zero).
       const series = (k, color) => {
-        const pts = [];
-        for (let i = 0; i < NB; i++) { const n = bins[i][k] / BIN; pts.push([(i + 0.5) * BIN, Math.max(1, n)]); }
-        P.polyline(pts, { color, width: 2 });
+        let run = [];
+        for (let i = 0; i <= NB; i++) {
+          const n = i < NB ? bins[i][k] / BIN : 0;
+          if (n > 0) run.push([(i + 0.5) * BIN, n]);
+          else { if (run.length > 1) P.polyline(run, { color, width: 2 }); else if (run.length) P.points(run, { color, r: 2.5 }); run = []; }
+        }
       };
       series(0, "ink"); series(3, "green"); series(2, "orange"); series(1, "purple");
       P.label("lookups", [40, 20000], { color: "ink", dy: -10 });
@@ -1015,7 +1165,7 @@
 }
 </script>
 
-<p>In its first minutes the resolver asks the <span class="c-purple">root</span> about every top-level domain it meets, 50 here, and then never again, because those referrals last two days. The <span class="c-orange">TLD servers</span> hear from it whenever a domain turns up that it hasn't met, which keeps happening for a day or so in the long tail of rarely visited names. Most of the remaining work lands on the <span class="c-green">domains' own servers</span>, and about two lookups in three never leave the resolver. The mix of names is made up, but the shape matches what real resolvers see: the higher a server sits in the tree, the less it hears from any one resolver<span class="sidenote">Real root servers still answer billions of queries a day, mostly for names that don't exist. In 2020 Verisign found that close to half of them came from one browser feature: Chromium testing random made-up names to detect networks that rewrite failed lookups <a class="cite" href="#ref-chromium"></a>.</span>.</p>
+<p>In its first minutes the resolver asks the <span class="c-purple">root</span> about every top-level domain it meets, 50 here, and then not at all until those two-day referrals expire. The <span class="c-orange">TLD servers</span> hear from it when a domain turns up that it hasn't met, less and less as the long tail of rare names gets used up. Most of the remaining work lands on the <span class="c-green">domains' own servers</span>, and about three lookups in five never leave the resolver. The mix of names is made up, but the shape is what real resolvers see: the higher a server sits in the tree, the less it hears from any one resolver<span class="sidenote">Real root servers still answer billions of queries a day, mostly for names that don't exist. In 2020 Verisign found that close to half of them came from one browser feature: Chromium testing random made-up names to detect networks that rewrite failed lookups <a class="cite" href="#ref-chromium"></a>.</span>.</p>
 
 <h2>Changing an address</h2>
 
@@ -1046,7 +1196,7 @@
     draw(g, s, v) {
       const narrow = g.w < 560, mapH = g.h - (narrow ? 44 : 40);
       const M = g.map({ box: [0, 0, g.w, mapH], projection: "equalEarth", graticule: false, borders: false });
-      M.marker(SERVER, { color: "green", r: 5, label: "example.com's server", side: "n" });
+      const sp = M.project(SERVER);
       for (const x of RES) {
         const p = M.project(x.at);
         if (!p) continue;
@@ -1054,18 +1204,21 @@
         if (fresh) g.circle(p, 9, { stroke: "green", width: 1.5, alpha: 0.6 });
         g.circle(p, narrow ? 3.6 : 4.5, { fill: now ? "green" : "muted", stroke: "panel", width: 1 });
       }
+      if (sp) g.rect(sp[0] - 5.5, sp[1] - 5.5, 11, 11, { fill: "green", stroke: "ink", width: 1.2, r: 1.5 });
       // The share switched so far.
       const k = RES.filter(x => x.left <= v.m).length, y = g.h - (narrow ? 22 : 18), x0 = narrow ? 8 : g.w * 0.2, x1 = narrow ? g.w - 8 : g.w * 0.8;
       g.rect(x0, y - 6, x1 - x0, 12, { fill: g.rgba("muted", 0.2), r: 6 });
       g.rect(x0, y - 6, Math.max(0, (x1 - x0) * (k / RES.length)), 12, { fill: "green", r: 6 });
       g.text(`${Math.round((100 * k) / RES.length)}% switched`, [x0, y - 15], { size: 11.5, align: "left", color: "green", weight: 600 });
-      g.text("gray: old address · green: new", [x1, y - 15], { size: 11, align: "right", color: "muted" });
+      g.text(narrow ? "square: server · gray: old · green: new" : "square: example.com's server · gray: old address · green: new", [x1, y - 15], { size: narrow ? 10.5 : 11, align: "right", color: "muted" });
     },
   });
 }
 </script>
 
 <p>There's no wave. Each resolver switches the moment its own copy runs out, and because the copies were fetched at scattered times, the <span class="c-green">green dots</span> appear in random places at a steady rate until, <button class="set" data-set="m=60">an hour after the change</button>, all of them have the new address. Distance from the server plays no part. Propagation is old copies expiring, and its limit is the TTL in force <em>before</em> the change. Lowering the TTL at the same moment as changing the address doesn't help, because the old copies still carry the old TTL<span class="sidenote">Some resolvers also impose their own minimum or maximum on TTLs, and some apps keep addresses longer than they should, which is where stories of changes taking days come from.</span>.</p>
+
+<aside class="callout mistake"><p>"DNS changes take 48 hours to propagate." A changed record reaches each resolver when that resolver's copy expires, so the wait is at most the old TTL, which the zone's owner sets. The 48 hours most likely comes from the .com zone's referrals, which last two days: moving a domain to different name servers really can take that long, because that TTL belongs to .com.</p></aside>
 
 <p>The fix is to lower the TTL well before the change. Say example.com's address normally has a TTL of one day. Ahead of the move, I drop it to five minutes; later, I change the address. Each row below is one resolver's copies over time, gray for the old address and green for the new, with the share still on the old address plotted beneath. Slide how far ahead the TTL was lowered:</p>
 
@@ -1101,20 +1254,23 @@
       const o = run(v.L), narrow = g.w < 560;
       const rowsH = g.h * 0.42, pad = narrow ? 6 : 50;
       const X = t => pad + ((t - X0) / (X1 - X0)) * (g.w - pad - 8);
-      const ROWS = 12, rh = (rowsH - 26) / ROWS;
+      const ROWS = 12, rh = (rowsH - 34) / ROWS;
       for (let i = 0; i < ROWS; i++) {
-        const y = 22 + i * rh;
+        const y = 30 + i * rh;
         for (const [a, b] of o.res[i].copies) {
           const x = X(Math.max(a, X0)), w = X(Math.min(b, X1)) - x;
           g.rect(x, y, Math.max(0.6, w - (b - a > 1 ? 1.5 : 0)), rh - 2, { fill: a >= 0 ? g.rgba("green", 0.55) : g.rgba("muted", b - a > 1 ? 0.3 : 0.55), r: b - a > 1 ? 2 : 0 });
         }
       }
-      const ev = (t, text, c, row) => {
-        g.line([X(t), 14], [X(t), rowsH + 4], { stroke: c, width: 1.5, dash: [4, 3] });
-        g.text(text, [X(t) + (row ? 4 : -4), 8], { size: 11, color: c, weight: 600, align: row ? "left" : "right" });
+      // Event lines with their names: the change to the right of its line, the TTL to the left of its
+      // line (or to the right when it's too close to the edge), so the two never overlap.
+      const ev = (t, text, c, y, left) => {
+        g.line([X(t), y + 6], [X(t), rowsH + 4], { stroke: c, width: 1.5, dash: [4, 3] });
+        g.text(text, [X(t) + (left ? -4 : 4), y], { size: 11, color: c, weight: 600, align: left ? "right" : "left" });
       };
-      ev(-v.L, "TTL lowered to 5 min", "blue", v.L < 6);
-      ev(0, "address changed", "green", true);
+      const lt = "TTL lowered to 5 min", lw = g.measure(lt, { size: 11, weight: 600 }), fitsLeft = X(-v.L) - lw - 6 > 0;
+      ev(0, "address changed", "green", 8, false);
+      ev(-v.L, lt, "blue", 8, fitsLeft);
       const P = g.graph({ box: [0, rowsH + 8, g.w, g.h - rowsH - 8], x: [X0, X1], y: [0, 1], axes: "frame", xLabel: "Hours from the change", yLabel: "On old address",
         xTicks: { values: [-24, -12, 0, 12, 24] }, yTicks: [0, 0.5, 1], yFormat: y => `${Math.round(y * 100)}%` });
       const pts = [];
@@ -1127,7 +1283,439 @@
 }
 </script>
 
-<p>Lowered <button class="set" data-set="L=0">at the change</button>, it does nothing: copies with up to a day left keep the old address for up to a day. Lowered 12 hours ahead, about half the resolvers have already swapped their long copy for short ones and switch within minutes, while the rest drag on for up to 12 more hours. Lowered <button class="set" data-set="L=24">a full day ahead</button>, every long copy has expired before the change, and everyone switches within five minutes. Afterwards the TTL can go back up. The price of the short TTL is a few hours of extra queries to example.com's servers, which the caching formula puts in numbers.</p>
+<p>Lowered <button class="set" data-set="L=0">at the change</button>, it does nothing: copies with up to a day left keep the old address that long. Lowered 12 hours ahead, about half the resolvers already hold short copies and switch within minutes, while the rest drag on for up to 12 hours. Lowered <button class="set" data-set="L=24">a full day ahead</button>, every long copy has expired before the change, and everyone switches within five minutes. Then the TTL can go back up; the short TTL's only cost is a few hours of extra queries.</p>
+
+<h2>On the wire</h2>
+
+<p>Each question and each answer is a single small packet, usually sent over <dfn data-def="User Datagram Protocol: the internet's simplest way to send a message. One packet with an address and a port, no connection and no promise of delivery.">UDP</dfn>, the internet's simplest way to send a message: no connection, no delivery promise, just a packet addressed to port 53. Here are the actual bytes your computer sends for one question, one cell per byte. Point at a byte to see what it's for:</p>
+
+<figure class="demo" id="packet" aria-label="The bytes of a DNS query laid out in rows of twelve: a twelve-byte header, then the name as length-prefixed labels, then the type and class. Each field is tinted and named underneath."></figure>
+<script>
+{
+  let CELLS = [];
+  const NAMES = ["example.com.", "www.example.com.", "mail.example.com."];
+  const hex = b => b.toString(16).padStart(2, "0");
+  demo("packet", {
+    aspect: w => (w < 560 ? 0.95 : 2.1),
+    caption: "A complete DNS question. The first row is the header; the name follows as labels, each led by its length and ending in a zero byte for the root; the last four bytes ask for type A in class IN.",
+    state: () => ({ hover: -1 }),
+    controls: [
+      { key: "name", label: "Name", type: "choice", value: NAMES[1], options: NAMES.map(n => ({ value: n, label: DNS.strip(n) })) },
+      { key: "edns", label: "Add an OPT record (EDNS)", type: "toggle", value: false, color: "blue" },
+    ],
+    hover(p, s) {
+      const i = p ? CELLS.findIndex(c => p[0] >= c[0] && p[0] < c[0] + c[2] && p[1] >= c[1] && p[1] < c[1] + c[3]) : -1;
+      if (i === s.hover) return false;
+      s.hover = i;
+      return true;
+    },
+    status(s, v) {
+      const q = DNS.query(v.name, "A", { edns: v.edns });
+      const f = s.hover >= 0 && q.fields.find(f => s.hover >= f.from && s.hover < f.to);
+      return f ? f.text : `${q.bytes.length} bytes in all`;
+    },
+    draw(g, s, v) {
+      const q = DNS.query(v.name, "A", { edns: v.edns }), narrow = g.w < 560, PER = 12;
+      const pad = 6, cw = (g.w - 2 * pad) / PER, ch = narrow ? 30 : 34, rowH = ch + (narrow ? 24 : 24), top = 6;
+      const fieldOf = i => q.fields.find(f => i >= f.from && i < f.to);
+      const hovered = s.hover >= 0 ? fieldOf(s.hover) : null;
+      CELLS = [];
+      q.bytes.forEach((b, i) => {
+        const f = fieldOf(i), r = Math.floor(i / PER), c = i % PER;
+        const x = pad + c * cw, y = top + r * rowH, on = f === hovered, col = f.color === "ink" ? "muted" : f.color;
+        CELLS.push([x, y, cw, ch]);
+        g.rect(x + 1.5, y, cw - 3, ch, { r: 4, fill: g.rgba(col, on ? 0.38 : 0.14), stroke: on ? col : g.rgba(col, 0.6), width: on ? 2 : 1 });
+        g.text(hex(b), [x + cw / 2, y + (f.chars || f.len ? ch * 0.36 : ch / 2)], { font: "mono", size: narrow ? 10.5 : 12.5, color: "ink", weight: 600 });
+        if (f.chars) g.text(String.fromCharCode(b), [x + cw / 2, y + ch * 0.74], { font: "mono", size: narrow ? 10 : 11.5, color: col });
+        if (f.len) g.text(String(b), [x + cw / 2, y + ch * 0.74], { size: narrow ? 9.5 : 10.5, color: col, weight: 600 });
+      });
+      // Field names under their bytes; letters of a label just get an underline.
+      for (const f of q.fields) {
+        if (f.len) continue;
+        const r = Math.floor(f.from / PER), endInRow = Math.min(f.to, (r + 1) * PER);
+        const x0 = pad + (f.from % PER) * cw, x1 = pad + (((endInRow - 1) % PER) + 1) * cw, y = top + r * rowH + ch + 10;
+        const col = f.color === "ink" ? "muted" : f.color;
+        g.line([x0 + 4, y - 5], [x1 - 4, y - 5], { stroke: col, width: 1.2 });
+        if (f.chars) continue;
+        const size = narrow ? 9.5 : 10.5;
+        if (g.measure(f.label, { size, weight: 600 }) < x1 - x0 + 2) g.text(f.label, [(x0 + x1) / 2, y + 5], { size, color: col, weight: 600 });
+      }
+    },
+  });
+}
+</script>
+
+<p>The first row, 12 bytes, is the <span class="c-brass">header</span>: an ID, a pair of bytes of flags, and four counts. The name follows as labels, each led by a byte giving its length: 3, then w-w-w, 7, then e-x-a-m-p-l-e, and so on. The dots are never sent, and the name ends in a <span class="c-purple">zero byte</span>, the root. Two bytes ask for type A and two for class IN, the internet: 33 bytes in all. Resolvers usually add <button class="set" data-set="edns=true">an OPT record</button>, 11 more bytes saying how large a reply this end can take, and that number matters once answers get big.</p>
+
+<p>Replies repeat the question and then add records, and the original rules capped a UDP reply at 512 bytes. Add addresses to an answer and watch it fill up:</p>
+
+<figure class="demo" id="size" aria-label="A horizontal bar showing the size of a reply in bytes, made of the header and question, the address records, and an optional signature, against lines at 512 and 1,232 bytes."></figure>
+<script>
+{
+  const MAX = 1800;
+  demo("size", {
+    aspect: w => (w < 560 ? 1.1 : 2.5),
+    caption: "The size of a reply against the limits on UDP. The original 512 bytes holds 30 IPv4 addresses or 17 IPv6 ones; EDNS raises the limit, and beyond it the reply has to go over TCP.",
+    controls: [
+      { key: "n", label: "Addresses", type: "stepper", min: 1, max: 60, step: 1, value: 12, color: "green" },
+      { key: "type", label: "Type", type: "choice", value: "A", options: ["A", "AAAA"] },
+      { key: "sig", label: "With a DNSSEC signature", type: "toggle", value: false, color: "green" },
+    ],
+    status(s, v) {
+      const z = DNS.replySize({ n: v.n, type: v.type, sig: v.sig }), n = z.total.toLocaleString("en-US");
+      return z.total <= 512 ? `${n} bytes: fits in 512` : z.total <= 1232 ? `${n} bytes: fits only with EDNS` : `${n} bytes: truncated, retry over TCP`;
+    },
+    draw(g, s, v) {
+      const z = DNS.replySize({ n: v.n, type: v.type, sig: v.sig }), narrow = g.w < 560;
+      const x0 = 12, x1 = g.w - 12, X = b => x0 + (b / MAX) * (x1 - x0);
+      const y = g.h * 0.45, bh = narrow ? 30 : 36;
+      const segs = [
+        [z.header + z.question, "muted", "header and question"],
+        [z.records, "green", `${v.n} ${v.type} record${v.n > 1 ? "s" : ""}, ${z.each} bytes each`],
+        [z.signature, "green", "signature"],
+      ];
+      let at = 0;
+      const labels = [];
+      segs.forEach(([n, c, text], i) => {
+        if (!n) return;
+        g.rect(X(at), y - bh / 2, X(at + n) - X(at), bh, { fill: g.rgba(c, i === 2 ? 0.1 : 0.3), hatch: i === 2 ? g.rgba("green", 0.7) : undefined, stroke: c, width: 1.2 });
+        labels.push({ text: i === 2 ? "signature" : text, color: c === "muted" ? "ink" : c });
+        at += n;
+      });
+      if (z.total > 1232) g.rect(X(1232), y - bh / 2 - 4, X(z.total) - X(1232), bh + 8, { stroke: "red", width: 1.6, dash: [4, 3] });
+      [[512, "red", "512: the original limit"], [1232, "blue", "1,232: the usual EDNS limit"]].forEach(([b, c, t], i) => {
+        const top = y - bh / 2 - (i ? 22 : 40);
+        g.line([X(b), top], [X(b), y + bh / 2 + 4], { stroke: c, width: 1.5, dash: [5, 4] });
+        g.text(t, [X(b) + (narrow && i ? -4 : 4), top + 2], { size: narrow ? 10.5 : 11.5, color: c, weight: 600, align: narrow && i ? "right" : "left", halo: true });
+      });
+      // A legend under the bar, one entry per part, wrapping on narrow screens.
+      let lx = x0, ly = y + bh / 2 + 18;
+      for (const l of labels) {
+        const w = g.measure(l.text, { size: narrow ? 10.5 : 11.5, weight: 600 }) + 22;
+        if (lx + w > x1) { lx = x0; ly += 17; }
+        g.rect(lx, ly - 5, 10, 10, { fill: g.rgba(l.color === "ink" ? "muted" : "green", l.text === "signature" ? 0.1 : 0.3), hatch: l.text === "signature" ? g.rgba("green", 0.7) : undefined, stroke: l.color === "ink" ? "muted" : "green", width: 1 });
+        g.text(l.text, [lx + 14, ly], { size: narrow ? 10.5 : 11.5, weight: 600, align: "left", color: l.color });
+        lx += w + 8;
+      }
+      const tx = Math.min(X(z.total) + 6, x1 - (narrow ? 70 : 80));
+      g.text(`${z.total.toLocaleString("en-US")} bytes`, [tx, y], { size: 13, weight: 700, align: "left", color: z.total > 1232 ? "red" : "ink", halo: true });
+      g.line([x0, g.h - 20], [x1, g.h - 20], { stroke: "faint", width: 1 });
+      for (let b = 0; b <= MAX; b += 500) g.text(b.toLocaleString("en-US"), [X(b), g.h - 9], { size: 10.5, color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>An IPv4 address adds 16 bytes and an IPv6 one 28, so 30 IPv4 addresses fit in 512 bytes but only 17 IPv6 ones, and <button class="set" data-set="sig=true n=4">one signature</button> takes more than half the space. EDNS <a class="cite" href="#ref-rfc6891"></a> lets each side say it can take more; since 2020 the agreed default is 1,232 bytes <a class="cite" href="#ref-flagday"></a>, because bigger UDP packets get split into fragments that many networks drop. A reply that still doesn't fit is sent cut short with a TC flag, and the resolver asks again over TCP, at the cost of two more round trips, one wasted and one for TCP's handshake <a class="cite" href="#ref-rfc7766"></a>.</p>
+
+<p>UDP's other property is that nothing checks delivery. If the question or the answer is lost, the stub hears nothing, and all it can do is wait and ask again. Set how many packets are lost and how long the stub waits, and look at how long 4,000 lookups take:</p>
+
+<figure class="demo" id="loss" aria-label="A histogram of the times of 4,000 simulated lookups on a log scale from 5 ms to 30 s. Most take tens of milliseconds; lookups that lost a packet form a second cluster one wait later."></figure>
+<script>
+{
+  const N = 4000, TRIES = 4;
+  // Each lookup: a round trip to the resolver of 10-30 ms, whether the resolver had to walk the tree
+  // (1 in 5, 20-120 ms extra), and a random
+  // number per try that decides whether that try lost a packet.
+  const LOOKUPS = (() => { const r = Num.rng(17); return Array.from({ length: N }, () => ({ rtt: 10 + 20 * r(), walk: r() < 0.2 ? 20 + 100 * r() : 0, u: Array.from({ length: TRIES }, () => r()) })); })();
+  function run(v) {
+    const p = v.loss / 100, fail = 1 - (1 - p) ** 2, T = v.wait * 1000;
+    return LOOKUPS.map(x => {
+      for (let k = 0; k < TRIES; k++) if (x.u[k] >= fail) return { t: k * T + x.rtt + x.walk, k };
+      return { t: TRIES * T, k: TRIES, failed: true };
+    });
+  }
+  const EDGES = Array.from({ length: 49 }, (_, i) => 10 ** (0.7 + (i * 3.8) / 48));
+  const bin = list => { const counts = new Array(EDGES.length - 1).fill(0); for (const x of list) { const i = EDGES.findIndex((e, j) => x.t >= e && x.t < EDGES[j + 1]); if (i >= 0) counts[i]++; } return { edges: EDGES, counts }; };
+  demo("loss", {
+    aspect: w => (w < 560 ? 1.0 : 2.1),
+    caption: "How long 4,000 lookups take when packets are lost. Every lost packet costs a full wait, so the slow lookups are almost all retries.",
+    controls: [
+      { key: "loss", label: "Packets lost", min: 0, max: 10, step: 0.5, value: 2, unit: "%", color: "red" },
+      { key: "wait", label: "Stub waits", type: "choice", value: 1, options: [{ value: 1, label: "1 s" }, { value: 5, label: "5 s" }] },
+    ],
+    status(s, v) {
+      const t = run(v), slow = t.filter(x => x.k > 0).length, failed = t.filter(x => x.failed).length;
+      return `${slow} of ${N.toLocaleString("en-US")} needed a retry${failed ? `, ${failed} failed` : ""}`;
+    },
+    draw(g, s, v) {
+      const t = run(v), ok = t.filter(x => x.k === 0), retried = t.filter(x => x.k > 0 && !x.failed);
+      const P = g.graph({ x: [5, 32000], y: [0, 700], xScale: "log", axes: "frame", xLabel: "Lookup time", yLabel: "Lookups",
+        xTicks: { values: [10, 100, 1000, 10000] }, xFormat: x => (x < 1000 ? `${x} ms` : `${x / 1000} s`), yTicks: [0, 200, 400, 600] });
+      P.histogram(bin(ok), { color: "blue", alpha: 0.3 });
+      if (retried.length) P.histogram(bin(retried), { color: "red", alpha: 0.35 });
+      const sorted = t.map(x => x.t).sort((a, b) => a - b), p99 = sorted[Math.floor(0.99 * N)], med = sorted[N >> 1];
+      P.vline(med, { color: "blue", label: `median ${DNS.ms(med)}` });
+      if (p99 > 500) P.vline(p99, { color: "red", label: `slowest 1%: ${(p99 / 1000).toFixed(1)} s` });
+      if (retried.length) {
+        const h = bin(retried), top = Math.max(...h.counts), i = h.counts.indexOf(top);
+        P.label(`${retried.length} retried`, [Math.sqrt(EDGES[i] * EDGES[i + 1]), top + 40], { color: "red", align: "center" });
+      }
+    },
+  });
+}
+</script>
+
+<p>With 2% of packets lost each way, about 4% of lookups lose one, and each of those costs a full wait: a second or more instead of a few tens of milliseconds. The median doesn't move, but the slow end is nearly all <span class="c-red">retries</span>. The usual Linux C library waits <button class="set" data-set="wait=5">5 seconds</button> and tries twice per server <a class="cite" href="#ref-resolvconf"></a>; resolvers do better, timing each server and waiting only a little longer than usual.</p>
+
+<p>No connection also means no proof of who sent a reply. The resolver accepts the first reply that matches its question, its 16-bit ID, and the port it sent from. An attacker who can't see the question can still guess: send a burst of forged replies, each with a different ID, hoping one lands before the real answer. Say each race allows 100 guesses. Slide the number of races:</p>
+
+<figure class="demo" id="spoof" aria-label="A plot of the chance that a forged reply has been accepted against the number of races, on a log scale, for a resolver that only checks the ID and one that also uses a random source port."></figure>
+<script>
+{
+  const K = 100, ID = 65536, PORTS = 64512;
+  const win = (races, port) => 1 - Math.exp(races * Math.log1p(-K / (ID * (port ? PORTS : 1))));
+  const big = x => (x >= 1e9 ? `${x / 1e9} billion` : x >= 1e6 ? `${x / 1e6} million` : x.toLocaleString("en-US"));
+  demo("spoof", {
+    aspect: w => (w < 560 ? 1.0 : 2.0),
+    caption: "The chance an attacker has slipped in a forged reply, with 100 guesses per race. Guessing a 16-bit ID takes hundreds of races; adding a random source port makes it tens of millions.",
+    controls: [
+      { key: "lr", label: "Races", min: 0, max: 9, step: 0.01, value: 2.66, color: "red", format: x => big(Math.round(10 ** x)) },
+      { key: "port", label: "Random source port", type: "toggle", value: false, color: "blue" },
+    ],
+    status: (s, v) => `${(100 * win(10 ** v.lr, v.port)).toFixed(1)}% chance a forgery got in`,
+    draw(g, s, v) {
+      const R = 10 ** v.lr;
+      const P = g.graph({ x: [1, 1e9], y: [0, 1], xScale: "log", axes: "frame", xLabel: "Races", yLabel: "Forgery accepted",
+        xTicks: { values: [1, 1e3, 1e6, 1e9] }, xFormat: big, yTicks: [0, 0.5, 1], yFormat: y => `${y * 100}%` });
+      P.fn(r => win(r, false), { color: "red", width: v.port ? 1.4 : 2.8, label: "ID only", labelAt: 30, labelOffset: [0, -12] });
+      P.fn(r => win(r, true), { color: "blue", width: v.port ? 2.8 : 1.4, label: "ID and port", labelAt: 3e5, labelOffset: [0, -12] });
+      P.marker(R, win(R, v.port), { color: v.port ? "blue" : "red", drop: true, label: `${(100 * win(R, v.port)).toFixed(0)}%`, pos: "se" });
+    },
+  });
+}
+</script>
+
+<p>Checking only the ID, 100 guesses win one race in 655, so an attacker has even odds after <button class="set" data-set="lr=2.66 port=false">about 450 races</button>. In 2008 Dan Kaminsky showed how to start races at will, by asking about made-up names like 123.example.com, and how a forged referral could take over a whole domain <a class="cite" href="#ref-kaminsky"></a>. The fix shipped that summer: a <span class="c-blue">random source port</span> on every question, which pushes even odds out to <button class="set" data-set="lr=7.46 port=true">about 29 million races</button>. Signed answers, at the end of the page, are the real cure.</p>
+
+<h2>One address, many places</h2>
+
+<p>The round trips in the first figure were set by hand. Real ones are set by distance: light in fiber covers about 200 km each millisecond, and cables rarely run straight. Yet there are only 13 root server names, each with one address, and resolvers on every continent reach one in a few milliseconds. The trick is <dfn data-def="Giving the same address to many servers in different places. The internet's routing delivers each packet to whichever copy is nearest along the network's paths.">anycast</dfn>: many machines in many cities share one address, and routing delivers each packet to the nearest copy. Drag yourself around the map, and switch anycast off:</p>
+
+<figure class="demo wide" id="hops" aria-label="A world map with one lookup's hops drawn as great circles: from you to your resolver, and from the resolver to a root server, a .com server, and example.com's server, each labeled with its round-trip time. Root copies show as small dots when anycast is on."></figure>
+<script>
+{
+  const C = DNS.CITY, NAMES = Object.keys(C);
+  const ROOTS = NAMES.map(n => C[n]);                                   // a copy in each of these cities
+  const TLDS = ["Los Angeles", "Chicago", "New York", "Miami", "São Paulo", "London", "Amsterdam", "Frankfurt", "Stockholm", "Istanbul",
+    "Johannesburg", "Nairobi", "Dubai", "Mumbai", "Singapore", "Hong Kong", "Tokyo", "Seoul", "Sydney", "Auckland"].map(n => C[n]);
+  const ONE = { root: [-118.24, 34.05], tld: [-77.04, 38.9] };            // single sites: Los Angeles and Washington
+  const AUTH = C.Frankfurt;                                               // example.com's servers, in one place
+  const nearest = (list, at) => list.reduce((b, p) => (DNS.km(at, p) < DNS.km(at, b) ? p : b));
+  function hops(s, v) {
+    const res = nearest(ROOTS, s.you);                                    // your provider's resolver, in the nearest big city
+    const root = v.any ? nearest(ROOTS, res) : ONE.root, tld = v.any ? nearest(TLDS, res) : ONE.tld;
+    const list = [["you", s.you, res, "brass", "to the resolver"], ["root", res, root, "purple", "root"], ["tld", res, tld, "orange", ".com"], ["auth", res, AUTH, "green", "example.com"]];
+    return list.map(([id, a, b, color, name]) => ({ id, a, b, color, name, km: DNS.km(a, b), ms: Math.round(DNS.rttFor(DNS.km(a, b))) }));
+  }
+  let M;
+  demo("hops", {
+    aspect: w => (w < 560 ? 0.9 : 2.0),
+    caption: "One cold lookup on a real map, with round-trip times computed from great-circle distance (fiber at 200 km per ms, paths 1.5 times the straight line). With anycast, the root and .com servers are nearby; example.com's servers are in one place.",
+    state: () => ({ you: [-46.63, -23.55] }),
+    controls: [{ key: "any", label: "Root and .com use anycast", type: "toggle", value: true, color: "purple" }],
+    status(s, v) {
+      const h = hops(s, v), total = h.reduce((a, x) => a + x.ms, 0);
+      return `cold lookup ${total} ms: root ${h[1].ms}, .com ${h[2].ms}, example.com ${h[3].ms}, plus ${h[0].ms} to the resolver`;
+    },
+    drag: {
+      hit: (p, s) => !!M && M.near(p, s.you, 22),
+      move(p, s) { const q = M.invert(p); if (q) s.you = [+q[0].toFixed(2), +q[1].toFixed(2)]; },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, h = hops(s, v);
+      M = g.map({ projection: "equalEarth", graticule: false, borders: false });
+      if (v.any) M.points(ROOTS, { r: narrow ? 1.6 : 2.2, color: "purple", labels: false });
+      M.marker(AUTH, { color: "green", r: 5 });
+      const labels = [];
+      for (const x of h.slice(1)) {
+        const arc = M.arc(x.a, x.b, { color: x.color, width: 2.4 });
+        M.marker(x.b, { color: x.color, r: 4.5 });
+        const mid = arc.at(0.5) ?? M.project(x.b);
+        if (mid) labels.push({ at: mid, text: `${x.name} ${x.ms} ms`, color: x.color, size: narrow ? 10.5 : 12 });
+      }
+      M.arc(h[0].a, h[0].b, { color: "brass", width: 2 });
+      const rp = M.project(h[0].b);
+      if (rp) { g.circle(rp, 6, { fill: "blue", stroke: "panel", width: 1.5 }); labels.push({ at: rp, text: `resolver ${h[0].ms} ms`, color: "blue", size: narrow ? 10.5 : 12 }); }
+      g.labels(labels);
+      const yp = M.project(s.you);
+      if (yp) g.handle(yp, { color: "brass" });
+    },
+  });
+}
+</script>
+
+<p>From São Paulo, with anycast, the root and .com copies are in the same city and answer in about a millisecond; nearly all of the cold lookup is the trip to <span class="c-green">example.com's servers</span>, which sit in one place. <button class="set" data-set="any=false">Without anycast</button>, the root is in Los Angeles and .com in Washington, adding a few hundred milliseconds. The roots run about 2,000 copies between them <a class="cite" href="#ref-rootservers"></a>, and the .com servers and big public resolvers such as 1.1.1.1 use the same trick. But "nearest" means nearest along the routes networks agree to carry, not on the map.</p>
+
+<p>I timed all 13 root servers from the computer I wrote this page on, three times each, and asked each one which copy had answered (a root server reports its copy's name when asked for <code>hostname.bind</code>). The <span class="c-purple">bars</span> are the median round trips. Press play to watch a resolver learn which to use:</p>
+
+<figure class="demo" id="roots" aria-label="Thirteen rows, one per root server letter, each with the city of the copy that answered, a bar for its measured round trip, and a second bar for the share of queries a simulated resolver sends it."></figure>
+<script>
+{
+  // Measured from one computer in October 2026: median of three round trips, and the copy that answered.
+  const DATA = [["a", 276, "Tokyo"], ["b", 104, "Singapore"], ["c", 278, "Los Angeles"], ["d", 41, "name unclear"], ["e", 40, "Mumbai"],
+    ["f", 40, "Mumbai"], ["g", 275, "name unclear"], ["h", 288, "London"], ["i", 291, "London"], ["j", 41, "Mumbai"],
+    ["k", 63, "Chennai"], ["l", 42, "Mumbai"], ["m", 41, "Mumbai"]];
+  const ORDER = DATA.map((d, i) => i).sort((a, b) => DATA[a][1] - DATA[b][1]);
+  const RANDOM = DATA.reduce((a, d) => a + d[1], 0) / DATA.length;
+  const fresh = () => {
+    let seed = 99;
+    const srtt = DATA.map(() => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed / 4294967296) * 30; });
+    return { srtt, count: DATA.map(() => 0), n: 0, wait: 0, acc: 0, seed, last: -1 };
+  };
+  // One query: pick the server with the lowest smoothed round trip, measure it (with 10% jitter),
+  // fold the measurement in, and let the others' estimates decay so slow ones get retried now and then.
+  function query(s) {
+    let i = 0;
+    for (let j = 1; j < DATA.length; j++) if (s.srtt[j] < s.srtt[i]) i = j;
+    s.seed = (s.seed * 1103515245 + 12345) >>> 0;
+    const rtt = DATA[i][1] * (0.9 + 0.2 * (s.seed / 4294967296));
+    s.srtt = s.srtt.map((x, j) => (j === i ? 0.7 * x + 0.3 * rtt : x * 0.98));
+    s.count[i]++; s.n++; s.wait += rtt; s.last = i;
+  }
+  demo("roots", {
+    aspect: w => (w < 560 ? 0.78 : 1.7),
+    caption: "Round trips to the 13 root servers measured from one computer, and the share of queries a resolver sends to each as it learns which answer fastest. A few copies answer from across the world.",
+    state: fresh,
+    reset: true,
+    transport: { speed: false },
+    step(dt, s) { s.acc += dt * 30; while (s.acc >= 1 && s.n < 5000) { query(s); s.acc--; } },
+    status: s => (s.n ? `${s.n} queries, average wait ${Math.round(s.wait / s.n)} ms (picking at random: ${Math.round(RANDOM)} ms)` : "press play"),
+    draw(g, s) {
+      const narrow = g.w < 560, top = 22, rh = (g.h - top - 4) / DATA.length;
+      const xName = narrow ? 30 : 34, xBar = narrow ? 104 : 160, wBar = narrow ? g.w * 0.24 : g.w * 0.38, xShare = xBar + wBar + (narrow ? 46 : 56), wShare = g.w - xShare - 30;
+      g.text("round trip", [xBar, 10], { size: 11.5, color: "purple", weight: 600, align: "left" });
+      g.text("share of queries", [xShare, 10], { size: 11.5, color: "blue", weight: 600, align: "left" });
+      const most = Math.max(1, ...s.count);
+      ORDER.forEach((i, row) => {
+        const [letter, ms, city] = DATA[i], y = top + row * rh + rh / 2;
+        g.bead([14, y], Math.min(9, rh / 2 - 1), letter, { color: "purple", textColor: "ink" });
+        g.text(city, [xName, y], { size: narrow ? 10.5 : 12, align: "left", color: city === "name unclear" ? "muted" : "ink" });
+        const w = (ms / 300) * wBar;
+        g.rect(xBar, y - rh * 0.3, w, rh * 0.6, { fill: g.rgba("purple", 0.3), stroke: "purple", width: 1 });
+        g.text(`${ms} ms`, [xBar + w + 4, y], { size: 10.5, color: "muted", align: "left" });
+        const sw = s.n ? (s.count[i] / most) * wShare * 0.8 : 0;
+        if (sw > 0) g.rect(xShare, y - rh * 0.3, sw, rh * 0.6, { fill: g.rgba("blue", i === s.last ? 0.6 : 0.3), stroke: "blue", width: 1 });
+        if (s.n) g.text(`${Math.round((100 * s.count[i]) / s.n)}%`, [xShare + sw + 4, y], { size: 10.5, color: "muted", align: "left" });
+      });
+    },
+  });
+}
+</script>
+
+<p>Seven letters answered in 40 to 63 ms, most from Mumbai. The other six took 100 to 290 ms, from Singapore, Tokyo, Los Angeles, London, and one copy whose name doesn't say: some letters have few copies, and others have copies this network's routes don't reach. The resolver doesn't need to know any of this. It keeps a running average of each server's speed, sends most questions to the quickest, and lets the others' averages fade so it retries them now and then. After a few hundred queries, more than four in five go to the six 40 ms copies, and the average wait settles near 63 ms, under half of what picking at random would cost.</p>
+
+<h2>When it fails</h2>
+
+<p>Not every lookup ends with an address. Each reply carries a response code, and besides success there are three outcomes worth telling apart. Try each one:</p>
+
+<figure class="demo" id="rcodes" aria-label="A sequence diagram of four lookups: one that succeeds, a misspelled name that the .com server says doesn't exist, a name with no record of the type asked, and one where example.com's servers don't reply."></figure>
+<script>
+{
+  const CASES = {
+    ok: { run: () => DNS.trip("example.com.", "A"), code: "NOERROR", tmax: 100, say: "an answer" },
+    typo: { run: () => DNS.trip("exmaple.com.", "A"), code: "NXDOMAIN", tmax: 100, say: "no such name" },
+    nodata: { run: () => DNS.trip("mail.example.com.", "AAAA"), code: "NOERROR, empty", tmax: 100, say: "the name exists, the record doesn't" },
+    down: { run: () => DNS.trip("example.com.", "A", { down: ["auth"], timeout: 400 }), code: "SERVFAIL", tmax: 1000, say: "the resolver couldn't get any answer" },
+  };
+  demo("rcodes", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    caption: "Four ways a lookup ends. A name that doesn't exist is a definite answer from the zone above it; SERVFAIL means nobody answered at all. The last case's time axis is ten times longer.",
+    controls: [{ key: "c", label: "Lookup", type: "choice", value: "typo",
+      options: [{ value: "ok", label: "example.com A" }, { value: "typo", label: "exmaple.com A" }, { value: "nodata", label: "mail.example.com AAAA" }, { value: "down", label: "servers down" }] }],
+    status: (s, v) => { const c = CASES[v.c], r = c.run(); return `${c.code}: ${c.say}, after ${r.total} ms`; },
+    draw(g, s, v) {
+      const c = CASES[v.c], r = c.run(), narrow = g.w < 560;
+      // The final reply's text is the code shown in the chip; on the long time axis the early,
+      // successful exchanges are too squeezed to label.
+      const msgs = r.msgs.map((m, i) => (i === r.msgs.length - 1 && m.text === c.code) || (c.tmax > 100 && m.t1 < 60 && m.from !== "you") ? { ...m, text: "" } : m);
+      const { X, Y } = DNS.seq(g, [0, 0, g.w, g.h - 30], { cols: ["you", "res", "root", "tld", "auth"], msgs, tmax: c.tmax, tickStep: c.tmax / 5 });
+      const bad = c.code === "SERVFAIL" || c.code === "NXDOMAIN";
+      g.chip(c.code, [X.you + (narrow ? 34 : 50), Math.min(g.h - 14, Y(r.total) + 22)], { color: bad ? "red" : c.code === "NOERROR" ? "green" : "muted", size: narrow ? 11 : 12.5 });
+      if (c.tmax > 100) g.text("time axis 10 times longer", [g.w - 8, g.h - 12], { size: 11, color: "muted", align: "right" });
+    },
+  });
+}
+</script>
+
+<p><button class="set" data-set="c=typo">NXDOMAIN</button> means the name doesn't exist, and it's an answer, not a failure: the .com server has never heard of exmaple.com, and that's final. An <button class="set" data-set="c=nodata">empty NOERROR</button> means the name exists but has no record of the type asked. <button class="set" data-set="c=down">SERVFAIL</button> is the real failure: example.com's servers don't reply, and after waiting on both, the resolver gives up. Only that one might go away if you try again.</p>
+
+<aside class="callout key"><p>NXDOMAIN is an answer: someone in charge of the zone said the name doesn't exist. SERVFAIL is the absence of an answer.</p></aside>
+
+<p>A "no" is cached too, for the smaller of the SOA record's TTL and its last field <a class="cite" href="#ref-rfc2308"></a>: 15 minutes for unregistered names under .com, 5 minutes for missing names under example.com. Look up a name before creating it, and you may wait that long to see it work.</p>
+
+<p>The worst failure is a domain's own servers going silent for everyone at once. On 4 October 2021 the routes to Facebook's DNS servers vanished from the internet, and within minutes resolvers everywhere returned SERVFAIL for facebook.com <a class="cite" href="#ref-facebook"></a>. What keeps a site reachable in such an outage is the cache. Set the TTL and see what share of resolvers can still answer for a popular name after its servers disappear:</p>
+
+<figure class="demo" id="outage" aria-label="A plot of the share of resolvers that can still answer for a name against hours since its servers stopped answering, falling in a straight line to zero at one TTL, or staying at 100% when resolvers serve stale answers."></figure>
+<script>
+{
+  const H = 8;
+  const alive = (t, T, stale) => (stale ? (t <= 72 ? 1 : 0) : Math.max(0, 1 - t / T));
+  let hx = null, P = null;   // hover position in hours, and the graph from the last draw
+  demo("outage", {
+    aspect: w => (w < 560 ? 1.05 : 2.1),
+    caption: "After a domain's servers stop answering, each resolver can answer until its cached copy expires, and copies expire at a steady rate over one TTL. Resolvers that serve stale answers keep going for days.",
+    controls: [
+      { key: "lt", label: "TTL", min: Math.log10(60), max: Math.log10(86400), step: 0.001, value: Math.log10(14400), color: "blue", format: x => DNS.dur(10 ** x),
+        marks: [60, 300, 3600, 86400].map(t => ({ value: Math.log10(t), label: DNS.dur(t) })) },
+      { key: "stale", label: "Serve stale answers", type: "toggle", value: false, color: "green" },
+    ],
+    hover(p, s) { const x = p && P ? P.inv(p)[0] : null; const nx = x != null && x >= 0 && x <= H ? x : null; if (nx === hx) return false; hx = nx; return true; },
+    status: (s, v) => `after 1 hour: ${Math.round(100 * alive(1, 10 ** v.lt / 3600, v.stale))}% of resolvers still answer`,
+    draw(g, s, v) {
+      const T = 10 ** v.lt / 3600;
+      P = g.graph({ x: [0, H], y: [0, 1.05], axes: "frame", xLabel: "Hours since the servers went silent", yLabel: "Resolvers still answering",
+        xTicks: { values: [0, 2, 4, 6, 8] }, yTicks: [0, 0.5, 1], yFormat: y => `${Math.round(y * 100)}%` });
+      if (!v.stale) P.area(t => alive(t, T, false), 0, H, { color: "blue", alpha: 0.15 });
+      P.fn(t => alive(t, T, v.stale), { color: v.stale ? "green" : "blue", width: 2.6 });
+      if (v.stale) P.label("serving expired copies, for up to a few days", [H * 0.62, 0.9], { color: "green" });
+      P.crosshair(hx ?? 1, [{ f: t => alive(t, T, v.stale), color: v.stale ? "green" : "blue", format: y => `${Math.round(y * 100)}% still answer` }], { xFormat: x => `${x.toFixed(1)} h` });
+    },
+  });
+}
+</script>
+
+<p>With a <button class="set" data-set="lt=2.477">five-minute TTL</button>, the name disappears for nearly everyone within five minutes. With <button class="set" data-set="lt=4.936">a day</button>, three-quarters of resolvers still answer six hours in, as long as the addresses they hold still work. Resolvers that <button class="set" data-set="stale=true">serve stale answers</button> go further: when a domain's servers can't be reached, they keep handing out the expired record, for up to a few days <a class="cite" href="#ref-rfc8767"></a>. Failure also makes noise. Apps that got SERVFAIL for facebook.com retried again and again, and Cloudflare's resolver saw 30 times its usual load <a class="cite" href="#ref-facebook"></a>; experiments with attacks on DNS servers found the same pattern, with caches and retries carrying many users through at the price of up to eight times the normal traffic <a class="cite" href="#ref-dike"></a>.</p>
+
+<h2>Back to the address bar</h2>
+
+<p>Put it together for the name people actually type, www.example.com, an alias. From an empty resolver it takes six queries across two branches of the tree (<a class="figref" href="#cname"></a>). But a busy resolver is rarely empty: the referrals last two days, the alias an hour, and usually only the 60-second address at the end has to be fetched again, one query to one server. Often even that was fetched a moment ago for someone else, and the answer comes back in one short round trip, or from your own computer with no packet at all, the fast cases of <a class="figref" href="#trip"></a>.</p>
+
+<p>DNS was drawn up in 1983 for a few hundred machines and has grown to billions mostly by not being asked. Every answer may be remembered for a while, a resolver's users share what it remembers, and the top of the tree hears from each resolver about once every two days. What it never had built in was proof or privacy; both were added later, and both are below.</p>
+
+<details class="deeper">
+  <summary>Signed answers: DNSSEC <span class="hint">3 min</span></summary>
+  <p>DNSSEC, standardized in 2005 <a class="cite" href="#ref-rfc4033"></a>, adds signatures. Each zone publishes a public key in a DNSKEY record and signs each set of records with the matching private key; the signatures travel in RRSIG records beside the data. A validating resolver checks the signature on example.com's answer with example.com's key. To trust that key, it checks a DS record, a fingerprint of the key published and signed by the parent zone, .com; the .com key in turn has a DS record signed by the root. The chain ends at the root's key, which validating resolvers carry built in, like the root hints. The root zone was first signed in July 2010.</p>
+  <p>A forged reply like the ones in the race above can't carry a valid signature without example.com's private key, so a validating resolver throws it away and returns SERVFAIL rather than a wrong address. The costs are bigger replies (the signature in <a class="figref" href="#size"></a> is about 300 bytes), new ways to break a domain by mishandling its keys, and the fact that only a minority of domains are signed. DNSSEC proves an answer is genuine. It doesn't hide it.</p>
+</details>
+
+<details class="deeper">
+  <summary>Private questions: DNS over TLS and HTTPS <span class="hint">2 min</span></summary>
+  <p>Plain DNS travels unencrypted, so anyone on the path, a café's Wi-Fi or an internet provider, can read every name you look up, and some networks rewrite the answers. DNS over TLS (DoT) wraps the conversation between your computer and its resolver in the same encryption web pages use, on its own port, 853 <a class="cite" href="#ref-rfc7858"></a>. DNS over HTTPS (DoH) sends the questions as ordinary HTTPS requests on port 443 <a class="cite" href="#ref-rfc8484"></a>, so they look like any other web traffic. Browsers can switch DoH on by themselves, which is one reason they sometimes skip the operating system.</p>
+  <p>Encryption hides the questions from the path, not from the resolver, which still sees everything you ask. Between the resolver and the root, TLD, and authoritative servers, most traffic is still plain UDP. A separate change limits what those servers learn: with query name minimisation <a class="cite" href="#ref-rfc9156"></a>, a resolver asks the root only about com and the .com server only about example.com, instead of sending the full name to every server on the way.</p>
+</details>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-rfc1034">P. Mockapetris, “Domain names: concepts and facilities”, RFC 1034, IETF, November 1987. Section 2.1 gives the history of HOSTS.TXT.</li>
+  <li id="ref-hobbes">Robert H. Zakon, “Hobbes' Internet Timeline”, zakon.org. Host counts from 1981 to 1989.</li>
+  <li id="ref-iana-root">IANA, “Root Zone Database”, iana.org/domains/root/db. A copy of the root zone I downloaded in October 2026 delegated 1,437 top-level domains.</li>
+  <li id="ref-chromium">Matthew Thomas and Duane Wessels, “Chromium's impact on root DNS traffic”, Verisign blog, August 2020.</li>
+  <li id="ref-rfc6891">J. Damas, M. Graff, and P. Vixie, “Extension Mechanisms for DNS (EDNS(0))”, RFC 6891, IETF, April 2013. It replaced RFC 2671, from 1999.</li>
+  <li id="ref-flagday">DNS Flag Day 2020, dnsflagday.net/2020. The recommendation of a 1,232-byte EDNS buffer and of retrying truncated replies over TCP.</li>
+  <li id="ref-rfc7766">J. Dickinson, S. Dickinson, R. Bellis, A. Mankin, and D. Wessels, “DNS Transport over TCP: Implementation Requirements”, RFC 7766, IETF, March 2016.</li>
+  <li id="ref-resolvconf">resolv.conf(5), Linux man-pages, man7.org. The defaults for <code>timeout</code> (5 seconds) and <code>attempts</code> (2).</li>
+  <li id="ref-kaminsky">CERT/CC, “Multiple DNS implementations vulnerable to cache poisoning”, Vulnerability Note VU#800113, July 2008.</li>
+  <li id="ref-rootservers">Root Server Technical Operations Association, root-servers.org. The 13 root server identities, their 12 operators, and their instances around the world.</li>
+  <li id="ref-rfc2308">M. Andrews, “Negative Caching of DNS Queries (DNS NCACHE)”, RFC 2308, IETF, March 1998.</li>
+  <li id="ref-facebook">Celso Martinho and Tom Strickx, “Understanding how Facebook disappeared from the Internet”, Cloudflare blog, 4 October 2021.</li>
+  <li id="ref-rfc8767">D. Lawrence, W. Kumari, and P. Sood, “Serving Stale Data to Improve DNS Resiliency”, RFC 8767, IETF, March 2020.</li>
+  <li id="ref-dike">Giovane C. M. Moura, John Heidemann, Moritz Müller, Ricardo de O. Schmidt, and Marco Davids, “When the Dike Breaks: Dissecting DNS Defenses During DDoS”, ACM Internet Measurement Conference (IMC), 2018.</li>
+  <li id="ref-rfc4033">R. Arends, R. Austein, M. Larson, D. Massey, and S. Rose, “DNS Security Introduction and Requirements”, RFC 4033, IETF, March 2005.</li>
+  <li id="ref-rfc7858">Z. Hu, L. Zhu, J. Heidemann, A. Mankin, D. Wessels, and P. Hoffman, “Specification for DNS over Transport Layer Security (TLS)”, RFC 7858, IETF, May 2016.</li>
+  <li id="ref-rfc8484">P. Hoffman and P. McManus, “DNS Queries over HTTPS (DoH)”, RFC 8484, IETF, October 2018.</li>
+  <li id="ref-rfc9156">S. Bortzmeyer, R. Dolmans, and P. Hoffman, “DNS Query Name Minimisation to Improve Privacy”, RFC 9156, IETF, November 2021.</li>
+</ol>
 <!-- explainer:article:end -->
 </article>
 </main>
