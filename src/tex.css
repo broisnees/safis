@@ -1,0 +1,122 @@
+/* Math. TeX in .tex elements becomes MathML (src/tex.js), set in a subset of
+   STIX Two Math (SIL Open Font License, src/fonts/STIXTwoMath-OFL.txt). */
+@font-face {
+  font-family: "Safis Math";
+  src: url("fonts/math.woff2") format("woff2");
+  font-display: block;
+}
+:root {
+  --font-math: "Safis Math", "STIX Two Math", "Cambria Math", "Latin Modern Math", math;
+  counter-reset: tex-eq;
+}
+math { font-family: var(--font-math); font-size: 1.07em; }
+span.tex { white-space: nowrap; }
+:is(div, p).tex {
+  display: flex; align-items: center; gap: 1em;
+  margin: 28px 0;
+  text-align: center;
+}
+.tex-scroll { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.tex-scroll > math { font-size: 1.14em; }
+:is(div, p).tex:is([data-number], .numbered)::before { content: ""; flex: none; width: 2.2em; }
+:is(div, p).tex.numbered { counter-increment: tex-eq; }
+:is(div, p).tex:is([data-number], .numbered)::after {
+  flex: none; width: 2.2em; text-align: right;
+  font-family: var(--font-serif); font-variant-numeric: lining-nums; color: var(--muted);
+}
+@media (max-width: 560px) {
+  .tex-scroll > math { font-size: 1.04em; }
+  :is(div, p).tex:is([data-number], .numbered)::before { display: none; }
+}
+:is(div, p).tex[data-number]::after { content: "(" attr(data-number) ")"; }
+:is(div, p).tex.numbered:not([data-number])::after { content: "(" counter(tex-eq) ")"; }
+
+/* Environments: matrices centered, cases and aligned columns flush against the relation. */
+mtable.tex-matrix > mtr > mtd { padding: 0.12em 0.42em; }
+mtable.tex-matrix > mtr > mtd:first-child { padding-left: 0.12em; }
+mtable.tex-matrix > mtr > mtd:last-child { padding-right: 0.12em; }
+mtable.tex-small { font-size: 0.75em; }
+mtable.tex-cases > mtr > mtd { text-align: left; padding: 0.15em 0; }
+mtable.tex-cases > mtr > mtd + mtd { padding-left: 1em; }
+mtable.tex-aligned > mtr > mtd { padding: 0.2em 0; }
+mtable.tex-aligned > mtr > mtd:nth-child(odd) { text-align: right; }
+mtable.tex-aligned > mtr > mtd:nth-child(even) { text-align: left; padding-right: 1.6em; }
+mtable.tex-aligned > mtr > mtd:last-child { padding-right: 0; }
+mtable.tex-gathered > mtr > mtd { padding: 0.2em 0; }
+mtd.tex-left { text-align: left; }
+mtd.tex-right { text-align: right; }
+mtd.tex-center { text-align: center; }
+
+mrow.tex-boxed { border: 1px solid currentColor; padding: 0.2em 0.3em; }
+
+/* Stretchy arrows (\xrightarrow, \overrightarrow). Chrome won't stretch an arrow glyph
+   to the width of its labels, so the arrow is drawn with gradients in currentColor:
+   a shaft, and each barb as the diagonal of a small box. */
+mrow:is(.tex-xarrow, .tex-overarrow) {
+  --t: 0.06em;
+  --hw: 0.3em; --hh: 0.15em;
+  --line: linear-gradient(currentColor, currentColor);
+  --tl: linear-gradient(to top right, transparent calc(50% - 0.03em), currentColor calc(50% - 0.03em), currentColor calc(50% + 0.03em), transparent calc(50% + 0.03em));
+  --bl: linear-gradient(to bottom right, transparent calc(50% - 0.03em), currentColor calc(50% - 0.03em), currentColor calc(50% + 0.03em), transparent calc(50% + 0.03em));
+  background-repeat: no-repeat;
+}
+/* \xrightarrow: a two-row table (label, then the label below or a phantom) centers on the axis. */
+mrow.tex-xarrow { margin: 0 0.2778em; --yl: 50%; --yu: calc(50% - 0.075em); --yd: calc(50% + 0.075em); }
+mrow.tex-xarrow > mtable > mtr > mtd { padding: 0.06em 0.6em; }
+mrow:is(.tex-arrow-eq, .tex-arrow-r2, .tex-arrow-l2) > mtable > mtr > mtd { padding-block: 0.16em; }
+mrow.tex-xarrow-label { math-depth: add(1); font-size: math; }
+mrow.tex-overarrow { padding-top: 0.4em; --yl: 0.13em; --yu: 0.01em; --yd: 0.16em; }
+mrow.tex-arrow-r, mrow.tex-arrow-map {
+  background-image: var(--line), var(--tl), var(--bl);
+  background-size: calc(100% - 0.08em) var(--t), var(--hw) var(--hh), var(--hw) var(--hh);
+  background-position: left 0.02em top var(--yl), right 0.02em top var(--yu), right 0.02em top var(--yd);
+}
+mrow.tex-arrow-map {
+  background-image: var(--line), var(--tl), var(--bl), var(--line);
+  background-size: calc(100% - 0.08em) var(--t), var(--hw) var(--hh), var(--hw) var(--hh), var(--t) 0.3em;
+  background-position: left 0.02em top var(--yl), right 0.02em top var(--yu), right 0.02em top var(--yd), left 0.02em top 50%;
+}
+mrow.tex-arrow-l {
+  background-image: var(--line), var(--bl), var(--tl);
+  background-size: calc(100% - 0.08em) var(--t), var(--hw) var(--hh), var(--hw) var(--hh);
+  background-position: right 0.02em top var(--yl), left 0.02em top var(--yu), left 0.02em top var(--yd);
+}
+mrow.tex-arrow-lr {
+  background-image: var(--line), var(--tl), var(--bl), var(--bl), var(--tl);
+  background-size: calc(100% - 0.08em) var(--t), var(--hw) var(--hh), var(--hw) var(--hh), var(--hw) var(--hh), var(--hw) var(--hh);
+  background-position: left 0.04em top var(--yl), right 0.02em top var(--yu), right 0.02em top var(--yd), left 0.02em top var(--yu), left 0.02em top var(--yd);
+}
+/* ⇌: a harpoon each way. */
+mrow.tex-arrow-eq {
+  background-image: var(--line), var(--tl), var(--line), var(--tl);
+  background-size: calc(100% - 0.04em) var(--t), var(--hw) var(--hh), calc(100% - 0.04em) var(--t), var(--hw) var(--hh);
+  background-position: left 0.02em top calc(50% - 0.1em), right 0.02em top calc(50% - 0.175em), left 0.02em top calc(50% + 0.1em), left 0.02em top calc(50% + 0.175em);
+}
+/* ⇒ and ⇐: two shafts and a wider head. */
+mrow:is(.tex-arrow-r2, .tex-arrow-l2) { --hw: 0.34em; --hh: 0.24em; }
+mrow.tex-arrow-r2 {
+  background-image: var(--line), var(--line), var(--tl), var(--bl);
+  background-size: calc(100% - 0.2em) var(--t), calc(100% - 0.2em) var(--t), var(--hw) var(--hh), var(--hw) var(--hh);
+  background-position: left 0.02em top calc(50% - 0.075em), left 0.02em top calc(50% + 0.075em), right 0.02em top calc(50% - 0.12em), right 0.02em top calc(50% + 0.12em);
+}
+mrow.tex-arrow-l2 {
+  background-image: var(--line), var(--line), var(--bl), var(--tl);
+  background-size: calc(100% - 0.2em) var(--t), calc(100% - 0.2em) var(--t), var(--hw) var(--hh), var(--hw) var(--hh);
+  background-position: right 0.02em top calc(50% - 0.075em), right 0.02em top calc(50% + 0.075em), left 0.02em top calc(50% - 0.12em), left 0.02em top calc(50% + 0.12em);
+}
+mrow:is(.tex-cancel, .tex-bcancel, .tex-xcancel) { --line: currentColor; }
+mrow.tex-cancel { background: linear-gradient(to top right, transparent calc(50% - 0.6px), var(--line) calc(50% - 0.6px), var(--line) calc(50% + 0.6px), transparent calc(50% + 0.6px)); }
+mrow.tex-bcancel { background: linear-gradient(to bottom right, transparent calc(50% - 0.6px), var(--line) calc(50% - 0.6px), var(--line) calc(50% + 0.6px), transparent calc(50% + 0.6px)); }
+mrow.tex-xcancel {
+  background:
+    linear-gradient(to top right, transparent calc(50% - 0.6px), var(--line) calc(50% - 0.6px), var(--line) calc(50% + 0.6px), transparent calc(50% + 0.6px)),
+    linear-gradient(to bottom right, transparent calc(50% - 0.6px), var(--line) calc(50% - 0.6px), var(--line) calc(50% + 0.6px), transparent calc(50% + 0.6px));
+}
+
+.tex-error {
+  font: 0.86em/1.4 var(--font-mono);
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+  padding: 1px 5px; border-radius: 4px;
+  white-space: pre-wrap;
+}
