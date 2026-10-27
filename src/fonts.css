@@ -1,0 +1,31 @@
+/* Source Serif 4 and Source Sans 3 (SIL Open Font License, see src/fonts/*-OFL.txt),
+   subset to Latin, Greek, and common math and arrow symbols by tools/subset-fonts.sh.
+   The build inlines them so pages still open from disk with no requests. */
+@font-face {
+  font-family: "Safis Serif";
+  src: url("fonts/serif-text.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Safis Serif";
+  src: url("fonts/serif-text-italic.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: italic;
+  font-display: block;
+}
+@font-face {
+  font-family: "Safis Display";
+  src: url("fonts/serif-display.woff2") format("woff2");
+  font-weight: 560;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Safis Sans";
+  src: url("fonts/sans.woff2") format("woff2");
+  font-weight: 400 650;
+  font-style: normal;
+  font-display: block;
+}
