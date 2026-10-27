@@ -124,6 +124,10 @@
   .card:hover .thumb { translate: 0 -3px; box-shadow: inset 0 0 0 1px var(--faint), 0 18px 36px -24px rgb(0 0 0 / 0.45); }
   :root[data-theme="dark"] .card img { filter: brightness(0.92); }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .card img { filter: brightness(0.92); } }
+  .card .thumb { position: relative; }
+  .new { position: absolute; top: 10px; left: 10px; padding: 4px 9px; border-radius: 999px; background: var(--brand); color: #fff; font: 700 11px/1 var(--font-text); letter-spacing: 0.06em; text-transform: uppercase; box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--brand) 70%, transparent); }
+  h3.latest { display: flex; align-items: baseline; gap: 14px; font: 600 13px/1 var(--font-text); letter-spacing: 0.08em; text-transform: uppercase; color: var(--brand); margin: 0 0 18px; }
+  h3.latest::after { content: ""; flex: 1; height: 1px; background: var(--chip-line); }
   .card-title { font: 600 1.12rem/1.3 var(--font-serif); text-wrap: balance; }
   .card:hover .card-title { text-decoration: underline; text-decoration-color: var(--brand); text-underline-offset: 0.18em; }
   .card-dek { color: var(--muted); font-size: 14.5px; line-height: 1.5; }
@@ -167,7 +171,7 @@
       <a href="#kinds">What it makes</a>
       <a href="#how">How it works</a>
       <a href="#install">Install</a>
-      <a href="#examples">Examples</a>
+      <a href="#examples">Explainers</a>
       <a href="#faq">FAQ</a>
     </nav>
     <a class="gh" href="https://github.com/broisnees/safis"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
@@ -183,7 +187,7 @@
       <p class="lead">Ask your agent about a jaw joint, a tide, or a hash table. Safis writes a long-form page that builds the idea step by step, with live figures the reader drags, turns, cuts open, and hears. One HTML file. No server.</p>
       <div class="install"><span class="prompt">$</span><code>npx skills add broisnees/safis -g</code><button class="copy" type="button" data-copy="npx skills add broisnees/safis -g">Copy</button></div>
       <div class="ctas">
-        <a class="button solid" href="#examples">Browse the examples</a>
+        <a class="button solid" href="#examples">Read the explainers</a>
         <a class="button" href="#how">How it works</a>
       </div>
       <p class="agents">Works in <b>Claude Code</b>, <b>Codex</b>, <b>OpenCode</b>, <b>Cursor</b>, and any agent that reads Agent Skills.</p>
@@ -318,6 +322,23 @@ window.FAN = (() => {
   </div>
 </div>
 
+<section class="block" id="examples">
+  <div class="wrap">
+    <p class="kicker2">Explainers</p>
+    <h2>Pages the skill wrote.</h2>
+    <p class="sub">Every page here was built with Safis, from a single prompt and the checks above. Open one and play with the figures.</p>
+    <h3 class="latest">New</h3>
+    <div class="cards">
+      <a class="card" href="fourier/index.html"><span class="thumb"><img src="fourier/thumb.webp" alt="" loading="lazy" decoding="async"><b class="new">New</b></span><span class="card-title">How Spinning Circles Draw Anything</span><span class="card-dek">How any repeating wave, and even any closed drawing, can be built from circles turning at whole-number speeds, and how to find out which circles a shape needs.</span></a>
+      <a class="card" href="dns/index.html"><span class="thumb"><img src="dns/thumb.webp" alt="" loading="lazy" decoding="async"><b class="new">New</b></span><span class="card-title">How DNS Turns a Name into an Address</span><span class="card-dek">What happens in the few milliseconds between typing a name like example.com and your computer knowing which address to connect to, and why the answer is usually already waiting in a cache.</span></a>
+      <a class="card" href="cdn/index.html"><span class="thumb"><img src="cdn/thumb.webp" alt="" loading="lazy" decoding="async"><b class="new">New</b></span><span class="card-title">How a CDN Makes a Faraway Site Fast</span><span class="card-dek">Why a page from the other side of the world loads slowly, and how a content delivery network hides the distance with copies, short round trips, and connections kept warm.</span></a>
+      <a class="card" href="protein/index.html"><span class="thumb"><img src="protein/thumb.webp" alt="" loading="lazy" decoding="async"><b class="new">New</b></span><span class="card-title">How a Cell Builds a Protein</span><span class="card-dek">How a cell copies one gene out of its DNA into a message, reads that message three letters at a time, and strings amino acids into the protein the gene describes, and what a single changed letter can do.</span></a>
+      <a class="card" href="battery/index.html"><span class="thumb"><img src="battery/thumb.webp" alt="" loading="lazy" decoding="async"><b class="new">New</b></span><span class="card-title">The Lithium-Ion Battery</span><span class="card-dek">How a lithium-ion cell stores energy by moving lithium out of graphite and into a metal oxide, and why every charge wears it down a little.</span></a>
+    </div>
+    <!-- explainer:gallery -->
+  </div>
+</section>
+
 <section class="block" id="kinds">
   <div class="wrap">
     <p class="kicker2">What it makes</p>
@@ -415,14 +436,7 @@ ln -s "$PWD/safis/skills/safis" ~/.claude/skills/safis</pre></div>
   </div>
 </section>
 
-<section class="block" id="examples">
-  <div class="wrap">
-    <p class="kicker2">Examples</p>
-    <h2>Pages the skill wrote.</h2>
-    <p class="sub">Every page here was built with Safis, from a single prompt and the checks above. Open one and play with the figures.</p>
-    <!-- explainer:gallery -->
-  </div>
-</section>
+
 
 <section class="block" id="faq">
   <div class="wrap">

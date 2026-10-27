@@ -24,7 +24,7 @@ if [[ "${1:-}" == "--deploy" ]]; then
   D="$S/deploy-site"; rm -rf "$D"; mkdir -p "$D"
   cp site/404.html site/safis.css site/safis.js "$D/"
   for s in "${pass[@]}"; do [ -d "drafts/$s" ] && { echo "skipped $s (still in drafts/)"; continue; }; cp -r "site/$s" "$D/"; done
-  node skills/safis/scripts/site.mjs "$D" --home web/home.html | tail -1
+  node skills/safis/scripts/site.mjs "$D" --shared --home web/home.html | tail -1
   npx -y wrangler@4 deploy --assets "$D" 2>&1 | grep -E 'Uploaded [0-9]+ files|safis.fyi|Version ID|ERROR|error' | head -6
   for h in safis.fyi www.safis.fyi; do curl -s -o /dev/null -w "$h %{http_code}\n" --max-time 15 "https://$h/"; done
 fi
