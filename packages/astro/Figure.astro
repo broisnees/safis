@@ -1,0 +1,18 @@
+---
+// A live figure in an Astro page or MDX post. The spec lives in a client module
+// (src/figures/<name>.js exporting it as default); mountFigures() in your layout
+// finds it by name and mounts it in the browser.
+interface Props {
+  /** File name of the spec module, without the extension. */
+  name: string;
+  id?: string;
+  /** Describes the figure for screen readers; also the default caption. */
+  label?: string;
+  /** Caption under the plate (HTML allowed). */
+  caption?: string;
+  /** Break out of the text column. */
+  wide?: boolean;
+}
+const { name, id, label, caption, wide = false } = Astro.props;
+---
+<figure class:list={["demo", { wide }]} id={id ?? name} data-safis-figure={name} aria-label={label}>{caption && <figcaption set:html={caption} />}</figure>

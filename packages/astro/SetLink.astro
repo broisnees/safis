@@ -1,0 +1,7 @@
+---
+// A "try this" link: glides the figure to `values`, optionally pressing a button or playing.
+interface Props { values?: Record<string, string | number | boolean>; figure?: string; press?: string; play?: boolean }
+const { values = {}, figure, press, play } = Astro.props;
+const data = Object.entries(values).map(([k, v]) => `${k}=${v}`).join(" ");
+---
+<button type="button" class="set" data-set={data} data-figure={figure} data-press={press} data-play={play == null ? undefined : String(play)}><slot /></button>

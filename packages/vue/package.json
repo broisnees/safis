@@ -1,0 +1,15 @@
+{
+  "name": "@safis/vue",
+  "version": "0.3.0",
+  "description": "Vue 3 components for safis interactive figures.",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": { ".": { "types": "./index.d.ts", "default": "./index.js" } },
+  "files": ["index.js", "index.d.ts"],
+  "sideEffects": false,
+  "peerDependencies": { "vue": ">=3.3" },
+  "dependencies": { "safis": "0.3.0" },
+  "license": "UNLICENSED",
+  "repository": { "type": "git", "url": "https://github.com/broisnischal/safis.git", "directory": "packages/vue" }
+}

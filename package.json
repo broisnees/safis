@@ -1,0 +1,25 @@
+{
+  "name": "safis-workspace",
+  "private": true,
+  "description": "Safis: a Claude skill and toolkit for interactive explainer pages. The npm packages live in packages/, example apps in examples/.",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build:template && npm run build:packages",
+    "build:template": "node tools/build-template.mjs",
+    "build:packages": "node tools/build-packages.mjs",
+    "build:examples": "npm run build:packages && npm run build -w examples/react-vite -w examples/vue-vite -w examples/svelte-vite -w examples/astro-blog",
+    "site": "node skills/safis/scripts/site.mjs site --thumbs",
+    "verify": "node skills/safis/scripts/verify.mjs",
+    "explore": "node skills/safis/scripts/explore.mjs",
+    "test": "node tools/test-engine.mjs && node tools/test-tex.mjs && node tools/test-plot.mjs && node tools/test-sim.mjs",
+    "test:packages": "node tools/test-packages.mjs",
+    "deploy": "npx -y wrangler@4 deploy",
+    "deploy:examples": "npm run build:packages && npm run deploy -w examples/react-vite -w examples/vue-vite -w examples/svelte-vite -w examples/astro-blog"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

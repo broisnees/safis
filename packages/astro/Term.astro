@@ -1,0 +1,6 @@
+---
+// A colored term that lights part `part` of the figure while the reader points at it.
+interface Props { color?: string; part?: string; figure?: string }
+const { color, part, figure } = Astro.props;
+---
+<span class={color ? `c-${color}` : undefined} data-part={part} data-figure={figure}><slot /></span>

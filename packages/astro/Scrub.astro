@@ -1,0 +1,7 @@
+---
+// A number in the sentence the reader drags; mirrors control `k` of figure `figure`
+// (or of the next figure on the page when `figure` is left out).
+interface Props { k: string; figure?: string }
+const { k, figure } = Astro.props;
+---
+<span class="scrub" data-key={k} data-figure={figure}></span>

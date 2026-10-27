@@ -1,0 +1,41 @@
+{
+  "name": "@safis/astro",
+  "version": "0.3.0",
+  "description": "Astro components for safis interactive figures, for pages and MDX posts.",
+  "type": "module",
+  "exports": {
+    "./Figure.astro": "./Figure.astro",
+    "./Scrub.astro": "./Scrub.astro",
+    "./SetLink.astro": "./SetLink.astro",
+    "./Term.astro": "./Term.astro",
+    "./Tex.astro": "./Tex.astro",
+    "./ThemeToggle.astro": "./ThemeToggle.astro",
+    "./client": {
+      "types": "./index.d.ts",
+      "default": "./client.js"
+    }
+  },
+  "files": [
+    "*.astro",
+    "client.js",
+    "index.d.ts"
+  ],
+  "keywords": [
+    "astro-component",
+    "withastro",
+    "explainer",
+    "interactive"
+  ],
+  "peerDependencies": {
+    "astro": ">=4"
+  },
+  "dependencies": {
+    "safis": "0.3.0"
+  },
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/broisnischal/safis.git",
+    "directory": "packages/astro"
+  }
+}

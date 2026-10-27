@@ -1,0 +1,23 @@
+---
+// A light / dark / system switch for the page corner. The reader's choice is kept
+// (localStorage "safis-theme", shared with safis pages) and survives client-side navigation.
+---
+<button type="button" class="theme-toggle" data-safis-theme-toggle aria-label="Theme"></button>
+<script>
+  import { setTheme } from "safis";
+
+  const ORDER = ["auto", "light", "dark"];
+  const saved = () => { try { return localStorage.getItem("safis-theme") || "auto"; } catch { return "auto"; } };
+  function wire() {
+    for (const b of document.querySelectorAll("[data-safis-theme-toggle]")) {
+      if (b.dataset.wired) continue;
+      b.dataset.wired = "1";
+      b.addEventListener("click", () => setTheme(ORDER[(ORDER.indexOf(saved()) + 1) % ORDER.length]));
+    }
+    setTheme(saved()); // applies the choice and draws the button's icon
+  }
+  wire();
+  document.addEventListener("astro:page-load", wire);
+  // The incoming page's <html> has no data-theme; put the reader's choice back before it paints.
+  document.addEventListener("astro:after-swap", () => { const t = saved(); if (t !== "auto") document.documentElement.dataset.theme = t; });
+</script>
