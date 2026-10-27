@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Brings existing explainer pages up to the current runtime and theme from
 // assets/template.html. Pages built from the first template (no runtime
-// markers) also get the current page structure.
+// markers) also get the current page structure. A page linked to a site's
+// shared runtime gets its own copy back; site.mjs links it again.
 //
 // Usage: node upgrade.mjs <page.html>... [--category <name>]
 

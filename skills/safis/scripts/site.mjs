@@ -4,27 +4,34 @@
 // sidebar. Pages live at <root>/<slug>/index.html. Links point at index.html
 // files so the site also works straight from disk.
 //
-// Usage: node site.mjs <root> [--title "Explainers"] [--intro "..."] [--thumbs]
-// --thumbs screenshots each page's first figure (needs Chrome, like verify.mjs).
+// Usage: node site.mjs <root> [--title "Explainers"] [--intro "..."] [--thumbs] [--shared | --inline]
+// --thumbs screenshots each page's first figure at 2x as thumb.webp (needs Chrome, like verify.mjs).
+// --shared writes one copy of the runtime to <root>/safis.css and <root>/safis.js
+// and links every page to it instead of carrying its own; the site still opens
+// from disk. --inline puts the runtime back in each page. The choice is kept in
+// the home page, so later runs don't need the flag.
 
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const ORDER = ["Body", "Biology", "Chemistry", "Physics", "Machines", "Earth & Space", "Computing", "AI", "Math"];
+const ORDER = ["Body", "Biology", "Chemistry", "Physics", "Machines", "Engineering", "Earth & Space", "Computing", "AI", "Math"];
 
 const argv = process.argv.slice(2);
-const opt = { root: null, title: null, intro: null, thumbs: false };
+const opt = { root: null, title: null, intro: null, thumbs: false, shared: null };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === "--title") opt.title = argv[++i];
   else if (a === "--intro") opt.intro = argv[++i];
   else if (a === "--thumbs") opt.thumbs = true;
+  else if (a === "--shared") opt.shared = true;
+  else if (a === "--inline") opt.shared = false;
   else opt.root = a;
 }
-if (!opt.root) { console.error('usage: node site.mjs <root> [--title "..."] [--intro "..."] [--thumbs]'); process.exit(2); }
+if (!opt.root) { console.error('usage: node site.mjs <root> [--title "..."] [--intro "..."] [--thumbs] [--shared | --inline]'); process.exit(2); }
 const root = path.resolve(opt.root);
 
 const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -36,6 +43,28 @@ const homeFile = path.join(root, "index.html");
 const oldHome = existsSync(homeFile) ? await readFile(homeFile, "utf8") : "";
 const siteTitle = opt.title ?? (unesc((oldHome.match(/<h1>([^<]*)<\/h1>/) || [])[1] ?? "") || "Explainers");
 const intro = opt.intro ?? (unesc((oldHome.match(/<p class="dek">([^<]*)<\/p>/) || [])[1] ?? "") || "Interactive explanations of how things work, built around figures you can turn, drag, and take apart.");
+const shared = opt.shared ?? oldHome.includes('<meta name="explainer:runtime" content="shared">');
+
+// The runtime block from the template, and the shared files built from it.
+const template = await readFile(path.join(here, "../assets/template.html"), "utf8");
+const RUNTIME = /<!-- explainer:runtime:start([^>]*)-->[\s\S]*?<!-- explainer:runtime:end -->/;
+const [block, tag] = template.match(RUNTIME);
+const version = t => (t.match(/\bv\d+\b/) || [""])[0];
+const css = [...block.matchAll(/<style>([\s\S]*?)<\/style>/g)].map(m => m[1]).join("\n");
+const js = [...block.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).join("\n;\n");
+const hash = s => createHash("sha256").update(s).digest("hex").slice(0, 10);
+const cssHref = `safis.css?v=${hash(css)}`, jsHref = `safis.js?v=${hash(js)}`;
+const sharedBlock = `<!-- explainer:runtime:start ${version(tag)} shared -->
+<link rel="stylesheet" href="../${cssHref}">
+<script src="../${jsHref}"></script>
+<!-- explainer:runtime:end -->`;
+if (shared) {
+  await writeFile(path.join(root, "safis.css"), css);
+  await writeFile(path.join(root, "safis.js"), js);
+} else if (oldHome.includes('<meta name="explainer:runtime" content="shared">')) {
+  await rm(path.join(root, "safis.css"), { force: true });
+  await rm(path.join(root, "safis.js"), { force: true });
+}
 
 const article = html => (html.match(/<!-- explainer:article:start -->([\s\S]*?)<!-- explainer:article:end -->/) || [])[1] ?? "";
 const pages = [];
@@ -62,12 +91,13 @@ const byCat = c => pages.filter(p => p.category === c).sort((a, b) => a.title.lo
 
 if (opt.thumbs && pages.length) {
   const { openBrowser } = await import("./lib/chrome.mjs");
-  const b = await openBrowser({ viewport: { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false } });
+  const b = await openBrowser({ viewport: { width: 1280, height: 1000, deviceScaleFactor: 2, mobile: false } });
   try {
     await b.setMedia("light");
     for (const p of pages) {
       await b.goto(pathToFileURL(p.file).href);
       const box = await b.evaluate(`(() => {
+        document.documentElement.classList.add("safis-checking");
         const s = document.querySelector("figure.demo .stage");
         if (!s) return null;
         s.scrollIntoView({ block: "center" });
@@ -76,8 +106,9 @@ if (opt.thumbs && pages.length) {
       })()`);
       if (!box) continue;
       await b.settle(400);
-      await writeFile(path.join(root, p.slug, "thumb.png"), await b.screenshot(box));
-      console.log(`thumbnail: ${p.slug}/thumb.png`);
+      await writeFile(path.join(root, p.slug, "thumb.webp"), await b.screenshot(box, { format: "webp", quality: 84 }));
+      await rm(path.join(root, p.slug, "thumb.png"), { force: true });
+      console.log(`thumbnail: ${p.slug}/thumb.webp`);
     }
   } finally {
     await b.close();
@@ -92,25 +123,32 @@ for (const p of pages) {
     .replace(/<!-- explainer:nav:start -->[\s\S]*?<!-- explainer:nav:end -->/, () => `<!-- explainer:nav:start -->${nav}<!-- explainer:nav:end -->`)
     .replace(/<!-- explainer:back:start -->[\s\S]*?<!-- explainer:back:end -->/, () => `<!-- explainer:back:start --><a class="backlink" href="../index.html">← ${esc(siteTitle)}</a><!-- explainer:back:end -->`)
     .replace(/<div class="page(?: has-toc)?">/, '<div class="page has-toc">');
+  // Link the page to the shared runtime, or give it its own copy back. A page on
+  // another runtime version keeps what it has until upgrade.mjs moves it over.
+  const m = html.match(RUNTIME);
+  if (m && version(m[1]) !== version(tag)) {
+    if (shared) console.log(`kept ${p.slug} inline: its runtime is ${version(m[1]) || "unversioned"}, the template's is ${version(tag)} (run upgrade.mjs on it first)`);
+  } else if (m && shared) html = html.replace(RUNTIME, () => sharedBlock);
+  else if (m && /\bshared\b/.test(m[1])) html = html.replace(RUNTIME, () => block);
   if (html !== p.html) await writeFile(p.file, html);
 }
 
 // Home page: the theme CSS from the template, then cards grouped by category.
-const template = await readFile(path.join(here, "../assets/template.html"), "utf8");
-const css = (template.match(/<style>([\s\S]*?)<\/style>/) || [])[1] ?? "";
 const card = p => {
-  const thumb = existsSync(path.join(root, p.slug, "thumb.png")) ? `<img src="${p.slug}/thumb.png" alt="" loading="lazy">` : `<span class="noimg"></span>`;
+  const file = ["thumb.webp", "thumb.png"].find(f => existsSync(path.join(root, p.slug, f)));
+  const thumb = file ? `<img src="${p.slug}/${file}" alt="" loading="lazy" decoding="async">` : `<span class="noimg"></span>`;
   return `<a class="card" href="${p.slug}/index.html"><span class="thumb">${thumb}</span><span class="card-title">${esc(p.title)}</span><span class="card-dek">${esc(p.dek)}</span><span class="card-meta">${p.figures} figure${p.figures === 1 ? "" : "s"} · ${p.minutes} min read</span></a>`;
 };
-const home = `<!doctype html>
+const homePage = theme => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(siteTitle)}</title>
 <meta name="description" content="${esc(intro)}">
-<meta name="explainer:site" content="home">
-<style>${css}
+<meta name="explainer:site" content="home">${shared ? '\n<meta name="explainer:runtime" content="shared">' : ""}
+${theme}
+<style>
 main.home { max-width: 68rem; }
 .home header { max-width: 40rem; }
 .cat { margin-top: 72px; }
@@ -172,12 +210,14 @@ ${cats.map(c => `<section class="cat"><h2>${esc(c)}</h2><div class="cards">${byC
 </body>
 </html>
 `;
-await writeFile(homeFile, home);
+const inlineTheme = `<style>${css}</style>`;
+await writeFile(homeFile, homePage(shared ? `<link rel="stylesheet" href="${cssHref}">` : inlineTheme));
 
 // A 404 page in the same style, for static hosts (Cloudflare, Netlify, Vercel, GitHub Pages).
-const notFound = home
+// It carries its own theme: hosts serve it at any path, where a relative link to safis.css would miss.
+const notFound = homePage(inlineTheme)
   .replace(/<title>[^<]*<\/title>/, `<title>Not found · ${esc(siteTitle)}</title>`)
-  .replace(/<meta name="explainer:site" content="home">/, '<meta name="explainer:site" content="404">')
+  .replace(/<meta name="explainer:site" content="home">(\n<meta name="explainer:runtime" content="shared">)?/, '<meta name="explainer:site" content="404">')
   .replace(/<main class="home">[\s\S]*<\/main>/, `<main class="home"><header><p class="kicker">404</p><h1>This page isn't here</h1><p class="dek">It may have moved. <a href="/">Back to ${esc(siteTitle)}</a>.</p></header></main>`);
 await writeFile(path.join(root, "404.html"), notFound);
 console.log(`wrote ${homeFile}: ${pages.length} pages in ${cats.length} categor${cats.length === 1 ? "y" : "ies"}`);

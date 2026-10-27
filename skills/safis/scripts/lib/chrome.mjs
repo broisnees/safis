@@ -133,8 +133,9 @@ export async function openBrowser({ viewport }) {
   }
 
   // Screenshot; clip is {x, y, width, height} in document CSS pixels.
-  async function screenshot(clip) {
-    const params = { format: "png" };
+  async function screenshot(clip, o = {}) {
+    const params = { format: o.format ?? "png" };
+    if (o.quality != null) params.quality = o.quality;
     if (clip) Object.assign(params, { clip: { ...clip, scale: 1 }, captureBeyondViewport: true });
     const { data } = await send("Page.captureScreenshot", params);
     return Buffer.from(data, "base64");

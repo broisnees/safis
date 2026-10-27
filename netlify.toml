@@ -4,6 +4,6 @@
   command = "echo 'site/ is prebuilt'"
 
 [[headers]]
-  for = "/*/thumb.png"
+  for = "/*/thumb.*"
   [headers.values]
     Cache-Control = "public, max-age=86400"

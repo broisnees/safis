@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Checks an explainer page in headless Chrome. It runs the page's built-in
 // self-check at desktop and phone widths, records console errors and any
-// network requests that leave the file, and saves a screenshot of every
+// network requests that leave the file, measures words of main text per
+// figure, and saves a screenshot of every
 // figure (desktop light, desktop dark, phone) for a visual pass.
 //
 // Usage: node verify.mjs <page.html> [--out <dir>]
@@ -102,6 +103,21 @@ async function main() {
 
     const desktop = await b.evaluate("window.__explainer.check()");
     const ids = desktop.demos.map(d => d.id);
+
+    // Main text against main figures: paragraphs and list items, leaving out
+    // captions, sidenotes, the abstract, deep dives, predictions, and references.
+    const text = await b.evaluate(`(() => {
+      const a = document.querySelector("article");
+      if (!a) return { words: 0, figures: 0 };
+      const skip = "figure, details, .abstract, .sidenote, .quiz, .references, .refs, table, pre";
+      const strip = el => { const c = el.cloneNode(true); c.querySelectorAll(".sidenote").forEach(n => n.remove()); return c.textContent; };
+      const words = [...a.querySelectorAll("p, li")]
+        .filter(el => !el.closest(skip) && !el.querySelector("p, li"))
+        .reduce((n, el) => n + (strip(el).match(/[A-Za-z0-9][\\w'’.-]*/g) || []).length, 0);
+      const figures = [...a.querySelectorAll("figure.demo")].filter(f => !f.closest("details")).length;
+      return { words, figures };
+    })()`);
+    text.perFigure = text.figures ? Math.round(text.words / text.figures) : null;
     await shoot("page-top.png");
     for (const id of ids) await shoot(`figure-${id}.png`, id);
 
@@ -121,6 +137,8 @@ async function main() {
     const pageErrors = [...new Set(consoleErrors)].map(e => `console: ${e}`);
     if (overflow > 1) pageErrors.push(`at ${PHONE.width}px wide the page scrolls sideways by ${overflow}px (something is wider than the screen)`);
     const pageWarnings = [...external].map(u => `loads ${u} (the page should be self-contained)`);
+    if (text.perFigure > 180) pageWarnings.push(`${text.perFigure} words of main text per figure (aim for 130-180): some paragraphs describe what no figure shows; give them a figure or cut them`);
+    else if (text.perFigure !== null && text.perFigure < 80) pageWarnings.push(`${text.perFigure} words of main text per figure: too little text to set each figure up and say what it showed`);
     let errorCount = pageErrors.length;
 
     const print = (label, res) => {
@@ -139,13 +157,14 @@ async function main() {
     console.log(`Checked ${pagePath}`);
     print(`Desktop, ${DESKTOP.width}px`, desktop);
     print(`Phone, ${PHONE.width}px`, phone);
+    console.log(`\nText: ${text.words} words of main text, ${text.figures} figures${text.perFigure === null ? "" : `, ${text.perFigure} words per figure`}`);
     if (pageErrors.length || pageWarnings.length) {
       console.log("\nWhole page");
       for (const e of pageErrors) console.log(`  ERROR ${e}`);
       for (const w of pageWarnings) console.log(`  warn  ${w}`);
     }
 
-    await writeFile(path.join(outDir, "report.json"), JSON.stringify({ page: pagePath, desktop, phone, overflow, consoleErrors, external: [...external] }, null, 2));
+    await writeFile(path.join(outDir, "report.json"), JSON.stringify({ page: pagePath, desktop, phone, text, overflow, consoleErrors, external: [...external] }, null, 2));
     console.log(`\nScreenshots in ${outDir}`);
     console.log("  page-top.png, figure-<id>.png    desktop, light");
     console.log("  dark/figure-<id>.png             desktop, dark");
