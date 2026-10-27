@@ -15,7 +15,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const argv = process.argv.slice(2);
 const outArg = argv.includes("--out") ? argv[argv.indexOf("--out") + 1] : null;
 const read = f => readFile(path.join(root, f), "utf8");
-const optional = f => (existsSync(path.join(root, f)) ? read(f) : "");
+// SAFIS_SKIP=iso,effects leaves those kits out, for building around one that isn't finished.
+const skip = new Set((process.env.SAFIS_SKIP ?? "").split(",").filter(Boolean).map(n => `src/${n}.js`));
+const optional = f => (!skip.has(f) && existsSync(path.join(root, f)) ? read(f) : "");
 
 // Order matters: fonts before the theme, the engine and extensions before the runtime.
 const STYLES = ["src/fonts.css", "src/theme.css", "src/tex.css", "src/plot.css", "src/sim.css", "src/article.css", "src/code.css"];

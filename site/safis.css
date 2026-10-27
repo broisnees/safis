@@ -142,6 +142,42 @@ main { max-width: var(--measure); margin: 0 auto; padding: 88px 0 128px; }
     font: 15px/1.45 var(--font-serif);
   }
 }
+/* The index scrolls on its own with a slim bar that shows while the pointer is over it. */
+.toc { scrollbar-width: thin; scrollbar-color: transparent transparent; scrollbar-gutter: stable; }
+.toc:hover, .toc:focus-within { scrollbar-color: var(--faint) transparent; }
+/* A button in the top-left corner hides the index on wide screens and opens it as a drawer on narrow ones. */
+.toc-toggle {
+  position: fixed; top: 14px; inset-inline-start: 14px; z-index: 16;
+  width: 36px; height: 36px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--rule); border-radius: 50%; background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--muted); cursor: pointer; box-shadow: var(--shadow);
+  transition: scale 0.15s, color 0.15s;
+}
+.toc-toggle svg { width: 16px; height: 16px; }
+.toc-toggle:active { scale: 0.96; }
+.toc-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) { .toc-toggle:hover { color: var(--ink); } }
+@media (min-width: 1240px) {
+  .page.has-toc { transition: grid-template-columns 0.35s var(--ease-out); }
+  .page.has-toc main { transition: transform 0.35s var(--ease-out); }
+  .page.has-toc .toc { transition: opacity 0.25s var(--ease-out), translate 0.35s var(--ease-out), visibility 0.35s; }
+  .safis-toc-hidden .page.has-toc { grid-template-columns: 0 1fr; }
+  .safis-toc-hidden .page.has-toc main { transform: none; }
+  .safis-toc-hidden .page.has-toc .toc { opacity: 0; visibility: hidden; translate: -24px 0; overflow: hidden; }
+}
+@media (max-width: 1239.98px) {
+  .safis-toc-open .page.has-toc .toc {
+    display: block; position: fixed; inset: 0 auto 0 0; z-index: 15; width: min(300px, 86vw); overflow-y: auto;
+    padding: 64px 14px 40px 20px; font: 15px/1.45 var(--font-serif);
+    background: var(--bg); box-shadow: 0 0 0 1px var(--rule), 0 24px 60px -12px rgb(0 0 0 / 0.45);
+    animation: toc-in 0.3s var(--ease-out);
+  }
+  .safis-toc-open .page.has-toc::after { content: ""; position: fixed; inset: 0; z-index: 14; background: rgb(0 0 0 / 0.28); animation: toc-fade 0.3s ease; }
+}
+@keyframes toc-in { from { translate: -100% 0; } }
+@keyframes toc-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .safis-toc-open .page.has-toc .toc, .safis-toc-open .page.has-toc::after { animation: none; } }
+@media print { .toc-toggle { display: none !important; } }
 .toc a { color: var(--muted); text-decoration: none; display: block; padding-block: 4px; padding-inline: 14px 0; border-inline-start: 1px solid var(--rule); }
 .toc a:hover { color: var(--ink); }
 .toc a[aria-current="page"] { color: var(--ink); border-inline-start: 2px solid var(--accent); padding-inline-start: 13px; }

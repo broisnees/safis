@@ -11191,6 +11191,37 @@ void main() {
     syncThemeButton(b);
     document.body.append(b);
   }
+  // The site index in the sidebar: a button hides it on wide screens (remembered, and
+  // applied before the page paints) and opens it as a drawer on narrow ones.
+  const TOC_KEY = "safis-toc";
+  try { if (!window.__safisHost && localStorage.getItem(TOC_KEY) === "hidden") root.classList.add("safis-toc-hidden"); } catch {}
+  function addIndexToggle() {
+    if (window.__safisHost || !document.querySelector(".page.has-toc .toc") || document.querySelector(".toc-toggle")) return;
+    const wide = matchMedia("(min-width: 1240px)");
+    const b = node("button", "toc-toggle");
+    b.type = "button";
+    b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.25 3v10" stroke="currentColor" stroke-width="1.5"/></svg>';
+    const open = () => (wide.matches ? !root.classList.contains("safis-toc-hidden") : root.classList.contains("safis-toc-open"));
+    const sync = () => {
+      const label = open() ? "Hide the index" : "Show the index";
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      b.setAttribute("aria-expanded", String(open()));
+    };
+    const close = () => { root.classList.remove("safis-toc-open"); sync(); };
+    b.addEventListener("click", () => {
+      if (wide.matches) {
+        const hidden = root.classList.toggle("safis-toc-hidden");
+        try { if (hidden) localStorage.setItem(TOC_KEY, "hidden"); else localStorage.removeItem(TOC_KEY); } catch {}
+      } else root.classList.toggle("safis-toc-open");
+      sync();
+    });
+    document.addEventListener("click", e => { if (root.classList.contains("safis-toc-open") && !e.target.closest(".toc, .toc-toggle")) close(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && root.classList.contains("safis-toc-open")) { close(); b.focus(); } });
+    wide.addEventListener("change", close);
+    sync();
+    document.body.append(b);
+  }
   // ---------- Article furniture (styles in src/article.css, reference in references/article.md) ----------
   const slug = t => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 60) || "section";
   let tipEl = null, tipFor = null;
@@ -11352,7 +11383,7 @@ void main() {
     }
   }
 
-  const ready = () => { enhanceArticle(); enhance(document); addMeta(); addSkipLink(); addThemeToggle(); };
+  const ready = () => { enhanceArticle(); enhance(document); addMeta(); addSkipLink(); addThemeToggle(); addIndexToggle(); };
   if (document.readyState === "loading") addEventListener("DOMContentLoaded", ready); else queueMicrotask(ready);
 
   // ---------- Self-check (used by scripts/verify.mjs, or open the page with ?check) ----------

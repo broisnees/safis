@@ -151,6 +151,42 @@ main { max-width: var(--measure); margin: 0 auto; padding: 88px 0 128px; }
     font: 15px/1.45 var(--font-serif);
   }
 }
+/* The index scrolls on its own with a slim bar that shows while the pointer is over it. */
+.toc { scrollbar-width: thin; scrollbar-color: transparent transparent; scrollbar-gutter: stable; }
+.toc:hover, .toc:focus-within { scrollbar-color: var(--faint) transparent; }
+/* A button in the top-left corner hides the index on wide screens and opens it as a drawer on narrow ones. */
+.toc-toggle {
+  position: fixed; top: 14px; inset-inline-start: 14px; z-index: 16;
+  width: 36px; height: 36px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--rule); border-radius: 50%; background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--muted); cursor: pointer; box-shadow: var(--shadow);
+  transition: scale 0.15s, color 0.15s;
+}
+.toc-toggle svg { width: 16px; height: 16px; }
+.toc-toggle:active { scale: 0.96; }
+.toc-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) { .toc-toggle:hover { color: var(--ink); } }
+@media (min-width: 1240px) {
+  .page.has-toc { transition: grid-template-columns 0.35s var(--ease-out); }
+  .page.has-toc main { transition: transform 0.35s var(--ease-out); }
+  .page.has-toc .toc { transition: opacity 0.25s var(--ease-out), translate 0.35s var(--ease-out), visibility 0.35s; }
+  .safis-toc-hidden .page.has-toc { grid-template-columns: 0 1fr; }
+  .safis-toc-hidden .page.has-toc main { transform: none; }
+  .safis-toc-hidden .page.has-toc .toc { opacity: 0; visibility: hidden; translate: -24px 0; overflow: hidden; }
+}
+@media (max-width: 1239.98px) {
+  .safis-toc-open .page.has-toc .toc {
+    display: block; position: fixed; inset: 0 auto 0 0; z-index: 15; width: min(300px, 86vw); overflow-y: auto;
+    padding: 64px 14px 40px 20px; font: 15px/1.45 var(--font-serif);
+    background: var(--bg); box-shadow: 0 0 0 1px var(--rule), 0 24px 60px -12px rgb(0 0 0 / 0.45);
+    animation: toc-in 0.3s var(--ease-out);
+  }
+  .safis-toc-open .page.has-toc::after { content: ""; position: fixed; inset: 0; z-index: 14; background: rgb(0 0 0 / 0.28); animation: toc-fade 0.3s ease; }
+}
+@keyframes toc-in { from { translate: -100% 0; } }
+@keyframes toc-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .safis-toc-open .page.has-toc .toc, .safis-toc-open .page.has-toc::after { animation: none; } }
+@media print { .toc-toggle { display: none !important; } }
 .toc a { color: var(--muted); text-decoration: none; display: block; padding-block: 4px; padding-inline: 14px 0; border-inline-start: 1px solid var(--rule); }
 .toc a:hover { color: var(--ink); }
 .toc a[aria-current="page"] { color: var(--ink); border-inline-start: 2px solid var(--accent); padding-inline-start: 13px; }
@@ -12059,6 +12095,37 @@ void main() {
     syncThemeButton(b);
     document.body.append(b);
   }
+  // The site index in the sidebar: a button hides it on wide screens (remembered, and
+  // applied before the page paints) and opens it as a drawer on narrow ones.
+  const TOC_KEY = "safis-toc";
+  try { if (!window.__safisHost && localStorage.getItem(TOC_KEY) === "hidden") root.classList.add("safis-toc-hidden"); } catch {}
+  function addIndexToggle() {
+    if (window.__safisHost || !document.querySelector(".page.has-toc .toc") || document.querySelector(".toc-toggle")) return;
+    const wide = matchMedia("(min-width: 1240px)");
+    const b = node("button", "toc-toggle");
+    b.type = "button";
+    b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.25 3v10" stroke="currentColor" stroke-width="1.5"/></svg>';
+    const open = () => (wide.matches ? !root.classList.contains("safis-toc-hidden") : root.classList.contains("safis-toc-open"));
+    const sync = () => {
+      const label = open() ? "Hide the index" : "Show the index";
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      b.setAttribute("aria-expanded", String(open()));
+    };
+    const close = () => { root.classList.remove("safis-toc-open"); sync(); };
+    b.addEventListener("click", () => {
+      if (wide.matches) {
+        const hidden = root.classList.toggle("safis-toc-hidden");
+        try { if (hidden) localStorage.setItem(TOC_KEY, "hidden"); else localStorage.removeItem(TOC_KEY); } catch {}
+      } else root.classList.toggle("safis-toc-open");
+      sync();
+    });
+    document.addEventListener("click", e => { if (root.classList.contains("safis-toc-open") && !e.target.closest(".toc, .toc-toggle")) close(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && root.classList.contains("safis-toc-open")) { close(); b.focus(); } });
+    wide.addEventListener("change", close);
+    sync();
+    document.body.append(b);
+  }
   // ---------- Article furniture (styles in src/article.css, reference in references/article.md) ----------
   const slug = t => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 60) || "section";
   let tipEl = null, tipFor = null;
@@ -12220,7 +12287,7 @@ void main() {
     }
   }
 
-  const ready = () => { enhanceArticle(); enhance(document); addMeta(); addSkipLink(); addThemeToggle(); };
+  const ready = () => { enhanceArticle(); enhance(document); addMeta(); addSkipLink(); addThemeToggle(); addIndexToggle(); };
   if (document.readyState === "loading") addEventListener("DOMContentLoaded", ready); else queueMicrotask(ready);
 
   // ---------- Self-check (used by scripts/verify.mjs, or open the page with ?check) ----------
