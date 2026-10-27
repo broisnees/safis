@@ -48,7 +48,7 @@ Every page in [`site/`](site) was built with the skill. Open the [live site](htt
 | [![](site/hash-table/thumb.webp)](https://safis.fyi/hash-table/)<br>**How a hash table finds things** | [![](site/next-word/thumb.webp)](https://safis.fyi/next-word/)<br>**How a language model picks the next word** | [![](site/attention/thumb.webp)](https://safis.fyi/attention/)<br>**How attention works** |
 | [![](site/learning/thumb.webp)](https://safis.fyi/learning/)<br>**How a neural network learns** | [![](site/matrix/thumb.webp)](https://safis.fyi/matrix/)<br>**How a matrix transforms space** | [![](site/fourier/thumb.webp)](https://safis.fyi/fourier/)<br>**How spinning circles draw anything** |
 | [![](site/protein/thumb.webp)](https://safis.fyi/protein/)<br>**How a cell builds a protein** | [![](site/battery/thumb.webp)](https://safis.fyi/battery/)<br>**The lithium-ion battery** | [![](site/cdn/thumb.webp)](https://safis.fyi/cdn/)<br>**How a CDN makes a faraway site fast** |
-| [![](site/dns/thumb.webp)](https://safis.fyi/dns/)<br>**How DNS turns a name into an address** | | |
+| [![](site/dns/thumb.webp)](https://safis.fyi/dns/)<br>**How DNS turns a name into an address** | [![](site/derivative/thumb.webp)](https://safis.fyi/derivative/)<br>**What a derivative measures** | |
 
 ## What it makes
 

@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What a Derivative Measures</title>
+<meta name="description" content="A derivative is the slope of a curve at a single point. Learn to see it on a graph, find it with a few rules, and use it to find speeds, peaks, and roots.">
+<meta name="explainer:category" content="Math">
+<!-- explainer:runtime:start v3 shared -->
+<link rel="stylesheet" href="../safis.css?v=df68e339d5">
+<script src="../safis.js?v=9f941759ca"></script>
+<!-- explainer:runtime:end -->
+</head>
+<body>
+<div class="page has-toc">
+<nav class="toc" aria-label="All explainers"><!-- explainer:nav:start --><a class="site" href="../index.html">Safis</a><h2>Body</h2><ul><li><a href="../jaw-joint/index.html">The Jaw Joint</a></li></ul><h2>Biology</h2><ul><li><a href="../protein/index.html">How a Cell Builds a Protein</a></li><li><a href="../neuron/index.html">How a Neuron Fires</a></li></ul><h2>Chemistry</h2><ul><li><a href="../battery/index.html">The Lithium-Ion Battery</a></li><li><a href="../ice/index.html">Why Ice Floats</a></li></ul><h2>Physics</h2><ul><li><a href="../pendulum/index.html">How a Pendulum Keeps Time</a></li></ul><h2>Machines</h2><ul><li><a href="../lock/index.html">How a Pin Tumbler Lock Knows Your Key</a></li></ul><h2>Earth &amp; Space</h2><ul><li><a href="../tides/index.html">Why There Are Two Tides a Day</a></li></ul><h2>Computing</h2><ul><li><a href="../cdn/index.html">How a CDN Makes a Faraway Site Fast</a></li><li><a href="../hash-table/index.html">How a Hash Table Finds Things</a></li><li><a href="../dns/index.html">How DNS Turns a Name into an Address</a></li></ul><h2>AI</h2><ul><li><a href="../next-word/index.html">How a Language Model Picks the Next Word</a></li><li><a href="../learning/index.html">How a Neural Network Learns</a></li><li><a href="../attention/index.html">How Attention Works</a></li></ul><h2>Math</h2><ul><li><a href="../matrix/index.html">How a Matrix Transforms Space</a></li><li><a href="../fourier/index.html">How Spinning Circles Draw Anything</a></li><li><a href="../derivative/index.html" aria-current="page">What a Derivative Measures</a></li></ul><!-- explainer:nav:end --></nav>
+<main>
+<!-- explainer:back:start --><a class="backlink" href="../index.html">← Safis</a><!-- explainer:back:end -->
+<header>
+  <p class="kicker">Math</p>
+  <h1>What a Derivative Measures</h1>
+  <p class="dek">A derivative is the slope of a curve at a single point. Learn to see it on a graph, find it with a few rules, and use it to find speeds, peaks, and roots.</p>
+</header>
+<article>
+<!-- explainer:article:start -->
+<script>
+  // Shared by every figure below.
+  window.DV = (() => {
+    const PI = Math.PI;
+
+    // ---- The trip ------------------------------------------------------------------------------
+    // A 30-minute drive. A town leg from 0 to 12 min that peaks at 1 km/min (60 km/h), a stop at a
+    // red light from 12 to 15 min, then an open-road leg from 15 to 30 min that peaks at 1.2 km/min
+    // (72 km/h). On each leg the speed is vmax·sin²(πu/T), u being the time into the leg, so the car
+    // starts and ends each leg at rest. Distance is the exact integral of that speed.
+    const legs = [{ t0: 0, T: 12, v: 1 }, { t0: 15, T: 15, v: 1.2 }];
+    const leg = (u, T, v) => v * (u / 2 - (T / (4 * PI)) * Math.sin((2 * PI * u) / T));
+    const pos = t => legs.reduce((s, L) => s + leg(clamp(t - L.t0, 0, L.T), L.T, L.v), 0); // km after t min
+
+    // ---- Slopes, always by the difference quotient ------------------------------------------------
+    const quot = (f, a, b) => (f(b) - f(a)) / (b - a);                 // rise over run between two points
+    const slope = (f, x, h = 1e-5) => (f(x + h) - f(x - h)) / (2 * h);  // a very narrow window centered on x
+    const right = (f, x, h = 1e-7) => (f(x + h) - f(x)) / h;
+    const left = (f, x, h = 1e-7) => (f(x) - f(x - h)) / h;
+
+    // Numbers as the page prints them: a real minus sign, never "−0.00".
+    const fmt = (x, d = 2) => { const r = Math.abs(x) < 0.5 * 10 ** -d ? 0 : x; return (r < 0 ? "−" : "") + Math.abs(r).toFixed(d); };
+    const kmh = kmPerMin => kmPerMin * 60;
+
+    // A custom magnifier: a circle at c with radius R showing the data window [x0 ± w] × [y0 ± w]
+    // drawn by fn(P), with lines from a small circle at `from` on the main plot.
+    function lens(g, from, rFrom, c, R, view, fn) {
+      const [x0, y0, w] = view;
+      const dx = c[0] - from[0], dy = c[1] - from[1], d = Math.hypot(dx, dy) || 1, nx = -dy / d, ny = dx / d;
+      g.line([from[0] + nx * rFrom, from[1] + ny * rFrom], [c[0] + nx * R, c[1] + ny * R], { stroke: "muted", width: 1 });
+      g.line([from[0] - nx * rFrom, from[1] - ny * rFrom], [c[0] - nx * R, c[1] - ny * R], { stroke: "muted", width: 1 });
+      g.circle(from, rFrom, { stroke: "ink", width: 1.2 });
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c[0], c[1], R, 0, TAU);
+      ctx.fillStyle = g.color("panel");
+      ctx.fill();
+      ctx.clip();
+      const P = g.graph({ box: [c[0] - R, c[1] - R, 2 * R, 2 * R], x: [x0 - w, x0 + w], y: [y0 - w, y0 + w], axes: "none", grid: false, pad: 0 });
+      fn(P);
+      ctx.restore();
+      g.circle(c, R, { stroke: "ink", width: 1.5 });
+      return P;
+    }
+
+    return { PI, legs, pos, quot, slope, right, left, fmt, kmh, lens };
+  })();
+</script>
+
+<div class="abstract">
+  <ul>
+    <li>A derivative is a slope: how fast one quantity changes as another moves, measured at a single point instead of averaged over a stretch.</li>
+    <li>It is found by taking the slope over a window and shrinking the window toward nothing. Zoomed in far enough, any smooth curve is a straight line, and the derivative is that line's slope.</li>
+    <li>The rules for derivatives come from pictures: a square growing gives the power rule, a rectangle the product rule, linked stretches the chain rule, and a circle the slope of the sine wave.</li>
+    <li>Set a derivative to zero and you find peaks and valleys. Follow tangent lines and you find roots. Stand on a tangent line and you estimate values a calculator would otherwise give.</li>
+  </ul>
+</div>
+
+<p class="lede">A car's odometer tells you how far you have gone. Its speedometer tells you something stranger: how fast you are going right now, at this instant, when no time passes and the car covers no distance. Speed is distance divided by time, and at a single instant both are zero. Yet the needle points at a number, and that number is a <dfn data-def="The slope of a curve at one point: how fast the output changes per unit change of the input, right there.">derivative</dfn>.</p>
+
+<p>Here is a half-hour drive as a graph: time along the bottom, distance from home up the side. The car pulls away through town, waits at a red light, then picks up speed on the open road. Drag the two <span class="c-orange" data-part="ends">orange points</span> to pick a stretch of the trip, and watch the line joining them:</p>
+
+<figure class="demo" id="trip" aria-label="A graph of distance against time for a 30-minute drive. Two orange points on the curve are joined by a straight orange line, with a green run and a gray rise marking the time and distance between them."></figure>
+<script>
+{
+  let P;
+  const near = (p, t) => P && P.near(p, [t, DV.pos(t)], 22);
+  demo("trip", {
+    aspect: w => (w < 560 ? 1.05 : 1.75),
+    caption: "Distance from home during a 30-minute drive. The slope of the orange line joining two moments is the average speed between them: the gray rise divided by the green run.",
+    state: () => ({ grab: null }),
+    controls: [
+      { key: "a", label: "From", min: 0, max: 30, step: 0.1, value: 3, unit: " min", hidden: true },
+      { key: "b", label: "To", min: 0, max: 30, step: 0.1, value: 9, unit: " min", hidden: true },
+    ],
+    presets: [
+      { label: "Whole trip", set: { a: 0, b: 30 } },
+      { label: "Red light", set: { a: 12, b: 15 } },
+      { label: "Open road", set: { a: 19, b: 26 } },
+    ],
+    drag: {
+      hit: (p, s, v) => (near(p, v.b) ? "b" : near(p, v.a) ? "a" : false),
+      start(p, s, v) { s.grab = near(p, v.b) ? "b" : "a"; },
+      move(p, s, v, d, fig) { fig.set(s.grab, Math.round(clamp(P.inv(p)[0], 0, 30) * 10) / 10); },
+      end(s) { s.grab = null; },
+    },
+    status(s, v) {
+      const a = Math.min(v.a, v.b), b = Math.max(v.a, v.b);
+      if (b - a < 0.05) return "pick two different moments";
+      return `average speed ${DV.fmt(DV.kmh(DV.quot(DV.pos, a, b)), 1)} km/h`;
+    },
+    draw(g, s, v) {
+      const a = Math.min(v.a, v.b), b = Math.max(v.a, v.b), A = [a, DV.pos(a)], B = [b, DV.pos(b)];
+      P = g.graph({ x: [0, 30], y: [0, 16], axes: "frame", xTicks: 5, yTicks: 5, xLabel: "Time (min)", yLabel: "Distance (km)" });
+      P.fn(DV.pos, { color: "blue", width: 2.5 });
+      if (b - a >= 0.05) {
+        P.line(A, B, { color: "orange", width: 1.2, dash: [5, 4] });
+        P.segment(A, [b, A[1]], { color: "green", width: 2 });
+        P.segment([b, A[1]], B, { color: "muted", width: 2 });
+        P.segment(A, B, { color: "orange", width: 3 });
+        const mid = P([(a + b) / 2, A[1]]), side = P([b, (A[1] + B[1]) / 2]);
+        g.label(`${DV.fmt(b - a, 1)} min`, [mid[0], mid[1] + 13], { color: "green" });
+        if (B[1] - A[1] > 0.3) g.label(`${DV.fmt(B[1] - A[1], 2)} km`, [side[0] + 8, side[1]], { color: "muted", align: "left" });
+      }
+      g.handle(P(A), { color: "orange", active: s.grab === "a" || g.lit("ends") });
+      g.handle(P(B), { color: "orange", active: s.grab === "b" || g.lit("ends") });
+    },
+  });
+}
+</script>
+
+<p>The orange line is a <dfn data-def="A straight line through two points of a curve. Its slope is the average rate of change between them.">secant</dfn>, a straight line through two points of the curve. Its steepness is the gray rise divided by the green run: kilometers gained per minute spent, which is the average speed over that stretch. Over the <button class="set" data-set="a=0 b=30">whole trip</button> it is 15 km in 30 minutes, 30 km/h. Over the <button class="set" data-set="a=12 b=15">red light</button> the line lies flat and the average is zero. On the <button class="set" data-set="a=19 b=26">open road</button> it climbs steeply, over 60 km/h.</p>
+
+<p>So steepness on this graph is speed: steep means a lot of distance for little time, flat means standing still. The question is how to get the speed at one moment rather than over a stretch.</p>
+
+<h2>Shrinking the window</h2>
+
+<p>An average over a long window blurs together the fast parts and the slow parts. A shorter window blurs less. Fix the left end at one moment, drag the slider to shrink the <span class="c-green">window</span> from ten minutes down to a thousandth of a minute, and watch the <span class="c-orange">secant's</span> slope on the right:</p>
+
+<figure class="demo" id="shrink" aria-label="Left: the trip graph with a fixed point and a secant to a second point a window h later. Right: the secant's slope plotted against the window width on a log scale, flattening onto a dashed red line as the window shrinks."></figure>
+<script>
+{
+  let P;
+  demo("shrink", {
+    aspect: w => (w < 560 ? 0.8 : 2.1),
+    caption: "The slope over a window that starts at a fixed moment, as the window shrinks. The slopes settle on one number, drawn as the dashed red line, and the secant settles onto the red tangent.",
+    state: () => ({ t0: 4, grab: false }),
+    controls: [{ key: "lh", label: "Window", min: -3, max: 1, step: 0.01, value: 0.78, color: "green",
+      format: x => `${Num.fmt(10 ** x, { digits: 2 })} min`,
+      marks: [{ value: 1, label: "10" }, { value: 0, label: "1" }, { value: -1, label: "0.1" }, { value: -2, label: "0.01" }, { value: -3, label: "0.001" }] }],
+    drag: {
+      hit: (p, s) => P && P.near(p, [s.t0, DV.pos(s.t0)], 22),
+      start(p, s) { s.grab = true; },
+      move(p, s) { s.t0 = clamp(P.inv(p)[0], 0.5, 19.5); },
+      end(s) { s.grab = false; },
+    },
+    status: (s, v) => `window ${Num.fmt(10 ** v.lh, { digits: 2 })} min, slope ${DV.fmt(DV.kmh(DV.quot(DV.pos, s.t0, s.t0 + 10 ** v.lh)), 3)} km/h`,
+    draw(g, s, v) {
+      const phone = g.w < 560, h = 10 ** v.lh, t0 = s.t0, A = [t0, DV.pos(t0)], B = [t0 + h, DV.pos(t0 + h)];
+      const m = DV.quot(DV.pos, t0, t0 + h), m0 = DV.slope(DV.pos, t0);
+      const L = phone ? [0, 0, g.w, g.h * 0.52] : [0, 0, g.w * 0.52, g.h];
+      const R = phone ? [0, g.h * 0.56, g.w, g.h * 0.44] : [g.w * 0.56, 0, g.w * 0.44, g.h];
+      P = g.graph({ box: L, x: [0, 30], y: [0, 16], axes: "frame", xTicks: 10, yTicks: 5, xLabel: "Time (min)", yLabel: "Distance (km)" });
+      P.fn(DV.pos, { color: "blue", width: 2.5 });
+      const tanA = clamp(1 - (v.lh + 1) / 1.5, 0, 1);
+      if (tanA > 0) P.line(A, [t0 + 1, A[1] + m0], { color: "red", width: 1.5, dash: [5, 4] });
+      P.line(A, B, { color: "orange", width: 1, dash: [3, 4] });
+      P.segment(A, B, { color: "orange", width: 3 });
+      if (h > 0.3) P.points([B], { color: "orange", r: 4 });
+      g.handle(P(A), { color: "blue", active: s.grab });
+      const Q = g.graph({ box: R, x: [0.001, 10], y: [0, 80], xScale: "log", axes: "frame", yTicks: 20, xLabel: "Window (min)", yLabel: "Slope (km/h)" });
+      Q.hline(DV.kmh(m0), { color: "red" });
+      Q.fn(x => DV.kmh(DV.quot(DV.pos, t0, t0 + x)), { color: "orange", width: 2 });
+      Q.marker(h, DV.kmh(m), { color: "orange", drop: true, label: `${DV.fmt(DV.kmh(m), 2)} km/h`, pos: "ne" });
+    },
+  });
+}
+</script>
+
+<p>At four minutes in, a ten-minute window says 29 km/h, because it reaches into the red light. A <button class="set" data-set="lh=0.48">three-minute</button> window says 56, because it takes in the car's top speed. <button class="set" data-set="lh=0">One minute</button> says 51, a <button class="set" data-set="lh=-1">tenth of a minute</button> 45.67, a hundredth 45.07, and from there the orange curve on the right lies flat on the dashed red line. The slope stops changing. Drag the blue point to another moment and the same thing happens at a different number.</p>
+
+<p>On the left, the secant pivots on the blue point and settles onto one particular line, the red dashed one, which touches the curve at that moment and leans exactly as steeply as the curve does there. It is the <dfn data-def="The straight line that touches a curve at one point and has the curve's slope there.">tangent</dfn>. Its slope is what the speedometer shows. To see the settling digit by digit, divide the window by ten again and again:</p>
+
+<figure class="demo" id="digits" aria-label="A table: each row a window ten times narrower than the one above, with the distance covered in it and the resulting slope. Digits of the slope that have stopped changing are shown in red."></figure>
+<script>
+{
+  const t0 = 4, limit = 45;
+  // Split a number into the part that matches the limit digit for digit, and the rest.
+  const settled = (str, ref) => { let i = 0; while (i < str.length && str[i] === ref[i]) i++; return [str.slice(0, i), str.slice(i)]; };
+  demo("digits", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    caption: "Slopes at four minutes into the trip, from windows ten times narrower each row. The red digits have stopped changing; each tenfold squeeze settles about one more.",
+    controls: [{ key: "k", label: "Divide by ten", type: "stepper", min: 0, max: 6, step: 1, value: 3, color: "green", format: n => `${n} time${n === 1 ? "" : "s"}` }],
+    status: (s, v) => `window ${Num.fmt(10 ** -v.k)} min`,
+    draw(g, s, v) {
+      const phone = g.w < 560, rows = 7, top = 34, rh = (g.h - top - 6) / rows, size = phone ? 13 : 15;
+      const cols = phone ? [0.02, 0.36, 0.98] : [0.08, 0.42, 0.92];
+      const head = ["window h (min)", "distance in it (km)", "slope (km/h)"];
+      head.forEach((t, i) => g.text(t, [g.w * cols[i], 16], { size: 12.5, color: "muted", align: i === 2 ? "right" : "left" }));
+      g.line([0, top - 6], [g.w, top - 6], { stroke: "grid", width: 1 });
+      for (let k = 0; k <= v.k; k++) {
+        const h = 10 ** -k, ds = DV.pos(t0 + h) - DV.pos(t0), m = DV.kmh(ds / h), y = top + rh * (k + 0.5);
+        const now = k === v.k;
+        g.text(h >= 1 ? "1" : h.toFixed(k), [g.w * cols[0], y], { size, font: "mono", align: "left", color: now ? "ink" : "muted" });
+        g.text(ds.toFixed(Math.min(k + 5, 10)), [g.w * cols[1], y], { size, font: "mono", align: "left", color: now ? "ink" : "muted" });
+        const str = m.toFixed(7), [a, b] = settled(str, limit.toFixed(7));
+        const wb = g.measure(b, { size, font: "mono" });
+        g.text(b, [g.w * cols[2], y], { size, font: "mono", align: "right", color: "muted" });
+        g.text(a, [g.w * cols[2] - wb, y], { size, font: "mono", align: "right", color: "red", weight: 700 });
+      }
+    },
+  });
+}
+</script>
+
+<p>Every row is an honest average: the distance covered in the window divided by the window's length. None of them is the instantaneous speed, because every window still has some length. But the red digits that stop changing pile up, one more for each tenfold squeeze, and they spell out <strong>45</strong> km/h with more and more zeros after it. The number they close in on is the instantaneous speed.</p>
+
+<p>Mathematicians call that number the <em>limit</em> of the slopes as the window shrinks to zero. Write the window as <span class="tex">\green{h}</span> and the curve as <span class="tex">\blue{f}</span>, and the derivative at <span class="tex">x</span> is</p>
+
+<div class="tex">\red{f'(x)} = \lim_{\green{h} \to 0} \frac{\blue{f}(x + \green{h}) - \blue{f}(x)}{\green{h}}</div>
+
+<p>Read it from the inside out: rise over run for a window, then the value those slopes settle on as the window closes. You never put <span class="tex">\green{h} = 0</span> into the fraction, which would give a meaningless 0/0. You watch where it is heading.</p>
+
+<aside class="callout key"><p>A derivative is not a slope over a stretch. It is the number that slopes over shorter and shorter stretches settle on.</p></aside>
+
+<h2>Zoom in until it's straight</h2>
+
+<p>There is a second way to see the same thing, and it is the one most worth carrying around. Pick a point on a curve and magnify the neighborhood around it. Drag the <span class="c-ink">zoom</span> slider from 1 to 1,000 and watch the curve inside the lens:</p>
+
+<figure class="demo" id="zoom" aria-label="A wavy curve with a point on it, and a round magnifier showing the neighborhood of that point. As the zoom grows, the curve inside the magnifier straightens out and lies along the dashed red tangent line."></figure>
+<script>
+{
+  let P;
+  const curves = {
+    wavy: x => 0.9 * Math.sin(1.7 * x) + 0.18 * x * x - 0.2,
+    corner: x => 0.75 * Math.abs(x - 0.6) + 0.35 * Math.sin(2 * x) - 0.6,
+  };
+  demo("zoom", {
+    aspect: w => (w < 560 ? 0.78 : 1.9),
+    caption: "A curve and a magnifier on one of its points. Smooth curves straighten out under magnification onto their red tangent line; a corner stays a corner at every zoom.",
+    state: () => ({ grab: false }),
+    controls: [
+      { key: "z", label: "Zoom", min: 0, max: 3, step: 0.01, value: 0.3, color: "ink", format: x => `×${Num.fmt(10 ** x, { digits: 2 })}`,
+        marks: [{ value: 0, label: "×1" }, { value: 1, label: "×10" }, { value: 2, label: "×100" }, { value: 3, label: "×1000" }] },
+      { key: "c", label: "Curve", type: "choice", options: [{ value: "wavy", label: "smooth" }, { value: "corner", label: "with a corner" }], value: "wavy" },
+      { key: "x0", label: "Point", min: -2.5, max: 2.5, step: 0.01, value: 1.1, hidden: true },
+    ],
+    presets: [{ label: "×1000 on the smooth curve", set: { c: "wavy", z: 3 } }, { label: "×1000 on the corner", set: { c: "corner", x0: 0.6, z: 3 } }],
+    drag: {
+      hit: (p, s, v) => P && P.near(p, [v.x0, curves[v.c](v.x0)], 22),
+      start(p, s) { s.grab = true; },
+      move(p, s, v, d, fig) { fig.set("x0", Math.round(clamp(P.inv(p)[0], -2.5, 2.5) * 100) / 100); },
+      end(s) { s.grab = false; },
+    },
+    status(s, v) {
+      const f = curves[v.c], w = 1.2 / 10 ** v.z, m = DV.slope(f, v.x0, w * 1e-4);
+      let dev = 0;
+      for (let i = 0; i <= 60; i++) { const x = v.x0 - w + (2 * w * i) / 60; dev = Math.max(dev, Math.abs(f(x) - f(v.x0) - m * (x - v.x0))); }
+      return `the curve strays ${DV.fmt((100 * dev) / (2 * w), dev / w < 0.02 ? 2 : 0)}% of the lens width from a straight line`;
+    },
+    draw(g, s, v) {
+      const phone = g.w < 560, f = curves[v.c], x0 = v.x0, y0 = f(x0), w = 1.2 / 10 ** v.z;
+      const box = phone ? [0, 0, g.w, g.h * 0.46] : [0, 0, g.w * 0.56, g.h];
+      P = g.graph({ box, x: [-2.6, 2.6], y: [-1.8, 1.8], axes: "cross", xTicks: 1, yTicks: 1 });
+      P.fn(f, { color: "blue", width: 2.5 });
+      const R = phone ? Math.min(g.w * 0.36, g.h * 0.24) : Math.min(g.w * 0.19, g.h * 0.44);
+      const c = phone ? [g.w / 2, g.h * 0.73] : [g.w * 0.79, g.h / 2];
+      const rFrom = Math.max(5, w * P.sx);
+      const at = P([x0, y0]);
+      const corner = v.c === "corner" && Math.abs(x0 - 0.6) < w * 0.02;
+      DV.lens(g, at, rFrom, c, R, [x0, y0, w], L => {
+        if (!corner) { const m = DV.slope(f, x0, w * 1e-4); L.line([x0, y0], [x0 + 1, y0 + m], { color: "red", width: 1.5, dash: [6, 5] }); }
+        L.fn(f, { color: "blue", width: 3, domain: [x0 - 1.5 * w, x0 + 1.5 * w] });
+        L.points([[x0, y0]], { color: "ink", r: 4 });
+      });
+      g.label(`×${Num.fmt(10 ** v.z, { digits: 2 })}`, [c[0], c[1] + R - 14], { color: "muted" });
+      g.handle(at, { color: "blue", active: s.grab });
+    },
+  });
+}
+</script>
+
+<p>At ×1 the lens shows a hump. By ×10 it is a gentle bend, by ×100 you can't tell it from the dashed red tangent, and at ×1,000 the curve strays from a straight line by less than a hundredth of a percent of what the lens shows. Drag the point anywhere along the curve and it is the same story. Every smooth curve, looked at closely enough, is a straight line. This is <em>local linearity</em>, and the derivative is the slope of that line.</p>
+
+<p>Now switch to the curve <button class="set" data-set="c=corner x0=0.6 z=3">with a corner</button> and put the point on the corner itself. No zoom straightens it out. The left side keeps one slope, the right side keeps another, and the lens shows a V at ×10 and at ×1,000 alike. There is no single line to read a slope from, so at that point the curve has no derivative.</p>
+
+<h2>A slope for every point</h2>
+
+<p>The speedometer doesn't give one number for the trip. It gives a number at every moment. In the same way, a curve has a slope at every point, and those slopes together make a new function, the <em>derivative function</em> <span class="tex">\red{f'}</span>. Pick a curve, then drag across the figure to slide the point along it, and watch the <span class="c-red">slope</span> leave a trail in the lower graph:</p>
+
+<figure class="demo" id="slopefn" aria-label="Top: a curve with a point and its red tangent line. Bottom: the slope at each visited point, plotted as red dots, which together trace the derivative function."></figure>
+<script>
+{
+  let P;
+  const F = {
+    sq: { f: x => x * x, x: [-2.5, 2.5], y: [-0.6, 6.5], dy: [-5.5, 5.5], name: "x^2" },
+    cube: { f: x => x ** 3, x: [-2, 2], y: [-8.5, 8.5], dy: [-1.5, 12.5], name: "x^3" },
+    sin: { f: Math.sin, x: [-3.3, 3.3], y: [-1.5, 1.5], dy: [-1.5, 1.5], name: "\\sin x" },
+    exp: { f: Math.exp, x: [-2.5, 2], y: [-0.6, 7.6], dy: [-0.6, 7.6], name: "e^x" },
+    abs: { f: Math.abs, x: [-2, 2], y: [-0.6, 2.2], dy: [-1.6, 1.6], name: "|x|" },
+  };
+  // The slope from each side by the difference quotient; where they disagree there is a corner.
+  const slopes = (f, x) => [DV.left(f, x), DV.right(f, x)];
+  const fill = (k, upTo) => { const c = F[k], out = []; for (let x = c.x[0]; x <= upTo + 1e-9; x += (c.x[1] - c.x[0]) / 40) out.push([x, ...slopes(c.f, x)]); return out; };
+  demo("slopefn", {
+    aspect: w => (w < 560 ? 0.72 : 1.25),
+    caption: "A curve with its red tangent, and below it the tangent's slope at each point visited. The red dots trace the derivative function; |x| has no single slope at its corner.",
+    state: () => ({ trail: fill("sq", 0.6) }),
+    controls: [
+      { key: "f", label: "Curve", type: "choice", options: [{ value: "sq", label: "x²" }, { value: "cube", label: "x³" }, { value: "sin", label: "sin x" }, { value: "exp", label: "eˣ" }, { value: "abs", label: "|x|" }], value: "sq" },
+      { key: "x", label: "Point", min: -3.3, max: 3.3, step: 0.01, value: 0.6, hidden: true },
+      { key: "full", label: "Show the whole slope graph", type: "toggle", value: false, color: "red" },
+    ],
+    change(key, s, v) {
+      const c = F[v.f];
+      if (key === "f") { v.x = clamp(v.x, c.x[0], c.x[1]); s.trail = fill(v.f, v.x); }
+      if (key === "x") s.trail.push([v.x, ...slopes(c.f, v.x)]);
+    },
+    drag: { move(p, s, v, d, fig) { const c = F[v.f]; fig.set("x", Math.round(clamp(P.inv(p)[0], c.x[0], c.x[1]) * 100) / 100); } },
+    status(s, v) {
+      const [l, r] = slopes(F[v.f].f, v.x);
+      return Math.abs(l - r) > 1e-3 ? `x = ${DV.fmt(v.x)}: slope ${DV.fmt(l)} from the left, ${DV.fmt(r)} from the right` : `x = ${DV.fmt(v.x)}, slope ${DV.fmt((l + r) / 2)}`;
+    },
+    draw(g, s, v) {
+      const c = F[v.f], x = clamp(v.x, c.x[0], c.x[1]), y = c.f(x), [l, r] = slopes(c.f, x), corner = Math.abs(l - r) > 1e-3;
+      const gap = 18, h1 = (g.h - gap) * 0.55;
+      P = g.graph({ box: [0, 0, g.w, h1], x: c.x, y: c.y, axes: "cross", xTicks: 1, yTicks: c.y[1] > 4 ? 2 : 1 });
+      P.fn(c.f, { color: "blue", width: 2.5 });
+      const span = (c.x[1] - c.x[0]) * 0.14;
+      if (corner) {
+        P.segment([x - span, y - l * span], [x, y], { color: "red", width: 2 });
+        P.segment([x, y], [x + span, y + r * span], { color: "red", width: 2 });
+      } else P.segment([x - span, y - l * span], [x + span, y + r * span], { color: "red", width: 2.5 });
+      g.handle(P([x, y]), { color: "blue" });
+      g.tex(`f(x) = ${c.name}`, [P.box[0] + 10, P.box[1] + 12], { size: 15, color: "blue", align: "left", halo: true });
+      const Q = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], x: c.x, y: c.dy, axes: "cross", xTicks: 1, yTicks: c.dy[1] > 4 ? 2 : 1 });
+      if (v.full) Q.fn(t => DV.slope(c.f, t), { color: "red", width: 1.5, dash: [5, 4] });
+      for (const [t, a, b] of s.trail) if (Math.abs(a - b) < 1e-3) Q.points([[t, (a + b) / 2]], { color: "red", r: 2.5 });
+      if (corner) {
+        g.circle(Q([x, l]), 4.5, { stroke: "red", width: 2, fill: "panel" });
+        g.circle(Q([x, r]), 4.5, { stroke: "red", width: 2, fill: "panel" });
+        g.label("no single slope here", Q([x, 0]), { color: "red", dy: 0 });
+      } else Q.marker(x, (l + r) / 2, { color: "red", drop: true });
+      g.tex("f'(x)", [Q.box[0] + 10, Q.box[1] + 12], { size: 15, color: "red", align: "left", halo: true });
+    },
+  });
+}
+</script>
+
+<p>For <button class="set" data-set="f=sq">x²</button> the dots fall on a straight line through the origin: the slope at <span class="tex">x</span> is <span class="tex">2x</span>. Left of zero the parabola falls, so the slopes are negative; at the bottom it is flat, slope zero. For <button class="set" data-set="f=cube">x³</button> the slopes trace <span class="tex">3x^2</span>, never negative, because the curve never goes down. For <button class="set" data-set="f=sin">sin x</button> they trace a wave shifted a quarter turn, which is cos x. And <button class="set" data-set="f=exp">eˣ</button> is the odd one: its trail lies right on top of the curve itself. It is the function that is its own slope.</p>
+
+<p>Now try <button class="set" data-set="f=abs x=0">|x|</button> and slide through zero. The slopes jump from −1 to +1 with nothing in between, and at zero itself the two sides disagree. That is the corner from the lens again: the function exists there, but its derivative doesn't.</p>
+
+<p>Reading a derivative off a graph takes three rules. Rising means a positive slope, falling a negative one. At a peak or the bottom of a valley the slope is zero. Steep means a big slope, gentle a small one. Before the next figure, guess:</p>
+
+<div class="quiz">
+  <p>Where on a curve is its slope graph highest?</p>
+  <div class="choices"><button>At the curve's highest point</button><button data-correct>Where the curve climbs most steeply</button><button>Where the curve crosses zero</button></div>
+  <p class="why">At the highest point the curve is flat, so its slope is zero. The slope graph peaks where the curve climbs fastest, which on a hill is partway up the side.</p>
+</div>
+
+<p>Point at or drag across either graph, and compare the <span class="c-blue">curve</span> with its <span class="c-red">slope graph</span> underneath. The <span class="c-brass">brass</span> marks are where the curve turns:</p>
+
+<figure class="demo" id="readoff" aria-label="A curve on top and its slope graph below, with a shared pointer line. Brass marks on the curve's peaks and valleys line up with the points where the slope graph crosses zero."></figure>
+<script>
+{
+  let P;
+  const C = {
+    hills: { f: x => 0.5 * x ** 3 - 1.5 * x, x: [-2.4, 2.4], y: [-3.5, 3.5], dy: [-2, 7.5], xl: "x", fmt: x => DV.fmt(x) },
+    wave: { f: x => Math.sin(x) + 0.5 * Math.sin(2 * x), x: [-3.2, 3.2], y: [-1.6, 1.6], dy: [-1.8, 2.2], xl: "x", fmt: x => DV.fmt(x) },
+    trip: { f: DV.pos, x: [0, 30], y: [0, 16], dy: [-0.15, 1.35], xl: "Time (min)", fmt: x => `${DV.fmt(x, 1)} min`, frame: true },
+  };
+  demo("readoff", {
+    aspect: w => (w < 560 ? 0.8 : 1.35),
+    caption: "A curve and its slope graph, lined up. Rising stretches sit over positive slopes, falling ones over negative slopes, and every peak and valley (brass) over a zero of the slope.",
+    state: () => ({ hx: 1.6 }),
+    controls: [{ key: "c", label: "Curve", type: "choice", options: [{ value: "hills", label: "hill and valley" }, { value: "wave", label: "lopsided wave" }, { value: "trip", label: "the trip" }], value: "hills" }],
+    change(key, s, v) { const c = C[v.c]; s.hx = c.x[0] + (c.x[1] - c.x[0]) * 0.83; },
+    hover(p, s, v) { if (!p || !P) return false; const x = P.inv(p)[0], c = C[v.c]; if (x < c.x[0] || x > c.x[1]) return false; s.hx = x; return true; },
+    drag: { move(p, s, v) { const c = C[v.c]; s.hx = clamp(P.inv(p)[0], c.x[0], c.x[1]); } },
+    status(s, v) { const c = C[v.c], m = DV.slope(c.f, s.hx); return `at ${c.fmt(s.hx)} the curve is ${Math.abs(m) < 0.02 ? "flat" : m > 0 ? "rising" : "falling"}, slope ${DV.fmt(m)}${v.c === "trip" ? ` km/min (${DV.fmt(DV.kmh(m), 0)} km/h)` : ""}`; },
+    draw(g, s, v) {
+      const c = C[v.c], gap = 14, h1 = (g.h - gap) * 0.5, axes = c.frame ? "frame" : "cross";
+      const df = x => DV.slope(c.f, x);
+      P = g.graph({ box: [0, 0, g.w, h1], x: c.x, y: c.y, axes, xTicks: c.frame ? 5 : 1, yTicks: c.frame ? 5 : 1, yLabel: c.frame ? "km" : undefined });
+      const Q = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], x: c.x, y: c.dy, axes, xTicks: c.frame ? 5 : 1, yTicks: c.frame ? 0.5 : 1, xLabel: c.xl, yLabel: c.frame ? "km/min" : undefined });
+      const turns = Num.roots(df, c.x[0] + 0.01, c.x[1] - 0.01).filter(x => Math.abs(DV.slope(df, x)) > 1e-3);
+      for (const t of turns) {
+        g.line(P([t, c.f(t)]), Q([t, 0]), { stroke: "brass", width: 1, dash: [3, 4] });
+      }
+      P.fn(c.f, { color: "blue", width: 2.5 });
+      Q.fn(df, { color: "red", width: 2.5 });
+      for (const t of turns) { P.points([[t, c.f(t)]], { color: "brass", r: 5 }); Q.points([[t, 0]], { color: "brass", r: 4 }); }
+      const x = s.hx, y = c.f(x), m = df(x), span = (c.x[1] - c.x[0]) * 0.1;
+      P.segment([x - span, y - m * span], [x + span, y + m * span], { color: "red", width: 2 });
+      P.crosshair(x, [{ f: c.f, color: "blue", format: t => DV.fmt(t) }], { xLabel: false });
+      Q.crosshair(x, [{ f: df, color: "red", format: t => DV.fmt(t) }], { xFormat: c.fmt });
+    },
+  });
+}
+</script>
+
+<p>Every brass peak and valley sits directly over a place where the red curve crosses zero, and between them the sign of the red curve tells you which way the blue one is heading. The slope graph is highest not at the top of a hill but partway up its side, where the climb is steepest. On the <button class="set" data-set="c=trip">trip</button>, the slope graph is the speedometer's record: a hump for the town leg, a flat zero at the red light, a taller hump on the open road.</p>
+
+<h2>Rules you can see</h2>
+
+<p>Shrinking windows by hand every time would be slow. Luckily the derivatives of common functions follow a handful of rules, and each rule comes from a picture. Start with <span class="tex">x^2</span>, the area of a square with side <span class="tex">\blue{x}</span>. Grow the side by a little <span class="tex">\green{dx}</span> and look at the new area:</p>
+
+<figure class="demo" id="square" aria-label="A square of side x, grown by dx along two edges. The new area is two red strips of size x by dx and a small gray corner of size dx by dx."></figure>
+<script>
+{
+  demo("square", {
+    aspect: w => (w < 560 ? 0.78 : 1.75),
+    caption: "A square of side x grown by dx. The new area is two red strips, each x by dx, plus a gray corner dx by dx that shrinks much faster than the strips.",
+    controls: [
+      { key: "x", label: "Side x", min: 0.6, max: 2, step: 0.05, value: 1.5, color: "blue" },
+      { key: "dx", label: "Growth dx", min: 0, max: 0.6, step: 0.01, value: 0.4, color: "green" },
+    ],
+    status: (s, v) => `new area per unit of growth: ${DV.fmt(2 * v.x + v.dx, 2)}`,
+    draw(g, s, v) {
+      const phone = g.w < 560, x = v.x, d = v.dx, box = phone ? [0, 0, g.w, g.h * 0.62] : [0, 0, g.w * 0.5, g.h];
+      const P = g.fit(-0.35, 2.75, -0.35, 2.75, { box });
+      const R = (x0, y0, w, h, o) => { const a = P([x0, y0 + h]), b = P([x0 + w, y0]); g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], o); };
+      R(0, 0, x, x, { fill: g.rgba("blue", 0.1), stroke: "blue", width: 2 });
+      if (d > 0) {
+        R(x, 0, d, x, { fill: g.rgba("red", 0.3), stroke: "red", width: 1.5 });
+        R(0, x, x, d, { fill: g.rgba("red", 0.3), stroke: "red", width: 1.5 });
+        R(x, x, d, d, { hatch: g.rgba("muted", 0.7), stroke: "muted", width: 1.5 });
+      }
+      g.tex("x^2", P([x / 2, x / 2]), { size: 18, color: "blue" });
+      g.dimension(P([0, 0]), P([x, 0]), "x", { offset: 14, color: "blue" });
+      if (d > 0.12) g.dimension(P([x, 0]), P([x + d, 0]), "dx", { offset: 14, color: "green" });
+      const T = phone ? [g.w / 2, g.h * 0.68] : [g.w * 0.75, g.h * 0.2], step = phone ? 30 : 38, al = "center";
+      g.tex(`\\Delta A = \\red{2\\cdot x\\,dx} + dx^2`, T, { size: 17, align: al });
+      g.tex(`= \\red{${DV.fmt(2 * x * d, 3)}} + ${DV.fmt(d * d, 3)}`, [T[0], T[1] + step], { size: 17, align: al });
+      g.tex(`\\dfrac{\\Delta A}{dx} = \\red{2x} + dx = ${DV.fmt(2 * x + d, 2)}`, [T[0], T[1] + 2.3 * step], { size: 17, align: al, display: true });
+      g.text(`the corner is ${d > 0 ? DV.fmt((100 * d * d) / (2 * x * d + d * d), 1) : "0"}% of the new area`, [T[0], T[1] + 3.5 * step], { size: 13, color: "muted", align: al });
+    },
+  });
+}
+</script>
+
+<p>The new area is two <span class="c-red">red strips</span>, each <span class="tex">x</span> long and <span class="tex">dx</span> wide, plus a gray corner <span class="tex">dx</span> on each side. Divide by <span class="tex">dx</span> to get area gained per unit of growth: <span class="tex">2x + dx</span>. Now shrink <span class="tex">dx</span>. The strips shrink in proportion, but the corner shrinks with the square of <span class="tex">dx</span>, so its share falls from about 12% at <span class="tex">dx = 0.4</span> to under 1% at <button class="set" data-set="dx=0.02">0.02</button>. In the limit only the strips are left, and the derivative of <span class="tex">x^2</span> is <span class="tex">\red{2x}</span>, the same line the dots traced earlier.</p>
+
+<p>A cube does the same in three dimensions: growing it adds three slabs of size <span class="tex">x^2 \cdot dx</span>, plus edges and a corner that vanish faster, so the slope of <span class="tex">x^3</span> is <span class="tex">3x^2</span>. The pattern holds for every power: the derivative of <span class="tex">x^n</span> is <span class="tex">n\,x^{n-1}</span>. That's the <em>power rule</em>.</p>
+
+<p>When two changing quantities are multiplied, the picture is a rectangle with both sides growing. Take width <span class="tex">u = x</span> and height <span class="tex">v = x^2</span>, so the area is <span class="tex">x^3</span> again. Nudge <span class="tex">x</span> and watch where the new area goes:</p>
+
+<figure class="demo" id="product" aria-label="A rectangle of width u = x and height v = x squared. Nudging x adds a red strip on the right of size v by du, a red strip on top of size u by dv, and a small gray corner of size du by dv."></figure>
+<script>
+{
+  demo("product", {
+    aspect: w => (w < 560 ? 0.72 : 1.6),
+    caption: "A rectangle whose width u and height v both depend on x. A small change in x adds a strip v·du on the side, a strip u·dv on top, and a corner du·dv that vanishes in the limit.",
+    controls: [
+      { key: "x", label: "x", min: 0.6, max: 1.4, step: 0.02, value: 1.1, color: "blue" },
+      { key: "dx", label: "Nudge dx", min: 0, max: 0.5, step: 0.01, value: 0.35, color: "green" },
+    ],
+    status(s, v) {
+      const x = v.x, d = v.dx;
+      if (d === 0) return `slope of the area: 3x² = ${DV.fmt(3 * x * x, 3)}`;
+      return `area gained per unit dx: ${DV.fmt(((x + d) ** 3 - x ** 3) / d, 3)}, heading for 3x² = ${DV.fmt(3 * x * x, 3)}`;
+    },
+    draw(g, s, v) {
+      const phone = g.w < 560, x = v.x, d = v.dx, u = x, w = x * x, du = d, dv = (x + d) ** 2 - w;
+      const box = phone ? [0, 0, g.w, g.h * 0.6] : [0, 0, g.w * 0.48, g.h];
+      const P = g.fit(-0.4, 2.1, -0.3, 3.7, { box });
+      const R = (x0, y0, a, b, o) => { const p = P([x0, y0 + b]), q = P([x0 + a, y0]); g.rect(p[0], p[1], q[0] - p[0], q[1] - p[1], o); };
+      R(0, 0, u, w, { fill: g.rgba("blue", 0.1), stroke: "blue", width: 2 });
+      if (d > 0) {
+        R(u, 0, du, w, { fill: g.rgba("red", 0.3), stroke: "red", width: 1.5 });
+        R(0, w, u, dv, { fill: g.rgba("red", 0.3), stroke: "red", width: 1.5 });
+        R(u, w, du, dv, { hatch: g.rgba("muted", 0.7), stroke: "muted", width: 1.5 });
+        if (d > 0.15) { g.tex("v\\,du", P([u + du / 2, w / 2]), { size: 14, color: "red", halo: true }); g.tex("u\\,dv", P([u / 2, w + dv / 2]), { size: 14, color: "red", halo: true }); }
+      }
+      g.tex("uv", P([u / 2, w / 2]), { size: 17, color: "blue" });
+      g.dimension(P([0, 0]), P([u, 0]), "u = x", { offset: 14, color: "blue" });
+      g.dimension(P([0, 0]), P([0, w]), "v = x²", { offset: -14, color: "blue" });
+      const T = phone ? [g.w / 2, g.h * 0.67] : [g.w * 0.74, g.h * 0.2], step = phone ? 30 : 38;
+      g.tex(`\\Delta(uv) = \\red{v\\,du} + \\red{u\\,dv} + du\\,dv`, T, { size: 16 });
+      g.tex(`= \\red{${DV.fmt(w * du, 3)}} + \\red{${DV.fmt(u * dv, 3)}} + ${DV.fmt(du * dv, 3)}`, [T[0], T[1] + step], { size: 16 });
+      g.tex(`(uv)' = \\red{u'v + uv'}`, [T[0], T[1] + 2.2 * step], { size: 17 });
+      g.tex(`= 1\\cdot x^2 + x\\cdot 2x = 3x^2`, [T[0], T[1] + 3.1 * step], { size: 16, color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Again the growth is two strips and a corner. The side strip is the height times the change in width, <span class="tex">v\,du</span>; the top strip is the width times the change in height, <span class="tex">u\,dv</span>. The corner <span class="tex">du\,dv</span> is a small change times a small change, and it disappears in the limit. Dividing by <span class="tex">dx</span> gives the <em>product rule</em>, <span class="tex">(uv)' = u'v + uv'</span>. With <span class="tex">u = x</span> and <span class="tex">v = x^2</span> it gives <span class="tex">x^2 + 2x^2 = 3x^2</span>, the same answer the cube gave.</p>
+
+<p>The third rule is for a function inside another function, like <span class="tex">\sin(x^2)</span>: square first, then take the sine. Think of each step as a number line that gets stretched. Squaring stretches the line near <span class="tex">x</span> by some factor, the sine stretches the result by another, and a small <span class="c-green">window</span> on the first line comes out stretched by both. Drag the <span class="c-green">green window</span> along the top line:</p>
+
+<figure class="demo" id="chain" aria-label="Three number lines stacked: x on top, u = x squared in the middle, y = sin u at the bottom. Gray lines connect each number to its image on the next line. A small green window on the x line maps to an orange window on the u line and a blue window on the y line."></figure>
+<script>
+{
+  let L;
+  const gx = x => x * x, fu = u => Math.sin(u);
+  demo("chain", {
+    aspect: w => (w < 560 ? 0.95 : 1.95),
+    caption: "Squaring, then taking the sine, as two stretches of the number line. A small window is stretched by the first factor, then by the second; the overall stretch is their product.",
+    state: () => ({ grab: false }),
+    controls: [
+      { key: "x0", label: "x", min: 0, max: 1.95, step: 0.01, value: 0.8, hidden: true },
+      { key: "dx", label: "Window dx", min: 0.01, max: 0.25, step: 0.01, value: 0.05, color: "green" },
+    ],
+    drag: {
+      hit: (p, s, v) => L && Math.abs(p[1] - L.yx) < 26 && Math.abs(p[0] - L.X(v.x0 + v.dx / 2)) < 40,
+      start(p, s) { s.grab = true; },
+      move(p, s, v, d, fig) { fig.set("x0", Math.round(clamp(L.Xinv(p[0]) - v.dx / 2, 0, 1.95) * 100) / 100); },
+      end(s) { s.grab = false; },
+    },
+    status(s, v) {
+      const x = v.x0, b = x + v.dx, k1 = DV.quot(gx, x, b), k2 = DV.quot(fu, gx(x), gx(b));
+      return `stretched ×${DV.fmt(k1)}, then ×${DV.fmt(k2)}: overall ×${DV.fmt(k1 * k2)}`;
+    },
+    draw(g, s, v) {
+      const phone = g.w < 560, lm = phone ? 74 : 100, rm = phone ? 18 : 200;
+      const yx = g.h * 0.14, yu = g.h * 0.5, yy = g.h * 0.86, x0 = lm, x1 = g.w - rm;
+      const X = x => x0 + (x / 2.2) * (x1 - x0), U = u => x0 + (u / 4.84) * (x1 - x0), Y = y => x0 + ((y + 1.1) / 2.2) * (x1 - x0);
+      L = { yx, X, Xinv: px => ((px - x0) / (x1 - x0)) * 2.2 };
+      const axis = (y, map, ticks, name) => {
+        g.line([x0 - 6, y], [x1 + 6, y], { stroke: "ink", width: 1.2 });
+        for (const t of ticks) { g.line([map(t), y - 4], [map(t), y + 4], { stroke: "ink", width: 1 }); g.text(Num.fmt(t), [map(t), y + 15], { size: 11.5, color: "muted" }); }
+        g.tex(name, [lm - 12, y], { size: 15, align: "right" });
+      };
+      for (let x = 0; x <= 2.2001; x += 0.1) {
+        g.line([X(x), yx], [U(gx(x)), yu], { stroke: "faint", width: 1 });
+        g.line([U(gx(x)), yu], [Y(fu(gx(x))), yy], { stroke: "faint", width: 1 });
+      }
+      const a = v.x0, b = a + v.dx, ua = gx(a), ub = gx(b), ya = fu(ua), yb = fu(ub);
+      g.path([[X(a), yx], [X(b), yx], [U(ub), yu], [U(ua), yu]], { fill: g.rgba("green", 0.18), close: true });
+      g.path([[U(ua), yu], [U(ub), yu], [Y(yb), yy], [Y(ya), yy]], { fill: g.rgba("orange", 0.18), close: true });
+      axis(yx, X, [0, 1, 2], "x");
+      axis(yu, U, [0, 1, 2, 3, 4], "u = x^2");
+      axis(yy, Y, [-1, 0, 1], "y = \\sin u");
+      g.line([X(a), yx], [X(b), yx], { stroke: "green", width: 6 });
+      g.line([U(ua), yu], [U(ub), yu], { stroke: "orange", width: 6 });
+      g.line([Y(ya), yy], [Y(yb), yy], { stroke: "blue", width: 6 });
+      g.handle([X((a + b) / 2), yx], { color: "green", active: s.grab });
+      const k1 = DV.quot(gx, a, b), k2 = DV.quot(fu, ua, ub);
+      g.label(`×${DV.fmt(k1)}`, [(X(a) + U(ua)) / 2 - 14, (yx + yu) / 2], { color: "orange", align: "right" });
+      g.label(`×${DV.fmt(k2)}${k2 < 0 ? " (flipped)" : ""}`, [(U(ua) + Y(ya)) / 2 - 14, (yu + yy) / 2], { color: "blue", align: "right" });
+      if (!phone) {
+        const T = [g.w - rm / 2 + 6, g.h * 0.3], st = 34;
+        g.tex(`\\frac{\\Delta u}{\\Delta x} = \\orange{${DV.fmt(k1)}}`, T, { size: 16, display: true });
+        g.tex(`\\frac{\\Delta y}{\\Delta u} = \\blue{${DV.fmt(k2)}}`, [T[0], T[1] + 1.4 * st], { size: 16, display: true });
+        g.tex(`\\frac{\\Delta y}{\\Delta x} = ${DV.fmt(k1 * k2)}`, [T[0], T[1] + 2.8 * st], { size: 16, display: true });
+        g.text(`limit: 2x·cos x² = ${DV.fmt(2 * a * Math.cos(a * a))}`, [T[0], T[1] + 3.9 * st], { size: 12.5, color: "muted" });
+      }
+    },
+  });
+}
+</script>
+
+<p>The gray lines show squaring spreading the numbers apart as <span class="tex">x</span> grows, and the sine squeezing them, then flipping them where it turns down. A small window only feels the local stretch. At <span class="tex">x = 0.8</span> squaring stretches it 1.65 times, the sine shrinks that to 0.78, and the bottom window is the product, 1.28 times the original. Shrink the window and the factors settle on the two derivatives, <span class="tex">\orange{2x} = 1.6</span> and <span class="tex">\blue{\cos u} = 0.80</span>. Rates through a chain multiply. That's the <em>chain rule</em>:</p>
+
+<div class="tex">\frac{dy}{dx} = \blue{\frac{dy}{du}} \cdot \orange{\frac{du}{dx}} = \blue{\cos(x^2)} \cdot \orange{2x}</div>
+
+<p>Gears work the same way: if the first gear drives the second three times as fast, and the second drives the third twice as fast, the third turns six times as fast as the first. The chain rule is that, for stretches that vary from place to place.</p>
+
+<p>One more rule, the one the slope trail hinted at: the slope of <span class="tex">\sin x</span> is <span class="tex">\cos x</span>. The sine is the height of a point going round a circle of radius 1. Move the point a small step <span class="tex">\green{d\theta}</span> along the circle and watch how much its height rises compared with the <span class="c-brass">brass</span> base of the big triangle:</p>
+
+<figure class="demo" id="sincos" aria-label="Left: a unit circle with a point at angle theta, a short green arc step, and the orange rise in height over that step; the brass base of the triangle under the point is cos theta. Right: the sine curve with the orange secant over the same step, the red tangent, and the dashed brass cosine curve."></figure>
+<script>
+{
+  let C;
+  demo("sincos", {
+    aspect: w => (w < 560 ? 0.85 : 2.15),
+    caption: "A small step along the unit circle raises the point by about cos θ times the step, because the step is at right angles to the radius. So the sine curve's slope at θ is cos θ.",
+    state: () => ({ grab: false }),
+    controls: [
+      { key: "th", label: "Angle θ", min: 0, max: 6.28, step: 0.01, value: 0.9, hidden: true },
+      { key: "d", label: "Step dθ", min: 0.01, max: 0.8, step: 0.01, value: 0.5, color: "green" },
+    ],
+    drag: {
+      hit: (p, s, v) => C && C.near(p, [Math.cos(v.th), Math.sin(v.th)], 22),
+      start(p, s) { s.grab = true; },
+      move(p, s, v, d, fig) { const q = C.inv(p); fig.set("th", Math.round(((Math.atan2(q[1], q[0]) + TAU) % TAU) * 100) / 100); },
+      end(s) { s.grab = false; },
+    },
+    status: (s, v) => `rise ÷ step = ${DV.fmt(DV.quot(Math.sin, v.th, v.th + v.d), 3)}, cos θ = ${DV.fmt(Math.cos(v.th), 3)}`,
+    draw(g, s, v) {
+      const phone = g.w < 560, t = v.th, d = v.d, c = Math.cos(t), sn = Math.sin(t), c2 = Math.cos(t + d), s2 = Math.sin(t + d);
+      const cb = phone ? [0, 0, g.w, g.h * 0.5] : [0, 0, g.w * 0.38, g.h];
+      const gb = phone ? [0, g.h * 0.53, g.w, g.h * 0.47] : [g.w * 0.4, 0, g.w * 0.6, g.h];
+      C = g.graph({ box: cb, x: [-1.3, 1.3], y: [-1.3, 1.3], equal: true, grid: false, xTicks: false, yTicks: false });
+      C.parametric(a => [Math.cos(a), Math.sin(a)], [0, TAU], { color: "muted", width: 1.5 });
+      C.segment([0, 0], [c, sn], { color: "ink", width: 1.5 });
+      C.segment([0, 0], [c, 0], { color: "brass", width: 3.5 });
+      C.segment([c, 0], [c, sn], { color: "muted", width: 1.5, dash: [3, 3] });
+      C.parametric(a => [Math.cos(a), Math.sin(a)], [t, t + d], { color: "green", width: 4 });
+      C.segment([c, sn], [c2, sn], { color: "muted", width: 1.2, dash: [3, 3] });
+      C.segment([c2, sn], [c2, s2], { color: "orange", width: 3 });
+      g.angleMark(C([0, 0]), 0, -t, 20, { label: "θ", color: "ink" });
+      g.handle(C([c, sn]), { color: "blue", active: s.grab });
+      const S = g.graph({ box: gb, x: [0, TAU], y: [-1.3, 1.3], xTicks: "pi", yTicks: [-1, 1], xLabel: "θ" });
+      S.fn(Math.cos, { color: "brass", width: 1.5, dash: [5, 4] });
+      S.fn(Math.sin, { color: "blue", width: 2.5 });
+      S.line([t, sn], [t + 1, sn + c], { color: "red", width: 1.5 });
+      S.segment([t, sn], [t + d, s2], { color: "orange", width: 3 });
+      S.marker(t, c, { color: "brass", label: `cos θ = ${DV.fmt(c)}`, pos: c > 0 ? "ne" : "se" });
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-green">arc step</span> leaves the point at right angles to the radius, so the little triangle it makes with its <span class="c-orange">rise</span> is the big triangle turned a quarter turn. In the big triangle, the brass base is <span class="tex">\cos\theta</span> on a slanted side of 1. In the little one, the rise plays the base's part and the step plays the slanted side's, so the rise is about <span class="tex">\cos\theta \cdot d\theta</span>. With a big step the guess is rough: 0.40 against 0.62 at the start. At a <button class="set" data-set="d=0.01">step of 0.01</button> it is 0.618, within 0.004. Drag the point round: the rise is largest at the right of the circle, zero at the top, and negative on the way down, just as the cosine goes.</p>
+
+<aside class="callout note" data-label="The rules so far"><p>Power: <span class="tex">(x^n)' = n\,x^{n-1}</span>. Product: <span class="tex">(uv)' = u'v + uv'</span>. Chain: <span class="tex">(f(g(x)))' = f'(g(x))\cdot g'(x)</span>. And <span class="tex">(\sin x)' = \cos x</span>, <span class="tex">(e^x)' = e^x</span>. Almost every formula you'll meet can be taken apart with these.</p></aside>
+
+<h2>Acceleration and bending</h2>
+
+<p>A derivative is a function, so it has a derivative of its own. On the trip, the slope of distance is speed, and the slope of speed is <em>acceleration</em>: how fast the speedometer needle is moving. Drag across the three graphs, from the <span class="c-blue">distance</span> on top to the <span class="c-red">speed</span> and the <span class="c-purple">acceleration</span> below:</p>
+
+<figure class="demo" id="accel" aria-label="Three stacked graphs over the 30-minute trip: distance in blue, speed in red (the slope of distance), and acceleration in purple (the slope of speed), with a shared pointer line."></figure>
+<script>
+{
+  let P;
+  const speed = t => DV.kmh(DV.slope(DV.pos, t));      // km/h
+  const accel = t => DV.slope(speed, t, 1e-3);         // km/h gained per minute
+  demo("accel", {
+    aspect: w => (w < 560 ? 0.62 : 1.15),
+    caption: "Distance, speed, and acceleration over the trip. Each graph is the slope of the one above it; the acceleration is positive while the speed climbs and negative while the car brakes.",
+    state: () => ({ t: 7 }),
+    hover(p, s) { if (!p || !P) return false; const t = P.inv(p)[0]; if (t < 0 || t > 30) return false; s.t = t; return true; },
+    drag: { move(p, s) { s.t = clamp(P.inv(p)[0], 0, 30); } },
+    status: (s) => { const a = accel(s.t); return `at ${DV.fmt(s.t, 1)} min: ${DV.fmt(speed(s.t), 0)} km/h, ${Math.abs(a) < 0.3 ? "steady" : a > 0 ? "speeding up" : "slowing down"}`; },
+    draw(g, s) {
+      const gap = 12, h = (g.h - 2 * gap) / 3;
+      const opt = (i, y, yl, step) => ({ box: [0, i * (h + gap), g.w, h], x: [0, 30], y, axes: "frame", xTicks: 5, yTicks: step, yLabel: yl, xLabel: i === 2 ? "Time (min)" : undefined, xFormat: i === 2 ? undefined : () => "" });
+      P = g.graph(opt(0, [0, 16], "km", 5));
+      P.fn(DV.pos, { color: "blue", width: 2.5 });
+      P.crosshair(s.t, [{ f: DV.pos, color: "blue", format: x => `${DV.fmt(x, 1)} km` }], { xLabel: false });
+      const Q = g.graph(opt(1, [0, 80], "km/h", 20));
+      Q.fn(speed, { color: "red", width: 2.5 });
+      Q.crosshair(s.t, [{ f: speed, color: "red", format: x => `${DV.fmt(x, 0)} km/h` }], { xLabel: false });
+      const A = g.graph(opt(2, [-18, 18], "km/h per min", 9));
+      A.area(accel, 0, 30, { color: "purple", alpha: 0.15 });
+      A.fn(accel, { color: "purple", width: 2.5 });
+      A.crosshair(s.t, [{ f: accel, color: "purple", format: x => DV.fmt(x, 1) }], { xFormat: x => `${DV.fmt(x, 1)} min` });
+    },
+  });
+}
+</script>
+
+<p>The car's speed peaks at 60 km/h six minutes in, and right there the acceleration is zero: the needle has stopped climbing and is about to fall. The steepest climb of the speed, about 16 km/h per minute, is where acceleration peaks. Braking for the light shows up as negative acceleration, and at the light itself all three are flat. This is the <em>second derivative</em>, written <span class="tex">\purple{f''}</span>, and a car's accelerometer measures it directly.</p>
+
+<p>On a graph, the second derivative shows as bending. Where the slope is increasing, the curve bends upward like a cup and sits above its tangent line. Where the slope is decreasing it bends down like a cap and sits below. Slide the <span class="c-red">tangent</span> along this curve and watch the <span class="c-purple">gap</span> between them:</p>
+
+<figure class="demo" id="bend" aria-label="A curve with a sliding red tangent line, the gap between curve and tangent shaded purple. Below, the second derivative in purple, positive where the curve bends up and negative where it bends down."></figure>
+<script>
+{
+  let P;
+  const f = x => 0.5 * x ** 3 - 1.5 * x, d1 = x => DV.slope(f, x), d2 = x => DV.slope(d1, x, 1e-3);
+  demo("bend", {
+    aspect: w => (w < 560 ? 0.8 : 1.5),
+    caption: "A curve with its red tangent, and the gap between them shaded. Where the second derivative (below) is positive the curve bends up above its tangent; where it is negative it bends down below.",
+    controls: [{ key: "x", label: "Point", min: -2.2, max: 2.2, step: 0.01, value: 1.2, color: "red" }],
+    drag: { move(p, s, v, d, fig) { fig.set("x", Math.round(clamp(P.inv(p)[0], -2.2, 2.2) * 100) / 100); } },
+    status: (s, v) => { const k = d2(v.x); return `f″ = ${DV.fmt(k)}: ${Math.abs(k) < 0.05 ? "not bending, the curve crosses its tangent" : k > 0 ? "bends up, curve above the tangent" : "bends down, curve below the tangent"}`; },
+    draw(g, s, v) {
+      const gap = 16, h1 = (g.h - gap) * 0.62, x = v.x, y = f(x), m = d1(x), T = t => y + m * (t - x);
+      P = g.graph({ box: [0, 0, g.w, h1], x: [-2.4, 2.4], y: [-3.2, 3.2], xTicks: 1, yTicks: 1 });
+      P.between(f, T, x - 0.9, x + 0.9, { color: "purple", alpha: 0.25 });
+      P.fn(f, { color: "blue", width: 2.5 });
+      P.segment([x - 1.1, T(x - 1.1)], [x + 1.1, T(x + 1.1)], { color: "red", width: 2 });
+      g.handle(P([x, y]), { color: "red" });
+      const Q = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], x: [-2.4, 2.4], y: [-8, 8], xTicks: 1, yTicks: 4 });
+      Q.fn(d2, { color: "purple", width: 2.5 });
+      Q.marker(x, d2(x), { color: "purple", drop: true });
+      g.tex("f''(x)", [Q.box[0] + 10, Q.box[1] + 12], { size: 15, color: "purple", align: "left", halo: true });
+    },
+  });
+}
+</script>
+
+<p>Right of the middle, the shaded gap opens upward on both sides of the tangent, and the purple <span class="tex">f''</span> is positive. Left of the middle the gap hangs below, and <span class="tex">f''</span> is negative. At <button class="set" data-set="x=0">zero</button> the curve switches from cap to cup and crosses its own tangent. That switch is called an <em>inflection point</em>. The two derivatives answer different questions: <span class="tex">f'</span> says which way the curve is heading, <span class="tex">f''</span> says which way it is turning.</p>
+
+<h2>Finding the best</h2>
+
+<p>The most common use of a derivative is finding the largest or smallest value of something. At the top of a smooth hill the curve is flat, so find where the slope is zero and you have every candidate for a peak. A classic: cut equal squares from the corners of a 20 cm sheet and fold up the sides into an open box. Change the cut and watch the <span class="c-blue">volume</span>:</p>
+
+<figure class="demo" id="box" aria-label="Left: a 20 cm square sheet with equal squares cut from its corners, and the open box it folds into. Right: the box's volume against the size of the cut, with the red tangent at the current cut and a brass mark at the peak where the tangent is flat."></figure>
+<script>
+{
+  const V = x => x * (20 - 2 * x) ** 2, best = 10 / 3;
+  demo("box", {
+    aspect: w => (w < 560 ? 0.78 : 2),
+    caption: "An open box folded from a 20 cm sheet with x cm squares cut from each corner. Its volume peaks where the slope of the volume curve is zero, at a cut of 10/3 cm.",
+    controls: [{ key: "x", label: "Cut x", min: 0.5, max: 9.5, step: 0.05, value: 1.5, unit: " cm", marks: [{ value: 10 / 3, label: "flat" }] }],
+    status: (s, v) => `volume ${DV.fmt(V(v.x), 0)} cm³, slope ${DV.fmt(DV.slope(V, v.x), 1)} cm³ per cm of cut`,
+    draw(g, s, v) {
+      const phone = g.w < 560, x = v.x, b = 20 - 2 * x;
+      const left = phone ? [0, 0, g.w, g.h * 0.44] : [0, 0, g.w * 0.42, g.h];
+      // The flat sheet.
+      const sw = Math.min(left[2] * 0.48, left[3] * 0.82), sx = left[0] + 8, sy = left[1] + (left[3] - sw) / 2, k = sw / 20;
+      g.rect(sx, sy, sw, sw, { fill: g.rgba("blue", 0.08), stroke: "ink", width: 1.5 });
+      for (const [cx, cy] of [[0, 0], [20 - x, 0], [0, 20 - x], [20 - x, 20 - x]]) g.rect(sx + cx * k, sy + cy * k, x * k, x * k, { fill: "panel", hatch: g.rgba("muted", 0.6), stroke: "muted", width: 1 });
+      g.rect(sx + x * k, sy + x * k, b * k, b * k, { stroke: "muted", width: 1, dash: [4, 3] });
+      g.label("20 cm", [sx + sw / 2, sy - 9], { color: "muted" });
+      // The folded box, in a simple oblique view.
+      const q = Math.min(left[2] * 0.45, left[3] * 0.9) / 26, ox = sx + sw + 18 + 0.55 * b * q, oy = left[1] + left[3] * 0.62 + 0.25 * b * q;
+      const Pp = ([X, Y, Z]) => [ox + X * q - 0.55 * Y * q, oy - Z * q - 0.35 * Y * q];
+      const face = (pts, o) => g.path(pts.map(Pp), { close: true, ...o });
+      face([[0, b, 0], [b, b, 0], [b, b, x], [0, b, x]], { fill: g.rgba("blue", 0.1), stroke: "ink", width: 1.2 });
+      face([[0, 0, 0], [0, b, 0], [0, b, x], [0, 0, x]], { fill: g.rgba("blue", 0.14), stroke: "ink", width: 1.2 });
+      face([[0, 0, 0], [b, 0, 0], [b, b, 0], [0, b, 0]], { fill: g.rgba("blue", 0.06), stroke: "ink", width: 1.2 });
+      face([[b, 0, 0], [b, b, 0], [b, b, x], [b, 0, x]], { fill: g.rgba("blue", 0.18), stroke: "ink", width: 1.2 });
+      face([[0, 0, 0], [b, 0, 0], [b, 0, x], [0, 0, x]], { fill: g.rgba("blue", 0.22), stroke: "ink", width: 1.5 });
+      // The volume curve.
+      const right = phone ? [0, g.h * 0.48, g.w, g.h * 0.52] : [g.w * 0.45, 0, g.w * 0.55, g.h];
+      const P = g.graph({ box: right, x: [0, 10], y: [0, 700], axes: "frame", xTicks: 2, yTicks: 200, xLabel: "Cut x (cm)", yLabel: "Volume (cm³)" });
+      P.fn(V, { color: "blue", width: 2.5 });
+      const m = DV.slope(V, x);
+      P.segment([x - 1.4, V(x) - 1.4 * m], [x + 1.4, V(x) + 1.4 * m], { color: "red", width: 2 });
+      P.points([[best, V(best)]], { color: "brass", r: 5 });
+      P.marker(x, V(x), { color: "blue", label: `${DV.fmt(V(x), 0)} cm³`, pos: x < best ? "se" : "ne" });
+    },
+  });
+}
+</script>
+
+<p>A thin cut gives a wide, shallow tray; a deep cut gives a tall, narrow tube. Somewhere between is the biggest box, and the <span class="c-red">tangent</span> finds it: it tilts up while more cut still helps, down once it starts to hurt, and lies flat at the top. The volume is <span class="tex">V = x(20 - 2x)^2</span>. Its derivative, by the product and chain rules, is <span class="tex">(20 - 2x)(20 - 6x)</span>, which is zero at <span class="tex">x = 10</span> (no box at all) and at <button class="set" data-set="x=3.35">x = 10/3</button> cm, about 3.33 cm. That box holds about 593 cm³, and no other cut beats it.</p>
+
+<aside class="callout mistake"><p>A zero slope marks a flat spot, not always a peak. It can be a valley, or a ledge where the curve pauses and keeps climbing, like <span class="tex">x^3</span> at zero. Check the second derivative or the values on either side before you call it a maximum.</p></aside>
+
+<h2>Riding the tangent</h2>
+
+<p>A tangent line is the best straight stand-in for a curve near a point, and straight lines are easy to solve. Newton used that to find roots, the places where a function crosses zero, in his own worked example <span class="tex">x^3 - 2x - 5 = 0</span> <a class="cite" href="#ref-ypma"></a>. Start from a guess, follow the <span class="c-red">tangent</span> down to where it hits zero, and use that as the next guess. Step it:</p>
+
+<figure class="demo" id="newton" aria-label="The curve y = x cubed minus 2x minus 5, with a sequence of red tangent lines: each starts above the current guess on the curve and runs down to the axis, where it gives the next guess. A table on the right lists the guesses, with correct digits in red."></figure>
+<script>
+{
+  let P;
+  const f = x => x ** 3 - 2 * x - 5, root = 2.0945514815423265;
+  const steps = (x0, n) => { const xs = [x0]; for (let i = 0; i < n; i++) { const x = xs[i], m = DV.slope(f, x); xs.push(Math.abs(m) < 1e-9 ? x : x - f(x) / m); } return xs; };
+  const settled = (str, ref) => { let i = 0; while (i < str.length && str[i] === ref[i]) i++; return [str.slice(0, i), str.slice(i)]; };
+  demo("newton", {
+    aspect: w => (w < 560 ? 0.8 : 1.9),
+    caption: "Newton's method on x³ − 2x − 5. Each red tangent runs from the curve to the axis, and where it lands is the next guess. Correct digits (red in the table) roughly double with each step.",
+    state: () => ({ grab: false }),
+    controls: [
+      { key: "n", label: "Steps", type: "stepper", min: 0, max: 5, step: 1, value: 2 },
+      { key: "x0", label: "First guess", min: 0.6, max: 3.4, step: 0.01, value: 3, hidden: true },
+    ],
+    drag: {
+      hit: (p, s, v) => P && P.near(p, [v.x0, 0], 22),
+      start(p, s) { s.grab = true; },
+      move(p, s, v, d, fig) { fig.set("x0", Math.round(clamp(P.inv(p)[0], 0.6, 3.4) * 100) / 100); },
+      end(s) { s.grab = false; },
+    },
+    status: (s, v) => { const xs = steps(v.x0, v.n), x = xs[xs.length - 1]; return `guess ${v.n}: x = ${x.toFixed(10)}, f(x) = ${Num.fmt(f(x), { digits: 2 })}`; },
+    draw(g, s, v) {
+      const phone = g.w < 560, xs = steps(v.x0, v.n);
+      const gb = phone ? [0, 0, g.w, g.h * 0.6] : [0, 0, g.w * 0.6, g.h];
+      P = g.graph({ box: gb, x: [0.5, 3.6], y: [-8, 34], xTicks: 0.5, yTicks: 10 });
+      P.fn(f, { color: "blue", width: 2.5 });
+      for (let i = 0; i < xs.length - 1; i++) {
+        const x = xs[i], nx = xs[i + 1];
+        P.segment([x, 0], [x, f(x)], { color: "muted", width: 1, dash: [3, 3] });
+        P.segment([x, f(x)], [nx, 0], { color: "red", width: 2 });
+        P.points([[x, f(x)]], { color: "red", r: 3 });
+      }
+      xs.forEach((x, i) => { if (i > 0) P.points([[x, 0]], { color: "ink", r: 3.5 }); });
+      g.handle(P([v.x0, 0]), { color: "ink", active: s.grab });
+      const tx = phone ? 16 : g.w * 0.64, ty = phone ? g.h * 0.66 : 28, rh = phone ? 20 : 30, size = phone ? 13 : 15;
+      g.text("guess", [tx, ty - 6], { size: 12.5, color: "muted", align: "left" });
+      xs.forEach((x, i) => {
+        const str = x.toFixed(10), [a, b] = settled(str, root.toFixed(10)), y = ty + 16 + i * rh;
+        g.tex(`x_{${i}}`, [tx + 8, y], { size, align: "left" });
+        const wa = g.measure(a, { size, font: "mono", weight: 700 });
+        g.text(a, [tx + 48, y], { size, font: "mono", color: "red", weight: 700, align: "left" });
+        g.text(b, [tx + 48 + wa, y], { size, font: "mono", color: "muted", align: "left" });
+      });
+    },
+  });
+}
+</script>
+
+<p>From a first guess of 3, the tangent lands at 2.36, then 2.127, 2.0951, and 2.0945517. The <span class="c-red">red digits</span> match the true root, and once the guess is close their count roughly doubles each step: three, then seven, then all eleven shown. Each step needs only the function's value and its slope at the current guess:</p>
+
+<div class="tex">x_{\text{next}} = x - \frac{f(x)}{\red{f'(x)}}</div>
+
+<p>From most starting points the method closes in within a few steps, which is why computers use it to take square roots and solve equations. But <button class="set" data-set="x0=0.85 n=5">start at 0.85</button>, near the flat bottom of the valley, and the first tangent shoots off to 37 before the guesses find their way back.</p>
+
+<p>The same stand-in line gives quick estimates. The square root of 4 is 2, and the slope of <span class="tex">\sqrt{x}</span> there is <span class="tex">1/(2\sqrt{4}) = 1/4</span>. So for a number a little past 4, add a quarter of the overshoot. Move <span class="tex">x</span> and compare the <span class="c-red">tangent's</span> estimate with the <span class="c-blue">true root</span>:</p>
+
+<figure class="demo" id="sqrt" aria-label="The curve y = square root of x with its red tangent line at x = 4. A movable x shows the tangent's estimate and the true square root side by side, with the gap between them."></figure>
+<script>
+{
+  let P;
+  demo("sqrt", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    caption: "Estimating square roots from the tangent line at a perfect square. Close to the base point the tangent and the curve are almost the same; the error grows with the square of the distance.",
+    state: () => ({ grab: false }),
+    controls: [
+      { key: "x", label: "x", min: 0.3, max: 10, step: 0.05, value: 4.1, color: "ink" },
+      { key: "a", label: "Base point", type: "choice", options: [{ value: 1, label: "1" }, { value: 4, label: "4" }, { value: 9, label: "9" }], value: 4 },
+    ],
+    drag: {
+      hit: (p, s, v) => P && P.near(p, [v.x, Math.sqrt(v.x)], 24),
+      start(p, s) { s.grab = true; },
+      move(p, s, v, d, fig) { fig.set("x", Math.round(clamp(P.inv(p)[0], 0.3, 10) * 20) / 20); },
+      end(s) { s.grab = false; },
+    },
+    status: (s, v) => { const a = v.a, m = DV.slope(Math.sqrt, a), est = Math.sqrt(a) + m * (v.x - a); return `tangent says ${est.toFixed(5)}, true √${Num.fmt(v.x)} = ${Math.sqrt(v.x).toFixed(5)}, off by ${Num.fmt(Math.abs(est - Math.sqrt(v.x)), { digits: 2 })}`; },
+    draw(g, s, v) {
+      const a = v.a, r = Math.sqrt(a), m = DV.slope(Math.sqrt, a), L = t => r + m * (t - a), x = v.x;
+      P = g.graph({ x: [0, 10.4], y: [0, 4.2], axes: "frame", xTicks: 1, yTicks: 1, xLabel: "x" });
+      P.fn(Math.sqrt, { color: "blue", width: 2.5, label: "$\\sqrt{x}$" });
+      P.fn(L, { color: "red", width: 1.8, dash: [6, 4] });
+      P.points([[a, r]], { color: "red", r: 4.5 });
+      P.segment([x, Math.sqrt(x)], [x, L(x)], { color: "purple", width: 3 });
+      P.vline(x, { color: "muted" });
+      g.handle(P([x, Math.sqrt(x)]), { color: "blue", active: s.grab });
+      const box = P.box, tx = box[0] + box[2] - 8, ty = box[1] + box[3] - 74;
+      g.tex(`\\red{${DV.fmt(L(x), 4)}}`, [tx, ty], { size: 16, align: "right", halo: true });
+      g.text("tangent estimate", [tx - 74, ty], { size: 12.5, color: "red", align: "right", halo: true });
+      g.tex(`\\blue{${DV.fmt(Math.sqrt(x), 4)}}`, [tx, ty + 24], { size: 16, align: "right", halo: true });
+      g.text("true root", [tx - 74, ty + 24], { size: 12.5, color: "blue", align: "right", halo: true });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="x=4.1 a=4">4.1</button> the tangent says 2.025 and the true value is 2.02485, off by about 0.00015: four good digits from one division. At <button class="set" data-set="x=5 a=4">5</button> it says 2.25 against 2.236, and at <button class="set" data-set="x=9 a=4">9</button> 3.25 against 3, because the curve has bent away from the line. Halve the distance from the base point and the error drops to about a quarter, like the corner of the growing square. This is <em>linear approximation</em>: near a point you know, swap the curve for its tangent.</p>
+
+<h2>Back to the speedometer</h2>
+
+<p>Now the needle makes sense. Play the trip, or drag along the curve, and watch the speedometer read the slope of the <span class="c-red">tangent</span>:</p>
+
+<figure class="demo" id="payoff" aria-label="The trip's distance graph with a moving point and its red tangent line, beside a speedometer whose needle shows the tangent's slope in km/h."></figure>
+<script>
+{
+  let P;
+  const speed = t => DV.kmh(DV.slope(DV.pos, clamp(t, 1e-4, 30 - 1e-4)));
+  demo("payoff", {
+    aspect: w => (w < 560 ? 0.78 : 2),
+    caption: "The trip replayed. The speedometer shows the slope of the red tangent at each moment: the derivative of distance with respect to time.",
+    state: () => ({ t: 5, grab: false }),
+    step(dt, s) { s.t = (s.t + dt * 3) % 30; },
+    drag: { move(p, s) { s.t = clamp(P.inv(p)[0], 0, 30); }, start(p, s) { s.grab = true; }, end(s) { s.grab = false; } },
+    status: s => `${DV.fmt(s.t, 1)} min, ${DV.fmt(DV.pos(s.t), 2)} km from home, ${DV.fmt(speed(s.t), 0)} km/h`,
+    draw(g, s) {
+      const phone = g.w < 560, t = s.t, y = DV.pos(t), m = DV.slope(DV.pos, clamp(t, 1e-4, 30 - 1e-4));
+      const gb = phone ? [0, 0, g.w, g.h * 0.55] : [0, 0, g.w * 0.62, g.h];
+      P = g.graph({ box: gb, x: [0, 30], y: [0, 16], axes: "frame", xTicks: 5, yTicks: 5, xLabel: "Time (min)", yLabel: "Distance (km)" });
+      P.fn(DV.pos, { color: "blue", width: 2.5 });
+      P.segment([t - 3, y - 3 * m], [t + 3, y + 3 * m], { color: "red", width: 2.5 });
+      g.handle(P([t, y]), { color: "blue", active: s.grab });
+      const r = phone ? Math.min(g.w * 0.26, g.h * 0.16) : Math.min(g.w * 0.15, g.h * 0.36);
+      const c = phone ? [g.w / 2, g.h * 0.74] : [g.w * 0.82, g.h * 0.47];
+      g.dial(c, r, speed(t), { min: 0, max: 100, ticks: 10, label: "km/h", color: "red" });
+      for (let k = 0; k <= 100; k += 20) { const a = Math.PI * (0.75 + 1.5 * k / 100); g.text(String(k), [c[0] + Math.cos(a) * r * 0.62, c[1] + Math.sin(a) * r * 0.62], { size: 11.5, color: "muted" }); }
+      g.text(`${DV.fmt(speed(t), 0)} km/h`, [c[0], c[1] + r + 18], { size: 15, weight: 600, color: "red" });
+    },
+  });
+}
+</script>
+
+<p>A speed at a single instant, when no time passes, is the slope of the tangent: the number that averages over shorter and shorter stretches close in on. Zoom in on the distance curve at any moment and it's a straight line, and the needle reads that line's slope. The odometer is the function, the speedometer its derivative, and the push into your seat when the driver speeds up is the second derivative.</p>
+
+<p>The idea runs well beyond cars. A falling stone's speed is the derivative of its height, an electric current the derivative of charge, and the gradient that trains a neural network is a list of derivatives, one per weight. Whenever something changes and you ask how fast, right now, the answer is a derivative.</p>
+
+<details class="deeper">
+  <summary>Going deeper: what "the limit" means exactly <span class="hint">4 min</span></summary>
+  <p>The limit in the definition was settled in the 1800s. Augustin-Louis Cauchy defined the derivative as the limit of the difference quotient in 1823 <a class="cite" href="#ref-cauchy"></a>, and Karl Weierstrass later made "limit" exact with two small numbers, written ε (epsilon) and δ (delta) <a class="cite" href="#ref-grabiner"></a>. The statement</p>
+  <div class="tex">\lim_{h \to 0} Q(h) = L, \qquad Q(h) = \frac{f(x+h) - f(x)}{h}</div>
+  <p>means: for every tolerance <span class="tex">\varepsilon \gt 0</span>, however small, there is a window size <span class="tex">\delta \gt 0</span> such that whenever <span class="tex">0 \lt |h| \lt \delta</span>, the quotient is within <span class="tex">\varepsilon</span> of <span class="tex">L</span>. It is a game. You name how close you want to be; I have to find a window narrow enough to guarantee it. Here <span class="tex">Q</span> is the trip's slope at four minutes, and <span class="tex">L</span> = 45 km/h. Shrink the tolerance:</p>
+  <figure class="demo" id="epsdelta" aria-label="The difference quotient of the trip at four minutes, plotted against the window h, with a hole at h = 0. A horizontal band of half-width epsilon around 45 km/h and a vertical band of half-width delta around h = 0 show that inside the delta band the curve stays inside the epsilon band."></figure>
+  <script>
+  {
+    const L = 45, Q = h => DV.kmh(DV.quot(DV.pos, 4, 4 + h));
+    // The widest window in which every quotient stays within eps of L, found by scanning outward.
+    const deltaFor = eps => { let d = 0; for (let i = 1; i <= 4000; i++) { const h = i * 0.001; if (Math.abs(Q(h) - L) >= eps || Math.abs(Q(-h) - L) >= eps) break; d = h; } return d; };
+    demo("epsdelta", {
+      aspect: w => (w < 560 ? 1 : 1.8),
+      caption: "The ε-δ game for the trip's slope at four minutes. For each tolerance ε (orange band), the green band is the widest window δ in which every slope stays inside it.",
+      controls: [{ key: "eps", label: "Tolerance ε", min: 0.2, max: 12, step: 0.1, value: 6, unit: " km/h", color: "orange" }],
+      status: (s, v) => `ε = ${DV.fmt(v.eps, 1)} km/h needs δ = ${DV.fmt(deltaFor(v.eps), 3)} min`,
+      draw(g, s, v) {
+        const P = g.graph({ x: [-4, 4], y: [20, 70], axes: "frame", xTicks: 1, yTicks: 10, xLabel: "Window h (min)", yLabel: "Slope Q(h) (km/h)" });
+        const d = deltaFor(v.eps);
+        P.clip(() => {
+          const a = P([-4, L + v.eps]), b = P([4, L - v.eps]);
+          g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], { fill: g.rgba("orange", 0.14) });
+          const c = P([-d, 70]), e = P([d, 20]);
+          g.rect(c[0], c[1], e[0] - c[0], e[1] - c[1], { fill: g.rgba("green", 0.16) });
+        });
+        P.hline(L, { color: "red", label: "45" });
+        P.fn(h => (Math.abs(h) < 1e-9 ? NaN : Q(h)), { color: "blue", width: 2.5 });
+        g.circle(P([0, L]), 4.5, { stroke: "blue", width: 2, fill: "panel" });
+      },
+    });
+  }
+  </script>
+  <p>Inside the green window, the blue curve never leaves the orange band. Make ε ten times smaller and δ shrinks too, but a δ always exists, and that is all "the limit is 45" claims. The hole at <span class="tex">h = 0</span> is honest: the quotient is never computed there, and the definition never needs it to be.</p>
+  <p>The same definition explains the corner. For <span class="tex">|x|</span> at 0, the quotient is −1 for every negative <span class="tex">h</span> and +1 for every positive one. Ask for ε = 0.5 and no window works, because any window holds both values. Stranger still, Weierstrass built a curve that is continuous everywhere and has corners at every scale, so it has no derivative anywhere: zoom in on it as far as you like and it never straightens out.</p>
+</details>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-thompson">Silvanus P. Thompson, <em>Calculus Made Easy</em>, Macmillan, 1910. The "little bits" approach to the growing square and cube used here.</li>
+  <li id="ref-strang">Gilbert Strang, <em>Calculus</em>, Wellesley-Cambridge Press, 1991.</li>
+  <li id="ref-ypma">Tjalling J. Ypma, “Historical development of the Newton-Raphson method”, <em>SIAM Review</em> 37(4) (1995), 531-551.</li>
+  <li id="ref-cauchy">Augustin-Louis Cauchy, <em>Résumé des leçons données à l'École royale polytechnique sur le calcul infinitésimal</em>, Paris, 1823.</li>
+  <li id="ref-grabiner">Judith V. Grabiner, “Who gave you the epsilon? Cauchy and the origins of rigorous calculus”, <em>The American Mathematical Monthly</em> 90(3) (1983), 185-194.</li>
+</ol>
+<!-- explainer:article:end -->
+</article>
+</main>
+</div>
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+</body>
+</html>
