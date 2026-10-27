@@ -46,7 +46,8 @@ Every page in [`site/`](site) was built with the skill. Open the [live site](htt
 | [![](site/jaw-joint/thumb.webp)](https://safis.fyi/jaw-joint/)<br>**The jaw joint** | [![](site/neuron/thumb.webp)](https://safis.fyi/neuron/)<br>**How a neuron fires** | [![](site/ice/thumb.webp)](https://safis.fyi/ice/)<br>**Why ice floats** |
 | [![](site/pendulum/thumb.webp)](https://safis.fyi/pendulum/)<br>**How a pendulum keeps time** | [![](site/lock/thumb.webp)](https://safis.fyi/lock/)<br>**How a pin tumbler lock works** | [![](site/tides/thumb.webp)](https://safis.fyi/tides/)<br>**Why there are two tides a day** |
 | [![](site/hash-table/thumb.webp)](https://safis.fyi/hash-table/)<br>**How a hash table finds things** | [![](site/next-word/thumb.webp)](https://safis.fyi/next-word/)<br>**How a language model picks the next word** | [![](site/attention/thumb.webp)](https://safis.fyi/attention/)<br>**How attention works** |
-| [![](site/learning/thumb.webp)](https://safis.fyi/learning/)<br>**How a neural network learns** | [![](site/matrix/thumb.webp)](https://safis.fyi/matrix/)<br>**How a matrix transforms space** | |
+| [![](site/learning/thumb.webp)](https://safis.fyi/learning/)<br>**How a neural network learns** | [![](site/matrix/thumb.webp)](https://safis.fyi/matrix/)<br>**How a matrix transforms space** | [![](site/fourier/thumb.webp)](https://safis.fyi/fourier/)<br>**How spinning circles draw anything** |
+| [![](site/protein/thumb.webp)](https://safis.fyi/protein/)<br>**How a cell builds a protein** | [![](site/battery/thumb.webp)](https://safis.fyi/battery/)<br>**The lithium-ion battery** | [![](site/cdn/thumb.webp)](https://safis.fyi/cdn/)<br>**How a CDN makes a faraway site fast** |
 
 ## What it makes
 
