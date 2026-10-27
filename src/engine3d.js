@@ -873,7 +873,7 @@ void main() {
 precision highp float;
 uniform sampler2D uColor; uniform sampler2D uNormal; uniform sampler2D uDepth;
 uniform vec2 uInvSize; uniform float uStep; uniform vec2 uNearFar; uniform float uOrtho; uniform float uInk;
-uniform int uSS;
+uniform int uSS; uniform float uAo; uniform float uAoR;
 out vec4 o;
 float lin(float d) {
   if (uOrtho > 0.5) return uNearFar.x + d * (uNearFar.y - uNearFar.x);
@@ -916,6 +916,29 @@ vec4 shade(vec2 px) {
   float a = clamp(edge * uInk, 0.0, 1.0);
   return vec4(ink * a, a) + c0 * (1.0 - a);
 }
+// Ambient occlusion from the depth buffer: surfaces with nearer surfaces close around
+// them (the crease between two packed atoms, the inside of a socket) get a little darker,
+// which is what makes a crowded model read as solid shapes rather than flat discs.
+float occlusion(vec2 px) {
+  vec4 n0 = texture(uNormal, px * uInvSize);
+  if (n0.a < 0.5 / 255.0) return 1.0;
+  float d0 = lin(texture(uDepth, px * uInvSize).r);
+  // A fixed two-ring kernel (no per-pixel noise, so no grain to blur away).
+  float occ = 0.0, wsum = 0.0;
+  for (int ring = 1; ring <= 2; ring++) {
+    float r = uAoR * float(ring) * 0.5;
+    for (int i = 0; i < 10; i++) {
+      float a = (float(i) + 0.5 * float(ring)) * 0.6283185;
+      vec2 q = (px + vec2(cos(a), sin(a)) * r) * uInvSize;
+      float w = ring == 1 ? 1.0 : 0.6;
+      wsum += w;
+      if (texture(uNormal, q).a < 0.5 / 255.0) continue;
+      float dz = (d0 - lin(texture(uDepth, q).r)) / d0;
+      occ += w * smoothstep(0.002, 0.02, dz) * (1.0 - smoothstep(0.05, 0.12, dz));
+    }
+  }
+  return 1.0 - uAo * clamp(occ / wsum * 1.4, 0.0, 1.0);
+}
 void main() {
   vec2 base = floor(gl_FragCoord.xy) * float(uSS);
   vec4 sum = vec4(0.0);
@@ -923,6 +946,7 @@ void main() {
     if (i < uSS && j < uSS) sum += shade(base + vec2(float(i), float(j)) + 0.5);
   }
   o = sum / float(uSS * uSS);
+  if (uAo > 0.0) o.rgb *= occlusion(base + float(uSS) * 0.5);
 }`;
 
   let R = null;
@@ -1172,7 +1196,7 @@ void main() {
     const opaque = items.filter(it => matOf(it).opacity >= 0.999);
     opaque.forEach((it, i) => {
       const m = matOf(it), g = upload(it.node.mesh);
-      it.id = (i % 254) + 1;
+      it.id = ((i * 97) % 254) + 1;
       const cutOn = cut && it.node.cut ? 1 : 0;
       if (cutOn) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
       gl.uniformMatrix4fv(main.u.uModel, false, it.world);
@@ -1252,6 +1276,8 @@ void main() {
     gl.uniform1f(cp.u.uOrtho, C.ortho ? 1 : 0);
     gl.uniform1f(cp.u.uInk, scene.ink === 0 ? 0 : 0.9);
     gl.uniform1i(cp.u.uSS, ss);
+    gl.uniform1f(cp.u.uAo, scene.ao === false ? 0 : typeof scene.ao === "number" ? scene.ao : 0.5);
+    gl.uniform1f(cp.u.uAoR, 9 * scale);
     gl.bindVertexArray(R.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
@@ -1370,6 +1396,161 @@ void main() {
     return g;
   }
 
+  // ---------- science and math builders ----------
+  // Height field y = f(x, z) over x: [x0, x1], z: [z0, z1]. The engine is y-up, so the
+  // math picture z = f(x, y) stands on the floor here: pass f(x, z) and read y as height.
+  // Non-finite values leave holes. Both sides are drawn, so it can be seen from below.
+  function surfaceSoup(f, { x = [-1, 1], z = [-1, 1], n = 48, nz = n, keep = null } = {}) {
+    const soup = new Soup(), back = new Soup();
+    const pt = (i, j) => { const px = x[0] + ((x[1] - x[0]) * i) / n, pz = z[0] + ((z[1] - z[0]) * j) / nz; return [px, f(px, pz), pz]; };
+    const P = [];
+    for (let j = 0; j <= nz; j++) for (let i = 0; i <= n; i++) P.push(pt(i, j));
+    const at = (i, j) => P[j * (n + 1) + i];
+    const tri = (a, b, c) => {
+      if (![a, b, c].every(q => Number.isFinite(q[1]))) return;
+      if (keep && !keep((a[1] + b[1] + c[1]) / 3)) return;
+      soup.tri(a, b, c);
+      back.tri(a, c, b);
+    };
+    for (let j = 0; j < nz; j++) for (let i = 0; i < n; i++) {
+      const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+      tri(a, d, c);
+      tri(a, c, b);
+    }
+    return { soup, back, P };
+  }
+  mesh.surface = (f, o = {}) => {
+    const { soup, back } = surfaceSoup(f, o);
+    if (o.doubleSided !== false) soup.p.push(...back.p);
+    return finish(soup, { crease: o.crease ?? 60 });
+  };
+  // The same surface cut into `bands` meshes by height, from range [lo, hi] (default: the
+  // surface's own span). Color each band (E3.ramp) and the outlines between bands read as
+  // contour lines. Returns { meshes, levels } with levels[k] the band's lower edge.
+  mesh.surfaceBands = (f, o = {}) => {
+    const { P } = surfaceSoup(f, { ...o, keep: () => false });
+    const ys = P.map(q => q[1]).filter(Number.isFinite);
+    const [lo, hi] = o.range ?? [Math.min(...ys), Math.max(...ys)];
+    const K = o.bands ?? 8, step = (hi - lo) / K || 1;
+    const n = o.n ?? 48, nz = o.nz ?? n, x = o.x ?? [-1, 1], z = o.z ?? [-1, 1];
+    const at = (i, j) => P[j * (n + 1) + i];
+    // Each triangle is clipped to every band it crosses, so band edges follow the
+    // exact level curves (smooth contours) instead of stepping from triangle to triangle.
+    const clip = (poly, level, keepAbove) => {
+      const out = [];
+      for (let k = 0; k < poly.length; k++) {
+        const p = poly[k], q = poly[(k + 1) % poly.length];
+        const pin = keepAbove ? p[1] >= level : p[1] < level, qin = keepAbove ? q[1] >= level : q[1] < level;
+        if (pin) out.push(p);
+        if (pin !== qin) { const t = (level - p[1]) / (q[1] - p[1]); out.push([p[0] + (q[0] - p[0]) * t, level, p[2] + (q[2] - p[2]) * t]); }
+      }
+      return out;
+    };
+    const soups = Array.from({ length: K }, () => new Soup());
+    const add = (a, b, c) => {
+      if (![a, b, c].every(q => Number.isFinite(q[1]))) return;
+      for (let k = 0; k < K; k++) {
+        let poly = [a, b, c];
+        if (k > 0) poly = clip(poly, lo + k * step, true);
+        if (k < K - 1 && poly.length) poly = clip(poly, lo + (k + 1) * step, false);
+        for (let t = 1; t + 1 < poly.length; t++) {
+          soups[k].tri(poly[0], poly[t], poly[t + 1]);
+          if (o.doubleSided !== false) soups[k].tri(poly[0], poly[t + 1], poly[t]);
+        }
+      }
+    };
+    for (let j = 0; j < nz; j++) for (let i = 0; i < n; i++) {
+      const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+      add(a, d, c);
+      add(a, c, b);
+    }
+    // Normals come from the whole surface, so shading doesn't break at the band edges.
+    const fn = (px, pz) => { const e = 1e-4 * ((x[1] - x[0]) + (z[1] - z[0])); const nx = -(f(px + e, pz) - f(px - e, pz)) / (2 * e), nzz = -(f(px, pz + e) - f(px, pz - e)) / (2 * e); return v3.norm([nx, 1, nzz]); };
+    const meshes = soups.map(soup => {
+      const m = finish(soup, { crease: o.crease ?? 60 });
+      for (let i = 0; i < m.positions.length; i += 3) {
+        const nrm = fn(m.positions[i], m.positions[i + 2]), flip = m.normals[i + 1] < 0 ? -1 : 1;
+        m.normals[i] = nrm[0] * flip; m.normals[i + 1] = nrm[1] * flip; m.normals[i + 2] = nrm[2] * flip;
+      }
+      return m;
+    });
+    return { meshes, levels: Array.from({ length: K }, (_, k) => lo + k * step), range: [lo, hi] };
+  };
+  // Parametric surface fn(u, v) -> [x, y, z] over u: [u0, u1], v: [v0, v1] (a sphere, a torus,
+  // a Möbius strip, a saddle). wrapU / wrapV join the seams of closed surfaces.
+  mesh.parametric = (fn, { u = [0, 1], v = [0, 1], nu = 48, nv = 32, wrapU = false, wrapV = false, doubleSided = true, crease = 60 } = {}) => {
+    const soup = new Soup();
+    const cols = wrapU ? nu : nu + 1, rows = wrapV ? nv : nv + 1;
+    const P = [];
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) P.push(fn(u[0] + ((u[1] - u[0]) * i) / nu, v[0] + ((v[1] - v[0]) * j) / nv));
+    const at = (i, j) => P[(j % rows) * cols + (i % cols)];
+    for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+      const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+      soup.quad(a, b, c, d);
+      if (doubleSided) soup.quad(a, d, c, b);
+    }
+    return finish(soup, { crease });
+  };
+  // Arrows for a vector field: one per point, length |v| * scale (capped at maxLength).
+  mesh.glyphs = (points, vectors, { scale = 1, radius = null, maxLength = Infinity, minLength = 1e-6 } = {}) => {
+    const parts = [];
+    points.forEach((p, i) => {
+      const v = vectors[i], len = Math.min(v3.len(v) * scale, maxLength);
+      if (!(len > minLength)) return;
+      parts.push(mesh.arrow(p, v3.add(p, v3.scale(v3.norm(v), len)), { radius: radius ?? len * 0.05, segments: 10 }));
+    });
+    return parts.length ? mergeMeshes(...parts) : mesh.custom([], []);
+  };
+  // A curve in space as a round wire (orbits, trajectories, field lines). Short curves get dots at the ends.
+  mesh.polyline = (points, r, { segments = 12, dots = false } = {}) => {
+    const wire = mesh.tube(points, r, { segments });
+    if (!dots) return wire;
+    return mergeMeshes(wire, transformMesh(mesh.sphere(r * 2.2, { segments: 14 }), m4.translation(points[0])), transformMesh(mesh.sphere(r * 2.2, { segments: 14 }), m4.translation(points[points.length - 1])));
+  };
+
+  // Color between palette stops for t in [0, 1], read from the page's palette at call time
+  // (call it in draw so it follows dark mode). Stops are palette or material names or hex.
+  function ramp(t, stops = ["blue", "porcelain", "red"]) {
+    const pal = window.palette || {};
+    const rgb = c => hexRgb(pal[c] || MATERIALS[c]?.color || c);
+    t = Math.max(0, Math.min(1, t)) * (stops.length - 1);
+    const k = Math.min(stops.length - 2, Math.floor(t)), f = t - k;
+    const c = mixRgb(rgb(stops[k]), rgb(stops[k + 1]), f);
+    return "#" + c.map(v => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("");
+  }
+
+  // Axes for a 3D plot: an ink arrow per axis over its range, tick marks every `ticks` units,
+  // and optionally a floor grid. Adds nodes to `scene` (or `group`), returns { nodes, labels }
+  // where labels are [{ at: [x, y, z], text, axis }] to draw with view.project and g.text.
+  // Ranges are in world units, y up: x: [x0, x1], y: [y0, y1], z: [z0, z1].
+  function axes3(scene, { x = [-1, 1], y = [0, 1], z = [-1, 1], ticks = 1, radius = null, origin = [0, 0, 0], grid = false, names = { x: "x", y: "y", z: "z" }, format = v => String(+v.toFixed(3)) } = {}) {
+    const span = Math.max(x[1] - x[0], y[1] - y[0], z[1] - z[0]), r = radius ?? span * 0.006;
+    const T = typeof ticks === "number" ? { x: ticks, y: ticks, z: ticks } : ticks;
+    const axes = { x: [[1, 0, 0], x], y: [[0, 1, 0], y], z: [[0, 0, 1], z] };
+    const nodes = [], labels = [];
+    for (const [name, [dir, [a, b]]] of Object.entries(axes)) {
+      if (a === b) continue;
+      const from = v3.add(origin, v3.scale(dir, a)), to = v3.add(origin, v3.scale(dir, b + span * 0.06));
+      const parts = [mesh.arrow(from, to, { radius: r, head: r * 7, headRadius: r * 2.6, segments: 12 })];
+      const step = T[name];
+      if (step) for (let v = Math.ceil(a / step) * step; v <= b + 1e-9; v += step) {
+        if (Math.abs(v) < 1e-9) continue;
+        const p = v3.add(origin, v3.scale(dir, v)), side = name === "y" ? [1, 0, 0] : [0, 1, 0];
+        parts.push(mesh.transform(mesh.cylinder(r * 0.8, span * 0.025, { segments: 8 }), m4.multiply(m4.translation(p), m4.alignY(side))));
+        labels.push({ at: v3.add(p, v3.scale(name === "y" ? [-1, 0, 0] : [0, -1, 0], span * 0.05)), text: format(v), axis: name, tick: true });
+      }
+      nodes.push(scene.add(mergeMeshes(...parts), { material: "graphite", name: `${name} axis`, pickable: false, cut: false }));
+      labels.push({ at: v3.add(origin, v3.scale(dir, b + span * 0.12)), text: names[name], axis: name, tick: false });
+    }
+    if (grid) {
+      const lines = [], step = T.x || T.z || 1;
+      for (let v = Math.ceil(x[0] / step) * step; v <= x[1] + 1e-9; v += step) lines.push(mesh.tube([[v, origin[1], z[0]], [v, origin[1], z[1]]], r * 0.35, { segments: 6 }));
+      for (let v = Math.ceil(z[0] / step) * step; v <= z[1] + 1e-9; v += step) lines.push(mesh.tube([[x[0], origin[1], v], [x[1], origin[1], v]], r * 0.35, { segments: 6 }));
+      nodes.push(scene.add(mergeMeshes(...lines), { material: "paper", name: "grid", pickable: false, cut: false }));
+    }
+    return { nodes, labels };
+  }
+
   window.E3 = {
     v3, m4, mesh, smooth, triangulate, inset,
     scene: o => new Scene(o),
@@ -1377,6 +1558,7 @@ void main() {
     Node, Scene,
     render,
     molecule, ELEMENTS, MATERIALS,
+    ramp, axes3,
     get canvas() { return R && R.canvas; },
     available() { try { renderer(); return true; } catch { return false; } },
   };
