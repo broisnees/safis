@@ -1,0 +1,33 @@
+# Runs the runtime tests, checks that the skill's template matches src/, and
+# checks two example pages in headless Chrome. No npm install needed: the
+# tests and scripts use only Node built-ins and the runner's Chrome.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Runtime tests
+        run: npm test
+      - name: Template is built from src/
+        run: |
+          node tools/build-template.mjs
+          git diff --exit-code -- skills/safis/assets/template.html
+      - name: Example pages pass the checker
+        run: |
+          node skills/safis/scripts/verify.mjs site/tides/index.html
+          node skills/safis/scripts/verify.mjs site/jaw-joint/index.html
