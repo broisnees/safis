@@ -8,9 +8,11 @@ Contents: [principles](#principles), [2D or 3D](#2d-or-3d), [the Porcelain look]
 
 **One new thing per figure.** If a figure needs a paragraph of instructions, it's two figures. Show the same scene several times in a row with one more element each time.
 
-**Direct manipulation beats sliders** when the thing has a position: drag the planet, the control point, the lens. Sliders are for quantities without a handle (mass, time of day, how far the mouth is open). Use a scrubber when the reader should study a process frame by frame, and animation with a pause button when the motion itself is the point.
+**Direct manipulation beats sliders** when the thing has a position: drag the planet, the control point, the lens, and draw it with `g.handle` so it's obviously grabbable. Then pick the control that matches the quantity: a slider for an amount (mass, time of day, how far the mouth is open), a segmented choice for a few named cases (Earth, Moon, Jupiter), a stepper for a count, a knob for an angle that wraps, a pad for two coupled numbers, a switch for a view option. Use a scrubber slider when the reader should study a process frame by frame, and the transport (play, step, speed) when the motion itself is the point.
 
-**Few controls.** Zero to two is typical, three is the limit.
+**Let the prose drive it too.** The number a paragraph is about can be a scrub in the sentence, and the comparison it makes can be a "try" link; presets under the figure jump to the cases worth seeing. See [runtime.md](runtime.md#prose-that-drives-figures).
+
+**Few controls.** Zero to two is typical, three is the limit; presets and prose links don't count against it, and are often better than a third control.
 
 **Start interesting.** Defaults mid-range, where the effect already shows. A figure that starts at rest teaches nothing until the reader acts.
 
@@ -36,8 +38,8 @@ The strongest pages mix them: a 3D hero to show the whole thing, 2D sections to 
 - **Outlines do the work.** E3 outlines every silhouette and part boundary in a darker shade of the part's own color. In 2D, outline shapes with 1.5 px `ink`; guides and leader lines 1 px `muted`.
 - **Cut material is hatched.** In 3D, `scene.cutPlane` hatches cut faces automatically. In 2D sections, fill cut solids with a pale tint plus `hatch`.
 - **See-through for context.** Housings, skin, and sockets that would hide the subject go to `opacity` 0.3-0.5.
-- **Labels are small caps.** `g.callouts` and `g.label` draw uppercase tracked text; values in `font: "mono"`.
-- **Figures sit on the page.** No frames or cards: the canvas is the page color, objects float with a soft shadow.
+- **Labels are quiet.** `g.callouts` and `g.label` draw small sentence-case sans with a halo; name things in lowercase ("key pin", "shear line"). Variables and formulas on the canvas go through `g.tex` in the serif italic. Never uppercase tracked labels.
+- **Figures sit on the page.** No card, border, or background of their own: the canvas is the page color, the controls sit under the drawing, and a numbered caption follows. Don't paint frames or panels inside the canvas either; group with space.
 - **Dark scenes when the subject is light or space.** Paint the canvas dark yourself and draw light on it.
 
 ## Patterns
@@ -56,6 +58,9 @@ The strongest pages mix them: a 3D hero to show the whole thing, 2D sections to 
 - **Front and side.** Two views of one model, or a 3D view next to a 2D section.
 - **Magnifier.** `g.inset` to show a small region enlarged.
 - **Instruments.** A dial, meter, or readout that measures what the figure is doing.
+- **Predict, then reveal.** The lead-in asks for a guess; the figure starts hiding the answer (a switch "Show the answer", or a button that runs the experiment), and the follow-up confirms it.
+- **Linked parts.** Colored terms in the prose with `data-part`; `draw` emphasizes `g.lit("part")`. Good for anatomy and machines with many named parts.
+- **Graph of the model.** A function plot next to the scene, with the current value marked, built with `g.graph` ([plots.md](plots.md)).
 - **Visual equation.** A formula in the prose whose variables are `chip`s colored like the segments in the figure.
 - **Step-through.** An integer slider over the stages of a process, with `status` naming the stage.
 - **One-shot action.** A button that runs a short animation (`autoplay: false`, `playButton: false`, `fig.play()` in the action), like pushing a dislocated jaw back.

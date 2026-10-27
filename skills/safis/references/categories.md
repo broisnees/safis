@@ -2,7 +2,7 @@
 
 Each category has its own kind of figure that works, its own accuracy traps, and its own colors. Read the section for the page's category before planning.
 
-Contents: [Body](#body), [Biology](#biology), [Chemistry](#chemistry), [Physics](#physics), [Machines](#machines), [Earth & Space](#earth--space), [Computing](#computing), [Math](#math).
+Contents: [Body](#body), [Biology](#biology), [Chemistry](#chemistry), [Physics](#physics), [Machines](#machines), [Earth & Space](#earth--space), [Computing](#computing), [AI](#ai), [Math](#math).
 
 ## Body
 
@@ -64,15 +64,24 @@ Planets, orbits, seasons, tides, weather, geology.
 Algorithms, data structures, networks, hardware.
 
 - **Figures that work:** step-throughs on an integer slider with the current step named in `status`; the data structure as boxes and arrows with the active part colored; a timeline or sequence diagram for protocols; cost plots (operations versus input size); hardware in 3D when the physical layout matters (a disk head, a chip's layers).
-- **Build:** 2D boxes with `g.rect`, arrows with `g.arrow`, text in `font: "mono"`; deterministic state per step so the slider can go backward.
+- **Build:** 2D boxes with `g.rect`, arrows with `g.arrow`, code and data in `font: "mono"`; deterministic state per step so the slider can go backward; a stepper or the transport's step button for single steps.
 - **Accuracy:** run the real algorithm in the figure code rather than scripting its frames, so every step is correct.
 - **Example topics:** how a hash table finds things; how TCP recovers lost packets; how a B-tree stays balanced.
+
+## AI
+
+Neural networks, language models, learning from data.
+
+- **Figures that work:** a tiny real model trained live in the page (a few neurons fitting points as the reader watches the loss fall); tokens as chips with their ids; probability bars over next words with a temperature slider; an attention heatmap where hovering a word shows what it attends to; embedding space as a 2D map the reader can probe; gradient descent as a ball rolling on a loss surface the reader can reshape.
+- **Build:** compute everything with real arithmetic in `Num` (softmax, dot products, small matrix multiplies, a seeded random generator) so every number on screen is the output of the toy model; `g.tokens`, `g.bars`, `g.heatmap`, `g.network`, and `g.graph` from [plots.md](plots.md); 3D only for loss surfaces or embedding clouds the reader turns.
+- **Accuracy:** a toy model with a stated size (8 dimensions, a 30-word vocabulary) is honest; invented numbers dressed as a real model are not. Describe what the model computes, not what it "thinks". Give real-world sizes only when sure, as orders of magnitude.
+- **Example topics:** how a language model picks the next word; how attention decides what matters; how a neural network learns from its mistakes; what an embedding is.
 
 ## Math
 
 Geometry, calculus, linear algebra, probability.
 
 - **Figures that work:** draggable points with everything derived from them; a quantity shown both as a picture and as its formula with colored chips; transformations animated between before and after; 3D surfaces turned with `orbit`.
-- **Build:** `g.fit` with `uniform: true` for geometry so angles look right; `E3.mesh.custom` or `sweep` for surfaces; `g.gizmo` to show axes in 3D.
+- **Build:** `g.graph` ([plots.md](plots.md)) for function plots with π ticks, areas, tangents, vector fields and contours; `g.fit` with `uniform: true` for geometry so angles look right; `E3.mesh.custom` or `sweep` for surfaces; `g.gizmo` to show axes in 3D; equations with `.tex` and colored symbols ([math.md](math.md)).
 - **Accuracy:** derive everything from the draggable inputs, so no configuration can show a false picture.
 - **Example topics:** what a derivative is; how a matrix transforms space; why the normal distribution shows up everywhere.
