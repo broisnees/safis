@@ -1,0 +1,1137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How DNS Turns a Name into an Address</title>
+<meta name="description" content="What happens in the few milliseconds between typing a name like example.com and your computer knowing which address to connect to, and why the answer is usually already waiting in a cache.">
+<meta name="explainer:category" content="Computing">
+<!-- explainer:runtime:start v3 shared -->
+<link rel="stylesheet" href="../safis.css?v=1ad508e56c">
+<script src="../safis.js?v=282c01de29"></script>
+<!-- explainer:runtime:end -->
+</head>
+<body>
+<div class="page has-toc">
+<nav class="toc" aria-label="All explainers"><!-- explainer:nav:start --><a class="site" href="../index.html">Safis</a><h2>Body</h2><ul><li><a href="../jaw-joint/index.html">The Jaw Joint</a></li></ul><h2>Biology</h2><ul><li><a href="../protein/index.html">How a Cell Builds a Protein</a></li><li><a href="../neuron/index.html">How a Neuron Fires</a></li></ul><h2>Chemistry</h2><ul><li><a href="../battery/index.html">The Lithium-Ion Battery</a></li><li><a href="../ice/index.html">Why Ice Floats</a></li></ul><h2>Physics</h2><ul><li><a href="../pendulum/index.html">How a Pendulum Keeps Time</a></li></ul><h2>Machines</h2><ul><li><a href="../lock/index.html">How a Pin Tumbler Lock Knows Your Key</a></li></ul><h2>Earth &amp; Space</h2><ul><li><a href="../tides/index.html">Why There Are Two Tides a Day</a></li></ul><h2>Computing</h2><ul><li><a href="../cdn/index.html">How a CDN Makes a Faraway Site Fast</a></li><li><a href="../hash-table/index.html">How a Hash Table Finds Things</a></li><li><a href="../dns/index.html" aria-current="page">How DNS Turns a Name into an Address</a></li></ul><h2>AI</h2><ul><li><a href="../next-word/index.html">How a Language Model Picks the Next Word</a></li><li><a href="../learning/index.html">How a Neural Network Learns</a></li><li><a href="../attention/index.html">How Attention Works</a></li></ul><h2>Math</h2><ul><li><a href="../matrix/index.html">How a Matrix Transforms Space</a></li><li><a href="../fourier/index.html">How Spinning Circles Draw Anything</a></li></ul><!-- explainer:nav:end --></nav>
+<main>
+<!-- explainer:back:start --><a class="backlink" href="../index.html">← Safis</a><!-- explainer:back:end -->
+<header>
+  <p class="kicker">Computing</p>
+  <h1>How DNS Turns a Name into an Address</h1>
+  <p class="dek">What happens in the few milliseconds between typing a name like example.com and your computer knowing which address to connect to, and why the answer is usually already waiting in a cache.</p>
+</header>
+<article>
+<!-- explainer:article:start -->
+<script>
+  // Shared by every figure below: a small made-up corner of the DNS (the root, .com and .net,
+  // example.com and example.net), the servers that answer for each zone, a resolver that walks
+  // them with a cache, the bytes of a query, and a world map. Figures draw from this model,
+  // so a sequence diagram, a cache, and a packet always agree about what was asked and answered.
+  window.DNS = (() => {
+    // Illustrative round-trip times in milliseconds: this computer to its resolver, and the
+    // resolver to the servers of each zone. Real values depend on where everything is.
+    const RTT = { stub: 16, root: 8, tld: 18, auth: 48, auth2: 40 };
+
+    const PARTY = {
+      you: { label: "your computer", short: "you", color: "brass" },
+      res: { label: "resolver", color: "blue" },
+      root: { label: "root", color: "purple" },
+      tld: { label: ".com", color: "orange" },
+      auth: { label: "example.com", color: "green" },
+      auth2: { label: "example.net", color: "green" },
+    };
+
+    // Records are [owner, type, ttl in seconds, data]. Addresses come from the ranges set aside
+    // for documentation (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32); the root
+    // and gTLD server names and addresses are the real ones.
+    const H = 3600, D = 86400;
+    const ZONES = {
+      ".": { server: "root", host: "a.root-servers.net", ip: "198.41.0.4", soa: [D, D], rr: [
+        ["com.", "NS", 2 * D, "a.gtld-servers.net."], ["com.", "NS", 2 * D, "b.gtld-servers.net."],
+        ["net.", "NS", 2 * D, "a.gtld-servers.net."], ["net.", "NS", 2 * D, "b.gtld-servers.net."],
+        ["org.", "NS", 2 * D, "a0.org.afilias-nst.info."],
+        ["a.gtld-servers.net.", "A", 2 * D, "192.5.6.30"], ["b.gtld-servers.net.", "A", 2 * D, "192.33.14.30"],
+        ["a0.org.afilias-nst.info.", "A", 2 * D, "199.19.56.1"],
+      ] },
+      "com.": { server: "tld", host: "a.gtld-servers.net", ip: "192.5.6.30", soa: [900, 900], rr: [
+        ["example.com.", "NS", 2 * D, "ns1.example.com."], ["example.com.", "NS", 2 * D, "ns2.example.com."],
+        ["ns1.example.com.", "A", 2 * D, "192.0.2.53"], ["ns2.example.com.", "A", 2 * D, "198.51.100.53"],
+      ] },
+      "net.": { server: "tld", host: "a.gtld-servers.net", ip: "192.5.6.30", soa: [900, 900], rr: [
+        ["example.net.", "NS", 2 * D, "ns1.example.net."], ["example.net.", "NS", 2 * D, "ns2.example.net."],
+        ["ns1.example.net.", "A", 2 * D, "203.0.113.53"], ["ns2.example.net.", "A", 2 * D, "203.0.113.54"],
+      ] },
+      "example.com.": { server: "auth", host: "ns1.example.com", ip: "192.0.2.53", soa: [H, 300], rr: [
+        ["example.com.", "SOA", H, "ns1.example.com. hostmaster.example.com. 2026102701 7200 900 1209600 300"],
+        ["example.com.", "NS", D, "ns1.example.com."], ["example.com.", "NS", D, "ns2.example.com."],
+        ["example.com.", "A", H, "192.0.2.10"],
+        ["example.com.", "AAAA", H, "2001:db8::10"],
+        ["example.com.", "MX", H, "10 mail.example.com."],
+        ["example.com.", "TXT", H, "\"v=spf1 mx -all\""],
+        ["www.example.com.", "CNAME", H, "edge.example.net."],
+        ["mail.example.com.", "A", H, "192.0.2.25"],
+        ["ns1.example.com.", "A", D, "192.0.2.53"], ["ns2.example.com.", "A", D, "198.51.100.53"],
+      ] },
+      "example.net.": { server: "auth2", host: "ns1.example.net", ip: "203.0.113.53", soa: [H, 300], rr: [
+        ["example.net.", "SOA", H, "ns1.example.net. hostmaster.example.net. 2026102701 7200 900 1209600 300"],
+        ["example.net.", "NS", D, "ns1.example.net."], ["example.net.", "NS", D, "ns2.example.net."],
+        ["edge.example.net.", "A", 60, "203.0.113.7"],
+        ["edge.example.net.", "AAAA", 60, "2001:db8:7::7"],
+        ["ns1.example.net.", "A", D, "203.0.113.53"], ["ns2.example.net.", "A", D, "203.0.113.54"],
+      ] },
+    };
+    const clone = z => JSON.parse(JSON.stringify(z));
+    // The same corner with the glue records left out of .com, so nothing says where ns1.example.com is.
+    const NOGLUE = clone(ZONES);
+    NOGLUE["com."].rr = NOGLUE["com."].rr.filter(r => r[1] === "NS");
+    // example.com served by a hosting company's servers, named inside another domain.
+    const OUTSIDE = clone(ZONES);
+    OUTSIDE["com."].rr = [["example.com.", "NS", 2 * D, "ns1.dnshost.net."], ["example.com.", "NS", 2 * D, "ns2.dnshost.net."]];
+    OUTSIDE["net."].rr.push(["dnshost.net.", "NS", 2 * D, "ns1.dnshost.net."], ["ns1.dnshost.net.", "A", 2 * D, "203.0.113.80"]);
+    OUTSIDE["dnshost.net."] = { server: "auth2", host: "ns1.dnshost.net", ip: "203.0.113.80", soa: [H, 300], rr: [
+      ["dnshost.net.", "NS", D, "ns1.dnshost.net."], ["ns1.dnshost.net.", "A", D, "203.0.113.80"], ["ns2.dnshost.net.", "A", D, "203.0.113.81"],
+    ] };
+    OUTSIDE["example.com."].rr = OUTSIDE["example.com."].rr.map(r => (r[1] === "NS" ? [r[0], r[1], r[2], r[3].replace("example.com", "dnshost.net")] : r));
+
+    const strip = n => (n === "." ? "." : n.replace(/\.$/, ""));
+    const parent = n => (n === "." ? null : n.indexOf(".") === n.length - 1 ? "." : n.slice(n.indexOf(".") + 1));
+    const inZone = (name, zone) => zone === "." || name === zone || name.endsWith("." + zone);
+    // How a zone is named in labels: ".com" for a top-level domain, "example.com" otherwise.
+    const zoneName = z => (z === "." ? "the root" : strip(z).includes(".") ? strip(z) : "." + strip(z));
+
+    // What the servers for `zone` say when asked for (qname, qtype): an answer, an alias,
+    // a referral to the servers of a zone further down, or no.
+    function answer(zones, zone, qname, qtype) {
+      const z = zones[zone];
+      let cut = null;
+      for (const r of z.rr) if (r[1] === "NS" && r[0] !== zone && inZone(qname, r[0]) && (!cut || r[0].length > cut.length)) cut = r[0];
+      if (cut) {
+        const ns = z.rr.filter(r => r[0] === cut && r[1] === "NS");
+        const glue = z.rr.filter(r => (r[1] === "A" || r[1] === "AAAA") && ns.some(n => n[3] === r[0]));
+        return { kind: "referral", zone: cut, ns, glue, ttl: ns[0][2] };
+      }
+      const own = z.rr.filter(r => r[0] === qname);
+      const hit = own.filter(r => r[1] === qtype);
+      if (hit.length) return { kind: "answer", rr: hit, ttl: Math.min(...hit.map(r => r[2])) };
+      const cname = own.find(r => r[1] === "CNAME");
+      if (cname) return { kind: "cname", rr: [cname], target: cname[3], ttl: cname[2] };
+      const soa = z.rr.find(r => r[1] === "SOA") ?? null;
+      const exists = own.length > 0 || z.rr.some(r => r[0].endsWith("." + qname));
+      return { kind: exists ? "nodata" : "nxdomain", soa, ttl: Math.min(z.soa[0], z.soa[1]) };
+    }
+
+    // Record data as people write it, without the trailing dots of fully qualified names.
+    const show = d => String(d).replace(/\.(?=\s|$)/g, "");
+    function replyText(r, type) {
+      if (r.kind === "referral") return r.glue.length ? `ask ${zoneName(r.zone)}` : `ask ${strip(r.ns[0][3])} (no address)`;
+      if (r.kind === "answer") return r.rr.length > 1 ? `${show(r.rr[0][3])} +${r.rr.length - 1}` : show(r.rr[0][3]);
+      if (r.kind === "cname") return `alias: ${strip(r.target)}`;
+      if (r.kind === "nxdomain") return "no such name";
+      return `no ${type} record`;
+    }
+
+    // A recursive resolver: start from the closest zone whose servers it already knows,
+    // follow referrals down, follow aliases, and cache everything it learns with its TTL.
+    // `cache` maps keys to { exp, data } (exp in seconds), so it can live in a figure's state.
+    function resolve(qname, qtype, o = {}) {
+      const zones = o.zones ?? ZONES, cache = o.cache ?? {}, now = o.now ?? 0;
+      const rtt = { ...RTT, ...(o.rtt || {}) }, down = o.down ?? [], wait = o.timeout ?? 800, tries = o.tries ?? 2;
+      const msgs = [];
+      let t = o.t0 ?? 0, queries = 0;
+      const live = k => cache[k] && cache[k].exp > now;
+      const put = (k, ttl, data) => { cache[k] = { exp: now + ttl, data }; };
+      const closest = name => {
+        for (let n = name; n; n = parent(n)) if (n === "." || (zones[n] && live("NS " + n) && cache["NS " + n].data.addr)) return n;
+        return ".";
+      };
+      function ask(zone, name, type) {
+        const server = zones[zone].server, text = `${strip(name)} ${type}?`;
+        if (down.includes(server)) {
+          for (let k = 0; k < tries; k++) {
+            msgs.push({ from: "res", to: server, t0: t, t1: t + rtt[server] / 2, text: k ? `again, ns${k + 1}` : text, color: "blue", kind: "q", lost: true });
+            msgs.push({ kind: "wait", at: "res", t0: t, t1: t + wait, text: "no reply" });
+            t += wait; queries++;
+          }
+          return { kind: "timeout" };
+        }
+        const r = answer(zones, zone, name, type), half = rtt[server] / 2;
+        msgs.push({ from: "res", to: server, t0: t, t1: t + half, text, color: "blue", kind: "q", zone });
+        msgs.push({ from: server, to: "res", t0: t + half, t1: t + 2 * half, text: replyText(r, type), color: PARTY[server].color, kind: "r", r });
+        t += 2 * half; queries++;
+        return r;
+      }
+      function lookup(name, type, depth) {
+        const chain = [];
+        if (depth > 3) return { rcode: "SERVFAIL", why: "loop", chain };
+        for (let hop = 0; hop < 8; hop++) {
+          const key = `${name} ${type}`;
+          if (live(key)) return { rcode: "NOERROR", rr: cache[key].data, chain, cached: true };
+          if (live("CNAME " + name)) { const c = cache["CNAME " + name].data; chain.push(c); name = c[3]; continue; }
+          if (live("NX " + name)) return { rcode: "NXDOMAIN", chain, cached: true };
+          let zone = closest(name), next = false;
+          for (let guard = 0; guard < 12 && !next; guard++) {
+            const r = ask(zone, name, type);
+            if (r.kind === "timeout") return { rcode: "SERVFAIL", why: "timeout", chain };
+            if (r.kind === "referral") {
+              put("NS " + r.zone, r.ttl, { ns: r.ns.map(x => x[3]), addr: r.glue.length > 0 });
+              if (!r.glue.length) {
+                const sub = lookup(r.ns[0][3], "A", depth + 1);
+                if (sub.rcode !== "NOERROR" || !sub.rr?.length) return { rcode: "SERVFAIL", why: sub.why ?? "no address for the servers", chain };
+                cache["NS " + r.zone].data.addr = true;
+              }
+              zone = r.zone;
+              continue;
+            }
+            if (r.kind === "answer") { put(key, r.ttl, r.rr); return { rcode: "NOERROR", rr: r.rr, chain }; }
+            if (r.kind === "cname") { put("CNAME " + name, r.ttl, r.rr[0]); chain.push(r.rr[0]); name = r.target; next = true; }
+            else if (r.kind === "nxdomain") { put("NX " + name, r.ttl, r.soa); return { rcode: "NXDOMAIN", soa: r.soa, ttl: r.ttl, chain }; }
+            else if (r.kind === "nodata") { put(key, r.ttl, []); return { rcode: "NOERROR", rr: [], nodata: true, chain }; }
+          }
+        }
+        return { rcode: "SERVFAIL", why: "too many aliases", chain };
+      }
+      const res = lookup(qname, qtype, 0);
+      return { ...res, msgs, t, queries, cache };
+    }
+
+    // The whole trip: this computer asks its resolver, the resolver does its work, and the answer comes back.
+    function finalText(r, qtype) {
+      if (r.rcode === "NOERROR") return r.rr?.length ? show(r.rr[r.rr.length - 1][3]) : `no ${qtype} record`;
+      return r.rcode;
+    }
+    function trip(qname, qtype, o = {}) {
+      const half = (o.rtt?.stub ?? RTT.stub) / 2;
+      const r = resolve(qname, qtype, { ...o, t0: half });
+      const msgs = [{ from: "you", to: "res", t0: 0, t1: half, text: `${strip(qname)} ${qtype}?`, color: "brass", kind: "q" }, ...r.msgs];
+      if (r.cached) msgs.push({ kind: "note", at: "res", t: half, text: "in cache" });
+      msgs.push({ from: "res", to: "you", t0: r.t, t1: r.t + half, text: finalText(r, qtype), color: r.rcode === "NOERROR" ? "blue" : "red", kind: "r" });
+      return { ...r, msgs, total: r.t + half };
+    }
+    // A cache already holding everything a resolver learns from one lookup of (name, type).
+    function warm(name, type, o = {}) { const cache = {}; resolve(name, type, { ...o, cache }); return cache; }
+
+    // A sequence diagram: one column per party, time running down, an arrow per message.
+    // Messages later than `now` are drawn as faint ghosts so the whole exchange is visible at rest.
+    function seq(g, box, o) {
+      const [bx, by, bw, bh] = box, narrow = bw < 520;
+      const cols = o.cols.map(c => (typeof c === "string" ? { id: c } : c));
+      const axisW = o.axis === false || narrow ? 0 : 46, head = 32, foot = o.foot ?? 10;
+      const x0 = bx + axisW, span = bw - axisW, X = {};
+      cols.forEach((c, i) => { X[c.id] = x0 + (span * (i + 0.5)) / cols.length; });
+      const Y = t => by + head + (Math.min(t, o.tmax) / o.tmax) * (bh - head - foot);
+      const now = o.now ?? Infinity;
+      if (axisW) {
+        const step = o.tickStep ?? Num.niceStep(o.tmax, 4);
+        for (let t = 0; t <= o.tmax + 1e-9; t += step) {
+          g.line([x0 - 4, Y(t)], [bx + bw, Y(t)], { stroke: "grid", width: 1 });
+          g.text(o.tickFormat ? o.tickFormat(t) : `${t} ms`, [x0 - 8, Y(t)], { size: 10.5, color: "muted", align: "right" });
+        }
+      }
+      for (const c of cols) g.line([X[c.id], by + 24], [X[c.id], by + bh - foot + 4], { stroke: "faint", width: 1, dash: [3, 4] });
+      for (const c of cols) {
+        const p = PARTY[c.id] ?? {};
+        g.chip(c.label ?? (narrow && p.short ? p.short : p.label), [X[c.id], by + 12], { color: c.color ?? p.color, size: narrow ? 10 : 11.5, padX: narrow ? 3 : 5 });
+      }
+      const lw = narrow ? 1.6 : 2, fs = narrow ? 10 : 11;
+      const segs = [], pending = [], fixed = [], seen = new Set();
+      for (const m of o.msgs) {
+        if (m.kind === "wait") {
+          if (now <= m.t0) continue;
+          const y1 = Y(Math.min(now, m.t1));
+          g.line([X[m.at] - 4, Y(m.t0)], [X[m.at] - 4, y1], { stroke: "red", width: 3, alpha: 0.7 });
+          if (now >= m.t1 && m.text) fixed.push({ text: m.text, at: [X[m.at] - 9, (Y(m.t0) + Y(m.t1)) / 2], color: "red", align: "right" });
+          continue;
+        }
+        if (m.kind === "note") {
+          if (now >= m.t) fixed.push({ text: m.text, at: [X[m.at] + (m.dx ?? -9), Y(m.t) + (m.dy ?? 10)], color: m.color ?? "muted", align: m.align ?? "right" });
+          continue;
+        }
+        const a = [X[m.from], Y(m.t0)], b = [X[m.to], Y(m.t1)];
+        const end = m.lost ? 0.55 : 1;
+        const f = clamp((now - m.t0) / Math.max(1e-6, m.t1 - m.t0), 0, 1);
+        if (o.ghost !== false && f < end) g.line(a, lerp2(a, b, end), { stroke: m.color, width: 1, alpha: 0.18, dash: m.dash });
+        if (f <= 0) continue;
+        const tip = lerp2(a, b, Math.min(f, end));
+        if (f >= end && !m.lost) g.arrow(a, b, { stroke: m.color, width: lw, head: narrow ? 7 : 8, dash: m.dash });
+        else g.line(a, tip, { stroke: m.color, width: lw, dash: m.dash });
+        segs.push([a, tip]);
+        if (m.lost && f >= end) { const d = 4.5; g.line([tip[0] - d, tip[1] - d], [tip[0] + d, tip[1] + d], { stroke: "red", width: 2 }); g.line([tip[0] - d, tip[1] + d], [tip[0] + d, tip[1] - d], { stroke: "red", width: 2 }); }
+        if (f < end) g.circle(tip, 3.5, { fill: m.color });
+        // Repeated messages (the same question to the same server) are labeled once.
+        const key = m.kind === "q" ? `q>${m.text}` : `${m.from}>${m.to}>${m.text}`;
+        if (f >= end && m.text && o.labels !== false && (o.dedupe === false || !seen.has(key))) {
+          seen.add(key);
+          pending.push({ m, a, b: m.lost ? tip : b, seg: segs.length - 1 });
+        }
+      }
+      // Place each arrow's label beside its arrow, clear of the other arrows and labels:
+      // try spots along the arrow, above it for questions and below it for answers first.
+      const style = { font: "mono", size: fs, weight: 500 };
+      const rectOf = (text, x, y, align) => {
+        const w = g.measure(text, style) + 6, h = fs + 4;
+        return [align === "right" ? x - w + 3 : align === "left" ? x - 3 : x - w / 2, y - h / 2, w, h];
+      };
+      const overlap = (p, q) => p[0] < q[0] + q[2] && q[0] < p[0] + p[2] && p[1] < q[1] + q[3] && q[1] < p[1] + p[3];
+      const segRect = (p, q, [x, y, w, h]) => {
+        let t0 = 0, t1 = 1;
+        const dx = q[0] - p[0], dy = q[1] - p[1], P = [-dx, dx, -dy, dy], Q = [p[0] - x, x + w - p[0], p[1] - y, y + h - p[1]];
+        for (let i = 0; i < 4; i++) {
+          if (P[i] === 0) { if (Q[i] < 0) return false; continue; }
+          const t = Q[i] / P[i];
+          if (P[i] < 0) t0 = Math.max(t0, t); else t1 = Math.min(t1, t);
+          if (t0 > t1) return false;
+        }
+        return true;
+      };
+      const placed = fixed.map(l => rectOf(l.text, l.at[0], l.at[1], l.align));
+      const blocked = (r, own) => r[1] < by + head - 2 || r[0] < bx + 2 || r[0] + r[2] > bx + bw - 2 || r[1] + r[3] > by + bh
+        || placed.some(p => overlap(p, r)) || segs.some((sg, i) => i !== own && segRect(sg[0], sg[1], r));
+      const out = [];
+      for (const { m, a, b, seg } of pending) {
+        const tw = g.measure(m.text, style), up = m.kind === "q";
+        const yAt = x => a[1] + (b[1] - a[1]) * ((x - a[0]) / (b[0] - a[0] || 1));
+        let best = null;
+        search: for (const t of [0.72, 0.55, 0.38, 0.86, 0.22]) for (const side of up ? [-1, 1] : [1, -1]) {
+          const cx = a[0] + (b[0] - a[0]) * t, xl = cx - tw / 2, xr = cx + tw / 2;
+          const y = side < 0 ? Math.min(yAt(xl), yAt(xr)) - 8 : Math.max(yAt(xl), yAt(xr)) + 9;
+          const r = rectOf(m.text, cx, y, "center");
+          if (!best) best = { cx, y, r };
+          if (!blocked(r, seg)) { best = { cx, y, r }; break search; }
+        }
+        placed.push(best.r);
+        out.push({ text: m.text, at: [best.cx, best.y], color: m.color, align: "center" });
+      }
+      for (const l of [...out, ...fixed]) g.text(l.text, l.at, { ...style, color: l.color, align: l.align, halo: true, haloWidth: 5 });
+      if (Number.isFinite(now) && now > 0 && now < o.tmax && o.nowLine !== false) {
+        g.line([x0, Y(now)], [bx + bw, Y(now)], { stroke: "muted", width: 1, alpha: 0.35 });
+      }
+      return { X, Y };
+    }
+    const lerp2 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+
+    // Advance an animated trip: time runs `slow` times slower than real, holds at the end, then restarts.
+    function play(s, dt, total, slow = 20, hold = 1.6) {
+      if (s.t < total) s.t = Math.min(total, s.t + (dt * 1000) / slow);
+      else if ((s.hold = (s.hold ?? 0) + dt) > hold) { s.t = 0; s.hold = 0; }
+    }
+
+    // The bytes of a query, field by field.
+    const TYPE = { A: 1, NS: 2, CNAME: 5, SOA: 6, MX: 15, TXT: 16, AAAA: 28, OPT: 41 };
+    const u16 = v => [(v >> 8) & 255, v & 255];
+    function query(name, type, o = {}) {
+      const bytes = [], fields = [];
+      const add = (vals, f) => { const from = bytes.length; bytes.push(...vals); fields.push({ ...f, from, to: bytes.length }); };
+      const id = o.id ?? 0x3a7f;
+      add(u16(id), { label: "ID", color: "brass", text: `ID ${id}: a random number; the reply must carry the same one` });
+      add(u16(0x0100), { label: "flags", color: "ink", text: "flags: this is a question, and recursion is desired (find the whole answer for me)" });
+      add(u16(1), { label: "questions", color: "ink", text: "1 question follows" });
+      add(u16(0), { label: "answers", color: "ink", text: "0 answers (this is a question)" });
+      add(u16(0), { label: "authority", color: "ink", text: "0 authority records" });
+      add(u16(o.edns ? 1 : 0), { label: "additional", color: "ink", text: o.edns ? "1 additional record: the OPT record at the end" : "0 additional records" });
+      const labels = strip(name).split(".");
+      labels.forEach((l, i) => {
+        const color = i === labels.length - 1 ? "orange" : "green";
+        add([l.length], { label: String(l.length), color, len: true, text: `length byte: the next label is ${l.length} letters long` });
+        add([...l].map(c => c.charCodeAt(0)), { label: l, color, chars: true, text: `the label "${l}", one byte per letter` });
+      });
+      add([0], { label: "0", color: "purple", len: true, text: "a label of length 0: the root, which ends every name" });
+      add(u16(TYPE[type]), { label: "type", color: "ink", text: `type ${TYPE[type]}: asking for ${type} records` });
+      add(u16(1), { label: "class", color: "ink", text: "class 1: IN, the internet" });
+      if (o.edns) {
+        add([0, 0, 41], { label: "OPT", color: "blue", text: "an OPT pseudo-record (EDNS): the root name and type 41" });
+        add(u16(o.udp ?? 1232), { label: "size", color: "blue", text: `the largest reply this sender accepts over UDP: ${o.udp ?? 1232} bytes` });
+        add([0, 0, 0, 0, 0, 0], { label: "flags, length", color: "blue", text: "extended flags and an empty data field" });
+      }
+      return { bytes, fields };
+    }
+    // Size in bytes of a reply carrying n records of one type for qname, with name compression.
+    function replySize({ qname = "example.com.", n = 1, type = "A", sig = false, edns = false } = {}) {
+      const nameLen = strip(qname).split(".").reduce((s, l) => s + 1 + l.length, 1);
+      const header = 12, question = nameLen + 4, each = 2 + 10 + (type === "AAAA" ? 16 : 4);
+      const signature = sig ? 2 + 10 + 18 + nameLen + 256 : 0, opt = edns ? 11 : 0;
+      return { header, question, each, records: n * each, signature, opt, total: header + question + n * each + signature + opt };
+    }
+
+    // Places used by the map figures, as [lon, lat] (the order g.map and Geo use).
+    const CITY = {
+      "Los Angeles": [-118.24, 34.05], "San Francisco": [-122.42, 37.77], Seattle: [-122.33, 47.61], Vancouver: [-123.12, 49.28],
+      Denver: [-104.99, 39.74], Dallas: [-96.8, 32.78], Chicago: [-87.63, 41.88], Toronto: [-79.38, 43.65], "New York": [-74.01, 40.71],
+      Miami: [-80.19, 25.76], "Mexico City": [-99.13, 19.43], Honolulu: [-157.86, 21.31], Anchorage: [-149.9, 61.22],
+      "Bogotá": [-74.07, 4.71], Lima: [-77.04, -12.05], "São Paulo": [-46.63, -23.55], "Buenos Aires": [-58.38, -34.6], Santiago: [-70.67, -33.45],
+      Reykjavik: [-21.94, 64.15], Lisbon: [-9.14, 38.72], Madrid: [-3.7, 40.42], London: [-0.13, 51.51], Paris: [2.35, 48.86],
+      Amsterdam: [4.9, 52.37], Frankfurt: [8.68, 50.11], Milan: [9.19, 45.46], Stockholm: [18.07, 59.33], Warsaw: [21.01, 52.23],
+      Athens: [23.73, 37.98], Kyiv: [30.52, 50.45], Moscow: [37.62, 55.76], Istanbul: [28.98, 41.01], Cairo: [31.24, 30.04],
+      Casablanca: [-7.59, 33.57], Lagos: [3.38, 6.52], Accra: [-0.19, 5.6], Nairobi: [36.82, -1.29], Johannesburg: [28.05, -26.2],
+      Riyadh: [46.68, 24.71], Dubai: [55.27, 25.2], Tehran: [51.39, 35.69], Karachi: [67.01, 24.86], Delhi: [77.21, 28.61],
+      Mumbai: [72.88, 19.08], Chennai: [80.27, 13.08], Dhaka: [90.41, 23.81], Bangkok: [100.5, 13.76], Singapore: [103.82, 1.35],
+      Jakarta: [106.85, -6.21], Manila: [120.98, 14.6], "Hong Kong": [114.17, 22.32], Taipei: [121.57, 25.03], Shanghai: [121.47, 31.23],
+      Beijing: [116.41, 39.9], Seoul: [126.98, 37.57], Tokyo: [139.69, 35.68], Perth: [115.86, -31.95], Sydney: [151.21, -33.87],
+      Melbourne: [144.96, -37.81], Auckland: [174.76, -36.85],
+    };
+    // Light in optical fiber covers about 200 km per millisecond; real paths run about 1.5 times
+    // the straight-line distance. Round trip, plus a millisecond for the server itself.
+    const rttFor = d => (2 * d * 1.5) / 200 + 1;
+    const km = (a, b) => Geo.distance(a, b);
+
+    const dur = s => (s < 60 ? `${Math.round(s)} s` : s < 3600 ? `${+(s / 60).toFixed(s < 600 ? 1 : 0)} min` : s < 86400 ? `${+(s / 3600).toFixed(s < 36000 ? 1 : 0)} h` : `${+(s / 86400).toFixed(1)} days`);
+    const ms = x => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString("en-US")) + " ms";
+
+    return { RTT, PARTY, ZONES, NOGLUE, OUTSIDE, strip, show, parent, zoneName, answer, resolve, trip, warm, seq, play,
+      TYPE, query, replySize, CITY, km, rttFor, dur, ms };
+  })();
+</script>
+
+<div class="abstract">
+  <ul>
+    <li>The internet delivers packets to numbers, not names. DNS turns a name into a number by asking a chain of servers, each responsible for one part of the name.</li>
+    <li>Your computer hands the question to a recursive resolver, which walks from the root to the top-level domain to the domain's own servers: a few round trips of tens of milliseconds each.</li>
+    <li>Every answer carries a lifetime, its TTL, and is cached for that long at every step, so most lookups take one short round trip or none. "Propagation" is old copies expiring.</li>
+    <li>The questions travel in small UDP packets that can be lost, forged, or too big, and DNS failures (timeouts, SERVFAIL, NXDOMAIN) come from that plumbing.</li>
+  </ul>
+</div>
+
+<p class="lede">Type example.com into a browser and press Enter. Before the browser can ask for the page, it needs a number. The internet delivers packets to addresses like 192.0.2.10, not to names, and the step that turns the name into that number is the Domain Name System, DNS. It usually finishes before the page has started to load.</p>
+
+<p>Here is one lookup, slowed down 20 times. Each arrow is a packet, and time runs down the page. Your computer asks a <span class="c-blue">resolver</span>, which asks three other servers in turn. Watch it from nothing, then switch to the case where <button class="set" data-set="known=res">the resolver has seen the name before</button>:</p>
+
+<figure class="demo wide" id="trip" aria-label="A sequence diagram with five columns: your computer, the resolver, a root server, a .com server, and example.com's server. Arrows for each question and answer slope downward as time passes."></figure>
+<script>
+{
+  const CASES = {
+    cold: () => DNS.trip("example.com.", "A"),
+    res: () => DNS.trip("example.com.", "A", { cache: DNS.warm("example.com.", "A") }),
+    local: () => ({ msgs: [{ kind: "note", at: "you", t: 0, text: "answered from this computer's own cache", align: "left", dx: 10, dy: 16, color: "brass" }], total: 0 }),
+  };
+  demo("trip", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    caption: "One lookup of example.com. Each arrow is a packet, and the slope is the time it spends in flight. Starting from nothing, four round trips run one after another; with the answer cached, one or none.",
+    state: () => ({ t: 0, hold: 0 }),
+    controls: [{ key: "known", label: "Already known by", type: "choice", value: "cold",
+      options: [{ value: "cold", label: "Nobody" }, { value: "res", label: "The resolver" }, { value: "local", label: "This computer" }] }],
+    change: (k, s) => { s.t = 0; s.hold = 0; },
+    step(dt, s, v) { DNS.play(s, dt, CASES[v.known]().total); },
+    status(s, v) {
+      const T = CASES[v.known]().total;
+      return T === 0 ? "nothing sent, 0 ms" : s.t < T ? `${Math.round(s.t)} ms` : `answer after ${T} ms`;
+    },
+    draw(g, s, v) {
+      DNS.seq(g, [0, 4, g.w, g.h - 4], { cols: ["you", "res", "root", "tld", "auth"], msgs: CASES[v.known]().msgs, now: s.t, tmax: 100, tickStep: 20 });
+    },
+  });
+}
+</script>
+
+<p>From nothing, the answer takes 90 ms: four round trips, each waiting for the one before, because each answer says where to ask next. When <button class="set" data-set="known=res">the resolver already has the answer</button>, it takes 16 ms. When <button class="set" data-set="known=local">your computer remembers it</button>, no packet leaves at all. I picked these times by hand at a typical size; real ones depend on where everyone is, and a later section has some I measured. The rest of the page takes this diagram apart: why four servers, what each one knows, how long anyone may remember an answer, and what goes wrong.</p>
+
+<h2>Names and numbers</h2>
+
+<p>Routers forward packets by number: an IPv4 address is 32 bits, written like 192.0.2.10, and an IPv6 address is 128 bits, written like 2001:db8::10. Names are for people, and a name can stay put when the site behind it moves to new machines.</p>
+
+<p>The first link between the two was a list. Until the mid-1980s, every computer on the ARPANET kept a copy of one file, <code>HOSTS.TXT</code>, with a line per host, edited by the Network Information Center at SRI and downloaded from there. Slide the number of hosts and watch what the copying costs:</p>
+
+<figure class="demo" id="hosts" aria-label="A sketch of the HOSTS.TXT file next to a log-log plot of the bytes the NIC would send each day against the number of hosts, with the capacity of one 50 kbit/s line marked."></figure>
+<script>
+{
+  const BYTES = 60;                          // about one line of HOSTS.TXT per host
+  const LINE = (50000 / 8) * 86400;          // bytes one 50 kbit/s line carries in a day
+  const YEARS = [[1981, 213], [1984, 1024], [1986, 5089], [1987, 28174], [1989, 159000]];
+  // Slider position is log10(hosts); positions on a historical mark show that year's exact count.
+  const hostsOf = x => { const m = YEARS.find(([, n]) => Math.abs(Math.log10(n) - x) < 0.002); return m ? m[1] : Math.round(10 ** x); };
+  const fmtB = b => (b < 1e3 ? `${Math.round(b)} B` : b < 1e6 ? `${Math.round(b / 1e3)} kB` : b < 1e9 ? `${+(b / 1e6).toFixed(b < 1e7 ? 1 : 0)} MB`
+    : b < 1e12 ? `${+(b / 1e9).toFixed(b < 1e10 ? 1 : 0)} GB` : `${+(b / 1e12).toFixed(1)} TB`);
+  demo("hosts", {
+    aspect: w => (w < 560 ? 0.8 : 2.0),
+    caption: "If every host fetched a fresh copy of the host list once a day, the bytes sent would grow with the square of the number of hosts. Dots mark real host counts from 1981 to 1989.",
+    controls: [{ key: "lg", label: "Hosts", min: 2, max: 5.3, step: 0.001, value: 3.01, color: "brass",
+      format: x => hostsOf(x).toLocaleString("en-US"),
+      marks: YEARS.map(([y, n]) => ({ value: Math.log10(n), label: String(y) })) }],
+    status: (s, v) => { const n = hostsOf(v.lg); return `file ${fmtB(n * BYTES)} · ${fmtB(n * n * BYTES)} sent a day`; },
+    draw(g, s, v) {
+      const n = hostsOf(v.lg), narrow = g.w < 560;
+      const fb = narrow ? [g.w * 0.08, 6, g.w * 0.84, g.h * 0.3] : [14, 14, g.w * 0.26, g.h - 28];
+      const pb = narrow ? [0, g.h * 0.34, g.w, g.h * 0.66] : [g.w * 0.31, 0, g.w * 0.69, g.h];
+      // The file: a page whose lines get denser as hosts are added.
+      const [x, y, w, h] = fb, fold = 14;
+      g.path([[x, y], [x + w - fold, y], [x + w, y + fold], [x + w, y + h], [x, y + h]], { fill: "panel", stroke: "ink", width: 1.5, close: true });
+      g.path([[x + w - fold, y], [x + w - fold, y + fold], [x + w, y + fold]], { stroke: "ink", width: 1 });
+      g.text("HOSTS.TXT", [x + 10, y + 16], { font: "mono", size: 12, weight: 600, align: "left", color: "brass" });
+      const top = y + 30, rows = Math.max(1, Math.floor((h - 58) / 7)), shown = Math.min(rows, Math.ceil(n / (n > rows ? n / rows : 1)));
+      const r = Num.rng(3);
+      for (let i = 0; i < shown; i++) g.line([x + 10, top + i * 7], [x + 10 + (w - 26) * (0.45 + 0.5 * r()), top + i * 7], { stroke: "muted", width: 2.5, alpha: 0.45 });
+      g.text(`${n.toLocaleString("en-US")} lines, ${fmtB(n * BYTES)}`, [x + w / 2, y + h - 14], { size: 12, color: "ink", halo: true });
+      // The cost: bytes sent a day if every host fetches a fresh copy daily.
+      const P = g.graph({ box: pb, x: [100, 500000], y: [1e5, 1e13], xScale: "log", yScale: "log", axes: "frame",
+        xLabel: "Hosts", yLabel: "Sent a day", yFormat: fmtB, xFormat: q => q.toLocaleString("en-US") });
+      P.fn(q => q * q * BYTES, { color: "brass", width: 2.5 });
+      P.hline(LINE, { color: "red", label: "one 50 kbit/s line, flat out" });
+      P.points(YEARS.map(([, h]) => [h, h * h * BYTES]), { r: 3, color: "muted", labels: YEARS.map(([yr]) => String(yr)) });
+      P.marker(n, n * n * BYTES, { color: "brass", drop: true, label: fmtB(n * n * BYTES), pos: "nw" });
+    },
+  });
+}
+</script>
+
+<p>Double the hosts and both the file and the number of copies double, so the traffic grows four times. At 1,024 hosts, a daily copy for everyone is 63 MB. At <button class="set" data-set="lg=4.45">28,174 hosts</button>, the count at the end of 1987, it would be 48 GB, more than 80 of the network's 50 kbit/s lines running flat out. The DNS specification names exactly this square law as its reason for being <a class="cite" href="#ref-rfc1034"></a>, along with a human one: every new machine waited for one office to edit the file.</p>
+
+<p>The replacement, designed by Paul Mockapetris in 1983, splits the list into a tree and hands each branch to its owner. Pick a name and read it from right to left, starting at the <span class="c-purple">root</span>:</p>
+
+<figure class="demo" id="tree" aria-label="The tree of domain names: the root at the top, top-level domains like com, net, and org below it, then names like example and wikipedia, then www, mail, edge, and en. The chosen name's path is highlighted, and shaded regions show the zones."></figure>
+<script>
+{
+  const T = { l: "", z: ".", kids: [
+    { l: "com", z: "com.", kids: [{ l: "example", z: "example.com.", kids: [{ l: "www" }, { l: "mail" }] }] },
+    { l: "net", z: "net.", kids: [{ l: "example", z: "example.net.", kids: [{ l: "edge" }] }] },
+    { l: "org", z: "org.", kids: [{ l: "wikipedia", z: "wikipedia.org.", kids: [{ l: "en" }] }] },
+    { l: "uk", z: "uk.", kids: [] }, { l: "jp", z: "jp.", kids: [] },
+  ] };
+  const ZC = z => (z === "." ? "purple" : z.split(".").length === 2 ? "orange" : "green");
+  // Leaves get evenly spaced slots; parents sit over the middle of their children.
+  let slot = 0;
+  (function place(n, depth, zone, name) {
+    n.depth = depth; n.zone = n.z ?? zone; n.name = n.l ? `${n.l}.${name}` : name;
+    if (!n.kids || !n.kids.length) { n.x = slot++; return; }
+    n.kids.forEach(k => place(k, depth + 1, n.zone, n.name));
+    n.x = (n.kids[0].x + n.kids[n.kids.length - 1].x) / 2;
+  })(T, 0, ".", "");
+  const ALL = [];
+  (function walk(n) { ALL.push(n); (n.kids || []).forEach(walk); })(T);
+  const NAMES = ["www.example.com.", "mail.example.com.", "edge.example.net.", "en.wikipedia.org."];
+  const ZONES = [".", "com.", "net.", "org.", "uk.", "jp.", "example.com.", "example.net.", "wikipedia.org."];
+  demo("tree", {
+    aspect: w => (w < 560 ? 0.95 : 1.8),
+    caption: "The namespace is a tree, and a name is the path from a leaf up to the root, read right to left. Each shaded zone is run by a different organization, which hands the zones below it to their owners.",
+    controls: [
+      { key: "name", label: "Name", type: "choice", value: NAMES[0], options: NAMES.map(n => ({ value: n, label: DNS.strip(n) })) },
+      { key: "zones", label: "Show zones", type: "toggle", value: false, color: "green" },
+    ],
+    status: (s, v) => `${v.name.split(".").length - 1} labels, ${v.name.split(".").length} steps down from the root`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, pad = narrow ? 30 : 46, top = 30, bottom = narrow ? 70 : 62;
+      const X = n => pad + (n.x / (slot - 1)) * (g.w - 2 * pad), Ylev = d => top + d * ((g.h - top - bottom) / 3);
+      const pos = n => [X(n), Ylev(n.depth)];
+      const path = new Set(ALL.filter(n => n === T || v.name === n.name || v.name.endsWith("." + n.name)));
+      const fs = narrow ? 11 : 12.5;
+      const boxW = n => (n.l ? g.measure(n.l, { font: "mono", size: fs, weight: 600 }) + 14 : 18);
+      if (v.zones) for (const z of ZONES) {
+        const members = ALL.filter(n => n.zone === z);
+        const xs = members.flatMap(n => [X(n) - boxW(n) / 2 - 6, X(n) + boxW(n) / 2 + 6]);
+        const ys = members.flatMap(n => [Ylev(n.depth) - 17, Ylev(n.depth) + 17]);
+        const c = ZC(z);
+        g.rect(Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), { fill: g.rgba(c, 0.1), stroke: g.rgba(c, 0.5), width: 1, r: 10 });
+      }
+      for (const n of ALL) for (const k of n.kids || []) {
+        const on = path.has(k);
+        g.line(pos(n), pos(k), { stroke: on ? "ink" : "faint", width: on ? 2.5 : 1.2 });
+      }
+      for (const n of ALL) {
+        const p = pos(n), on = path.has(n), c = ZC(n.zone), w = boxW(n);
+        if (!n.l) { g.circle(p, 8, { fill: on ? g.rgba("purple", 0.3) : "panel", stroke: "purple", width: on ? 2.5 : 1.5 }); g.text("root", [p[0] + 14, p[1]], { size: 12, color: "purple", align: "left", weight: 600 }); continue; }
+        g.rect(p[0] - w / 2, p[1] - 11, w, 22, { r: 5, fill: on ? g.rgba(c, 0.2) : "panel", stroke: on ? c : "faint", width: on ? 2 : 1 });
+        g.text(n.l, p, { font: "mono", size: fs, weight: 600, color: on ? "ink" : "muted" });
+      }
+      // The name, assembled from the path, each label in the color of its zone.
+      const labels = DNS.strip(v.name).split("."), parts = [];
+      labels.forEach((l, i) => { parts.push([l, i === labels.length - 1 ? "orange" : "green"]); parts.push([".", i === labels.length - 1 ? "purple" : "muted"]); });
+      const big = narrow ? 17 : 21, total = parts.reduce((a, [t]) => a + g.measure(t, { font: "mono", size: big, weight: 600 }), 0);
+      let x = g.w / 2 - total / 2;
+      const yName = g.h - bottom + 30;
+      for (const [t, c] of parts) { const w = g.measure(t, { font: "mono", size: big, weight: 600 }); g.text(t, [x + w / 2, yName], { font: "mono", size: big, weight: 600, color: c }); x += w; }
+      g.arrow([g.w / 2 + total / 2, yName + 19], [g.w / 2 - total / 2, yName + 19], { stroke: "muted", width: 1.2, head: 7 });
+      g.text("read from the root down", [g.w / 2, yName + 31], { size: 11, color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Each dot is a step down the tree, and the final dot, usually left off, is the root. Now <button class="set" data-set="zones=true">turn on the zones</button>. Each shaded region is a <dfn data-def="A part of the DNS tree whose names are all looked after by the same servers and the same operator. A zone ends where it hands a branch below it to someone else.">zone</dfn>, a part of the tree looked after by one set of servers. The <span class="c-purple">root zone</span>, edited by IANA, lists only the top-level domains, about 1,400 of them <a class="cite" href="#ref-iana-root"></a>, and the servers for each. The <span class="c-orange">com zone</span>, run by Verisign, lists every name under com and its servers. It doesn't know example.com's address, only who does. Handing a branch down this way is <dfn data-def="Handing a branch of the tree to another set of servers. The parent zone keeps only a pointer: the names (and often addresses) of the child's servers.">delegation</dfn>, and it's why the owner of example.com can add mail.example.com without asking anyone.</p>
+
+<h2>Inside your computer</h2>
+
+<p>The lookup starts at home. A browser asks the operating system with a library call (<code>getaddrinfo</code> on most systems), which goes to the <dfn data-def="The small DNS client inside an operating system. It doesn't walk the tree itself; it checks local sources, then sends the whole question to a recursive resolver and waits.">stub resolver</dfn>, a stub because it never walks the tree itself. Before anything leaves the machine, the answer may already be in one of three places. Switch them on and off and watch where the question stops:</p>
+
+<figure class="demo" id="stub" aria-label="Layers inside a computer, from the browser down to the browser's cache, the hosts file, and the operating system's cache, with the resolver outside. A dot carries the question down until a layer has the answer."></figure>
+<script>
+{
+  const LAYERS = [
+    { name: "browser", sub: "needs example.com" },
+    { key: "bc", name: "browser's own cache", hit: "example.com → 192.0.2.10", miss: "other names only" },
+    { key: "hf", name: "hosts file", hit: "192.0.2.10  example.com", miss: "127.0.0.1  localhost" },
+    { key: "oc", name: "operating system's cache", hit: "example.com A 192.0.2.10", miss: "other names only" },
+    { name: "resolver", sub: "across the network" },
+  ];
+  const stopAt = v => LAYERS.findIndex((L, i) => i > 0 && (i === 4 || v[L.key]));
+  const SAY = ["", "answered by the browser's cache, in microseconds", "answered by the hosts file, nobody asked",
+    "answered by the system's cache, well under 1 ms", "sent to the resolver: 16 ms or more"];
+  demo("stub", {
+    aspect: w => (w < 560 ? 0.8 : 1.75),
+    caption: "The places a lookup can end before any packet leaves the computer. Only when all three miss does the question go to the resolver.",
+    state: () => ({ p: 0, hold: 0 }),
+    controls: [
+      { key: "bc", label: "Browser cache has it", type: "toggle", value: false, color: "brass" },
+      { key: "hf", label: "Hosts file has it", type: "toggle", value: false, color: "brass" },
+      { key: "oc", label: "System cache has it", type: "toggle", value: true, color: "brass" },
+    ],
+    change: (k, s) => { s.p = 0; s.hold = 0; },
+    step(dt, s, v) {
+      const T = 2 * stopAt(v);
+      if (s.p < T) s.p = Math.min(T, s.p + dt * 2.4);
+      else if ((s.hold += dt) > 1.4) { s.p = 0; s.hold = 0; }
+    },
+    status: (s, v) => SAY[stopAt(v)],
+    draw(g, s, v) {
+      const narrow = g.w < 560, k = stopAt(v);
+      const left = narrow ? 14 : g.w * 0.16, right = narrow ? g.w - 14 : g.w * 0.84, gap = narrow ? 30 : 34;
+      const rowH = (g.h - 20 - gap) / 5, rh = rowH - 10;
+      const rowY = i => 10 + i * rowH + (i === 4 ? gap : 0);
+      // The computer: a dashed outline around the first four layers.
+      g.rect(left - 8, 4, right - left + 16, rowY(3) + rh + 8, { stroke: "muted", width: 1, dash: [4, 4], r: 10 });
+      g.text("this computer", [right - 4, rowY(3) + rh + 20], { size: 11, color: "muted", align: "right" });
+      LAYERS.forEach((L, i) => {
+        const y = rowY(i), hit = i === k, passed = i > 0 && i < k;
+        const c = i === 4 ? "blue" : "brass";
+        g.rect(left, y, right - left, rh, { r: 6, fill: hit ? g.rgba(c, 0.18) : "panel", stroke: hit ? c : i === 0 ? "brass" : "faint", width: hit ? 2 : 1.2 });
+        const cy = y + rh / 2;
+        g.text(L.name, [left + 12, L.key && narrow ? cy - 8 : cy], { size: narrow ? 12 : 13, weight: 600, align: "left", color: i === 4 ? "blue" : "ink" });
+        const detail = L.key ? (v[L.key] ? L.hit : L.miss) : L.sub;
+        g.text(detail, narrow && L.key ? [left + 12, cy + 9] : [right - 12, cy], { size: narrow ? 10.5 : 11.5, font: L.key && v[L.key] ? "mono" : undefined, align: narrow && L.key ? "left" : "right", color: L.key && v[L.key] ? "ink" : "muted" });
+        if (passed) g.text("miss", [left - 14, cy], { size: 10.5, color: "muted", align: "right" });
+      });
+      // The question goes down to layer k and the answer comes back up.
+      const pos = s.p <= k ? s.p : 2 * k - s.p, i0 = Math.floor(Math.min(pos, k - 1e-9)), f = pos - i0;
+      const yOf = i => rowY(i) + rh / 2;
+      const y = yOf(i0) + (yOf(Math.min(i0 + 1, 4)) - yOf(i0)) * f;
+      const x = (left + right) / 2 + (s.p <= k ? -20 : 20);
+      if (s.p > 0 || k > 0) {
+        g.line([(left + right) / 2 - 20, yOf(0)], [(left + right) / 2 - 20, yOf(k)], { stroke: "brass", width: 1, alpha: 0.35, dash: [3, 4] });
+        g.circle([x, y], 6, { fill: s.p <= k ? "brass" : k === 4 ? "blue" : "brass", stroke: "panel", width: 1.5 });
+      }
+      if (k === 4) g.text("network", [(left + right) / 2 + 30, rowY(4) - gap / 2 + 2], { size: 11, color: "muted", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-brass">hosts file</span> is HOSTS.TXT's descendant, still on every computer (<code>/etc/hosts</code> on Linux and macOS). An entry there usually beats DNS, which is how developers point a name at a test machine. The two caches hold recent answers for as long as each answer allows. The order varies between systems, and some browsers skip the operating system entirely<span class="sidenote">Chrome has its own built-in DNS client, and browsers with encrypted DNS switched on (the last "going deeper" section) send their queries directly to the resolver they're set up to use.</span>, but the idea is the same: look locally, then ask.</p>
+
+<p>When everything local misses, a packet goes to a <dfn data-def="A server that takes a question, walks the DNS tree on the asker's behalf, caches what it learns, and returns the final answer. Run by internet providers, companies, and public services such as 1.1.1.1 or 8.8.8.8.">recursive resolver</dfn>, which does the whole walk. The network you join picks one, usually your provider's, often relayed through your router, unless you choose a public one such as 1.1.1.1 or 8.8.8.8. Either way it serves thousands or millions of people, so someone has usually asked your question a moment ago.</p>
+
+<h2>Walking the tree</h2>
+
+<p>A resolver that has just started knows only one thing: the addresses of the root servers, shipped with its software in a short file called the root hints. So it starts at the top. Step through the replies to its question about example.com, one server at a time:</p>
+
+<figure class="demo" id="referral" aria-label="The three servers asked in turn, root, .com, and example.com, next to the reply from the current one, laid out in its answer, authority, and additional sections."></figure>
+<script>
+{
+  const ZONES = [".", "com.", "example.com."], COLOR = ["purple", "orange", "green"], LABEL = ["root", ".com", "example.com"];
+  const line = rr => `${DNS.strip(rr[0]).padEnd(20)}${String(rr[2]).padStart(7)}  ${rr[1].padEnd(3)} ${DNS.show(rr[3])}`;
+  const REPLIES = ZONES.map(z => {
+    const r = DNS.answer(DNS.ZONES, z, "example.com.", "A"), Z = DNS.ZONES[z];
+    return {
+      server: `${Z.host} (${Z.ip})`, aa: r.kind === "answer",
+      sections: [
+        ["answer", r.kind === "answer" ? r.rr.map(rr => [line(rr), "green"]) : []],
+        ["authority", r.kind === "referral" ? r.ns.map(rr => [line(rr), COLOR[ZONES.indexOf(r.zone)]]) : []],
+        ["additional", r.kind === "referral" ? r.glue.map(rr => [line(rr), COLOR[ZONES.indexOf(r.zone)]]) : []],
+      ],
+      more: z === "." ? "plus 11 more servers for com" : null,
+    };
+  });
+  demo("referral", {
+    aspect: w => (w < 560 ? 0.78 : 1.75),
+    caption: "The three replies a resolver gets when it looks up example.com from scratch. The first two are referrals that point one level down; only the last answers the question.",
+    controls: [{ key: "k", label: "Server asked", type: "stepper", min: 1, max: 3, step: 1, value: 1, color: "blue", format: k => LABEL[k - 1] }],
+    status: (s, v) => (v.k < 3 ? `referral: go ask ${LABEL[v.k]}` : "answer, marked authoritative"),
+    draw(g, s, v) {
+      const narrow = g.w < 560, k = v.k - 1, R = REPLIES[k];
+      // The servers, top to bottom, with the one asked now highlighted.
+      const lx = narrow ? 0 : 0, lw = narrow ? g.w : g.w * 0.24;
+      const ys = narrow ? null : [g.h * 0.2, g.h * 0.5, g.h * 0.8];
+      ZONES.forEach((z, i) => {
+        const p = narrow ? [g.w * (0.17 + 0.33 * i), 16] : [lx + lw / 2, ys[i]];
+        if (i > 0) {
+          const q = narrow ? [g.w * (0.17 + 0.33 * (i - 1)), 16] : [lx + lw / 2, ys[i - 1]];
+          const on = i <= k;
+          if (narrow) g.arrow([q[0] + 44, q[1]], [p[0] - 44, p[1]], { stroke: on ? "ink" : "faint", width: 1.5, head: 7 });
+          else g.arrow([q[0], q[1] + 16], [p[0], p[1] - 16], { stroke: on ? "ink" : "faint", width: 1.5, head: 8 });
+        }
+        g.chip(LABEL[i], p, { color: i <= k ? COLOR[i] : "faint", size: narrow ? 11 : 12.5 });
+        if (i === k && !narrow) g.text("asked now", [p[0], p[1] + 24], { size: 11, color: "muted" });
+      });
+      // The reply.
+      const cx = narrow ? 6 : g.w * 0.27, top = narrow ? 44 : 14, fs = narrow ? 9.6 : 12, lh = fs + 6;
+      const mono = (t, x, y, c, w = 500) => g.text(t, [x, y], { font: "mono", size: fs, weight: w, align: "left", color: c });
+      let y = top;
+      g.text(`reply from ${R.server}`, [cx, y], { size: narrow ? 11.5 : 13, weight: 600, align: "left", color: COLOR[k] }); y += lh + 4;
+      mono(`question:      example.com A`, cx, y, "ink"); y += lh;
+      mono(`authoritative: ${R.aa ? "yes" : "no"}`, cx, y, R.aa ? "green" : "muted"); y += lh + 6;
+      for (const [name, rows] of R.sections) {
+        g.text(name, [cx, y], { size: narrow ? 11 : 12, weight: 600, align: "left", color: "muted" });
+        g.line([cx + g.measure(name, { size: 12, weight: 600 }) + 8, y], [g.w - 8, y], { stroke: "faint", width: 1 });
+        y += lh;
+        if (!rows.length) { mono("(empty)", cx + 8, y, "muted"); y += lh; }
+        for (const [t, c] of rows) { mono(t, cx + 8, y, c); y += lh; }
+        if (name === "authority" && R.more) { mono(R.more, cx + 8, y, "muted"); y += lh; }
+        y += 4;
+      }
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-purple">root server</span> doesn't know example.com's address and doesn't guess. Its reply is a <dfn data-def="A reply that doesn't answer the question but names the servers one level further down the tree that can.">referral</dfn>: the answer section is empty, the authority section names the servers for <span class="c-orange">com</span>, and the additional section gives their addresses so the resolver can reach them. The com server does the same one level down. Only <span class="c-green">example.com's own server</span> fills the answer section, and it marks the reply authoritative: this comes from the zone's owner, not from someone's cache. Each line carries a TTL in seconds. The referrals say 172,800, two days, and the resolver keeps them that long.</p>
+
+<p>That changes the next lookup. Here is one resolver handling six questions a minute apart, all sharing one cache, with what it knows listed on the right. Step through them:</p>
+
+<figure class="demo" id="second" aria-label="A sequence diagram of one lookup out of six handled by the same resolver, with the resolver's cache listed beside it. Later lookups skip the servers the cache already knows."></figure>
+<script>
+{
+  const LOOKUPS = [["example.com.", "A"], ["example.com.", "AAAA"], ["mail.example.com.", "A"], ["edge.example.net.", "A"], ["example.com.", "MX"], ["example.com.", "A"]];
+  const label = key => {
+    const [a, b] = key.split(" ");
+    if (a === "NS") return [`servers for ${DNS.zoneName(b)}`, b.split(".").length === 2 ? "orange" : "green"];
+    if (a === "CNAME" || a === "NX") return [`${DNS.strip(b)} ${a}`, "green"];
+    return [`${DNS.strip(a)} ${b}`, "blue"];
+  };
+  // Run the six lookups in order against one cache and keep what each needed and what the cache held after it.
+  const RUNS = (() => {
+    const cache = {};
+    return LOOKUPS.map(([n, t], i) => {
+      const now = i * 60, r = DNS.resolve(n, t, { cache, now });
+      const held = Object.entries(cache).filter(([, e]) => e.exp > now).map(([k, e]) => [...label(k), e.exp - now]);
+      return { name: n, type: t, msgs: r.msgs, t: r.t, queries: r.queries, held };
+    });
+  })();
+  const COLS = ["res", "root", { id: "tld", label: ".com, .net" }, "auth", "auth2"];
+  demo("second", {
+    aspect: w => (w < 560 ? 0.72 : 1.75),
+    caption: "Six lookups through one resolver, a minute apart. Referrals stay in its cache for two days, so after the first lookup in a top-level domain the root drops out, and after the first in a domain only that domain's server is asked.",
+    controls: [{ key: "i", label: "Lookup", type: "stepper", min: 1, max: 6, step: 1, value: 1, color: "blue",
+      format: i => `${DNS.strip(LOOKUPS[i - 1][0])} ${LOOKUPS[i - 1][1]}` }],
+    status: (s, v) => { const r = RUNS[v.i - 1]; return r.queries ? `${r.queries} ${r.queries > 1 ? "queries" : "query"}, ${r.t} ms` : "answered from the cache, 0 ms"; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = RUNS[v.i - 1];
+      const sb = narrow ? [0, 0, g.w, g.h * 0.55] : [0, 0, g.w * 0.64, g.h];
+      const msgs = r.queries ? r.msgs : [{ kind: "note", at: "res", t: 2, text: "already in the cache", align: "left", dx: 9, dy: 8, color: "blue" }];
+      DNS.seq(g, sb, { cols: COLS, msgs, tmax: 80, tickStep: 20, axis: false });
+      // The cache after this lookup.
+      const cx = narrow ? 10 : g.w * 0.67, top = narrow ? g.h * 0.6 : 18, lh = narrow ? 16 : 19, fs = narrow ? 11 : 12;
+      g.text("the resolver's cache now", [cx, top], { size: fs + 0.5, weight: 600, align: "left", color: "blue" });
+      g.text("root servers (built in)", [cx, top + lh * 1.3], { size: fs, align: "left", color: "purple" });
+      r.held.forEach(([t, c, left], j) => {
+        const y = top + lh * (j + 2.3);
+        g.text(t, [cx, y], { size: fs, align: "left", color: c, weight: 500 });
+        g.text(DNS.dur(left), [g.w - 10, y], { size: fs, align: "right", color: "muted" });
+      });
+    },
+  });
+}
+</script>
+
+<p>The first lookup pays for the full walk. The second, the IPv6 address of the same name, goes straight to example.com's server, because the resolver already knows where it is; so does mail.example.com. The <button class="set" data-set="i=4">fourth</button>, a name under .net, needs the root again, because nothing so far has said who runs .net. By the <button class="set" data-set="i=6">sixth</button> the answer itself is cached and nothing is sent. A busy resolver almost never asks a root server anything: it learned where every popular top-level domain lives within minutes of starting, and that knowledge lasts two days.</p>
+
+<p>There's a puzzle hiding in the com server's referral. It says example.com's servers are ns1.example.com and ns2.example.com. To reach ns1.example.com the resolver needs its address, but that address lives inside example.com, which it can only ask ns1.example.com about. The com zone breaks the loop by including the addresses, in the additional section. These are <dfn data-def="Addresses for a child zone's name servers, stored in the parent zone and sent along with referrals, so a resolver can reach servers whose names are inside the zone they serve.">glue records</dfn>. Take them away and see what the resolver does:</p>
+
+<figure class="demo" id="glue" aria-label="A sequence diagram of the resolver looking up example.com with glue addresses, without them, and with name servers in another domain."></figure>
+<script>
+{
+  const CASES = {
+    glue: { zones: DNS.ZONES, label: "With glue" },
+    none: { zones: DNS.NOGLUE, label: "No glue" },
+    out: { zones: DNS.OUTSIDE, label: "Servers in another domain" },
+  };
+  const run = k => DNS.resolve("example.com.", "A", { zones: CASES[k].zones });
+  const COLS = ["res", "root", { id: "tld", label: ".com, .net" }, "auth", { id: "auth2", label: "dnshost.net" }];
+  demo("glue", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    caption: "Without glue, the resolver can't reach servers named inside the zone they serve, and keeps getting the same referral. Servers named in another domain work, after a detour to look up their address.",
+    controls: [{ key: "c", label: "Referral from .com", type: "choice", value: "none",
+      options: Object.entries(CASES).map(([value, c]) => ({ value, label: c.label })) }],
+    status: (s, v) => { const r = run(v.c); return r.rcode === "NOERROR" ? `answer after ${r.queries} queries, ${r.t} ms` : `SERVFAIL after ${r.queries} queries: it gives up`; },
+    draw(g, s, v) {
+      const r = run(v.c), msgs = [...r.msgs];
+      if (r.rcode !== "NOERROR") msgs.push({ kind: "note", at: "res", t: r.t, text: "loop: give up, SERVFAIL", color: "red", align: "left", dx: 9, dy: 12 });
+      DNS.seq(g, [0, 0, g.w, g.h], { cols: COLS, msgs, tmax: 160, tickStep: 40 });
+    },
+  });
+}
+</script>
+
+<p>Without glue, the resolver asks com for ns1.example.com and gets the same referral back, around and around, until it gives up and reports SERVFAIL, a server failure. That's why a registrar asks for addresses when you name your own servers inside your own domain. Servers named in <button class="set" data-set="c=out">another domain</button>, like a hosting company's ns1.dnshost.net, need no glue: the resolver looks that name up on the side, through .net, then carries on. It costs three extra round trips the first time, and after that the answer is cached like any other.</p>
+
+<h2>What the answers say</h2>
+
+<p>So far every question has asked for an address. A zone holds other kinds of record too, each a line with a name, a TTL, a type, and some data. Here is the whole of example.com. Pick a name and a type and see which lines answer:</p>
+
+<figure class="demo" id="records" aria-label="The records of the example.com zone, one per line, with the lines that answer the chosen question highlighted and the reply summarized below."></figure>
+<script>
+{
+  const Z = DNS.ZONES["example.com."];
+  const ABOUT = { SOA: "the zone's settings", NS: "the zone's name servers", A: "an IPv4 address", AAAA: "an IPv6 address",
+    MX: "a mail server, with its priority", TXT: "free text", CNAME: "an alias for another name" };
+  const shown = r => (r[1] === "SOA" ? "ns1.example.com hostmaster.example.com" : DNS.show(r[3]));
+  demo("records", {
+    aspect: w => (w < 560 ? 0.78 : 1.6),
+    caption: "Every record in one zone. A question names a name and a type; the lines that match both are the answer. A name with an alias answers any type with the alias.",
+    controls: [
+      { key: "name", label: "Name", type: "choice", value: "example.com.", options: ["example.com.", "www.example.com.", "mail.example.com."].map(n => ({ value: n, label: DNS.strip(n) })) },
+      { key: "type", label: "Type", type: "choice", value: "MX", options: ["A", "AAAA", "MX", "TXT", "NS"] },
+    ],
+    status(s, v) {
+      const r = DNS.answer(DNS.ZONES, "example.com.", v.name, v.type);
+      return r.kind === "answer" ? `answer: ${r.rr.length} record${r.rr.length > 1 ? "s" : ""}` : r.kind === "cname" ? `alias for ${DNS.strip(r.target)}` : `no ${v.type} record: an empty answer`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = DNS.answer(DNS.ZONES, "example.com.", v.name, v.type);
+      const hit = new Set(r.kind === "answer" || r.kind === "cname" ? r.rr : []);
+      const fs = narrow ? 9.8 : 12, lh = narrow ? 18.5 : 23, x0 = narrow ? 4 : 12, top = 14;
+      const cw = g.measure("m", { font: "mono", size: fs });
+      const cols = narrow ? [0, 17, 23, 29] : [0, 18, 25, 31];
+      const rows = Z.rr;
+      rows.forEach((rr, i) => {
+        const y = top + i * lh, on = hit.has(rr), ownerMatch = rr[0] === v.name;
+        if (on) g.rect(x0 - 4, y - lh / 2 + 1, g.w - 2 * x0 + 8, lh - 2, { r: 4, fill: g.rgba("green", 0.16), stroke: "green", width: 1.5 });
+        const c = on ? "ink" : ownerMatch ? "ink" : "muted";
+        const cells = [DNS.strip(rr[0]), String(rr[2]), rr[1], shown(rr)];
+        cells.forEach((t, j) => g.text(t, [x0 + cols[j] * cw + (j === 1 ? 5 * cw : 0), y], { font: "mono", size: fs, align: j === 1 ? "right" : "left", color: j === 2 && on ? "green" : c, weight: on ? 600 : 500 }));
+        if (!narrow) g.text(ABOUT[rr[1]], [g.w - x0, y], { size: 11, color: on ? "green" : "muted", align: "right", alpha: on ? 1 : 0.7 });
+      });
+      const y = top + rows.length * lh + (narrow ? 10 : 14);
+      g.line([x0, y - 10], [g.w - x0, y - 10], { stroke: "faint", width: 1 });
+      const say = r.kind === "answer" ? `reply: ${r.rr.map(x => DNS.show(x[3])).join(", ")}`
+        : r.kind === "cname" ? `reply: ${DNS.strip(v.name)} is an alias for ${DNS.strip(r.target)}; ask about that name instead`
+        : `reply: ${DNS.strip(v.name)} exists, but has no ${v.type} record`;
+      g.text(say, [x0, y + 4], { size: narrow ? 11 : 13, weight: 600, align: "left", color: r.kind === "nodata" ? "muted" : "green" });
+      if (narrow) g.text(`${v.type}: ${ABOUT[v.type]}`, [x0, y + 22], { size: 11, align: "left", color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>A records hold IPv4 addresses and AAAA records IPv6 ones, four times as long, hence the four A's. A browser usually asks for both and uses whichever connects first. MX names the domain's mail servers, with a number saying which to try first. TXT holds free text, these days mostly email rules and proofs that you control the domain. NS lists the zone's own servers, repeating what the parent said. Ask for <button class="set" data-set="name=mail.example.com. type=AAAA">mail.example.com AAAA</button> and the reply is an empty answer, not an error: the name exists, the record doesn't. And <button class="set" data-set="name=www.example.com. type=A">www.example.com</button> answers every question the same way, with a <dfn data-def="Canonical name record: says that this name is an alias for another name, so the resolver must look up the other name instead.">CNAME</dfn>.</p>
+
+<p>A CNAME says this name is an alias for another one, and the resolver has to start over with the other name. Here www.example.com points at edge.example.net, a name in a different zone, with servers of its own. Compare what the resolver has to do depending on what it already knows:</p>
+
+<figure class="demo" id="cname" aria-label="A sequence diagram of the resolver looking up www.example.com, which is an alias for edge.example.net, for three states of its cache."></figure>
+<script>
+{
+  const CASES = {
+    empty: () => DNS.resolve("www.example.com.", "A"),
+    servers: () => {
+      const cache = {};
+      DNS.resolve("example.com.", "A", { cache });
+      DNS.resolve("edge.example.net.", "AAAA", { cache });
+      return DNS.resolve("www.example.com.", "A", { cache, now: 1 });
+    },
+    alias: () => {
+      const cache = DNS.warm("www.example.com.", "A");
+      return DNS.resolve("www.example.com.", "A", { cache, now: 120 });
+    },
+  };
+  const COLS = ["res", "root", { id: "tld", label: ".com, .net" }, "auth", "auth2"];
+  demo("cname", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    caption: "Following an alias. With nothing cached, the resolver walks two branches of the tree. Usually the alias is still cached and only the short-lived address at the end of it has to be fetched again.",
+    controls: [{ key: "c", label: "Resolver knows", type: "choice", value: "empty",
+      options: [{ value: "empty", label: "Nothing" }, { value: "servers", label: "Both zones' servers" }, { value: "alias", label: "The alias, 2 min ago" }] }],
+    status: (s, v) => { const r = CASES[v.c](); return `${r.queries} ${r.queries === 1 ? "query" : "queries"}, ${r.t} ms`; },
+    draw(g, s, v) {
+      const r = CASES[v.c](), msgs = [...r.msgs];
+      if (v.c === "alias") msgs.unshift({ kind: "note", at: "res", t: 0, text: "alias in cache (1 h); address expired (60 s)", align: "left", dx: 9, dy: -2, color: "blue" });
+      DNS.seq(g, [0, 0, g.w, g.h], { cols: COLS, msgs, tmax: 160, tickStep: 40 });
+    },
+  });
+}
+</script>
+
+<p>From an empty cache the alias doubles the work. After example.com's server answers with the alias, the resolver goes back to the root to find out who runs .net, then on to example.net's server: six queries. With <button class="set" data-set="c=servers">both zones' servers known</button>, it's two. The <button class="set" data-set="c=alias">third case</button> is the everyday one. The alias has a TTL of an hour, the address at the end of it only 60 seconds, so the resolver usually still holds the first and refetches the second. Short TTLs like that are how a <a href="../cdn/">content delivery network</a> steers each visitor to a nearby server and changes its answer minute by minute.</p>
+
+<p>One rule follows from how aliases work: a name with a CNAME can't have any other records, since every question about it is redirected. The bare example.com must have NS and SOA records, so it can never be an alias.</p>
+
+<h2>How long an answer lasts</h2>
+
+<p>Every record carries a <dfn data-def="Time to live: the number of seconds a cache may keep a record before it has to ask again. Set by the owner of the zone.">TTL</dfn>, its time to live: the number of seconds anyone may keep a copy before asking again. The zone's owner sets it. Here is one name at one resolver over six hours. Each tick is a lookup by one of its users; set how often people ask and how long the answer may be kept:</p>
+
+<figure class="demo" id="ttl" aria-label="Six hours of lookups for one name at one resolver. Green ticks are misses that fetch a fresh copy, shown as a blue bar one TTL long; blue ticks are answered from that copy."></figure>
+<script>
+{
+  const HOURS = 6;
+  const GAPS = (() => { const r = Num.rng(11); return Array.from({ length: 3000 }, () => -Math.log(1 - r())); })();
+  const lam = v => 10 ** v.lr, ttl = v => 10 ** v.lt;
+  function run(v) {
+    const L = lam(v), T = ttl(v) / 3600, ev = [], copies = [];
+    let t = 0, exp = -1;
+    for (const u of GAPS) {
+      t += u / L;
+      if (t > HOURS) break;
+      const hit = t < exp;
+      if (!hit) { exp = t + T; copies.push([t, exp]); }
+      ev.push([t, hit]);
+    }
+    return { ev, copies };
+  }
+  demo("ttl", {
+    aspect: w => (w < 560 ? 1.1 : 2.4),
+    caption: "One name's lookups at one resolver. A miss fetches the record and starts a copy that lasts exactly one TTL; lookups during the copy are answered from it.",
+    controls: [
+      { key: "lr", label: "Lookups", min: 0, max: 2.3, step: 0.01, value: 1, color: "green", format: x => `${Math.round(10 ** x)} an hour` },
+      { key: "lt", label: "TTL", min: Math.log10(60), max: Math.log10(21600), step: 0.001, value: Math.log10(3600), color: "blue", format: x => DNS.dur(10 ** x),
+        marks: [60, 300, 3600, 21600].map(t => ({ value: Math.log10(t), label: DNS.dur(t) })) },
+    ],
+    status(s, v) { const { ev } = run(v), h = ev.filter(e => e[1]).length; return `${ev.length} lookups, ${ev.length - h} sent on, ${Math.round((100 * h) / Math.max(1, ev.length))}% from the cache`; },
+    draw(g, s, v) {
+      const { ev, copies } = run(v), narrow = g.w < 560;
+      const x0 = 14, x1 = g.w - 14, X = t => x0 + (t / HOURS) * (x1 - x0);
+      const yBar = g.h * 0.3, barH = Math.min(30, g.h * 0.16), yTick = g.h * 0.62, axisY = g.h - 22;
+      g.text("copy in the resolver's cache", [x0, yBar - barH / 2 - 12], { size: 12, align: "left", color: "blue", weight: 600 });
+      for (const [a, b] of copies) g.rect(X(a), yBar - barH / 2, Math.max(1.5, X(Math.min(b, HOURS)) - X(a)), barH, { fill: g.rgba("blue", 0.16), stroke: "blue", width: 1.2, r: 3 });
+      g.text("lookups", [x0, yTick - 30], { size: 12, align: "left", color: "muted", weight: 600 });
+      for (const [t, hit] of ev) {
+        const x = X(t);
+        if (hit) g.line([x, yTick - 9], [x, yTick + 9], { stroke: "blue", width: 1.2, alpha: 0.75 });
+        else {
+          g.line([x, yTick - 16], [x, yTick + 16], { stroke: "green", width: 2.2 });
+          g.line([x, yTick - 16], [x, yBar + barH / 2], { stroke: "green", width: 1, dash: [2, 3], alpha: 0.6 });
+        }
+      }
+      g.line([x0, axisY], [x1, axisY], { stroke: "muted", width: 1 });
+      for (let h = 0; h <= HOURS; h++) {
+        g.line([X(h), axisY], [X(h), axisY + 4], { stroke: "muted", width: 1 });
+        g.text(h === 0 ? "0" : `${h} h`, [X(h), axisY + 13], { size: 11, color: "muted" });
+      }
+      if (!narrow) g.text("green: a miss, asked example.com's server · blue: answered from the copy", [x1, yTick + 32], { size: 11, color: "muted", align: "right" });
+    },
+  });
+}
+</script>
+
+<p>A <span class="c-green">green tick</span> is a miss: the cache was empty or expired, so the resolver asked example.com's server and started a fresh copy, the <span class="c-blue">blue bar</span>, which lasts exactly one TTL. Every lookup inside the bar is answered from it. The TTL counts down while the copy sits there, so a user who asks 20 minutes into a one-hour copy is told it has 40 minutes left, and their own computer's copy runs out at the same moment as the resolver's. Compare <button class="set" data-set="lr=0.3 lt=2.477">a rare name with a five-minute TTL</button>, which misses almost every time, with <button class="set" data-set="lr=2.3 lt=2.477">a popular one with the same TTL</button>.</p>
+
+<p>So how well caching works depends on both numbers together. Before looking, a guess:</p>
+
+<div class="quiz">
+  <p>A resolver's users look up a name 1,000 times an hour, and the name's TTL is only 60 seconds. What share of those lookups does the resolver answer from its cache?</p>
+  <div class="choices"><button>Under 10%</button><button>About half</button><button data-correct>Over 90%</button></div>
+  <p class="why">In each 60-second copy's life about 17 more lookups arrive, all answered from the copy, so only one lookup in 18 goes to the server: 94% from the cache.</p>
+</div>
+
+<p>Here is that share against the TTL, for names of four popularities:</p>
+
+<figure class="demo" id="hitrate" aria-label="A plot of the share of lookups answered from cache against the TTL, on a log scale from 10 seconds to a day, with one curve for each of four popularities."></figure>
+<script>
+{
+  const POP = [1, 10, 100, 1000];
+  const share = (perHour, T) => { const x = (perHour / 3600) * T; return x / (1 + x); };
+  demo("hitrate", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    caption: "The share of lookups a resolver answers from its cache, for names looked up 1 to 1,000 times an hour. Popular names cache well even with short TTLs; rare names hardly cache at all.",
+    controls: [
+      { key: "pop", label: "Lookups", type: "choice", value: 1000, options: POP.map(p => ({ value: p, label: `${p.toLocaleString("en-US")} an hour` })) },
+      { key: "lt", label: "TTL", min: 1, max: Math.log10(86400), step: 0.001, value: Math.log10(60), color: "blue", format: x => DNS.dur(10 ** x),
+        marks: [10, 60, 3600, 86400].map(t => ({ value: Math.log10(t), label: DNS.dur(t) })) },
+    ],
+    status: (s, v) => `${(100 * share(v.pop, 10 ** v.lt)).toFixed(1)}% from the cache`,
+    draw(g, s, v) {
+      const T = 10 ** v.lt;
+      const P = g.graph({ x: [10, 86400], y: [0, 1], xScale: "log", axes: "frame", xLabel: "TTL", yLabel: "From the cache",
+        xTicks: { values: [10, 60, 600, 3600, 86400] }, xFormat: DNS.dur, yTicks: [0, 0.25, 0.5, 0.75, 1], yFormat: y => `${Math.round(y * 100)}%` });
+      for (const p of POP) {
+        const on = p === v.pop;
+        P.fn(t => share(p, t), { color: on ? "blue" : "muted", width: on ? 2.8 : 1.3, label: `${p.toLocaleString("en-US")}/h`, labelAt: Math.min(70000, 3600 * 8 / p) });
+      }
+      P.marker(T, share(v.pop, T), { color: "blue", drop: true, label: `${(100 * share(v.pop, T)).toFixed(0)}%`, pos: "nw" });
+    },
+  });
+}
+</script>
+
+<p>Each copy lives for one TTL, <span class="tex">\green{T}</span>, and in that time a name asked <span class="tex">\blue{\lambda}</span> times a second collects <span class="tex">\blue{\lambda}\green{T}</span> more lookups, all of them answered from the copy. Out of every <span class="tex">1 + \blue{\lambda}\green{T}</span> lookups, one goes to the server:</p>
+
+<div class="tex">\text{share from cache} = \frac{\blue{\lambda}\green{T}}{1 + \blue{\lambda}\green{T}}</div>
+
+<p>A name asked a thousand times an hour is answered from the cache 94% of the time even with a one-minute TTL. A name asked once an hour barely benefits from anything shorter than a few hours. That's why big sites can afford short TTLs, and why a short TTL costs a small site very few extra queries: its name was rarely cached anyway.</p>
+
+<p>The same arithmetic, applied to referrals, explains how a few root servers can serve the whole internet. Here is a simulated resolver handling 20,000 lookups an hour for 50,000 domains, a few very popular and most rarely asked, starting with an empty cache. Slide through its first two days:</p>
+
+<figure class="demo" id="levels" aria-label="A simulated resolver's first two days: queries per hour to root servers, top-level domain servers, and domains' own servers, on a log scale, with bars for the hour ending at the chosen time."></figure>
+<script>
+{
+  // A resolver with an empty cache, 20,000 lookups an hour, 50,000 domains with Zipf popularity
+  // under 50 top-level domains. Referrals last 2 days; answers last 1 min to 1 day.
+  const HOURS = 48, BIN = 1 / 12, NB = HOURS / BIN, RATE = 20000;
+  let SIM = null;
+  function sim() {
+    if (SIM) return SIM;
+    const r = Num.rng(7), ND = 50000, NT = 50;
+    const cdf = (n, s) => { const w = Array.from({ length: n }, (_, i) => 1 / (i + 1) ** s), tot = w.reduce((a, b) => a + b); let c = 0; return Float64Array.from(w, x => (c += x / tot)); };
+    const pick = c => { const u = r(); let lo = 0, hi = c.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (c[m] < u) lo = m + 1; else hi = m; } return lo; };
+    const tc = cdf(NT, 1.6), dc = cdf(ND, 1.0), TTLS = [60, 300, 3600, 86400], tw = Float64Array.from([0.2, 0.5, 0.9, 1]);
+    const tld = Int32Array.from({ length: ND }, () => pick(tc)), ttl = Float64Array.from({ length: ND }, () => TTLS[pick(tw)] / 3600);
+    const tExp = new Float64Array(NT).fill(-1), nExp = new Float64Array(ND).fill(-1), aExp = new Float64Array(ND).fill(-1);
+    const bins = Array.from({ length: NB }, () => [0, 0, 0, 0]);
+    let t = 0;
+    for (let i = 0; i < RATE * HOURS; i++) {
+      t += -Math.log(1 - r()) / RATE;
+      const d = pick(dc), b = bins[Math.min(NB - 1, Math.floor(t / BIN))];
+      b[0]++;
+      if (aExp[d] > t) continue;
+      b[3]++; aExp[d] = t + ttl[d];
+      if (nExp[d] > t) continue;
+      b[2]++; nExp[d] = t + 48;
+      if (tExp[tld[d]] > t) continue;
+      b[1]++; tExp[tld[d]] = t + 48;
+    }
+    return (SIM = bins);
+  }
+  // Totals over the hour ending at time h (or since the start, if that's sooner).
+  const hourTo = h => { const bins = sim(), i1 = Math.max(1, Math.round(h / BIN)), i0 = Math.max(0, i1 - 12), s = [0, 0, 0, 0];
+    for (let i = i0; i < i1; i++) for (let k = 0; k < 4; k++) s[k] += bins[i][k]; return { s, span: (i1 - i0) * BIN }; };
+  const fmt = n => Math.round(n).toLocaleString("en-US");
+  demo("levels", {
+    aspect: w => (w < 560 ? 0.8 : 2.0),
+    caption: "A simulated resolver warming up. The root hears from it only in its first hour; the top-level domains less and less as it meets fewer new domains; most remaining work goes to the domains' own servers.",
+    controls: [{ key: "h", label: "Hours since start", min: 0.25, max: 48, step: 0.25, value: 1, color: "blue", format: h => (h < 1 ? `${Math.round(h * 60)} min` : `${h} h`),
+      marks: [{ value: 1, label: "1 h" }, { value: 12, label: "12 h" }, { value: 24, label: "1 day" }, { value: 48, label: "2 days" }] }],
+    status(s, v) { const { s: q } = hourTo(v.h); return `${Math.round(100 * (1 - q[3] / q[0]))}% answered from the cache`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, bins = sim();
+      const pb = narrow ? [0, 0, g.w, g.h * 0.56] : [0, 0, g.w * 0.6, g.h], bb = narrow ? [4, g.h * 0.62, g.w - 8, g.h * 0.36] : [g.w * 0.63, 22, g.w * 0.37 - 4, g.h - 40];
+      const P = g.graph({ box: pb, x: [0, 48], y: [1, 50000], yScale: "log", axes: "frame", xLabel: "Hours since start", yLabel: "Per hour",
+        xTicks: { values: [0, 12, 24, 36, 48] }, yFormat: y => fmt(y) });
+      const series = (k, color) => {
+        const pts = [];
+        for (let i = 0; i < NB; i++) { const n = bins[i][k] / BIN; pts.push([(i + 0.5) * BIN, Math.max(1, n)]); }
+        P.polyline(pts, { color, width: 2 });
+      };
+      series(0, "ink"); series(3, "green"); series(2, "orange"); series(1, "purple");
+      P.label("lookups", [40, 20000], { color: "ink", dy: -10 });
+      P.vline(v.h, { color: "blue" });
+      const { s: q, span } = hourTo(v.h);
+      g.text(span < 1 ? `the first ${Math.round(span * 60)} minutes` : `the hour up to ${v.h < 1 ? Math.round(v.h * 60) + " min" : v.h + " h"}`, [bb[0], bb[1] - 8], { size: 12, weight: 600, align: "left", color: "blue" });
+      g.bars([q[0], q[3], q[2], q[1]], { box: bb, horizontal: true, labels: ["lookups", "to domains' servers", "to TLD servers", "to root servers"],
+        colors: ["ink", "green", "orange", "purple"], values: true, format: fmt, range: [0, q[0] * 1.05] });
+    },
+  });
+}
+</script>
+
+<p>In its first minutes the resolver asks the <span class="c-purple">root</span> about every top-level domain it meets, 50 here, and then never again, because those referrals last two days. The <span class="c-orange">TLD servers</span> hear from it whenever a domain turns up that it hasn't met, which keeps happening for a day or so in the long tail of rarely visited names. Most of the remaining work lands on the <span class="c-green">domains' own servers</span>, and about two lookups in three never leave the resolver. The mix of names is made up, but the shape matches what real resolvers see: the higher a server sits in the tree, the less it hears from any one resolver<span class="sidenote">Real root servers still answer billions of queries a day, mostly for names that don't exist. In 2020 Verisign found that close to half of them came from one browser feature: Chromium testing random made-up names to detect networks that rewrite failed lookups <a class="cite" href="#ref-chromium"></a>.</span>.</p>
+
+<h2>Changing an address</h2>
+
+<p>Caching bites when a record changes. Suppose I move example.com to a new machine and change its A record to 203.0.113.99. Its own server gives the new address at once, but every resolver holding the old one keeps handing that out until its copy expires. People call the wait <em>propagation</em>, as if the change spread outward across the world. Guess first:</p>
+
+<div class="quiz">
+  <p>The old record's TTL is one hour. Which resolvers start giving out the new address first?</p>
+  <div class="choices"><button>The ones nearest example.com's server</button><button>The big public resolvers</button><button data-correct>Whichever ones' copies happen to run out first</button></div>
+  <p class="why">Nothing is pushed out from the server. Each resolver asks again only when its own copy expires, and copies were fetched at scattered moments, so the switches come in random places at a steady rate.</p>
+</div>
+
+<p>Here are 60 resolvers around the world, each holding the old address with a one-hour TTL, fetched at some moment in the hour before the change. Slide the time since the change:</p>
+
+<figure class="demo wide" id="propagate" aria-label="A world map with 60 resolvers as dots. Gray dots still give out the old address; green dots have fetched the new one. A bar shows the share that has switched."></figure>
+<script>
+{
+  const SERVER = DNS.CITY.Frankfurt, TTL = 60;   // minutes
+  const RES = (() => {
+    const r = Num.rng(21), names = Object.keys(DNS.CITY);
+    return names.slice(0, 60).map(n => ({ n, at: DNS.CITY[n], left: r() * TTL }));   // minutes left on each copy at the change
+  })();
+  demo("propagate", {
+    aspect: w => (w < 560 ? 1.25 : 2.2),
+    caption: "Resolvers switching to a changed address. Each switches when its own copy expires, at a random moment within one TTL of the change, wherever it is.",
+    controls: [{ key: "m", label: "Since the change", min: 0, max: 70, step: 0.5, value: 20, color: "green", format: m => `${m} min`,
+      marks: [{ value: 0, label: "change" }, { value: 60, label: "1 TTL" }] }],
+    status(s, v) { const k = RES.filter(x => x.left <= v.m).length; return `${k} of ${RES.length} resolvers give the new address`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, mapH = g.h - (narrow ? 44 : 40);
+      const M = g.map({ box: [0, 0, g.w, mapH], projection: "equalEarth", graticule: false, borders: false });
+      M.marker(SERVER, { color: "green", r: 5, label: "example.com's server", side: "n" });
+      for (const x of RES) {
+        const p = M.project(x.at);
+        if (!p) continue;
+        const now = x.left <= v.m, fresh = now && v.m - x.left < 3;
+        if (fresh) g.circle(p, 9, { stroke: "green", width: 1.5, alpha: 0.6 });
+        g.circle(p, narrow ? 3.6 : 4.5, { fill: now ? "green" : "muted", stroke: "panel", width: 1 });
+      }
+      // The share switched so far.
+      const k = RES.filter(x => x.left <= v.m).length, y = g.h - (narrow ? 22 : 18), x0 = narrow ? 8 : g.w * 0.2, x1 = narrow ? g.w - 8 : g.w * 0.8;
+      g.rect(x0, y - 6, x1 - x0, 12, { fill: g.rgba("muted", 0.2), r: 6 });
+      g.rect(x0, y - 6, Math.max(0, (x1 - x0) * (k / RES.length)), 12, { fill: "green", r: 6 });
+      g.text(`${Math.round((100 * k) / RES.length)}% switched`, [x0, y - 15], { size: 11.5, align: "left", color: "green", weight: 600 });
+      g.text("gray: old address · green: new", [x1, y - 15], { size: 11, align: "right", color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>There's no wave. Each resolver switches the moment its own copy runs out, and because the copies were fetched at scattered times, the <span class="c-green">green dots</span> appear in random places at a steady rate until, <button class="set" data-set="m=60">an hour after the change</button>, all of them have the new address. Distance from the server plays no part. Propagation is old copies expiring, and its limit is the TTL in force <em>before</em> the change. Lowering the TTL at the same moment as changing the address doesn't help, because the old copies still carry the old TTL<span class="sidenote">Some resolvers also impose their own minimum or maximum on TTLs, and some apps keep addresses longer than they should, which is where stories of changes taking days come from.</span>.</p>
+
+<p>The fix is to lower the TTL well before the change. Say example.com's address normally has a TTL of one day. Ahead of the move, I drop it to five minutes; later, I change the address. Each row below is one resolver's copies over time, gray for the old address and green for the new, with the share still on the old address plotted beneath. Slide how far ahead the TTL was lowered:</p>
+
+<figure class="demo" id="migrate" aria-label="Rows of cached copies for twelve resolvers over 58 hours, long one-day copies until the TTL is lowered and dense five-minute copies after, above a plot of the share of resolvers still giving the old address."></figure>
+<script>
+{
+  const N = 400, LONG = 24, SHORT = 5 / 60, X0 = -32, X1 = 26;   // hours
+  const PH = (() => { const r = Num.rng(5); return Array.from({ length: N }, () => r()); })();
+  const memo = new Map();
+  // Each resolver refetches as soon as its copy expires (a popular name). A copy fetched after the
+  // TTL was lowered lasts 5 minutes; before, a day. It gets the new address on its first fetch after 0.
+  function run(L) {
+    if (memo.has(L)) return memo.get(L);
+    const res = PH.map(u => {
+      const copies = [];
+      let f = -80 - u * LONG;
+      while (f < X1) { const ttl = f >= -L ? SHORT : LONG; if (f + ttl > X0) copies.push([f, f + ttl]); f += ttl; }
+      const sw = copies.find(c => c[0] >= 0)?.[0] ?? X1;
+      return { copies, sw };
+    });
+    const out = { res, sw: res.map(r => r.sw).sort((a, b) => a - b) };
+    memo.set(L, out);
+    return out;
+  }
+  const oldAt = (o, t) => (t < 0 ? 1 : o.sw.filter(x => x > t).length / N);
+  demo("migrate", {
+    aspect: w => (w < 560 ? 0.75 : 1.55),
+    caption: "Lowering a TTL ahead of a change. Old long-lived copies have to expire before the change for everyone to switch quickly; a TTL lowered a full old TTL ahead means every resolver switches within five minutes.",
+    controls: [{ key: "L", label: "TTL lowered", min: 0, max: 30, step: 0.5, value: 12, color: "blue", format: L => (L ? `${L} h before` : "at the change"),
+      marks: [{ value: 0, label: "at the change" }, { value: 24, label: "1 day before" }] }],
+    status(s, v) { const o = run(v.L), last = o.sw[N - 1]; return last < 0.2 ? "everyone switched within 5 minutes" : `last resolver switched ${last.toFixed(1)} h after the change`; },
+    draw(g, s, v) {
+      const o = run(v.L), narrow = g.w < 560;
+      const rowsH = g.h * 0.42, pad = narrow ? 6 : 50;
+      const X = t => pad + ((t - X0) / (X1 - X0)) * (g.w - pad - 8);
+      const ROWS = 12, rh = (rowsH - 26) / ROWS;
+      for (let i = 0; i < ROWS; i++) {
+        const y = 22 + i * rh;
+        for (const [a, b] of o.res[i].copies) {
+          const x = X(Math.max(a, X0)), w = X(Math.min(b, X1)) - x;
+          g.rect(x, y, Math.max(0.6, w - (b - a > 1 ? 1.5 : 0)), rh - 2, { fill: a >= 0 ? g.rgba("green", 0.55) : g.rgba("muted", b - a > 1 ? 0.3 : 0.55), r: b - a > 1 ? 2 : 0 });
+        }
+      }
+      const ev = (t, text, c, row) => {
+        g.line([X(t), 14], [X(t), rowsH + 4], { stroke: c, width: 1.5, dash: [4, 3] });
+        g.text(text, [X(t) + (row ? 4 : -4), 8], { size: 11, color: c, weight: 600, align: row ? "left" : "right" });
+      };
+      ev(-v.L, "TTL lowered to 5 min", "blue", v.L < 6);
+      ev(0, "address changed", "green", true);
+      const P = g.graph({ box: [0, rowsH + 8, g.w, g.h - rowsH - 8], x: [X0, X1], y: [0, 1], axes: "frame", xLabel: "Hours from the change", yLabel: "On old address",
+        xTicks: { values: [-24, -12, 0, 12, 24] }, yTicks: [0, 0.5, 1], yFormat: y => `${Math.round(y * 100)}%` });
+      const pts = [];
+      for (let t = X0; t <= X1; t += 0.05) pts.push([t, oldAt(o, t)]);
+      P.polyline(pts, { color: "ink", width: 2.2 });
+      P.vline(0, { color: "green" });
+      P.vline(-v.L, { color: "blue" });
+    },
+  });
+}
+</script>
+
+<p>Lowered <button class="set" data-set="L=0">at the change</button>, it does nothing: copies with up to a day left keep the old address for up to a day. Lowered 12 hours ahead, about half the resolvers have already swapped their long copy for short ones and switch within minutes, while the rest drag on for up to 12 more hours. Lowered <button class="set" data-set="L=24">a full day ahead</button>, every long copy has expired before the change, and everyone switches within five minutes. Afterwards the TTL can go back up. The price of the short TTL is a few hours of extra queries to example.com's servers, which the caching formula puts in numbers.</p>
+<!-- explainer:article:end -->
+</article>
+</main>
+</div>
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+</body>
+</html>

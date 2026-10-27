@@ -1,0 +1,1481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Spinning Circles Draw Anything</title>
+<meta name="description" content="How any repeating wave, and even any closed drawing, can be built from circles turning at whole-number speeds, and how to find out which circles a shape needs.">
+<meta name="explainer:category" content="Math">
+<!-- explainer:runtime:start v3 shared -->
+<link rel="stylesheet" href="../safis.css?v=1ad508e56c">
+<script src="../safis.js?v=282c01de29"></script>
+<!-- explainer:runtime:end -->
+</head>
+<body>
+<div class="page has-toc">
+<nav class="toc" aria-label="All explainers"><!-- explainer:nav:start --><a class="site" href="../index.html">Safis</a><h2>Body</h2><ul><li><a href="../jaw-joint/index.html">The Jaw Joint</a></li></ul><h2>Biology</h2><ul><li><a href="../protein/index.html">How a Cell Builds a Protein</a></li><li><a href="../neuron/index.html">How a Neuron Fires</a></li></ul><h2>Chemistry</h2><ul><li><a href="../battery/index.html">The Lithium-Ion Battery</a></li><li><a href="../ice/index.html">Why Ice Floats</a></li></ul><h2>Physics</h2><ul><li><a href="../pendulum/index.html">How a Pendulum Keeps Time</a></li></ul><h2>Machines</h2><ul><li><a href="../lock/index.html">How a Pin Tumbler Lock Knows Your Key</a></li></ul><h2>Earth &amp; Space</h2><ul><li><a href="../tides/index.html">Why There Are Two Tides a Day</a></li></ul><h2>Computing</h2><ul><li><a href="../cdn/index.html">How a CDN Makes a Faraway Site Fast</a></li><li><a href="../hash-table/index.html">How a Hash Table Finds Things</a></li><li><a href="../dns/index.html">How DNS Turns a Name into an Address</a></li></ul><h2>AI</h2><ul><li><a href="../next-word/index.html">How a Language Model Picks the Next Word</a></li><li><a href="../learning/index.html">How a Neural Network Learns</a></li><li><a href="../attention/index.html">How Attention Works</a></li></ul><h2>Math</h2><ul><li><a href="../matrix/index.html">How a Matrix Transforms Space</a></li><li><a href="../fourier/index.html" aria-current="page">How Spinning Circles Draw Anything</a></li></ul><!-- explainer:nav:end --></nav>
+<main>
+<!-- explainer:back:start --><a class="backlink" href="../index.html">← Safis</a><!-- explainer:back:end -->
+<header>
+  <p class="kicker">Math</p>
+  <h1>How Spinning Circles Draw Anything</h1>
+  <p class="dek">How any repeating wave, and even any closed drawing, can be built from circles turning at whole-number speeds, and how to find out which circles a shape needs.</p>
+</header>
+<article>
+<!-- explainer:article:start -->
+<script>
+  // Shared by every figure below. Waves repeat every 2π: time t is the angle a speed-1 circle
+  // has turned, so a circle of speed n turns n times while t runs once from 0 to 2π.
+  window.FS = (() => {
+    const PI = Math.PI;
+    const wrap = t => ((t % TAU) + TAU) % TAU;
+
+    // ---- Repeating signals, one turn long --------------------------------------------------------
+    const SIG = {
+      square: t => (wrap(t) < PI ? 1 : -1),
+      saw: t => 1 - wrap(t) / PI,                                    // falls steadily, then jumps back up
+      triangle: t => { const u = wrap(t) / TAU; return u < 0.25 ? 4 * u : u < 0.75 ? 2 - 4 * u : 4 * u - 4; },
+      pulse: t => (wrap(t) < PI / 3 ? 1 : 0),                         // on for a sixth of each turn
+      sine: t => Math.sin(t),
+    };
+    // A square wave whose jumps are ramps of width w (w = 0 is the sharp square, w = π a triangle).
+    const ramped = w => t => {
+      const u = wrap(t + w / 2);
+      if (w <= 0) return u - w / 2 < PI ? 1 : -1;
+      return u < w ? -1 + 2 * u / w : u < PI ? 1 : u < PI + w ? 1 - 2 * (u - PI) / w : -1;
+    };
+
+    // How much of each whole-number speed a signal holds, found by multiplying and averaging:
+    // a[n] = 2·average of f(t)·cos(nt), b[n] = 2·average of f(t)·sin(nt), a[0] = the plain average.
+    // The averages are taken over M evenly spaced moments of one turn (the midpoint rule).
+    const cache = new Map();
+    function series(f, nMax = 40, M = 8192, key) {
+      if (key && cache.has(key)) return cache.get(key);
+      const a = new Float64Array(nMax + 1), b = new Float64Array(nMax + 1);
+      for (let j = 0; j < M; j++) {
+        const t = (j + 0.5) * TAU / M, y = f(t);
+        if (!y) continue;
+        for (let n = 0; n <= nMax; n++) { a[n] += y * Math.cos(n * t); b[n] += y * Math.sin(n * t); }
+      }
+      for (let n = 0; n <= nMax; n++) { a[n] *= (n ? 2 : 1) / M; b[n] *= 2 / M; }
+      const out = {
+        a: [...a], b: [...b], nMax,
+        amp: n => (n ? Math.hypot(a[n], b[n]) : Math.abs(a[0])),
+        // The rebuilt wave from speeds 0..N.
+        at(t, N = nMax) { let s = a[0]; for (let n = 1; n <= N; n++) s += a[n] * Math.cos(n * t) + b[n] * Math.sin(n * t); return s; },
+      };
+      if (key) cache.set(key, out);
+      return out;
+    }
+
+    // The square wave's recipe (derived on the page): odd speeds 1, 3, 5, ... with sizes 4/(πn).
+    const sqAmp = n => (n % 2 ? 4 / (PI * n) : 0);
+    // Partial sum with the first `terms` odd waves.
+    function squareSum(t, terms) {
+      let s = 0;
+      for (let k = 0; k < terms; k++) { const n = 2 * k + 1; s += Math.sin(n * t) / n; }
+      return (4 / PI) * s;
+    }
+    // Highest point of a partial sum of n waves just after the jump at t = 0 (its first peak, at t = π/2n).
+    function squarePeak(terms) {
+      const lo = 0, hi = Math.min(PI / 2, (1.6 * PI) / (2 * terms));
+      let best = { t: 0, y: -9 };
+      for (let i = 1; i <= 400; i++) { const t = lo + (hi - lo) * i / 400, y = squareSum(t, terms); if (y > best.y) best = { t, y }; }
+      return best;
+    }
+
+    // ---- Closed drawings ------------------------------------------------------------------------
+    // Points evenly spaced by distance along a closed outline.
+    function resample(pts, N) {
+      const L = [0];
+      for (let i = 1; i <= pts.length; i++) { const p = pts[i - 1], q = pts[i % pts.length]; L.push(L[i - 1] + Math.hypot(q[0] - p[0], q[1] - p[1])); }
+      const total = L[L.length - 1], out = [];
+      let j = 0;
+      for (let i = 0; i < N; i++) {
+        const d = (i * total) / N;
+        while (L[j + 1] < d) j++;
+        const p = pts[j % pts.length], q = pts[(j + 1) % pts.length], u = (d - L[j]) / (L[j + 1] - L[j] || 1);
+        out.push([p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u]);
+      }
+      return out;
+    }
+    // Every circle a drawing needs: for each speed k (−N/2 < k ≤ N/2), the average of the drawing's
+    // points after unspinning them at speed k. Returns [{ k, re, im, r }], speed 0 (the center) first.
+    function circles(pts) {
+      const N = pts.length, out = [];
+      for (let k = -N / 2 + 1; k <= N / 2; k++) {
+        let re = 0, im = 0;
+        for (let j = 0; j < N; j++) {
+          const a = (-k * TAU * j) / N, c = Math.cos(a), s = Math.sin(a);
+          re += pts[j][0] * c - pts[j][1] * s;
+          im += pts[j][0] * s + pts[j][1] * c;
+        }
+        out.push({ k, re: re / N, im: im / N, r: Math.hypot(re, im) / N });
+      }
+      const center = out.find(c => c.k === 0);
+      return [center, ...out.filter(c => c.k !== 0).sort((a, b) => b.r - a.r)];
+    }
+    // Where a chain of circles puts each joint at time t; the last point is the pen.
+    function joints(terms, t) {
+      let x = 0, y = 0;
+      const pts = [[0, 0]];
+      for (const c of terms) {
+        const a = c.k * t, ca = Math.cos(a), sa = Math.sin(a);
+        x += c.re * ca - c.im * sa;
+        y += c.re * sa + c.im * ca;
+        pts.push([x, y]);
+      }
+      return pts;
+    }
+    const pen = (terms, t) => { const p = joints(terms, t); return p[p.length - 1]; };
+    // The whole path the pen draws in one turn.
+    const trace = (terms, n = 600) => Array.from({ length: n + 1 }, (_, i) => pen(terms, (i * TAU) / n));
+
+    // Draw a chain: each circle thin and neutral, each arm darker, the pen as a dot.
+    // o.first: index of the first term to draw a circle for (the center term has none).
+    function drawChain(g, P, terms, t, o = {}) {
+      const pts = joints(terms, t), sc = P.sx ?? 1;
+      for (let i = o.first ?? 0; i < terms.length; i++) {
+        const c = pts[i], r = Math.hypot(terms[i].re, terms[i].im) * sc;
+        if (r < 0.6) continue;
+        const hot = o.hot === i;
+        g.circle(P(c), r, { stroke: hot ? "orange" : "muted", width: hot ? 1.8 : 1, alpha: hot ? 0.95 : Math.max(0.18, 0.55 - i * 0.012) });
+        g.line(P(c), P(pts[i + 1]), { stroke: hot ? "orange" : "ink", width: hot ? 2.2 : i < 6 ? 1.5 : 1, alpha: hot ? 1 : 0.75 });
+      }
+      const tip = P(pts[pts.length - 1]);
+      g.circle(tip, o.r ?? 4.5, { fill: o.color ?? "blue" });
+      return pts;
+    }
+
+    // Shapes, roughly inside a 2 × 2 box, each a single closed outline.
+    function bez(p0, p1, p2, p3, n = 24) {
+      const out = [];
+      for (let i = 0; i <= n; i++) {
+        const u = i / n, v = 1 - u;
+        out.push([0, 1].map(d => v * v * v * p0[d] + 3 * v * v * u * p1[d] + 3 * v * u * u * p2[d] + u * u * u * p3[d]));
+      }
+      return out;
+    }
+    function noteShape() {
+      // An eighth note: a tilted oval head, a stem rising from its right side, and a flag.
+      const H = [-0.3, -0.6], rx = 0.34, ry = 0.235, rot = 0.42, cr = Math.cos(rot), sr = Math.sin(rot);
+      const E = f => [H[0] + rx * Math.cos(f) * cr - ry * Math.sin(f) * sr, H[1] + rx * Math.cos(f) * sr + ry * Math.sin(f) * cr];
+      // The rightmost point of the head, then the arc over the top, where x falls steadily.
+      let fMax = 0, xMax = -9;
+      for (let i = 0; i < 720; i++) { const f = (i / 720) * TAU, x = E(f)[0]; if (x > xMax) { xMax = x; fMax = f; } }
+      const findX = x => { let a = fMax, b = fMax + PI; for (let i = 0; i < 50; i++) { const m = (a + b) / 2; if (E(m)[0] > x) a = m; else b = m; } return (a + b) / 2; };
+      const xr = xMax - 0.012, xl = xr - 0.12, top = 0.98;
+      const fR = findX(xr), fL = findX(xl), out = [];
+      const yR = E(fR)[1], yL = E(fL)[1];
+      for (let i = 0; i <= 12; i++) out.push([xr, yR + (0.5 - yR) * (i / 12)]);
+      out.push(...bez([xr, 0.5], [xr + 0.18, 0.42], [xr + 0.47, 0.25], [xr + 0.3, -0.18]).slice(1));
+      out.push(...bez([xr + 0.3, -0.18], [xr + 0.62, 0.22], [xr + 0.2, 0.55], [xr, top]).slice(1));
+      for (let i = 0; i <= 4; i++) out.push([xr + (xl - xr) * (i / 4), top]);
+      for (let i = 1; i <= 12; i++) out.push([xl, top + (yL - top) * (i / 12)]);
+      const span = fR + TAU - fL;
+      for (let i = 1; i < 60; i++) out.push(E(fL + (span * i) / 60));
+      return out;
+    }
+    function fishShape() {
+      const out = [];
+      for (let i = 0; i <= 40; i++) { const s = (i / 40) * PI; out.push([0.25 + 0.68 * Math.cos(s), 0.42 * Math.sin(s) * (1 - 0.25 * Math.cos(s))]); }
+      out.push([-0.95, 0.46], [-0.78, 0.0], [-0.95, -0.46]);
+      for (let i = 0; i <= 40; i++) { const s = PI + (i / 40) * PI; out.push([0.25 + 0.68 * Math.cos(s), 0.42 * Math.sin(s) * (1 - 0.25 * Math.cos(s))]); }
+      return out;
+    }
+    function starShape() {
+      const out = [];
+      for (let i = 0; i < 10; i++) { const a = PI / 2 + (i * PI) / 5, r = i % 2 ? 0.42 : 1; out.push([r * Math.cos(a), r * Math.sin(a) - 0.05]); }
+      return out;
+    }
+    const squareShape = () => [[0.8, 0.8], [-0.8, 0.8], [-0.8, -0.8], [0.8, -0.8]];
+
+    const N = 512;
+    const shapes = {};
+    function shape(name, pts) {
+      if (pts) return { pts: resample(pts, N), circles: circles(resample(pts, N)) };
+      if (!shapes[name]) {
+        const raw = { note: noteShape, fish: fishShape, star: starShape, square: squareShape }[name]();
+        const p = resample(raw, N);
+        shapes[name] = { pts: p, circles: circles(p) };
+      }
+      return shapes[name];
+    }
+
+    // ---- Small drawing helpers -------------------------------------------------------------------
+    // A wave as a polyline sampled n times across [a, b] on a graph P.
+    const curve = (P, f, a, b, o = {}, n = 600) => P.polyline(Array.from({ length: n + 1 }, (_, i) => { const x = a + ((b - a) * i) / n; return [x, f(x)]; }), o);
+    // Numbers as the page prints them: a real minus sign, never "−0.00".
+    const fmt = (x, d = 2) => { const r = Math.abs(x) < 0.5 * 10 ** -d ? 0 : x; return (r < 0 ? "−" : "") + Math.abs(r).toFixed(d); };
+
+    return { PI, wrap, SIG, ramped, series, sqAmp, squareSum, squarePeak, resample, circles, joints, pen, trace, drawChain, shape, curve, fmt, N };
+  })();
+</script>
+
+<div class="abstract">
+  <ul>
+    <li>A dot going round a circle traces a sine wave with its height. The circle's size, speed, and starting angle are the wave's amplitude, frequency, and phase.</li>
+    <li>Stack circles on circles and the heights add. With whole-number speeds the result repeats every turn, and enough circles can match any repeating wave, even a square one, except for a 9% overshoot at each jump that never goes away.</li>
+    <li>To find how much of each speed a wave holds, multiply it by a test wave of that speed and average. Every other speed averages to zero.</li>
+    <li>Let the circles turn both ways and the pen can draw any closed shape in the plane. Most shapes need only their few biggest circles, which is the idea behind compressing sound and pictures.</li>
+  </ul>
+</div>
+
+<script>
+  // Circles on the left, the pen's height over time on the right, joined by a dashed line at the
+  // pen's height. Both halves share one vertical scale, so the dashed line is always level.
+  // terms: [{ k, r, ph, color }] (speed, radius, starting angle); heights of the chain add.
+  window.CW = (() => {
+    function layout(g, o = {}) {
+      const yr = o.yr ?? 1.3, span = o.span ?? 2 * TAU;
+      const cw = Math.min(g.w * 0.36, g.h * 1.05);
+      const W = g.graph({ box: [cw, 0, g.w - cw, g.h], x: [0, span], y: [-yr, yr], xTicks: "pi", yTicks: o.yTicks ?? [-1, 1], xLabel: "t", grid: false });
+      const sc = Math.abs(W.sy), cx = cw / 2 + 4;
+      const C = p => [cx + p[0] * sc, W.ypx(p[1])];
+      C.sx = sc;
+      C.inv = q => [(q[0] - cx) / sc, (W.ypx(0) - q[1]) / sc];
+      return { W, C, span, cw };
+    }
+    // Joint positions of the chain at time t (circle centers, then the pen).
+    function chain(terms, t) {
+      let x = 0, y = 0;
+      const pts = [[0, 0]];
+      for (const c of terms) { const a = c.k * t + (c.ph ?? 0); x += c.r * Math.cos(a); y += c.r * Math.sin(a); pts.push([x, y]); }
+      return pts;
+    }
+    const height = (terms, t) => terms.reduce((s, c) => s + c.r * Math.sin(c.k * t + (c.ph ?? 0)), 0);
+    function draw(g, terms, t, o = {}) {
+      const L = layout(g, o), { W, C, span } = L, tt = ((t % span) + span) % span;
+      // The ghost: a reference wave, dashed.
+      if (o.ghost) FS.curve(W, o.ghost, 0, span, { color: "muted", width: 1.5, dash: [5, 4] });
+      // Each circle's own wave, thin, when asked.
+      if (o.parts) terms.forEach(c => c.color && FS.curve(W, x => c.r * Math.sin(c.k * x + (c.ph ?? 0)), 0, span, { color: c.color, width: 1.5, alpha: 0.75 }));
+      const f = x => height(terms, x);
+      FS.curve(W, f, 0, span, { color: "blue", width: 1.5, alpha: 0.25 });
+      FS.curve(W, f, 0, tt, { color: "blue", width: 2.5 }, Math.max(2, Math.round(600 * tt / span)));
+      // The circles.
+      const pts = chain(terms, t);
+      g.line(C([-(o.yr ?? 1.3) * 0.98, 0]), C([(o.yr ?? 1.3) * 0.98, 0]), { stroke: "faint", width: 1 });
+      terms.forEach((c, i) => {
+        const col = c.color ?? "muted";
+        g.circle(C(pts[i]), c.r * C.sx, { stroke: col, width: c.color ? 1.6 : 1.2, alpha: c.color ? 0.9 : 0.7 });
+        g.line(C(pts[i]), C(pts[i + 1]), { stroke: c.arm ?? c.color ?? "ink", width: 2 });
+        g.circle(C(pts[i]), 2.5, { fill: "ink" });
+      });
+      const pen = C(pts[pts.length - 1]), mark = W([tt, f(t)]);
+      g.line(pen, mark, { stroke: "blue", width: 1, dash: [3, 4], alpha: 0.7 });
+      g.circle(mark, 4, { fill: "blue" });
+      if (o.handle) g.handle(pen, { color: "blue", active: o.active });
+      else g.circle(pen, 5, { fill: "blue" });
+      return { ...L, pen, pts };
+    }
+    return { layout, chain, height, draw };
+  })();
+</script>
+
+<p class="lede">Pluck a guitar string and hum the same note, and you hear two different sounds with the same pitch. Draw a cat on a napkin, and you have a shape no formula seems to describe. Both, it turns out, can be built out of the simplest motion there is: a point going round a circle at a steady speed. Put a circle on the rim of a circle, another on the rim of that, and so on, give each one a whole-number speed, and the last point can trace any wave that repeats and any closed drawing.</p>
+
+<p>Here is an eighth note drawn that way. The pen is the blue dot at the end of a chain of turning circles, and the slider sets how many circles the chain has. Slide it down to a handful and watch the note melt, then back up:</p>
+
+<figure class="demo wide" id="hero" aria-label="A chain of turning circles whose last point draws an eighth note. A slider sets how many circles the chain keeps; with few circles the drawing is a rounded blob, with many it is a sharp note."></figure>
+<script>
+{
+  const S = FS.shape("note"), paths = new Map();
+  const path = K => { if (!paths.has(K)) paths.set(K, FS.trace(S.circles.slice(0, K + 1), 900)); return paths.get(K); };
+  demo("hero", {
+    aspect: w => (w < 560 ? 0.95 : 1.6),
+    caption: "An eighth note drawn by the last of a chain of circles, each turning at a whole-number speed. The faint line is the whole path for this many circles; the dashed outline is the drawing they are copying.",
+    state: () => ({ t: 4.4 }),
+    controls: [{ key: "K", label: "Circles", min: 1, max: 120, step: 1, value: 40, color: "blue", marks: [{ value: 1 }, { value: 10 }, { value: 40 }, { value: 120 }] }],
+    step(dt, s) { s.t = (s.t + dt * TAU / 14) % TAU; },
+    status: (s, v) => `${v.K} circle${v.K === 1 ? "" : "s"}, the fastest turning ${Math.max(...S.circles.slice(1, v.K + 1).map(c => Math.abs(c.k)))} times a lap`,
+    draw(g, s, v) {
+      const P = g.fit(-1.25, 1.25, -1.15, 1.15, { pad: 12 });
+      g.path(S.pts.map(P), { close: true, stroke: "muted", width: 1, dash: [4, 4], alpha: 0.7 });
+      const full = path(v.K), n = Math.round((full.length - 1) * s.t / TAU);
+      g.path(full.map(P), { stroke: "blue", width: 1.5, alpha: 0.22 });
+      g.path(full.slice(0, n + 1).map(P), { stroke: "blue", width: 2.5 });
+      FS.drawChain(g, P, S.circles.slice(0, v.K + 1), s.t, { first: 1 });
+    },
+  });
+}
+</script>
+
+<p>With one circle the pen just goes round. With ten it makes a lumpy oval with a bump where the flag should be. With forty the note is clear, and with a hundred and twenty you can barely tell the copy from the dashed original. Every circle in that chain turns at a steady whole-number speed: once per lap, twice, three times, some clockwise and some counterclockwise. Nothing else moves.</p>
+
+<p>The idea behind this goes back to Joseph Fourier, who used it in 1807 to work out how heat spreads through a solid <a class="cite" href="#ref-fourier"></a>. It now runs inside every phone: in how sound is recorded and squeezed into small files, how photos are stored, and how radios pick one station out of the air. I'll build it up from a single circle.</p>
+
+<h2>One circle</h2>
+
+<p>Take one circle and a dot that goes round it at a steady speed, counterclockwise. Ignore everything about the dot except its height above the center line. Press play, or drag the dot, and watch its height drawn out over time on the right:</p>
+
+<figure class="demo" id="circle" aria-label="A dot going round a circle on the left. A dashed line carries its height across to a graph on the right, where the height over time draws a sine wave."></figure>
+<script>
+{
+  let L;
+  demo("circle", {
+    aspect: w => (w < 560 ? 1.5 : 2.3),
+    caption: "The height of a dot going steadily round a circle, plotted against time, is a sine wave. One full turn of the dot is one full wave.",
+    state: () => ({ t: 2.2, grab: false }),
+    step(dt, s) { s.t = (s.t + dt * 1.1) % (2 * TAU); },
+    status: s => `angle ${Math.round(((s.t % TAU) * 180) / Math.PI)}°, height ${FS.fmt(Math.sin(s.t))}`,
+    drag: {
+      hit(p, s) { if (!L) return false; return Math.hypot(p[0] - L.pen[0], p[1] - L.pen[1]) < 24; },
+      start(p, s) { s.grab = true; },
+      move(p, s) {
+        const q = L.C.inv(p), a = (Math.atan2(q[1], q[0]) + TAU) % TAU;
+        const lap = Math.floor(s.t / TAU) * TAU, cands = [lap - TAU + a, lap + a, lap + TAU + a].filter(x => x >= 0 && x < 2 * TAU);
+        s.t = cands.reduce((b, x) => (Math.abs(x - s.t) < Math.abs(b - s.t) ? x : b), cands[0] ?? a);
+      },
+      end(s) { s.grab = false; },
+    },
+    draw(g, s) {
+      L = CW.draw(g, [{ k: 1, r: 1 }], s.t, { handle: true, active: s.grab });
+      const c = L.C([0, 0]), a = s.t % TAU;
+      g.angleMark(c, 0, -a, 20, { color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>The curve on the right is a <dfn data-def="The wave traced by the height of a point going steadily round a circle, plotted against time.">sine wave</dfn>. It isn't a curve that happens to look like the circle. It is the circle, unrolled along time: the top of the circle is the crest, the bottom is the trough, and the steep middle of the wave is where the dot moves straight up or down past the center line. One turn of the dot draws one complete wave, and the next turn draws the same wave again.</p>
+
+<p>I'll measure time by how far a dot of speed 1 has turned, in radians, so one full turn takes 2π. That's why the time axis is marked in multiples of π. The height at time <span class="tex">t</span> is then just <span class="tex">\sin t</span>, which is what the sine button on a calculator gives.</p>
+
+<p>Three things set a wave like this. The first two are the size of the circle and how fast the dot goes round. Make the <span class="c-orange">radius</span> bigger or smaller, and step the speed up to several turns per lap, keeping an eye on the dashed speed-1 wave for comparison:</p>
+
+<figure class="demo" id="amp" aria-label="The circle and its wave again. A slider sets the circle's radius, drawn in orange, and a stepper sets how many turns the dot makes while time runs through 2π. A dashed wave shows the original radius 1, speed 1 for comparison."></figure>
+<script>
+{
+  demo("amp", {
+    aspect: w => (w < 560 ? 1.5 : 2.3),
+    caption: "A bigger circle makes a taller wave; a faster dot packs more waves into the same time. The dashed wave is radius 1 at speed 1.",
+    state: () => ({ t: 1.4 }),
+    controls: [
+      { key: "r", label: "Radius", min: 0.2, max: 1.2, step: 0.05, value: 0.7, color: "orange" },
+      { key: "k", label: "Speed", type: "stepper", min: 1, max: 5, step: 1, value: 2, format: n => `${n} turn${n === 1 ? "" : "s"}` },
+    ],
+    step(dt, s) { s.t = (s.t + dt * 0.55) % (2 * TAU); },
+    status: (s, v) => `height = ${v.r.toFixed(2)} sin(${v.k === 1 ? "" : v.k}t)`,
+    draw(g, s, v) {
+      CW.draw(g, [{ k: v.k, r: v.r, arm: "orange" }], s.t, { ghost: Math.sin });
+    },
+  });
+}
+</script>
+
+<p>The radius is the wave's <dfn data-def="How far a wave rises above its middle line: the radius of the circle that makes it.">amplitude</dfn>, how far it rises above the middle line. The speed is its <dfn data-def="How many complete waves fit into a set time; for these circles, how many turns the dot makes while time runs through 2π.">frequency</dfn>, how many complete waves fit into the same time. At speed 3 the dot goes round three times while the dashed wave makes one, so three crests sit where the dashed wave has one. A wave with radius <span class="tex">\orange{r}</span> and speed <span class="tex">k</span> has height <span class="tex">\orange{r}\sin(kt)</span>.</p>
+
+<p>The third thing is where the dot starts. So far every dot set off from the right-hand side of its circle, at height zero, heading up. Turn the knob to start the dot further round, at the <span class="c-brass">brass</span> mark, and compare the new wave with the dashed one that starts at zero:</p>
+
+<figure class="demo" id="phase" aria-label="The circle and its wave, with the dot's starting point marked in brass. A knob moves the starting angle round the circle, and the wave slides sideways against a dashed wave that starts at zero."></figure>
+<script>
+{
+  demo("phase", {
+    aspect: w => (w < 560 ? 1.5 : 2.3),
+    caption: "Starting the dot further round the circle slides the whole wave earlier in time. A quarter turn ahead turns the sine wave into a cosine wave.",
+    state: () => ({ t: 0.9 }),
+    controls: [{ key: "ph", label: "Start", type: "knob", min: 0, max: 360, step: 5, value: 60, unit: "°", wrap: true, color: "brass" }],
+    presets: [{ label: "0°", set: { ph: 0 } }, { label: "90°, cosine", set: { ph: 90 } }, { label: "180°", set: { ph: 180 } }],
+    step(dt, s) { s.t = (s.t + dt * 0.55) % (2 * TAU); },
+    status: (s, v) => `starts ${v.ph}° round: the wave runs ${FS.fmt((v.ph / 360) * TAU, 2)} ahead in time`,
+    draw(g, s, v) {
+      const ph = (v.ph * Math.PI) / 180;
+      const L = CW.draw(g, [{ k: 1, r: 1, ph }], s.t, { ghost: Math.sin });
+      const c = L.C([0, 0]);
+      if (v.ph % 360) g.angleMark(c, 0, -ph, 24, { color: "brass" });
+      g.circle(L.C([Math.cos(ph), Math.sin(ph)]), 5.5, { fill: "brass", stroke: "panel", width: 1.5 });
+      // The shift: from the dashed wave's first crest back to the new wave's crest.
+      const crest = Math.PI / 2, shift = ph % TAU, newCrest = crest - shift < 0 ? crest - shift + TAU : crest - shift;
+      if (shift > 0.05) {
+        const y = L.W.ypx(1) - 12;
+        g.arrow([L.W.xpx(crest + (newCrest > crest ? TAU : 0)), y], [L.W.xpx(newCrest), y], { stroke: "brass", width: 1.5, head: 7 });
+      }
+    },
+  });
+}
+</script>
+
+<p>The starting angle is the wave's <dfn data-def="Where in its cycle a wave starts: the starting angle of the dot on its circle.">phase</dfn>. Moving the start further round doesn't change the wave's shape at all. It slides the wave earlier in time by exactly the angle you turned, because the dot reaches every point that much sooner. Start it <button class="set" data-set="ph=90">a quarter turn round</button>, at the top, and the wave begins at its crest: that's the <strong>cosine</strong> wave, <span class="tex">\cos t</span>. Sine and cosine aren't two different shapes. They are one circle, watched from two starting points.</p>
+
+<aside class="callout key"><p>A circle and a dot make a wave. The radius is its amplitude, the speed its frequency, and the starting angle its phase. Those three numbers describe a sine wave completely.</p></aside>
+
+<h2>Circles on circles</h2>
+
+<p>One circle makes one smooth wave. To make anything more interesting, put a second, smaller circle on the rim of the first, with its own dot going round at its own speed. The first dot now carries the second circle around with it, and the pen is the dot on the second circle. Step the <span class="c-orange">second circle's</span> speed up and change its size, and watch how the blue height wave is built from the two thin ones:</p>
+
+<figure class="demo" id="two" aria-label="A small orange circle riding on the rim of a big gray circle. The pen on the small circle draws a blue wave on the right, which is the sum of the big circle's gray wave and the small circle's orange wave, both drawn thin."></figure>
+<script>
+{
+  demo("two", {
+    aspect: w => (w < 560 ? 1.35 : 2.2),
+    caption: "The height of the pen is the big circle's height plus the small circle's height, at every moment. So the blue wave is the gray wave plus the orange wave.",
+    state: () => ({ t: 1.7 }),
+    controls: [
+      { key: "k2", label: "Second speed", type: "stepper", min: 2, max: 7, step: 1, value: 3, format: n => `${n} turns` },
+      { key: "r2", label: "Second radius", min: 0, max: 0.8, step: 0.05, value: 0.4, color: "orange" },
+    ],
+    step(dt, s) { s.t = (s.t + dt * 0.45) % (2 * TAU); },
+    status: (s, v) => `height = sin t + ${v.r2.toFixed(2)} sin(${v.k2}t)`,
+    draw(g, s, v) {
+      CW.draw(g, [{ k: 1, r: 1, color: "muted", arm: "ink" }, { k: v.k2, r: v.r2, color: "orange" }], s.t, { yr: 2, yTicks: [-1, 1], parts: true });
+    },
+  });
+}
+</script>
+
+<p>The pen's height is the first dot's height plus the second dot's height above the first, so at every moment the <span class="c-blue">blue wave</span> is the gray wave plus the <span class="c-orange">orange wave</span>, added point by point. Where both are high, the sum is higher still; where one is up and the other down, they partly cancel. With a <button class="set" data-set="k2=3 r2=0.35">small circle at speed 3</button> the big wave gets flattened shoulders. With <button class="set" data-set="k2=2 r2=0.5">speed 2</button> it leans to one side like a shark fin. Two plain sine waves already make shapes that look nothing like sine waves.</p>
+
+<p>Adding waves this way is called <dfn data-def="Adding waves point by point: at every moment, the heights simply add.">superposition</dfn>, and it is what real waves do. Two ripples crossing on a pond, or two instruments playing at once, add their heights in exactly this way.</p>
+
+<p>There is a reason I keep the speeds whole numbers. Look at the path the pen draws in the plane, not just its height. I'll make the second speed a slider that can stop between whole numbers. Watch whether the pen, after one full turn of the big circle, lands back on the <span class="c-orange">orange ring</span> where it started. The blue cross marks where the first turn ends:</p>
+
+<figure class="demo" id="closing" aria-label="A big circle and a small circle on its rim, with the path the pen draws in the plane. An orange ring marks where the pen started. A slider sets the small circle's speed; at whole numbers the path closes after one turn, at other speeds it takes several turns or more."></figure>
+<script>
+{
+  // Turns until the path closes: the denominator of the speed written as a fraction.
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const turns = k => { const n = Math.round(k * 20); return 20 / gcd(n, 20); };
+  const R2 = 0.5;
+  demo("closing", {
+    aspect: w => (w < 560 ? 1.1 : 1.8),
+    caption: "The pen's path in the plane. The bold line is the first turn, and the blue cross marks where it ends. With a whole-number speed for the small circle the cross lands on the orange starting ring; with a fraction like 5/2 the path needs two turns to close.",
+    state: () => ({ t: 0 }),
+    controls: [{ key: "k", label: "Second speed", min: 1, max: 5, step: 0.05, value: 2.5, color: "orange",
+      marks: [1, 2, 3, 4, 5].map(n => ({ value: n, label: String(n) })), format: k => k.toFixed(2) }],
+    presets: [{ label: "3", set: { k: 3 } }, { label: "2.5", set: { k: 2.5 } }, { label: "2.2", set: { k: 2.2 } }],
+    change(key, s) { s.t = 0; },
+    step(dt, s, v) { s.t += dt * 1.2; if (s.t > TAU * Math.min(turns(v.k), 6) + 1.5) s.t = 0; },
+    status: (s, v) => { const q = turns(v.k); return q === 1 ? "back at the start after 1 turn" : `back at the start after ${q} turns`; },
+    draw(g, s, v) {
+      const q = turns(v.k), terms = [{ k: 1, r: 1 }, { k: v.k, r: R2 }];
+      const P = g.fit(-1.6, 1.6, -1.6, 1.6, { pad: 10 });
+      const at = t => CW.chain(terms, t)[2];
+      const all = Array.from({ length: 300 * Math.min(q, 20) + 1 }, (_, i) => at((i * TAU) / 300));
+      g.path(all.map(P), { stroke: "blue", width: 1, alpha: 0.35 });
+      // The first turn, always shown, and where it ends.
+      const first = Array.from({ length: 301 }, (_, i) => at((i * TAU) / 300));
+      g.path(first.map(P), { stroke: "blue", width: 2.5 });
+      const t = Math.min(s.t, TAU * Math.min(q, 6)), lap = Math.floor(t / TAU) * TAU;
+      if (t > TAU) g.path(Array.from({ length: 121 }, (_, i) => at(lap + ((t - lap) * i) / 120)).map(P), { stroke: "blue", width: 1.8, alpha: 0.7 });
+      const pts = CW.chain(terms, t);
+      g.circle(P(pts[0]), P.sx, { stroke: "muted", width: 1.2 });
+      g.circle(P(pts[1]), R2 * P.sx, { stroke: "orange", width: 1.5 });
+      g.line(P(pts[0]), P(pts[1]), { stroke: "ink", width: 2 });
+      g.line(P(pts[1]), P(pts[2]), { stroke: "orange", width: 2 });
+      g.circle(P(at(0)), 9, { stroke: "orange", width: 2.5 });
+      const end = P(at(TAU));
+      g.path([[end[0] - 6, end[1] - 6], [end[0] + 6, end[1] + 6]], { stroke: "blue", width: 2.5 });
+      g.path([[end[0] - 6, end[1] + 6], [end[0] + 6, end[1] - 6]], { stroke: "blue", width: 2.5 });
+      if (q > 1) g.label("end of turn 1", [end[0] - 12, end[1]], { align: "right", color: "blue" });
+      g.circle(P(pts[2]), 5, { fill: "blue" });
+      g.label(`turn ${Math.floor(t / TAU) + 1}`, [g.w - 16, 18], { align: "right", color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>At a whole-number speed like <button class="set" data-set="k=3">3</button>, the small circle makes exactly three turns while the big one makes one, so both are back where they started at the same moment, and the pen is on its ring. Then the whole motion repeats, exactly. At <button class="set" data-set="k=2.5">2.5</button> the small circle is half a turn off after the first lap, the pen misses, and it takes two laps to line up. At <button class="set" data-set="k=2.2">2.2</button> it takes five.</p>
+
+<p>That is the whole reason for whole numbers. A wave that repeats every turn can only be made of circles that all come back to the start every turn, which means circles turning 1, 2, 3, or any whole number of times per turn. The slowest of them sets the beat, and is called the <dfn data-def="The slowest circle in the chain, which turns once per repeat; its frequency is the pitch you hear.">fundamental</dfn>. The others, at whole-number multiples of its speed, are its <dfn data-def="A wave whose speed is a whole-number multiple of the fundamental's: twice, three times, four times as fast.">harmonics</dfn>. Every repeating wave on this page is built from a fundamental and its harmonics, and nothing else.</p>
+
+<h2>A square wave from smooth ones</h2>
+
+<p>The hardest test for this idea is a <dfn data-def="A wave that sits at +1 for half of each turn and at −1 for the other half, jumping instantly between them.">square wave</dfn>: flat at +1 for half a turn, flat at −1 for the other half, with instant jumps between. It's what a switch flicked on and off at a steady beat produces. Every circle we have makes a smooth, round wave.</p>
+
+<div class="quiz">
+  <p>Can a sum of smooth sine waves make a wave with flat tops and sharp, vertical jumps?</p>
+  <div class="choices"><button>No, the corners will always stay rounded</button><button>Yes, exactly, given enough waves</button><button data-correct>Almost: the flat parts come out right, but something odd stays at the jumps</button></div>
+  <p class="why">With more and more waves the sum gets as close as you like to the flat tops, and the jumps get as steep as you like. But just beside each jump the sum always overshoots, by the same amount no matter how many waves you add.</p>
+</div>
+
+<p>The recipe, which I'll show how to find in a later section, uses only odd speeds: 1, 3, 5, 7, and so on, with the wave of speed <span class="tex">n</span> made <span class="tex">n</span> times smaller than the first. Add the waves one at a time with the stepper. The <span class="c-orange">orange wave</span> is the one just added, and the <span class="c-blue">blue wave</span> is the sum so far. Press Play to hear the sum as a note while you add waves:</p>
+
+<figure class="demo" id="square" aria-label="A dashed square wave and a blue sum of sine waves that approaches it. A stepper adds the waves of speeds 1, 3, 5, and so on one at a time; the newest one is drawn in orange. A Play button sounds the sum as a note."></figure>
+<script>
+{
+  // The sum as a sound: one harmonic per odd wave, at the recipe's sizes, on a 220 Hz fundamental.
+  const voice = Sound.voice({ freq: 220, gain: 0.7 });
+  demo("square", {
+    aspect: w => (w < 560 ? 1.35 : 2.2),
+    caption: "A square wave (dashed) and the sum of its first few odd waves (blue). Each new wave, in orange, fills in where the sum so far is too low and pulls it down where it's too high.",
+    controls: [{ key: "n", label: "Waves", type: "stepper", min: 1, max: 15, step: 1, value: 3, format: n => `${n} wave${n === 1 ? "" : "s"}` }, Sound.button(voice)],
+    status: (s, v) => `${voice.playing ? "sounding: " : ""}speeds 1${v.n > 1 ? ", 3" : ""}${v.n > 2 ? ", 5" : ""}${v.n > 4 ? ", …" : v.n > 3 ? ", 7" : ""}${v.n > 4 ? `, ${2 * v.n - 1}` : ""}`,
+    draw(g, s, v) {
+      voice.set({ harmonics: Array.from({ length: 2 * v.n - 1 }, (_, i) => FS.sqAmp(i + 1)) });
+      const W = g.graph({ x: [0, 2 * TAU], y: [-1.5, 1.5], xTicks: "pi", yTicks: [-1, 1], xLabel: "t", grid: false });
+      FS.curve(W, FS.SIG.square, 0, 2 * TAU, { color: "muted", width: 1.5, dash: [5, 4] }, 2000);
+      const m = 2 * v.n - 1;
+      FS.curve(W, t => FS.sqAmp(m) * Math.sin(m * t), 0, 2 * TAU, { color: "orange", width: 1.5 }, 1200);
+      FS.curve(W, t => FS.squareSum(t, v.n), 0, 2 * TAU, { color: "blue", width: 2.5 }, 1600);
+    },
+  });
+}
+</script>
+
+<p>The first wave is a rough guess: right sign, wrong shape. The <button class="set" data-set="n=2">speed-3 wave</button> is a third as tall, and it pushes the sum down at the middle of each half and up near the edges, flattening the top. The <button class="set" data-set="n=3">speed-5 wave</button> flattens it more. By <button class="set" data-set="n=15">fifteen waves</button> the tops are almost level and the jumps almost vertical. Each wave is smaller and faster than the one before, so it fixes a finer detail.</p>
+
+<p>Here is the same sum built from circles. Each odd speed gets its own circle, stacked on the one before, with the newest in <span class="c-orange">orange</span>. Add circles and watch the pen's height sharpen into a square wave:</p>
+
+<figure class="demo" id="sqcircles" aria-label="A chain of circles of shrinking size, turning at speeds 1, 3, 5, and so on. The pen's height draws a blue wave on the right that approaches a dashed square wave as more circles are added."></figure>
+<script>
+{
+  demo("sqcircles", {
+    aspect: w => (w < 560 ? 1.35 : 2.2),
+    caption: "The square wave's recipe as a chain of circles: radius 4/π at speed 1, a third of that at speed 3, a fifth at speed 5, and so on. The newest circle is orange.",
+    state: () => ({ t: 1.1 }),
+    controls: [{ key: "n", label: "Circles", type: "stepper", min: 1, max: 8, step: 1, value: 4 }],
+    step(dt, s) { s.t = (s.t + dt * 0.35) % (2 * TAU); },
+    status: (s, v) => `pen height ${FS.fmt(FS.squareSum(s.t, v.n))}`,
+    draw(g, s, v) {
+      const terms = Array.from({ length: v.n }, (_, i) => { const k = 2 * i + 1; return { k, r: FS.sqAmp(k), color: i === v.n - 1 && v.n > 1 ? "orange" : undefined }; });
+      CW.draw(g, terms, s.t, { yr: 1.55, ghost: FS.SIG.square });
+    },
+  });
+}
+</script>
+
+<p>The big circle does most of the work, carrying the pen up for half a turn and down for the other half. Each smaller circle rides on the rim of the one before and, because it turns three, five, or seven times as fast, swings the pen a little up or down at just the right moments to flatten the top. Nothing in the chain ever stops or jumps. Every circle turns steadily, and yet the pen's height jumps.</p>
+
+<p>Now look closely at the corners. Near each jump the blue sum doesn't stop at 1: it overshoots, rings, and settles. It's natural to expect the overshoot to fade as waves are added. Drag the number of waves up into the hundreds and watch the <span class="c-red">red line</span>, which marks how high the first peak goes:</p>
+
+<figure class="demo" id="gibbs" aria-label="Two views of the sum near a jump. On the left, the sum around the jump at t = 0 with a red line at the height of its highest peak. On the right, the same region stretched sideways by the number of waves, which shows the overshoot keeping the same shape and height."></figure>
+<script>
+{
+  const LIMIT = 1.17898; // (2/π)·Si(π), the height the first peak settles at
+  demo("gibbs", {
+    aspect: w => (w < 560 ? 0.95 : 2.1),
+    caption: "The square wave's sum near the jump at t = 0. Left: at the true scale, the ringing squeezes toward the jump. Right: stretched sideways in proportion to the number of waves, the overshoot is the same shape every time, and its peak (red) settles near 1.179.",
+    controls: [{ key: "n", label: "Waves", min: 1, max: 200, step: 1, value: 8, color: "blue", marks: [{ value: 1 }, { value: 10 }, { value: 50 }, { value: 100 }, { value: 200 }] }],
+    status: (s, v) => { const p = FS.squarePeak(v.n); return `peak ${p.y.toFixed(3)}, ${(((p.y - 1) / 2) * 100).toFixed(1)}% of the jump above 1`; },
+    draw(g, s, v) {
+      const phone = g.w < 560, gap = 18;
+      const A = phone ? [0, 0, g.w, g.h / 2 - gap / 2] : [0, 0, g.w / 2 - gap / 2, g.h];
+      const B = phone ? [0, g.h / 2 + gap / 2, g.w, g.h / 2 - gap / 2] : [g.w / 2 + gap / 2, 0, g.w / 2 - gap / 2, g.h];
+      const peak = FS.squarePeak(v.n);
+      const L = g.graph({ box: A, x: [-1.2, 1.2], y: [-1.4, 1.4], xTicks: [-1, 1], yTicks: [-1, 1], xLabel: "t", grid: false });
+      FS.curve(L, FS.SIG.square, -1.2, 1.2, { color: "muted", width: 1.5, dash: [5, 4] }, 2001);
+      FS.curve(L, t => FS.squareSum(t, v.n), -1.2, 1.2, { color: "blue", width: 2 }, 2400);
+      L.hline(peak.y, { color: "red" });
+      L.hline(-peak.y, { color: "red" });
+      // Stretched: t = u·π/(2n) puts the first peak at u = 1 whatever the number of waves n is.
+      const st = (2 * v.n) / Math.PI;
+      const Z = g.graph({ box: B, x: [-6, 6], y: [-1.4, 1.4], xTicks: false, yTicks: [-1, 1], xLabel: `t, stretched ${Num.fmt(st, { digits: 3 })}×`, grid: false });
+      FS.curve(Z, u => FS.SIG.square(u * 1e-6), -6, 6, { color: "muted", width: 1.5, dash: [5, 4] }, 2001);
+      FS.curve(Z, u => FS.squareSum(u / st, v.n), -6, 6, { color: "blue", width: 2.5 }, 800);
+      Z.hline(peak.y, { color: "red" });
+      Z.marker(peak.t * st, peak.y, { color: "red", label: peak.y.toFixed(3), pos: "ne" });
+      Z.hline(LIMIT, { color: "muted", alpha: 0.6 });
+    },
+  });
+}
+</script>
+
+<p>The ringing gets narrower as waves are added, squeezing in toward the jump, but it doesn't get shorter. At <button class="set" data-set="n=10">10 waves</button> the first peak reaches 1.180; at <button class="set" data-set="n=200">200 waves</button> it still reaches 1.179. The right-hand view stretches the region next to the jump so the ringing always fills the same width, and there it hardly changes at all. The overshoot settles at about 9% of the full jump from −1 to +1, and stays there forever <a class="cite" href="#ref-gibbs"></a>.</p>
+
+<p>This is the <dfn data-def="The overshoot of about 9% of the jump that a Fourier sum makes beside every sudden jump, however many terms it has.">Gibbs phenomenon</dfn>. It doesn't contradict the claim that the sum becomes the square wave. Pick any moment away from the jump, and with enough waves the ringing moves past it and the sum there settles to exactly 1. The overshoot never dies; it just moves closer to the jump.<span class="sidenote">Henry Wilbraham worked it out first, in 1848 <a class="cite" href="#ref-wilbraham"></a>. It turned up again fifty years later in an exchange of letters in <em>Nature</em> about adding up waves, which Albert Michelson, who had just built a machine that added them mechanically <a class="cite" href="#ref-michelson"></a>, took part in. J. Willard Gibbs described the overshoot in his letter of 1899, and Maxime Bôcher gave it Gibbs's name in 1906.</span> Exactly at the jump, every sine wave is zero, so the sum lands halfway, at 0.</p>
+
+<aside class="callout mistake"><p>More terms don't remove the overshoot. A sum of smooth waves copying a sudden jump always rises about 9% of the jump too high just beside it. Only the width of the ringing shrinks.</p></aside>
+
+<h2>Multiply and average</h2>
+
+<p>So far I've handed you the recipe. The real question runs the other way: given a wave, how do you find out which circles it's made of, and how big each one is? It sounds hopeless, since the waves are all added together into one curve. The trick that untangles them is to multiply the wave by a test wave and take the average over one turn.</p>
+
+<p>Start with two plain sine waves, and multiply them point by point. Where both are positive or both negative, the product is positive; where they disagree, it's negative. Set the two speeds with the steppers and watch the <span class="c-purple">purple product</span>, its shaded area above and below zero, and its average:</p>
+
+<figure class="demo" id="ortho" aria-label="Top: an orange sine wave and a green test wave, each with a speed set by a stepper. Bottom: their product in purple, with the area above zero filled and the area below hatched, and a dashed line at the product's average over one turn."></figure>
+<script>
+{
+  demo("ortho", {
+    aspect: w => (w < 560 ? 1.05 : 1.75),
+    caption: "Two sine waves and their product over one turn. When the speeds differ, the product spends exactly as much area below zero as above, and its average is 0. When they match, the product never goes below zero, and its average is ½.",
+    controls: [
+      { key: "m", label: "Wave speed", type: "stepper", min: 1, max: 6, step: 1, value: 2, color: "orange" },
+      { key: "n", label: "Test speed", type: "stepper", min: 1, max: 6, step: 1, value: 3, color: "green" },
+    ],
+    status: (s, v) => `average of the product: ${FS.fmt(Num.integrate(t => Math.sin(v.m * t) * Math.sin(v.n * t), 0, TAU, 512) / TAU)}`,
+    draw(g, s, v) {
+      const gap = 14, h1 = (g.h - gap) * 0.42;
+      const f = t => Math.sin(v.m * t), q = t => Math.sin(v.n * t), pr = t => f(t) * q(t);
+      const A = g.graph({ box: [0, 0, g.w, h1], x: [0, TAU], y: [-1.3, 1.3], xTicks: "pi", yTicks: [-1, 1], grid: false, xLabel: "t" });
+      FS.curve(A, q, 0, TAU, { color: "green", width: 2 });
+      FS.curve(A, f, 0, TAU, { color: "orange", width: 2 });
+      const B = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], x: [0, TAU], y: [-1.15, 1.15], xTicks: "pi", yTicks: [-1, 0.5, 1], grid: false, xLabel: "t" });
+      B.area(t => Math.max(0, pr(t)), 0, TAU, { color: "purple", alpha: 0.28, samples: 400 });
+      B.area(t => Math.min(0, pr(t)), 0, TAU, { color: "purple", alpha: 0.08, hatch: true, samples: 400 });
+      FS.curve(B, pr, 0, TAU, { color: "purple", width: 2 });
+      const avg = Num.integrate(pr, 0, TAU, 512) / TAU;
+      B.hline(avg, { color: "purple", label: `average ${FS.fmt(avg)}` });
+    },
+  });
+}
+</script>
+
+<p>With <button class="set" data-set="m=2 n=3">different speeds</button> the product swings up and down, and the filled area above zero exactly balances the hatched area below, so the average is 0. Try any pair of different whole-number speeds and the balance holds every time. With the <button class="set" data-set="m=3 n=3">same speed</button>, the product is a sine wave times itself. It's never negative, it rocks between 0 and 1, and its average is exactly ½.</p>
+
+<p>The reason is that the product of two waves is itself two waves, one at the sum of the speeds and one at the difference <span class="tex">(\sin a \sin b = \tfrac12\cos(a-b) - \tfrac12\cos(a+b))</span>. A wave of any whole-number speed makes whole turns in one lap and averages to zero, except one of speed zero, which is a constant. Only when the speeds match is the difference zero, and only then does something survive the average. Waves of different whole-number speeds are called <dfn data-def="Of two waves: their product averages to zero over a full turn. Sine and cosine waves of different whole-number speeds are orthogonal.">orthogonal</dfn>.</p>
+
+<p>Now use it. Here is a wave made of a few sine waves of unknown sizes and speeds. Step the green test wave through speeds 1 to 8; at each one, the figure multiplies, averages, and doubles the result to undo the ½. The bars on the right keep a record of what you've measured:</p>
+
+<figure class="demo" id="probe" aria-label="A blue wave of unknown makeup with a green test wave of chosen speed. Below, their product in purple and its average. On the right, a bar chart of the amount measured at each test speed so far."></figure>
+<script>
+{
+  // The hidden wave. The figure never reads these numbers; it only measures f.
+  const f = t => 0.9 * Math.sin(2 * t) + 0.5 * Math.sin(5 * t) - 0.3 * Math.sin(7 * t);
+  const amount = k => (2 / TAU) * Num.integrate(t => f(t) * Math.sin(k * t), 0, TAU, 1024);
+  demo("probe", {
+    aspect: w => (w < 560 ? 0.8 : 1.75),
+    caption: "Measuring a wave one speed at a time. The product with the test wave averages to zero unless the wave contains that speed; twice the average is how much of it there is.",
+    state: () => ({ found: { 3: amount(3) } }),
+    reset: true,
+    controls: [{ key: "k", label: "Test speed", type: "stepper", min: 1, max: 8, step: 1, value: 3, color: "green" }],
+    change(key, s, v) { if (key === "k") s.found[v.k] = amount(v.k); },
+    status: (s, v) => `twice the average: ${FS.fmt(amount(v.k))} of speed ${v.k}`,
+    draw(g, s, v) {
+      const phone = g.w < 560, gap = 14;
+      const left = phone ? [0, 0, g.w, g.h * 0.64] : [0, 0, g.w * 0.62, g.h];
+      const right = phone ? [0, g.h * 0.64 + gap, g.w, g.h * 0.36 - gap] : [g.w * 0.62 + gap * 1.5, 0, g.w * 0.38 - gap * 1.5, g.h];
+      const h1 = (left[3] - gap) * 0.5, q = t => Math.sin(v.k * t), pr = t => f(t) * q(t);
+      const A = g.graph({ box: [left[0], left[1], left[2], h1], x: [0, TAU], y: [-1.8, 1.8], xTicks: "pi", yTicks: [-1, 1], grid: false });
+      FS.curve(A, q, 0, TAU, { color: "green", width: 1.5 });
+      FS.curve(A, f, 0, TAU, { color: "blue", width: 2.5 });
+      const B = g.graph({ box: [left[0], left[1] + h1 + gap, left[2], left[3] - h1 - gap], x: [0, TAU], y: [-1.8, 1.8], xTicks: "pi", yTicks: [-1, 1], grid: false, xLabel: "t" });
+      B.area(t => Math.max(0, pr(t)), 0, TAU, { color: "purple", alpha: 0.28, samples: 400 });
+      B.area(t => Math.min(0, pr(t)), 0, TAU, { color: "purple", alpha: 0.08, hatch: true, samples: 400 });
+      FS.curve(B, pr, 0, TAU, { color: "purple", width: 2 });
+      B.hline(amount(v.k) / 2, { color: "purple" });
+      // The record of measurements.
+      const R = g.graph({ box: right, axes: "frame", x: [0.4, 8.6], y: [-0.55, 1.05], xTicks: { values: [1, 2, 3, 4, 5, 6, 7, 8] }, yTicks: [-0.5, 0, 0.5, 1], grid: false, xLabel: "test speed", yLabel: "amount" });
+      for (let k = 1; k <= 8; k++) {
+        const a = s.found[k];
+        if (a == null) { g.text("?", [R.xpx(k), R.ypx(0) - 9], { color: "muted", size: 13 }); continue; }
+        const x0 = R.xpx(k - 0.32), x1 = R.xpx(k + 0.32), y0 = R.ypx(0), y1 = R.ypx(a);
+        g.rect(x0, Math.min(y0, y1), x1 - x0, Math.max(1.5, Math.abs(y1 - y0)), { fill: "purple", alpha: k === v.k ? 0.85 : 0.45, r: 2 });
+        g.text(Math.abs(a) > 0.01 ? FS.fmt(a, 1) : "0", [R.xpx(k), a > 0.01 ? y1 - 9 : a < -0.01 ? y1 + 10 : y0 - 9], { size: 11.5, color: Math.abs(a) > 0.01 ? "ink" : "muted", halo: true });
+      }
+    },
+  });
+}
+</script>
+
+<p>At speed 3 the product balances out and the bar stays flat: there's no speed-3 wave inside. Step through the rest. Speeds <button class="set" data-set="k=2">2</button> and <button class="set" data-set="k=5">5</button> come out positive, 0.9 and 0.5; speed <button class="set" data-set="k=7">7</button> comes out at −0.3, which means that wave is upside down; everything else is zero. Those are exactly the numbers I used to build the hidden wave. The test wave of speed 2 is blind to the other components, because each of them is orthogonal to it.</p>
+
+<p>The averages here are taken with the same multiply-and-add a computer does, over a thousand moments in one turn. I never tell the figure the answer.</p>
+
+<p>There's a catch. My hidden waves all started at height zero, like sines. A wave with a different phase gives a smaller average against the sine test, and a cosine gives nothing at all. The fix is to test with a cosine too. Turn the knob to slide the hidden wave's phase, and watch the two measured amounts, plotted as a point:</p>
+
+<figure class="demo" id="pair" aria-label="Left: a blue wave of speed 3 with an adjustable phase, and green sine and cosine test waves of speed 3. Right: a point whose across position is the measured sine amount and whose up position is the measured cosine amount; it moves round a dashed circle as the phase changes."></figure>
+<script>
+{
+  const A0 = 0.8, K = 3;
+  demo("pair", {
+    aspect: w => (w < 560 ? 0.95 : 2),
+    caption: "A wave of speed 3 and size 0.8, measured with a sine test and a cosine test. As its phase changes, the two amounts trade off, but the point they make stays on a circle of radius 0.8, at an angle equal to the phase.",
+    controls: [{ key: "ph", label: "Phase", type: "knob", min: 0, max: 360, step: 5, value: 40, unit: "°", wrap: true, color: "brass" }],
+    status: (s, v) => { const p = (v.ph * Math.PI) / 180; return `sine part ${FS.fmt(A0 * Math.cos(p))}, cosine part ${FS.fmt(A0 * Math.sin(p))}`; },
+    draw(g, s, v) {
+      const phone = g.w < 560, gap = 16, ph = (v.ph * Math.PI) / 180, f = t => A0 * Math.sin(K * t + ph);
+      const sinPart = (2 / TAU) * Num.integrate(t => f(t) * Math.sin(K * t), 0, TAU, 512);
+      const cosPart = (2 / TAU) * Num.integrate(t => f(t) * Math.cos(K * t), 0, TAU, 512);
+      const left = phone ? [0, 0, g.w, g.h * 0.45] : [0, 0, g.w * 0.6, g.h];
+      const right = phone ? [0, g.h * 0.45 + gap, g.w, g.h * 0.55 - gap] : [g.w * 0.6 + gap, 0, g.w * 0.4 - gap, g.h];
+      const A = g.graph({ box: left, x: [0, TAU], y: [-1.2, 1.2], xTicks: "pi", yTicks: [-1, 1], grid: false, xLabel: "t" });
+      FS.curve(A, t => Math.sin(K * t), 0, TAU, { color: "green", width: 1.5 });
+      FS.curve(A, t => Math.cos(K * t), 0, TAU, { color: "green", width: 1.5, dash: [4, 4] });
+      FS.curve(A, f, 0, TAU, { color: "blue", width: 2.5 });
+      const R = g.graph({ box: right, x: [-1.05, 1.05], y: [-1.05, 1.05], equal: true, xTicks: false, yTicks: false, grid: false, xLabel: "sine part", yLabel: "cosine part" });
+      R.parametric(a => [A0 * Math.cos(a), A0 * Math.sin(a)], [0, TAU], { color: "muted", width: 1, dash: [4, 4] });
+      R.label("size 0.8", [-0.62, -0.62], { color: "muted", align: "right" });
+      R.vector([0, 0], [sinPart, cosPart], { color: "purple", width: 2.5 });
+      if (v.ph % 360) g.angleMark(R([0, 0]), 0, -ph, 22, { color: "brass" });
+      R.marker(sinPart, cosPart, { color: "purple" });
+    },
+  });
+}
+</script>
+
+<p>As the phase turns, the sine part shrinks while the cosine part grows, and the other way round, but the <span class="c-purple">point</span> they make never leaves the dashed circle. Its distance from the center is the wave's size, 0.8, whatever the phase. Its angle is the phase itself. So the two averages together pin down a wave completely: one number for how much, one for when it starts.</p>
+
+<p>That is the full method. For each whole-number speed <span class="tex">n</span>, take twice the average of the wave times <span class="tex">\green{\sin nt}</span>, and twice the average of the wave times <span class="tex">\green{\cos nt}</span>:</p>
+
+<div class="tex">b_n = 2\,\overline{f(t)\,\green{\sin nt}}, \qquad a_n = 2\,\overline{f(t)\,\green{\cos nt}}</div>
+
+<p>The bar over a product means its average over one turn. Then the wave is the sum of all its pieces, <span class="tex">f(t) = a_0 + \sum_n \left(a_n \cos nt + b_n \sin nt\right)</span>, where <span class="tex">a_0</span> is the plain average of the wave, its middle level. This sum is called the wave's <dfn data-def="A repeating wave written as a sum of sine and cosine waves at whole-number multiples of one speed, with sizes found by multiplying and averaging.">Fourier series</dfn>.</p>
+
+<details class="deeper">
+  <summary>Where the formula comes from, and the square wave's recipe <span class="hint">3 min</span></summary>
+  <p>Suppose a wave really is a sum of sines and cosines at whole-number speeds:</p>
+  <div class="tex">f(t) = a_0 + \sum_{m \ge 1} \big(a_m \cos mt + b_m \sin mt\big)</div>
+  <p>Multiply both sides by <span class="tex">\sin nt</span> and average over one turn. The average of a sum is the sum of the averages, so each term can be averaged on its own. Using the product rules</p>
+  <div class="tex">\begin{aligned} \sin mt\,\sin nt &= \tfrac12\cos(m-n)t - \tfrac12\cos(m+n)t \\ \cos mt\,\sin nt &= \tfrac12\sin(n+m)t + \tfrac12\sin(n-m)t \end{aligned}</div>
+  <p>every term becomes waves of whole-number speed, which average to zero over a turn, except the single term <span class="tex">\tfrac12 \cos 0 = \tfrac12</span> that appears when <span class="tex">m = n</span> in the first line. So the average of <span class="tex">f(t)\sin nt</span> is <span class="tex">\tfrac12 b_n</span>, and <span class="tex">b_n</span> is twice that average. Writing the average as an integral over one turn gives the form in textbooks:</p>
+  <div class="tex">b_n = \frac{1}{\pi}\int_0^{2\pi} f(t)\sin nt\,dt</div>
+  <p>For the square wave, <span class="tex">f = 1</span> on the first half turn and <span class="tex">-1</span> on the second, so</p>
+  <div class="tex">b_n = \frac{1}{\pi}\left(\int_0^{\pi}\sin nt\,dt - \int_{\pi}^{2\pi}\sin nt\,dt\right) = \frac{2}{\pi n}\big(1 - \cos n\pi\big)</div>
+  <p>When <span class="tex">n</span> is even, <span class="tex">\cos n\pi = 1</span> and the amount is zero. When it's odd, <span class="tex">\cos n\pi = -1</span> and <span class="tex">b_n = 4/(\pi n)</span>. That's the recipe from the square-wave section: odd speeds only, sizes falling as <span class="tex">1/n</span>. The square wave's cosine amounts are all zero, because it is upside-down symmetric about <span class="tex">t = 0</span> the same way a sine is.</p>
+  <p>Two cautions. This shows how to find the amounts if the wave is such a sum; that every reasonable repeating wave is one, with the sum settling to the wave's value wherever the wave doesn't jump, took most of the nineteenth century to prove properly, starting with Dirichlet in 1829 <a class="cite" href="#ref-korner"></a>. And at a jump the sum settles halfway, as the square-wave figure showed.</p>
+</details>
+
+<h2>The spectrum</h2>
+
+<p>Once the amounts are measured, the wave can be drawn a second way: not as height against time, but as a row of bars, one per speed, each as tall as the size of that speed's circle. That picture is the wave's <dfn data-def="The sizes of all the whole-number speeds in a wave, drawn as bars against speed.">spectrum</dfn>. Pick a wave, and point at a bar to see the piece of the wave it stands for in <span class="c-orange">orange</span>:</p>
+
+<figure class="demo" id="spectrum" aria-label="A repeating wave on top, chosen from square, sawtooth, triangle, and pulse, and its spectrum below as purple bars for speeds 0 to 20. Pointing at a bar draws that speed's wave in orange over the top plot."></figure>
+<script>
+{
+  const NAMES = { square: "square", saw: "sawtooth", triangle: "triangle", pulse: "pulse" };
+  const ser = k => FS.series(FS.SIG[k], 20, 8192, k);
+  let BX; // the bar graph from the last draw, for pointing
+  demo("spectrum", {
+    aspect: w => (w < 560 ? 0.95 : 1.6),
+    caption: "A wave and its spectrum: the size of each whole-number speed in it, measured by multiplying and averaging. The orange wave is the piece belonging to the chosen bar; speed 0 is the wave's middle level.",
+    state: () => ({ hot: 3 }),
+    controls: [{ key: "sig", label: "Wave", type: "choice", value: "square", options: Object.entries(NAMES).map(([value, label]) => ({ value, label })) }],
+    hover(p, s) {
+      if (!p || !BX || !BX.contains(BX.inv(p))) return false;
+      const n = Math.round(BX.inv(p)[0]);
+      if (n >= 0 && n <= 20 && n !== s.hot) { s.hot = n; return true; }
+      return false;
+    },
+    drag: { hit: p => BX && BX.contains(BX.inv(p)), move(p, s) { s.hot = clamp(Math.round(BX.inv(p)[0]), 0, 20); } },
+    status: (s, v) => { const S = ser(v.sig); return `speed ${s.hot}: size ${FS.fmt(S.amp(s.hot), 3)}`; },
+    draw(g, s, v) {
+      const S = ser(v.sig), f = FS.SIG[v.sig], gap = 16, h1 = (g.h - gap) * 0.45;
+      const A = g.graph({ box: [0, 0, g.w, h1], x: [0, 2 * TAU], y: [-1.45, 1.45], xTicks: "pi", yTicks: [-1, 1], grid: false, xLabel: "t" });
+      FS.curve(A, f, 0, 2 * TAU, { color: "blue", width: 2.5 }, 2000);
+      const n = s.hot, piece = t => (n ? S.a[n] * Math.cos(n * t) + S.b[n] * Math.sin(n * t) : S.a[0]);
+      FS.curve(A, piece, 0, 2 * TAU, { color: "orange", width: 2 });
+      BX = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], axes: "frame", x: [-0.6, 20.6], y: [0, 1.35], xTicks: { values: [0, 1, 5, 10, 15, 20] }, yTicks: [0.5, 1], grid: false, xLabel: "speed", yLabel: "size" });
+      for (let k = 0; k <= 20; k++) {
+        const a = S.amp(k), x0 = BX.xpx(k - 0.32), x1 = BX.xpx(k + 0.32), y0 = BX.ypx(0), y1 = BX.ypx(a);
+        if (a > 1e-3) g.rect(x0, y1, x1 - x0, y0 - y1, { fill: k === n ? "orange" : "purple", alpha: k === n ? 0.95 : 0.6, r: 2 });
+        else if (k === n) g.rect(x0, y0 - 2, x1 - x0, 2, { fill: "orange" });
+      }
+    },
+  });
+}
+</script>
+
+<p>The <button class="set" data-set="sig=square">square wave</button>'s bars are the recipe from before, measured instead of handed over: nothing at even speeds, and <span class="tex">4/\pi n</span> at odd ones, 1.27, 0.42, 0.25, and on down. The <button class="set" data-set="sig=saw">sawtooth</button> uses every speed, with sizes falling as <span class="tex">1/n</span>. The <button class="set" data-set="sig=triangle">triangle</button> uses odd speeds again, but its bars die away much faster. The <button class="set" data-set="sig=pulse">pulse</button>, on for a sixth of each turn, has a bar at speed 0, its middle level of 1/6, and gaps at speeds 6, 12, and 18.</p>
+
+<p>The spectrum and the wave hold the same information. Given the bars, including the phases I've left out of the picture, you can rebuild the wave exactly, and given the wave, the multiply-and-average step gives you the bars. They are two descriptions of one thing, one in time and one in speed.</p>
+
+<p>Why do the triangle's bars shrink so much faster than the square's? The square jumps, and the triangle only has corners. Sharp features need fast waves to draw them. Smooth the square's jumps into ramps and watch the high speeds on this scale, where each step down is ten times smaller:</p>
+
+<figure class="demo" id="decay" aria-label="A square wave whose jumps are turned into sloped ramps by a slider, and its spectrum on a scale where each gridline is ten times smaller than the one above. Dashed guide lines show sizes falling as 1 over n and 1 over n squared."></figure>
+<script>
+{
+  const cache = new Map();
+  const ser = w => { const key = w.toFixed(2); if (!cache.has(key)) cache.set(key, FS.series(FS.ramped(w), 61, 8192)); return cache.get(key); };
+  demo("decay", {
+    aspect: w => (w < 560 ? 0.95 : 1.6),
+    caption: "The sharper the wave, the more its spectrum leans on fast waves. A jump makes sizes fall as 1/n; a ramp, which has only corners, makes them fall as 1/n² once the speeds get past it. On the lower plot each gridline is ten times below the one above.",
+    controls: [{ key: "w", label: "Ramp", min: 0, max: 3.14, step: 0.02, value: 0.5, color: "blue", marks: [{ value: 0, label: "jump" }, { value: 3.14, label: "triangle" }], format: w => (w === 0 ? "jump" : `${w.toFixed(2)} wide`) }],
+    status: (s, v) => { const S = ser(v.w); return `speed 31 is ${Num.fmt((S.amp(31) / S.amp(1)) * 100, { digits: 2 })}% of speed 1`; },
+    draw(g, s, v) {
+      const S = ser(v.w), f = FS.ramped(v.w), gap = 16, h1 = (g.h - gap) * 0.38;
+      const A = g.graph({ box: [0, 0, g.w, h1], x: [0, 2 * TAU], y: [-1.35, 1.35], xTicks: "pi", yTicks: [-1, 1], grid: false, xLabel: "t" });
+      FS.curve(A, FS.SIG.square, 0, 2 * TAU, { color: "muted", width: 1.2, dash: [4, 4] }, 2000);
+      FS.curve(A, f, 0, 2 * TAU, { color: "blue", width: 2.5 }, 2000);
+      const B = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], axes: "frame", x: [0, 68], y: [1e-4, 2], yScale: "log", xTicks: { values: [1, 11, 21, 31, 41, 51, 61] }, xLabel: "speed", yLabel: "size" });
+      B.fn(n => 4 / (Math.PI * n), { color: "muted", width: 1, dash: [5, 4], domain: [1, 62] });
+      B.fn(n => 8 / (Math.PI * Math.PI * n * n), { color: "muted", width: 1, dash: [5, 4], domain: [1, 62] });
+      g.tex("1/n", [B.xpx(62.5), B.ypx(4 / (Math.PI * 62))], { size: 13, color: "muted", align: "left" });
+      g.tex("1/n^2", [B.xpx(62.5), B.ypx(8 / (Math.PI * Math.PI * 62 * 62))], { size: 13, color: "muted", align: "left" });
+      for (let n = 1; n <= 61; n += 2) {
+        const a = S.amp(n);
+        if (a < 1e-4) continue;
+        B.segment([n, 1e-4], [n, a], { color: "purple", width: 2.5 });
+        B.points([[n, a]], { color: "purple", r: 2.5 });
+      }
+    },
+  });
+}
+</script>
+
+<p>With a sharp <button class="set" data-set="w=0">jump</button> the bars follow the upper guide, <span class="tex">1/n</span>: the speed-31 wave is still 3% of the first. Give the jump a <button class="set" data-set="w=0.5">short ramp</button> and the bars follow <span class="tex">1/n</span> for a while, then bend down onto a line as steep as <span class="tex">1/n^2</span>. The wider the ramp, the earlier they bend. At the <button class="set" data-set="w=3.14">triangle</button>, speed 31 is down to 0.1%.</p>
+
+<p>This is a general rule. A jump costs sizes that fall as <span class="tex">1/n</span>, a corner costs <span class="tex">1/n^2</span>, and the smoother a wave is, the faster its spectrum falls away. Fine detail in time means a wide spread in speed.</p>
+
+<h2>Sound</h2>
+
+<p>Sound is the everyday place where all of this is real. A sound is air pressure going up and down at your ear, and a steady note is a pressure wave that repeats a few hundred times a second. Its repeat rate sets the pitch: the standard tuning note, the A above middle C, repeats 440 times a second. Its spectrum sets everything else about how it sounds.</p>
+
+<p>A guitar string shows where a spectrum comes from. Pulled aside at one point and let go, it starts as two straight lines meeting at a corner. That shape, like any shape of a string pinned at both ends, is a sum of the string's own modes: half a sine wave between the ends, a whole one, one and a half, and so on, each vibrating at its own whole-number multiple of the lowest pitch. Move the <span class="c-orange">pluck point</span> and watch which modes the shape needs, and press Pluck to hear it:</p>
+
+<figure class="demo" id="string" aria-label="A string pinned at both ends, plucked at an orange point and vibrating, drawn hugely exaggerated and slowed down. Below, purple bars show how much of each of the string's first twelve modes the plucked shape holds. A Pluck button plays a string plucked at that point."></figure>
+<script>
+{
+  const NM = 40;
+  const modes = p => {
+    const y0 = x => (x < p ? x / p : (1 - x) / (1 - p));
+    return Array.from({ length: NM }, (_, i) => { const n = i + 1, f = x => y0(x) * Math.sin(n * Math.PI * x); return 2 * (Num.integrate(f, 0, p, 256) + Num.integrate(f, p, 1, 256)); });
+  };
+  const cache = new Map(), get = p => { const k = p.toFixed(2); if (!cache.has(k)) cache.set(k, modes(p)); return cache.get(k); };
+  demo("string", {
+    aspect: w => (w < 560 ? 1 : 1.8),
+    caption: "A plucked string (height exaggerated, motion slowed a few hundred times) and the sizes of its first twelve modes. Every mode with a still point under the pluck is missing.",
+    state: () => ({ t: 0 }),
+    reset: true,
+    controls: [
+      { key: "p", label: "Pluck point", min: 0.05, max: 0.5, step: 0.01, value: 0.2, color: "orange", format: p => `${Math.round(p * 100)}% along` },
+      Sound.button((s, v) => { s.t = 0; return Sound.pluck({ freq: 147, pick: v.p, decay: 2.5, brightness: 0.6 }); }, { label: "Pluck" }),
+    ],
+    change(key, s) { if (key === "p") s.t = 0; },
+    step(dt, s) { s.t += dt * 0.5; },
+    status: (s, v) => { const B = get(v.p), miss = B.slice(0, 12).map((b, i) => (Math.abs(b) < 0.004 ? i + 1 : 0)).filter(Boolean); return miss.length ? `missing: mode ${miss.join(", ")}` : "every mode present"; },
+    draw(g, s, v) {
+      const B = get(v.p), gap = 18, h1 = (g.h - gap) * 0.5;
+      const P = g.fit(-0.04, 1.04, -1.25, 1.25, { box: [0, 0, g.w, h1], uniform: false, pad: 10 });
+      const y = x => B.reduce((sum, b, i) => sum + b * Math.sin((i + 1) * Math.PI * x) * Math.cos((i + 1) * Math.PI * s.t), 0);
+      g.line(P([0, 0]), P([1, 0]), { stroke: "faint", width: 1 });
+      for (const x of [0, 1]) g.rect(P([x, 0])[0] - 3, P([0, 0.5])[1], 6, P([0, -0.5])[1] - P([0, 0.5])[1], { fill: "muted", r: 2 });
+      g.path(Num.linspace(0, 1, 301).map(x => P([x, y(x)])), { stroke: "ink", width: 2.2 });
+      g.path([[0, 0], [v.p, 1], [1, 0]].map(P), { stroke: "orange", width: 1, dash: [4, 4], alpha: 0.7 });
+      g.circle(P([v.p, 1]), 5, { fill: "orange" });
+      const R = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], axes: "frame", x: [0.4, 12.6], y: [0, 0.85], xTicks: { values: Num.range(1, 13, 1) }, yTicks: [0.4, 0.8], grid: false, xLabel: "mode" });
+      for (let n = 1; n <= 12; n++) {
+        const a = Math.abs(B[n - 1]), x0 = R.xpx(n - 0.3), x1 = R.xpx(n + 0.3);
+        if (a > 0.004) g.rect(x0, R.ypx(a), x1 - x0, R.ypx(0) - R.ypx(a), { fill: "purple", alpha: 0.65, r: 2 });
+        else R.label("0", [n, 0.06], { color: "muted" });
+      }
+    },
+  });
+}
+</script>
+
+<p>Plucked <button class="set" data-set="p=0.2">a fifth of the way along</button>, the string holds every mode except the 5th and 10th. Those modes have a still point, a <dfn data-def="A point on a vibrating string that never moves in a given mode.">node</dfn>, exactly where the finger was, so they can't help make a shape whose biggest bend is there. Pluck <button class="set" data-set="p=0.5">in the middle</button> and all the even modes vanish, since each has a node at the center. Pluck <button class="set" data-set="p=0.08">near the end</button>, the way a sharp, bright guitar sound is made, and the higher modes grow.</p>
+
+<p>Each mode vibrates at its own whole-number multiple of the lowest frequency, so the sound the string makes is a repeating wave whose spectrum is these bars. I've computed the motion as nothing more than the sum of the modes, each swinging at its own speed. The corner that runs back and forth along the string is what that sum looks like <a class="cite" href="#ref-fletcher"></a>.</p>
+
+<p>Now compare sounds with the same pitch but different spectra. Choose a recipe and press Play:</p>
+
+<figure class="demo" id="timbre" aria-label="Three repeats of a sound wave on top and its spectrum below, for a pure tone, a plucked string, a bowed string, and a hollow tone with odd harmonics only. A Play button sounds the chosen recipe at 220 hertz."></figure>
+<script>
+{
+  // The plucked recipe: the mode sizes of the string above, plucked a fifth of the way along.
+  const B = (() => { const p = 0.2, y0 = x => (x < p ? x / p : (1 - x) / (1 - p)); return Array.from({ length: 16 }, (_, i) => { const n = i + 1, f = x => y0(x) * Math.sin(n * Math.PI * x); return Math.abs(2 * (Num.integrate(f, 0, p, 256) + Num.integrate(f, p, 1, 256))); }); })();
+  const RECIPES = {
+    pure: n => (n === 1 ? 1 : 0),
+    pluck: n => B[n - 1] / B[0],
+    bow: n => 1 / n,
+    hollow: n => (n % 2 ? 1 / n : 0),
+  };
+  const amps = r => Array.from({ length: 16 }, (_, i) => RECIPES[r](i + 1));
+  const voice = Sound.voice({ freq: 220, gain: 0.7 });
+  demo("timbre", {
+    aspect: w => (w < 560 ? 0.95 : 1.7),
+    caption: "Four sounds with the same pitch, 220 repeats a second, and different spectra. The repeat rate is the same in each; the shape of the repeat, set by the bar heights, is what makes them sound different. The wave drawn is the one the Play button sounds.",
+    controls: [
+      { key: "r", label: "Recipe", type: "choice", value: "pluck", options: [{ value: "pure", label: "pure tone" }, { value: "pluck", label: "plucked" }, { value: "bow", label: "bowed" }, { value: "hollow", label: "hollow" }] },
+      Sound.button(voice),
+    ],
+    status: (s, v) => (voice.playing ? "playing at 220 Hz" : "220 Hz, press Play to hear it"),
+    draw(g, s, v) {
+      voice.set({ harmonics: amps(v.r) });
+      const a = amps(v.r), cyc = Sound.cycle(voice.params, { n: 400, cycles: 3 });
+      let peak = 0; for (const y of cyc) peak = Math.max(peak, Math.abs(y));
+      const gap = 16, h1 = (g.h - gap) * 0.5;
+      const A = g.graph({ box: [0, 0, g.w, h1], x: [0, 3], y: [-1.2, 1.2], xTicks: { values: [1, 2, 3], format: x => `${x}/220 s` }, yTicks: false, grid: false, xLabel: "time" });
+      A.polyline(Array.from(cyc, (y, i) => [(3 * i) / (cyc.length - 1), y / (peak || 1)]), { color: "blue", width: 2.5 });
+      const R = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], axes: "frame", x: [0.4, 16.6], y: [0, 1.1], xTicks: { values: [1, 2, 3, 4, 5, 6, 8, 10, 12, 16] }, yTicks: [0.5, 1], grid: false, xLabel: "harmonic" });
+      a.forEach((x, i) => { if (x > 0.003) { const n = i + 1; g.rect(R.xpx(n - 0.3), R.ypx(x), R.xpx(n + 0.3) - R.xpx(n - 0.3), R.ypx(0) - R.ypx(x), { fill: "purple", alpha: 0.65, r: 2 }); } });
+    },
+  });
+}
+</script>
+
+<p>The <button class="set" data-set="r=pure">pure tone</button> is a single circle, and it sounds thin and flat, like a tuning fork or a test beep. The <button class="set" data-set="r=pluck">plucked</button> recipe uses the mode sizes of the string from the last figure, plucked a fifth of the way along. The <button class="set" data-set="r=bow">bowed</button> one has every harmonic falling as <span class="tex">1/n</span>, the sawtooth, which is close to what a violin string does while the bow drags it <a class="cite" href="#ref-helmholtz"></a>. The <button class="set" data-set="r=hollow">hollow</button> one keeps only odd harmonics, the square wave's recipe, a little like a clarinet's low notes <a class="cite" href="#ref-fletcher"></a>.</p>
+
+<p>All four repeat 220 times a second, so they have the same pitch. What differs is the shape of each repeat, and the shape is set by the bars. Musicians call the difference <dfn data-def="The quality that makes two sounds of the same pitch and loudness sound different: in a steady tone, mostly its spectrum.">timbre</dfn>. Your inner ear does something close to this measurement: different spots along the cochlea respond to different frequencies, so the ear hears a sound partly as its spectrum.</p>
+
+<h2>Arrows that turn</h2>
+
+<p>The pair of numbers from the phase figure, a sine part and a cosine part that together act like one arrow, is a hint. Mathematicians have a number system in which arrows are the numbers: the <dfn data-def="Numbers that are arrows (or points) in a plane. They add tip to tail, and multiplying two of them multiplies their lengths and adds their angles.">complex numbers</dfn>. Each one is a point in a plane, or the arrow from the center to it. The arrow one step right is 1; the arrow one step up is called <span class="tex">i</span>. Adding two complex numbers puts the arrows tip to tail, as with the circles. Multiplying them is where it gets useful. Drag the tips of the <span class="c-blue">blue</span> and <span class="c-orange">orange</span> arrows and watch their <span class="c-purple">product</span>:</p>
+
+<figure class="demo" id="arrows" aria-label="Two draggable arrows from the center of a plane, blue and orange, and a purple arrow that is their product. Angle marks show each arrow's angle from the rightward direction; the product's angle is the sum of the other two."></figure>
+<script>
+{
+  let P, grab = null;
+  const len = (x, y) => Math.hypot(x, y), deg = (x, y) => (Math.atan2(y, x) * 180) / Math.PI;
+  demo("arrows", {
+    aspect: w => (w < 560 ? 1 : 1.6),
+    caption: "Multiplying complex numbers: the purple product's length is the blue length times the orange length, and its angle is the blue angle plus the orange angle.",
+    controls: [
+      { key: "zx", min: -1.4, max: 1.4, step: 0.01, value: 1.1, hidden: true },
+      { key: "zy", min: -1.4, max: 1.4, step: 0.01, value: 0.45, hidden: true },
+      { key: "wx", min: -1.4, max: 1.4, step: 0.01, value: 0.5, hidden: true },
+      { key: "wy", min: -1.4, max: 1.4, step: 0.01, value: 0.75, hidden: true },
+    ],
+    presets: [{ label: "times i", set: { wx: 0, wy: 1 } }, { label: "times −1", set: { wx: -1, wy: 0 } }, { label: "times 1.4", set: { wx: 1.4, wy: 0 } }],
+    status: (s, v) => {
+      const px = v.zx * v.wx - v.zy * v.wy, py = v.zx * v.wy + v.zy * v.wx;
+      return `lengths ${len(v.zx, v.zy).toFixed(2)} × ${len(v.wx, v.wy).toFixed(2)} = ${len(px, py).toFixed(2)} · angles ${Math.round(deg(v.zx, v.zy))}° + ${Math.round(deg(v.wx, v.wy))}°`;
+    },
+    drag: {
+      hit(p, s, v) {
+        if (!P) return false;
+        const dz = Math.hypot(...[0, 1].map(i => p[i] - P([v.zx, v.zy])[i])), dw = Math.hypot(...[0, 1].map(i => p[i] - P([v.wx, v.wy])[i]));
+        grab = Math.min(dz, dw) > 26 ? null : dz < dw ? "z" : "w";
+        return grab !== null;
+      },
+      move(p, s, v, d, fig) {
+        let [x, y] = P.inv(p);
+        const l = Math.hypot(x, y); if (l > 1.4) { x *= 1.4 / l; y *= 1.4 / l; }
+        fig.setMany(grab === "z" ? { zx: +x.toFixed(2), zy: +y.toFixed(2) } : { wx: +x.toFixed(2), wy: +y.toFixed(2) });
+      },
+      end() { grab = null; },
+    },
+    draw(g, s, v) {
+      P = g.fit(-2.1, 2.1, -2.05, 2.05, { pad: 8 });
+      for (let k = -2; k <= 2; k++) { g.line(P([k, -2.1]), P([k, 2.1]), { stroke: "faint", width: 1 }); g.line(P([-2.1, k]), P([2.1, k]), { stroke: "faint", width: 1 }); }
+      g.line(P([-2.1, 0]), P([2.1, 0]), { stroke: "muted", width: 1.2 });
+      g.line(P([0, -2.1]), P([0, 2.1]), { stroke: "muted", width: 1.2 });
+      g.circle(P([0, 0]), P.sx, { stroke: "muted", width: 1, dash: [3, 4] });
+      g.tex("1", [P([1, 0])[0] + 8, P([1, 0])[1] + 12], { size: 14, color: "muted" });
+      g.tex("i", [P([0, 1])[0] - 10, P([0, 1])[1] - 8], { size: 14, color: "muted" });
+      const px = v.zx * v.wx - v.zy * v.wy, py = v.zx * v.wy + v.zy * v.wx, O = P([0, 0]);
+      const az = Math.atan2(v.zy, v.zx), aw = Math.atan2(v.wy, v.wx), ap = Math.atan2(py, px);
+      g.angleMark(O, 0, -az, 30, { color: "blue" });
+      g.angleMark(O, 0, -aw, 42, { color: "orange" });
+      g.angleMark(O, 0, -(az + aw), 54, { color: "purple" });
+      g.arrow(O, P([px, py]), { stroke: "purple", width: 3, head: 12 });
+      g.arrow(O, P([v.zx, v.zy]), { stroke: "blue", width: 2.5 });
+      g.arrow(O, P([v.wx, v.wy]), { stroke: "orange", width: 2.5 });
+      g.handle(P([v.zx, v.zy]), { color: "blue", active: grab === "z" });
+      g.handle(P([v.wx, v.wy]), { color: "orange", active: grab === "w" });
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-purple">product</span> always points at the sum of the two angles, and its length is the product of the two lengths. So multiplying by an arrow of length 1 does nothing but turn. Multiplying by <button class="set" data-set="wx=0 wy=1"><span class="tex">i</span></button>, which points straight up, turns any arrow a quarter turn counterclockwise; doing it twice turns it half a turn, which is why <span class="tex">i \times i = -1</span>. Multiplying by <button class="set" data-set="wx=-1 wy=0">−1</button> turns it half a turn. Multiplication is turning.</p>
+
+<p>Now take the arrow of length 1 at angle <span class="tex">\theta</span>. Its tip is at <span class="tex">\cos\theta</span> across and <span class="tex">\sin\theta</span> up, so it's the complex number <span class="tex">\cos\theta + i\sin\theta</span>. This arrow has a famous short name, <span class="tex">e^{i\theta}</span>, for reasons in the note below, and the only thing to know about it here is that it's a turn by <span class="tex">\theta</span>. Let <span class="tex">\theta</span> grow with time and the arrow spins. Turn the view to see the spinning tip spread out along time:</p>
+
+<figure class="demo" id="helix" aria-label="A spiral in three dimensions: the tip of a spinning arrow carried along a time axis. Seen end on it is a circle; from the side it is a sine wave; from above it is a cosine wave. The view can be turned by dragging."></figure>
+<script>
+{
+  const Z = t => (t / (2 * TAU) - 0.5) * 3.4;   // time, laid out along the third axis
+  const VIEWS = { angled: { yaw: 0.85, pitch: 0.38 }, end: { yaw: 0, pitch: 0 }, side: { yaw: Math.PI / 2, pitch: 0 }, top: { yaw: Math.PI / 2, pitch: 1.5707 } };
+  demo("helix", {
+    aspect: w => (w < 560 ? 1 : 1.7),
+    caption: "The tip of the arrow <i>e</i><sup><i>it</i></sup> as time runs along the third axis. Its shadow seen from the side is sin <i>t</i>; seen from above, cos <i>t</i>. A complex number that spins at a steady speed is a sine wave and a cosine wave at once.",
+    orbit: { yaw: 0.85, pitch: 0.38, minPitch: -1.5707, maxPitch: 1.5707 },
+    state: () => ({ t: 3.2 }),
+    controls: [{ key: "look", label: "Look", type: "choice", value: "angled", options: [{ value: "angled", label: "angled" }, { value: "end", label: "end on" }, { value: "side", label: "from the side" }, { value: "top", label: "from above" }] }],
+    change(key, s, v) { if (key === "look") s.view = { ...VIEWS[v.look] }; },
+    step(dt, s) { s.t = (s.t + dt * 0.8) % (2 * TAU); },
+    status: s => `cos t = ${FS.fmt(Math.cos(s.t))}, sin t = ${FS.fmt(Math.sin(s.t))}`,
+    draw(g, s) {
+      const V = s.view ?? VIEWS.angled;
+      const P = g.view3d({ yaw: V.yaw, pitch: V.pitch, scale: Math.min(g.w, g.h * 1.6) * 0.21, center: [g.w / 2, g.h / 2] });
+      const xy = p => [P(p)[0], P(p)[1]];
+      const ts = Num.linspace(0, 2 * TAU, 400);
+      // Axes: time through the middle, and the real and imaginary directions at the near end.
+      g.arrow(xy([0, 0, Z(0) - 0.2]), xy([0, 0, Z(2 * TAU) + 0.35]), { stroke: "muted", width: 1.2, head: 8 });
+      g.line(xy([-1.25, 0, Z(s.t)]), xy([1.25, 0, Z(s.t)]), { stroke: "faint", width: 1 });
+      g.line(xy([0, -1.25, Z(s.t)]), xy([0, 1.25, Z(s.t)]), { stroke: "faint", width: 1 });
+      g.label("t", xy([0, 0, Z(2 * TAU) + 0.55]), { color: "muted" });
+      // Shadows: the sine on a back wall, the cosine on the floor.
+      g.path(ts.map(t => xy([-1.6, Math.sin(t), Z(t)])), { stroke: "blue", width: 1, alpha: 0.35, dash: [3, 3] });
+      g.path(ts.map(t => xy([Math.cos(t), -1.6, Z(t)])), { stroke: "green", width: 1, alpha: 0.45, dash: [3, 3] });
+      // The circle the arrow turns on, at the current time.
+      g.path(Num.linspace(0, TAU, 80).map(a => xy([Math.cos(a), Math.sin(a), Z(s.t)])), { stroke: "muted", width: 1, alpha: 0.7, close: true });
+      g.path(ts.map(t => xy([Math.cos(t), Math.sin(t), Z(t)])), { stroke: "blue", width: 1.5, alpha: 0.3 });
+      const done = ts.filter(t => t <= s.t);
+      g.path([...done, s.t].map(t => xy([Math.cos(t), Math.sin(t), Z(t)])), { stroke: "blue", width: 2.5 });
+      const tip = [Math.cos(s.t), Math.sin(s.t), Z(s.t)];
+      g.arrow(xy([0, 0, Z(s.t)]), xy(tip), { stroke: "orange", width: 2.5, head: 9 });
+      g.line(xy(tip), xy([-1.6, tip[1], tip[2]]), { stroke: "blue", width: 1, alpha: 0.4, dash: [2, 3] });
+      g.line(xy(tip), xy([tip[0], -1.6, tip[2]]), { stroke: "green", width: 1, alpha: 0.5, dash: [2, 3] });
+      g.circle(xy(tip), 5, { fill: "blue" });
+      g.circle(xy([-1.6, tip[1], tip[2]]), 3.5, { fill: "blue" });
+      g.circle(xy([tip[0], -1.6, tip[2]]), 3.5, { fill: "green" });
+    },
+  });
+}
+</script>
+
+<p>Looked at <button class="set" data-set="look=end">end on</button>, it's the circle from the start of this page. From <button class="set" data-set="look=side">the side</button>, the height of the tip draws <span class="tex">\sin t</span>. From <button class="set" data-set="look=top">above</button>, its sideways position draws <span class="tex">\cos t</span>, in <span class="c-green">green</span>. One spinning arrow, <span class="tex">e^{it} = \cos t + i \sin t</span>, carries both waves.<span class="sidenote">Why the exponential? Grow <span class="tex">\theta</span> a little and <span class="tex">e^{i\theta}</span> gets multiplied by <span class="tex">e^{i\,d\theta} \approx 1 + i\,d\theta</span>, a tiny step at right angles to the arrow. Steps always at right angles to the arrow keep its length fixed and walk its tip round a circle. That's Euler's formula, <span class="tex">e^{i\theta} = \cos\theta + i\sin\theta</span>.</span> A dot at speed <span class="tex">k</span> on a circle of size <span class="tex">c</span> is then just <span class="tex">c\,e^{ikt}</span>, and its starting angle can be folded into <span class="tex">c</span> by letting <span class="tex">c</span> be an arrow too.</p>
+
+<p>That makes negative speeds easy to say: <span class="tex">e^{-it}</span> spins the other way, clockwise. And a plain up-and-down wave turns out to be two arrows spinning in opposite directions. Here an arrow spinning counterclockwise carries a second one spinning clockwise at the same speed. Change the second arrow's length, and watch the path of the tip:</p>
+
+<figure class="demo" id="counter" aria-label="A blue arrow of fixed length spinning counterclockwise, with an orange arrow on its tip spinning clockwise at the same speed. The tip's path is drawn: an ellipse that flattens onto the horizontal line when the two arrows are the same length."></figure>
+<script>
+{
+  demo("counter", {
+    aspect: w => (w < 560 ? 1.1 : 1.9),
+    caption: "Two arrows spinning in opposite directions. When they're the same length, their up-and-down parts cancel and the tip only slides along the horizontal line: a real wave, cos <i>t</i>, made of ½<i>e</i><sup><i>it</i></sup> and ½<i>e</i><sup>−<i>it</i></sup>.",
+    state: () => ({ t: 0.9 }),
+    controls: [{ key: "r2", label: "Clockwise arrow", min: 0, max: 0.5, step: 0.01, value: 0.3, color: "orange", marks: [{ value: 0.5, label: "equal" }] }],
+    step(dt, s) { s.t = (s.t + dt * 0.8) % TAU; },
+    status: (s, v) => `tip strays up to ${Math.abs(0.5 - v.r2).toFixed(2)} from the line`,
+    draw(g, s, v) {
+      const P = g.fit(-1.15, 1.15, -0.75, 0.75, { pad: 10 }), r1 = 0.5;
+      g.line(P([-1.15, 0]), P([1.15, 0]), { stroke: "muted", width: 1.2 });
+      const a = [r1 * Math.cos(s.t), r1 * Math.sin(s.t)], b = [a[0] + v.r2 * Math.cos(-s.t), a[1] + v.r2 * Math.sin(-s.t)];
+      g.path(Num.linspace(0, TAU, 200).map(t => P([(r1 + v.r2) * Math.cos(t), (r1 - v.r2) * Math.sin(t)])), { stroke: "blue", width: 2, alpha: 0.85, close: true });
+      g.circle(P([0, 0]), r1 * P.sx, { stroke: "muted", width: 1 });
+      g.circle(P(a), v.r2 * P.sx, { stroke: "orange", width: 1.2, alpha: 0.8 });
+      g.arcArrow(P([0, 0]), r1 * P.sx + 10, -0.3, -1.1, { stroke: "muted", width: 1.2, head: 7 });
+      g.arrow(P([0, 0]), P(a), { stroke: "ink", width: 2.2, head: 9 });
+      if (v.r2 > 0.02) g.arrow(P(a), P(b), { stroke: "orange", width: 2.2, head: 9 });
+      g.circle(P(b), 5, { fill: "blue" });
+    },
+  });
+}
+</script>
+
+<p>With the arrows <button class="set" data-set="r2=0.5">the same length</button>, whatever one does upward the other does downward, and the tip just slides back and forth along the line: the plain wave <span class="tex">\cos t = \tfrac12 e^{it} + \tfrac12 e^{-it}</span>. With <button class="set" data-set="r2=0.2">unequal arrows</button> the tip leaves the line and goes round an ellipse. So the sine and cosine waves of the earlier sections were each a matched pair of circles, one per direction, and the two numbers measured for each speed are the arrow describing that pair.</p>
+
+<h2>Drawing with circles</h2>
+
+<p>Back to the note at the top. A drawing isn't a wave going up and down; it's a pen moving around a plane. But a point in a plane is a complex number, so a drawing traced once around, over one turn of time, is a repeating complex wave. Its pieces are single arrows <span class="tex">c\,e^{ikt}</span>, and nothing forces them into matched pairs any more. Speeds can be positive or negative, and each one stands alone.</p>
+
+<p>Here is the smallest example: a big circle turning counterclockwise at speed 1, with a smaller one on its rim. Step the small circle's speed through negative and positive values and watch the closed path the pen draws:</p>
+
+<figure class="demo" id="wind" aria-label="A big circle turning counterclockwise with a small orange circle on its rim. A stepper sets the small circle's speed from −5 to 5, including clockwise speeds; the pen's closed path is drawn in blue."></figure>
+<script>
+{
+  demo("wind", {
+    aspect: w => (w < 560 ? 1.1 : 1.8),
+    caption: "A big circle at speed 1 and a small one at speed k. Each pair of speeds draws its own closed curve; the number of bumps is the difference between the two speeds.",
+    state: () => ({ t: 0.6 }),
+    controls: [{ key: "k", label: "Small circle's speed", type: "stepper", min: -5, max: 5, step: 1, value: -2, color: "orange", format: k => (k < 0 ? `−${-k}, clockwise` : k === 0 ? "0, still" : `${k}`) }],
+    step(dt, s) { s.t = (s.t + dt * 0.5) % TAU; },
+    status: (s, v) => { const d = Math.abs(v.k - 1); return d > 1 ? `${d} bumps around` : v.k === -1 ? "an ellipse" : v.k === 1 ? "one bigger circle" : "a circle pushed off center"; },
+    draw(g, s, v) {
+      const terms = [{ k: 1, re: 1, im: 0 }, { k: v.k, re: 0.4, im: 0 }];
+      const P = g.fit(-1.5, 1.5, -1.5, 1.5, { pad: 8 });
+      const path = FS.trace(terms, 400);
+      g.path(path.map(P), { stroke: "blue", width: 2.2, alpha: 0.85 });
+      const pts = FS.joints(terms, s.t);
+      g.circle(P(pts[0]), P.sx, { stroke: "muted", width: 1.2 });
+      g.circle(P(pts[1]), 0.4 * P.sx, { stroke: "orange", width: 1.5 });
+      g.line(P(pts[0]), P(pts[1]), { stroke: "ink", width: 2 });
+      g.line(P(pts[1]), P(pts[2]), { stroke: "orange", width: 2 });
+      g.circle(P(pts[2]), 5, { fill: "blue" });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="k=-2">−2</button> the pen draws a rounded triangle, at <button class="set" data-set="k=-3">−3</button> a rounded square, at <button class="set" data-set="k=3">+3</button> a peanut, and at <button class="set" data-set="k=-1">−1</button> an ellipse. Two circles already make a family of shapes, and every one closes after one turn because both speeds are whole numbers.</p>
+
+<p>To find the circles hidden in a drawing, the multiply-and-average trick works almost unchanged. Multiplying by <span class="tex">e^{-ikt}</span> turns each point back by <span class="tex">kt</span>, so it unspins the drawing at speed <span class="tex">k</span>. The circle that was turning at exactly that speed now stands still, while every other circle still turns a whole number of times and averages away. Here is a path made of three circles, at speeds 1, −2, and 3. Step the unspinning speed and watch the <span class="c-purple">unspun path</span> and its average, the purple arrow:</p>
+
+<figure class="demo" id="unspin" aria-label="A blue closed path made of three circles, and the purple path it becomes when every point is turned back in proportion to time at a chosen speed. A purple arrow from the center points to the average of the purple path."></figure>
+<script>
+{
+  const TERMS = [{ k: 1, re: 1, im: 0 }, { k: -2, re: 0.35, im: 0.2 }, { k: 3, re: 0, im: 0.22 }];
+  const z = t => FS.pen(TERMS, t);
+  demo("unspin", {
+    aspect: w => (w < 560 ? 1 : 1.75),
+    caption: "Turning every point of the blue path back by k·t gives the purple path. Its average is the circle of speed k: an arrow with that circle's size and starting angle, or nothing if there is no circle at that speed.",
+    controls: [{ key: "k", label: "Unspin speed", type: "stepper", min: -4, max: 4, step: 1, value: -2, color: "purple" }],
+    status: (s, v) => {
+      const ts = Num.linspace(0, TAU, 513).slice(0, 512);
+      let x = 0, y = 0; for (const t of ts) { const p = z(t), c = Math.cos(-v.k * t), sn = Math.sin(-v.k * t); x += p[0] * c - p[1] * sn; y += p[0] * sn + p[1] * c; }
+      x /= 512; y /= 512;
+      const r = Math.hypot(x, y);
+      return r < 0.005 ? `average 0: no circle at speed ${v.k}` : `average: size ${r.toFixed(2)}, starting angle ${Math.round((Math.atan2(y, x) * 180) / Math.PI)}°`;
+    },
+    draw(g, s, v) {
+      const P = g.fit(-1.75, 1.75, -1.75, 1.75, { pad: 8 });
+      const ts = Num.linspace(0, TAU, 513);
+      g.line(P([-1.75, 0]), P([1.75, 0]), { stroke: "faint", width: 1 });
+      g.line(P([0, -1.75]), P([0, 1.75]), { stroke: "faint", width: 1 });
+      g.path(ts.map(t => P(z(t))), { stroke: "blue", width: 2, alpha: 0.4 });
+      const w = ts.map(t => { const p = z(t), c = Math.cos(-v.k * t), sn = Math.sin(-v.k * t); return [p[0] * c - p[1] * sn, p[0] * sn + p[1] * c]; });
+      g.path(w.map(P), { stroke: "purple", width: 1.8 });
+      const avg = w.slice(0, 512).reduce((a, p) => [a[0] + p[0] / 512, a[1] + p[1] / 512], [0, 0]);
+      if (Math.hypot(...avg) > 0.005) g.arrow(P([0, 0]), P(avg), { stroke: "purple", width: 3.5, head: 12 });
+      g.circle(P(avg), 6, { fill: "purple", stroke: "panel", width: 2 });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="k=-2">−2</button> the purple path circles around a point off center, and the arrow to that point is the speed −2 circle: size 0.40, starting angle 30°. At <button class="set" data-set="k=1">1</button> the arrow is the big circle, size 1. At <button class="set" data-set="k=0">0</button> or <button class="set" data-set="k=2">2</button> the purple path wraps evenly around the center and the average is nothing. One arrow per speed, each found on its own, exactly as the sine and cosine tests did for waves: the arrow is the pair of numbers in one.</p>
+
+<p>That's everything needed to draw. Take a square, traced at a steady pace, and find its circles. Add them one at a time, biggest first:</p>
+
+<figure class="demo" id="build" aria-label="A dashed square and the path drawn by a chain of circles fitted to it. A stepper adds circles one at a time, biggest first; the newest circle is orange."></figure>
+<script>
+{
+  const S = FS.shape("square"), paths = new Map();
+  const path = K => { if (!paths.has(K)) paths.set(K, FS.trace(S.circles.slice(0, K + 1), 600)); return paths.get(K); };
+  demo("build", {
+    aspect: w => (w < 560 ? 1 : 1.75),
+    caption: "A square drawn by its biggest circles. They come at speeds 1, −3, 5, −7, 9, and so on, alternating direction, and each one is far smaller than the last.",
+    state: () => ({ t: 4.2 }),
+    controls: [{ key: "K", label: "Circles", type: "stepper", min: 1, max: 12, step: 1, value: 3 }],
+    step(dt, s) { s.t = (s.t + dt * TAU / 12) % TAU; },
+    status: (s, v) => `speeds ${S.circles.slice(1, v.K + 1).map(c => (c.k < 0 ? "−" + -c.k : c.k)).join(", ")}`,
+    draw(g, s, v) {
+      const P = g.fit(-1.3, 1.3, -1.15, 1.15, { pad: 8 });
+      g.path(S.pts.map(P), { close: true, stroke: "muted", width: 1.2, dash: [5, 4] });
+      const full = path(v.K), n = Math.round((full.length - 1) * s.t / TAU);
+      g.path(full.map(P), { stroke: "blue", width: 1.5, alpha: 0.25 });
+      g.path(full.slice(0, n + 1).map(P), { stroke: "blue", width: 2.5 });
+      FS.drawChain(g, P, S.circles.slice(0, v.K + 1), s.t, { first: 1, hot: v.K > 1 ? v.K : -1 });
+    },
+  });
+}
+</script>
+
+<p>One circle is a circle. <button class="set" data-set="K=2">Two</button>, the second turning three times as fast the other way, pull it into a rounded square. By <button class="set" data-set="K=6">six</button> the sides are nearly straight. The speeds come out as 1, −3, 5, −7, 9: every fourth one, alternating direction, because the square looks the same after a quarter turn and only those speeds respect that. A square has corners but no jumps, so its sizes fall as <span class="tex">1/k^2</span> and there's no overshoot.</p>
+
+<p>Now the drawings. Pick a shape, slide the number of circles, or choose <em>your own</em> and draw any closed shape with one stroke:</p>
+
+<figure class="demo wide" id="draw" aria-label="A chain of circles drawing a chosen shape: an eighth note, a fish, a star, or a shape drawn by hand on the canvas. A slider sets how many circles are kept, biggest first."></figure>
+<script>
+{
+  let P;
+  const traces = new Map(), mine = { v: -1, S: null };
+  const shapeOf = (s, v) => {
+    if (v.shape !== "yours") return FS.shape(v.shape);
+    if (!s.mine) return null;
+    if (mine.v !== s.mineV) { mine.S = FS.shape(null, s.mine); mine.v = s.mineV; }
+    return mine.S;
+  };
+  const traceOf = (S, key, K) => { const id = `${key}:${K}`; if (!traces.has(id)) { if (traces.size > 60) traces.clear(); traces.set(id, FS.trace(S.circles.slice(0, K + 1), 900)); } return traces.get(id); };
+  demo("draw", {
+    aspect: w => (w < 560 ? 0.95 : 1.6),
+    caption: "Any closed drawing as a chain of circles, biggest first. The dashed line is the drawing; the faint blue line is the full path for this many circles.",
+    state: () => ({ t: 4.6, mine: null, mineV: 0, stroke: null }),
+    reset: true,
+    controls: [
+      { key: "shape", label: "Drawing", type: "choice", value: "fish", options: [{ value: "note", label: "note" }, { value: "fish", label: "fish" }, { value: "star", label: "star" }, { value: "yours", label: "your own" }] },
+      { key: "K", label: "Circles", min: 1, max: 200, step: 1, value: 20, color: "blue", marks: [{ value: 1 }, { value: 5 }, { value: 20 }, { value: 50 }, { value: 100 }, { value: 200 }] },
+    ],
+    change(key, s) { if (key === "shape") s.t = 0; },
+    step(dt, s) { s.t = (s.t + dt * TAU / 14) % TAU; },
+    status: (s, v) => { const S = shapeOf(s, v); if (!S) return "draw a closed shape with one stroke"; const f = Math.max(...S.circles.slice(1, v.K + 1).map(c => Math.abs(c.k))); return `${v.K} circles, fastest ${f} turns a lap`; },
+    drag: {
+      hit: (p, s, v) => v.shape === "yours",
+      start(p, s) { s.stroke = [P.inv(p)]; },
+      move(p, s) { const q = P.inv(p), last = s.stroke[s.stroke.length - 1]; if (Math.hypot(q[0] - last[0], q[1] - last[1]) > 0.01) s.stroke.push(q); },
+      end(s) {
+        const st = s.stroke; s.stroke = null;
+        if (!st || st.length < 12) return;
+        const xs = st.map(p => p[0]), ys = st.map(p => p[1]);
+        if (Math.max(...xs) - Math.min(...xs) + Math.max(...ys) - Math.min(...ys) < 0.3) return;
+        s.mine = st; s.mineV++; s.t = 0;
+      },
+    },
+    draw(g, s, v) {
+      P = g.fit(-1.25, 1.25, -1.15, 1.15, { pad: 12 });
+      if (s.stroke) { g.path(s.stroke.map(P), { stroke: "ink", width: 2 }); return; }
+      const S = shapeOf(s, v);
+      if (!S) {
+        g.rect(14, 14, g.w - 28, g.h - 28, { stroke: "faint", width: 1.5, r: 12 });
+        g.text("Draw a closed shape here with one stroke", [g.w / 2, g.h / 2], { color: "muted", size: 15 });
+        return;
+      }
+      g.path(S.pts.map(P), { close: true, stroke: "muted", width: 1, dash: [4, 4], alpha: 0.8 });
+      const full = traceOf(S, v.shape === "yours" ? `m${s.mineV}` : v.shape, v.K), n = Math.round((full.length - 1) * s.t / TAU);
+      g.path(full.map(P), { stroke: "blue", width: 1.5, alpha: 0.22 });
+      g.path(full.slice(0, n + 1).map(P), { stroke: "blue", width: 2.5 });
+      FS.drawChain(g, P, S.circles.slice(0, v.K + 1), s.t, { first: 1 });
+    },
+  });
+}
+</script>
+
+<p>The <button class="set" data-set="shape=fish K=5">fish with 5 circles</button> is a lumpy egg; with <button class="set" data-set="shape=fish K=20">20</button> it has a tail; with <button class="set" data-set="shape=fish K=80">80</button> the notch in the tail is sharp. The <button class="set" data-set="shape=star K=30">star</button> needs more, because its ten corners are sharp. Whatever you draw, the same steps run: the drawing is cut into 512 evenly spaced points, each speed from −255 to 256 gets its arrow by unspinning and averaging, and the arrows are chained biggest first. With all 512 the pen passes through every one of the points exactly.</p>
+
+<p>Greek astronomers built the same machine on paper. To follow the planets, Hipparchus and Ptolemy put the planet on a small circle, an <dfn data-def="A circle whose center rides around the rim of a larger circle; Greek astronomers used them to model the paths of planets.">epicycle</dfn>, riding on a big one. In 1960 Norwood Russell Hanson pointed out that enough epicycles can follow any closed path at all, even a square <a class="cite" href="#ref-hanson"></a>.</p>
+
+<p>Most of the drawing lives in a few circles. Here are the note's circles in order of size, on a scale where each step down is ten times smaller. Slide the cut and watch how close the copy stays:</p>
+
+<figure class="demo" id="sizes" aria-label="Left: the eighth note rebuilt from its biggest circles over the dashed original, with the farthest gap marked in red. Right: the sizes of all the note's circles from biggest to smallest, on a scale where each gridline is ten times smaller; the kept ones are purple."></figure>
+<script>
+{
+  const S = FS.shape("note"), sizes = S.circles.slice(1).map(c => c.r);
+  const H = Math.max(...S.pts.map(p => p[1])) - Math.min(...S.pts.map(p => p[1])); // the note's height
+  const err = new Map();
+  const worst = K => {
+    if (!err.has(K)) {
+      const terms = S.circles.slice(0, K + 1);
+      let w = 0, at = 0;
+      S.pts.forEach((q, j) => { const p = FS.pen(terms, (j * TAU) / S.pts.length), d = Math.hypot(p[0] - q[0], p[1] - q[1]); if (d > w) { w = d; at = j; } });
+      err.set(K, { w, at });
+    }
+    return err.get(K);
+  };
+  demo("sizes", {
+    aspect: w => (w < 560 ? 0.75 : 2),
+    caption: "The note's 511 circles sorted by size. The first few dozen carry nearly all of the drawing; the rest fix details smaller than the line is wide.",
+    controls: [{ key: "K", label: "Keep", min: 1, max: 200, step: 1, value: 30, color: "purple", marks: [{ value: 1 }, { value: 10 }, { value: 30 }, { value: 100 }, { value: 200 }] }],
+    status: (s, v) => `${v.K} circles, ${2 * v.K} numbers: farthest gap ${((worst(v.K).w / H) * 100).toFixed(1)}% of the note's height`,
+    draw(g, s, v) {
+      const phone = g.w < 560, gap = 18;
+      const L = phone ? [0, 0, g.w, g.h * 0.55] : [0, 0, g.w * 0.42, g.h];
+      const R = phone ? [0, g.h * 0.55 + gap, g.w, g.h * 0.45 - gap] : [g.w * 0.42 + gap, 0, g.w * 0.58 - gap, g.h];
+      g.clip(L, () => {
+        const P = g.fit(-1.05, 1.05, -1.1, 1.1, { box: L, pad: 6 });
+        g.path(S.pts.map(P), { close: true, stroke: "muted", width: 1, dash: [4, 4] });
+        const path = FS.trace(S.circles.slice(0, v.K + 1), 900);
+        g.path(path.map(P), { stroke: "blue", width: 2 });
+        const e = worst(v.K), p = FS.pen(S.circles.slice(0, v.K + 1), (e.at * TAU) / S.pts.length);
+        g.line(P(p), P(S.pts[e.at]), { stroke: "red", width: 2.5 });
+        g.circle(P(S.pts[e.at]), 4, { stroke: "red", width: 1.5 });
+      });
+      const B = g.graph({ box: R, axes: "frame", x: [0, 512], y: [1e-5, 1], yScale: "log", xTicks: { values: [1, 100, 200, 300, 400, 511] }, xLabel: "circles, biggest first", yLabel: "size" });
+      sizes.forEach((r, i) => { if (r > 1e-5) B.segment([i + 1, 1e-5], [i + 1, r], { color: i < v.K ? "purple" : "faint", width: i < v.K ? 1.6 : 1 }); });
+      B.vline(v.K + 0.5, { color: "purple" });
+    },
+  });
+}
+</script>
+
+<p>The sizes fall off fast. The biggest circle has radius 0.43, on a note 1.8 units tall; the 10th is 0.026, and the 30th is under 0.002, a two-hundredth of the first. With <button class="set" data-set="K=30">30 circles</button>, 60 numbers instead of the 1,024 that list the 512 points, the copy never strays more than about 2% of the note's height, and the worst place is the sharp tip of the flag. With <button class="set" data-set="K=100">100</button> it stays within half a percent.</p>
+
+<h2>Keeping the biggest</h2>
+
+<p>That last figure is the idea behind most of the compression in your pocket. Describe a signal by its spectrum, keep the big amounts, throw away the small ones, and store far fewer numbers for nearly the same result. Here is a sliver of sound, 256 measurements of the air pressure, made of a note with a little hiss on top. Slide how many frequencies to keep, biggest first:</p>
+
+<figure class="demo" id="audio" aria-label="Top: a short stretch of a recorded-style sound wave in gray and the version rebuilt from its biggest frequencies in blue. Bottom: the sizes of all 129 frequencies; the kept ones are purple."></figure>
+<script>
+{
+  const N = 256, rng = Num.rng(7);
+  // A note with five harmonics (4 repeats in the window) plus a little hiss.
+  const AMP = [1, 0.5, 0.35, 0.2, 0.12], PH = [0.3, 1.9, 0.8, 2.6, 1.3];
+  const x = Array.from({ length: N }, (_, j) => AMP.reduce((s, a, h) => s + a * Math.sin((TAU * 4 * (h + 1) * j) / N + PH[h]), 0) + rng.gauss(0, 0.05));
+  // Its spectrum: for each frequency k (repeats per window), the arrow found by unspinning and averaging.
+  const X = Array.from({ length: N / 2 + 1 }, (_, k) => {
+    let re = 0, im = 0;
+    x.forEach((y, j) => { re += y * Math.cos((TAU * k * j) / N); im -= y * Math.sin((TAU * k * j) / N); });
+    const w = k === 0 || k === N / 2 ? 1 / N : 2 / N;
+    return { k, re: re * w, im: im * w, r: Math.hypot(re, im) * w };
+  });
+  const order = [...X].sort((a, b) => b.r - a.r);
+  const rms = a => Math.sqrt(a.reduce((s, y) => s + y * y, 0) / a.length);
+  const rebuild = K => { const keep = order.slice(0, K); return Array.from({ length: N }, (_, j) => keep.reduce((s, c) => s + c.re * Math.cos((TAU * c.k * j) / N) - c.im * Math.sin((TAU * c.k * j) / N), 0)); };
+  demo("audio", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    caption: "A short sound and its 129 frequencies. Five big ones make the note; the rest are the hiss, each tiny. Keeping only the biggest stores far fewer numbers and changes the sound very little.",
+    controls: [{ key: "K", label: "Keep", min: 1, max: 129, step: 1, value: 5, color: "purple", marks: [{ value: 1 }, { value: 5 }, { value: 20 }, { value: 129 }] }],
+    status: (s, v) => { const y = rebuild(v.K), e = rms(y.map((q, j) => q - x[j])) / rms(x); return `${v.K} of 129 frequencies, ${Math.round((v.K / 129) * 100)}% of the numbers; off by ${(e * 100).toFixed(1)}%`; },
+    draw(g, s, v) {
+      const y = rebuild(v.K), gap = 16, h1 = (g.h - gap) * 0.5;
+      const A = g.graph({ box: [0, 0, g.w, h1], x: [0, N - 1], y: [-2.6, 2.6], xTicks: false, yTicks: false, grid: false, xLabel: "time" });
+      A.polyline(x.map((q, j) => [j, q]), { color: "muted", width: 1.5 });
+      A.polyline(y.map((q, j) => [j, q]), { color: "blue", width: 2 });
+      const B = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], axes: "frame", x: [-1, 129], y: [0, 1.1], xTicks: { values: [0, 4, 8, 12, 16, 20, 64, 128] }, yTicks: [0.5, 1], grid: false, xLabel: "frequency (repeats in the window)", yLabel: "size" });
+      const kept = new Set(order.slice(0, v.K).map(c => c.k));
+      X.forEach(c => B.segment([c.k, 0], [c.k, Math.max(c.r, 0.004)], { color: kept.has(c.k) ? "purple" : "muted", width: kept.has(c.k) ? 2.5 : 1, alpha: kept.has(c.k) ? 1 : 0.6 }));
+    },
+  });
+}
+</script>
+
+<p>With <button class="set" data-set="K=5">5 frequencies</button>, 4% of the numbers, the blue copy is the note without the hiss, and it differs from the original by only the hiss itself. With <button class="set" data-set="K=1">1</button> it's a pure tone. Keeping <button class="set" data-set="K=20">20</button> starts to bring back the hiss's biggest pieces, and little else changes. Real audio formats like MP3 and AAC cut sound into short overlapping windows like this one, describe each with a close cousin of these waves, and then spend their bits by a model of hearing: amounts the ear can't notice, often because a louder sound at a nearby frequency drowns them out, are stored coarsely or not at all <a class="cite" href="#ref-brandenburg"></a>.</p>
+
+<p>Pictures work the same way, in two directions at once. JPEG cuts a photo into blocks of 8 by 8 pixels and describes each block as a mix of 64 fixed patterns, each a cosine wave across times a cosine wave down <a class="cite" href="#ref-wallace"></a>. Step through the patterns, or point at one:</p>
+
+<figure class="demo" id="dct" aria-label="Left: one 8 by 8 pattern, large, made of a cosine wave across times a cosine wave down. Right: all 64 such patterns in a grid, with the chosen one outlined in orange; steppers set how many half-waves it has across and down."></figure>
+<script>
+{
+  let G; // the grid's origin and cell size, for pointing
+  demo("dct", {
+    aspect: w => (w < 560 ? 0.7 : 1.9),
+    caption: "The 64 patterns JPEG builds every 8 × 8 block from. Top left is flat; moving right adds half-waves across, moving down adds half-waves down.",
+    controls: [
+      { key: "u", label: "Across", type: "stepper", min: 0, max: 7, step: 1, value: 2, format: n => `${n} half-wave${n === 1 ? "" : "s"}` },
+      { key: "v", label: "Down", type: "stepper", min: 0, max: 7, step: 1, value: 1, format: n => `${n} half-wave${n === 1 ? "" : "s"}` },
+    ],
+    hover(p, s, v, fig) {
+      if (!p || !G) return false;
+      const i = Math.floor((p[0] - G.x) / G.c), j = Math.floor((p[1] - G.y) / G.c);
+      if (i >= 0 && i < 8 && j >= 0 && j < 8 && (i !== v.u || j !== v.v)) { fig.setMany({ u: i, v: j }); return true; }
+      return false;
+    },
+    status: (s, v) => (v.u + v.v === 0 ? "the flat pattern: the block's average shade" : `pattern ${v.u} across, ${v.v} down`),
+    draw(g, s, v) {
+      const phone = g.w < 560, gap = 24;
+      const big = phone ? Math.min(g.w * 0.62, g.h * 0.42) : Math.min(g.h - 20, g.w * 0.36);
+      const small = phone ? Math.min(g.w - 20, g.h - big - gap - 20) : Math.min(g.h - 20, g.w - big - gap - 40);
+      const bx = phone ? (g.w - big) / 2 : (g.w - big - gap - small) / 2, by = phone ? 10 : (g.h - big) / 2;
+      const sx = phone ? (g.w - small) / 2 : bx + big + gap, sy = phone ? by + big + gap : (g.h - small) / 2;
+      g.pixels(Img.dctBasis(v.u, v.v), [bx, by, big, big], { values: false, grid: true });
+      const cs = small / 8, pad = Math.max(1.5, cs * 0.07);
+      G = { x: sx, y: sy, c: cs };
+      for (let u = 0; u < 8; u++) for (let w = 0; w < 8; w++) g.pixels(Img.dctBasis(u, w), [sx + u * cs + pad, sy + w * cs + pad, cs - 2 * pad, cs - 2 * pad], { values: false, grid: false, frame: false, snap: false });
+      g.rect(sx + v.u * cs, sy + v.v * cs, cs, cs, { stroke: "orange", width: 2.5 });
+    },
+  });
+}
+</script>
+
+<p>The top-left pattern is flat: it sets the block's average shade. Patterns further right or further down change faster, like the faster circles. Finding how much of each pattern a block holds is the same multiply-and-average as before, done across and down. Drag the <span class="c-orange">orange square</span> to pick a block of the picture, and keep only its biggest amounts:</p>
+
+<script>
+  // Shared by the two picture figures: a 128 × 128 gray scene cut into 16 × 16 blocks, each block's
+  // 64 pattern amounts (the 8 × 8 DCT of its pixels, less 128 as JPEG does), and rebuilds that keep
+  // only the K biggest amounts of each block.
+  window.JPG = (() => {
+    const IM = Img.gray(Img.scene(128)), NB = 16;
+    const coefs = [], order = [];
+    for (let by = 0; by < NB; by++) for (let bx = 0; bx < NB; bx++) {
+      const c = Img.dct8(Img.block(IM, bx, by).map(x => x - 128));
+      coefs.push(c);
+      order.push([...Array(64).keys()].sort((a, b) => Math.abs(c[b]) - Math.abs(c[a])));
+    }
+    const kept = (bi, K) => { const k = new Float64Array(64); for (const i of order[bi].slice(0, K)) k[i] = coefs[bi][i]; return k; };
+    const blockBack = (bi, K) => Img.idct8(kept(bi, K)).map(x => x + 128);
+    const cache = new Map();
+    function rebuilt(K) {
+      if (!cache.has(K)) {
+        const back = coefs.map((_, bi) => blockBack(bi, K));
+        cache.set(K, Img.make(128, 128, (x, y) => clamp(back[(y >> 3) * NB + (x >> 3)][(y & 7) * 8 + (x & 7)] / 255, 0, 1)));
+      }
+      return cache.get(K);
+    }
+    // Typical error in shades of 255, over the whole picture or one block.
+    const rmsOff = (a, b) => Math.sqrt(a.reduce((s, x, i) => s + (x - b[i]) ** 2, 0) / a.length);
+    const blockOff = (bi, K) => rmsOff(blockBack(bi, K), Img.idct8(coefs[bi]).map(x => x + 128));
+    const pictureOff = K => { let s = 0; coefs.forEach((_, bi) => { s += blockOff(bi, K) ** 2; }); return Math.sqrt(s / coefs.length); };
+    return { IM, NB, coefs, order, kept, blockBack, rebuilt, blockOff, pictureOff };
+  })();
+</script>
+
+<figure class="demo" id="block" aria-label="A gray picture with one 8 by 8 block marked in orange; the block enlarged; its 64 pattern amounts as a grid of squares, darker for bigger amounts, with the kept ones outlined; and the block rebuilt from only the kept amounts."></figure>
+<script>
+{
+  let T; // the thumbnail's pixel mapping, for dragging the block
+  demo("block", {
+    aspect: w => (w < 560 ? 0.85 : 2.6),
+    caption: "One 8 × 8 block, its 64 pattern amounts (darker means bigger; the purple outlines are the ones kept), and the block rebuilt from only the kept amounts. Smooth blocks need one or two; blocks with an edge need more.",
+    state: () => ({ b: [6, 9] }),
+    controls: [{ key: "K", label: "Keep", type: "stepper", min: 1, max: 64, step: 1, value: 4, color: "purple", format: n => `${n} of 64` }],
+    presets: [{ label: "1", set: { K: 1 } }, { label: "4", set: { K: 4 } }, { label: "12", set: { K: 12 } }],
+    drag: {
+      hit: p => !!T?.at(p),
+      move(p, s) { const q = T?.at(p); if (q) s.b = [clamp(q[0] >> 3, 0, 15), clamp(q[1] >> 3, 0, 15)]; },
+    },
+    status: (s, v) => { const bi = s.b[1] * JPG.NB + s.b[0]; return `kept ${v.K} of 64 amounts; typical pixel off by ${JPG.blockOff(bi, v.K).toFixed(1)} of 255 shades`; },
+    draw(g, s, v) {
+      const phone = g.w < 560, bi = s.b[1] * JPG.NB + s.b[0], c = JPG.coefs[bi], keep = new Set(JPG.order[bi].slice(0, v.K));
+      const lab = 22, gap = 14;
+      const cols = phone ? 2 : 4, rows = phone ? 2 : 1;
+      const cw = (g.w - gap * (cols - 1)) / cols, ch = (g.h - gap * (rows - 1)) / rows - lab;
+      const side = Math.min(cw, ch), box = k => { const i = k % cols, j = Math.floor(k / cols); return [i * (cw + gap) + (cw - side) / 2, j * (ch + lab + gap), side, side]; };
+      const label = (k, t) => { const b = box(k); g.text(t, [b[0] + side / 2, b[1] + side + 13], { size: 12.5, color: "muted" }); };
+      T = g.pixels(JPG.IM, box(0), { mark: [s.b[0] * 8, s.b[1] * 8, 8, 8], values: false });
+      const r = T.rect(s.b[0] * 8, s.b[1] * 8, 8, 8);
+      g.handle([r[0] + r[2] / 2, r[1] + r[3] / 2], { color: "orange", r: 5 });
+      label(0, "the picture");
+      g.pixels(Img.crop(JPG.IM, s.b[0] * 8, s.b[1] * 8, 8, 8), box(1), { values: false, grid: true });
+      label(1, "one block");
+      // The amounts: each cell shaded by the size of its amount.
+      const B = box(2), cs = side / 8, max = Math.max(...c.map(Math.abs));
+      for (let vv = 0; vv < 8; vv++) for (let u = 0; u < 8; u++) {
+        const i = vv * 8 + u, a = Math.abs(c[i]) / max;
+        g.rect(B[0] + u * cs + 1, B[1] + vv * cs + 1, cs - 2, cs - 2, { fill: "purple", alpha: 0.06 + 0.9 * Math.sqrt(a), r: 2 });
+        if (keep.has(i)) g.rect(B[0] + u * cs + 1, B[1] + vv * cs + 1, cs - 2, cs - 2, { stroke: "purple", width: 2.2, r: 2 });
+      }
+      label(2, "its 64 amounts");
+      g.pixels(Img.fromBlock(JPG.blockBack(bi, v.K)), box(3), { values: false, grid: true });
+      label(3, `rebuilt from ${v.K}`);
+    },
+  });
+}
+</script>
+
+<p>Over <button class="set" data-set="K=1">smooth sky</button>, one amount, the average shade, is enough. Drag the square onto the roof or the window, where an edge cuts through, and the amounts spread out over many patterns; with <button class="set" data-set="K=4">4</button> the edge is blurred, with <button class="set" data-set="K=12">12</button> it's back. Here is the whole picture, every block keeping only its biggest few:</p>
+
+<figure class="demo" id="jpeg" aria-label="Left: a 128 by 128 gray picture of a country scene with a house. Middle: the same picture rebuilt block by block from only the biggest few pattern amounts in each 8 by 8 block. Right: an enlarged part of the rebuilt picture around the house, where the blocks show."></figure>
+<script>
+{
+  const CROP = [16, 56, 40, 40];
+  demo("jpeg", {
+    aspect: w => (w < 560 ? 0.42 : 2.6),
+    caption: "A 128 × 128 picture (left), the same picture rebuilt from only the biggest few amounts in each 8 × 8 block (middle), and part of the rebuilt picture enlarged (right). A handful per block keeps the scene; the edges show the loss first.",
+    controls: [{ key: "K", label: "Keep per block", type: "stepper", min: 1, max: 64, step: 1, value: 4, color: "purple" }],
+    status: (s, v) => `${v.K} of 64 amounts per block (${Math.round((v.K / 64) * 100)}%), typical pixel off by ${JPG.pictureOff(v.K).toFixed(1)} of 255 shades`,
+    draw(g, s, v) {
+      const phone = g.w < 560, gap = 14, lab = 20, R = JPG.rebuilt(v.K);
+      const n = 3, cw = phone ? g.w : (g.w - gap * 2) / 3, ch = phone ? (g.h - gap * 2) / 3 - lab : g.h - lab, side = Math.min(cw, ch);
+      const box = k => (phone ? [(g.w - side) / 2, k * (ch + lab + gap), side, side] : [k * (cw + gap) + (cw - side) / 2, 0, side, side]);
+      const label = (k, t) => { const b = box(k); g.text(t, [b[0] + side / 2, b[1] + side + 12], { size: 12.5, color: "muted" }); };
+      g.pixels(JPG.IM, box(0), { values: false, mark: CROP });
+      label(0, "original");
+      g.pixels(R, box(1), { values: false });
+      label(1, `${v.K} per block`);
+      g.pixels(R, box(2), { src: CROP, values: false, grid: false });
+      label(2, "enlarged");
+    },
+  });
+}
+</script>
+
+<p>With <button class="set" data-set="K=1">one amount per block</button> the picture is a mosaic of flat 8-pixel tiles. With <button class="set" data-set="K=4">four</button>, 6% of the numbers, the scene is all there, with smudges where edges cross blocks. With <button class="set" data-set="K=10">ten</button> it's hard to tell from the original at this size. JPEG doesn't keep a fixed count per block. It rounds every amount to a coarse step, coarser for the fine patterns the eye notices least, and most small amounts round to zero <a class="cite" href="#ref-wallace"></a>. The big amounts stay; the small ones go.</p>
+
+<aside class="callout key"><p>Most signals people care about are smooth most of the time, so their spectra are dominated by a few large amounts. Storing those and dropping the rest is the core of how sound and image files are made small.</p></aside>
+
+<h2>Circles everywhere</h2>
+
+<p>Every figure on this page did the same two things. It found circles by multiplying and averaging, and it rebuilt something by adding them back up. Computers do the finding with the <dfn data-def="A fast way to compute all the amounts of a sampled signal at once, taking about N log N steps for N points instead of N squared.">fast Fourier transform</dfn>, which gets every amount for <span class="tex">N</span> points in about <span class="tex">N \log_2 N</span> steps instead of <span class="tex">N^2</span>. For a million points that's about twenty million steps instead of a trillion. James Cooley and John Tukey published it in 1965 <a class="cite" href="#ref-cooley"></a>, and it turned out Gauss had used the same trick around 1805, in work published only after his death <a class="cite" href="#ref-heideman"></a>.</p>
+
+<p>The idea reaches well past sound and pictures. Fourier invented it to follow heat, because each circle's worth of temperature fades at its own steady rate, so the hard problem splits into many easy ones <a class="cite" href="#ref-fourier"></a>. The same split handles vibrating drums, quantum particles, and tide tables. And not every signal repeats: a single clap or one heartbeat doesn't. Let the repeat get longer and longer and the whole-number speeds crowd together until they fill in every speed between them, which is the subject of the last note below.</p>
+
+<details class="deeper">
+  <summary>From repeating waves to any wave: the Fourier transform <span class="hint">3 min</span></summary>
+  <p>A single blip that never repeats can be treated as a repeating wave with a very long repeat time <span class="tex">T</span>. The whole-number speeds of a wave that repeats every <span class="tex">T</span> seconds are the frequencies <span class="tex">1/T, 2/T, 3/T, \ldots</span>, so as <span class="tex">T</span> grows they sit closer and closer together. Lengthen the gap between blips and watch the spectrum:</p>
+  <figure class="demo" id="transform" aria-label="Top: a train of rectangular blips, one second wide, repeating every T seconds. Bottom: its spectrum, as stems at the frequencies n over T scaled by T, with a dashed curve they all lie on. As T grows the stems crowd together and fill in the curve."></figure>
+  <script>
+  {
+    demo("transform", {
+      aspect: w => (w < 560 ? 0.95 : 1.7),
+      caption: "A one-second blip repeated every T seconds, and its amounts (times T) at the frequencies n/T. Whatever T is, the stems sit on the same dashed curve; as T grows they fill it in, and the curve is the Fourier transform of a single blip.",
+      controls: [{ key: "T", label: "Repeat every", min: 2, max: 24, step: 0.5, value: 4, unit: "s", color: "blue" }],
+      status: (s, v) => `${Math.floor(3 * v.T) + 1} stems from 0 to 3 per second`,
+      draw(g, s, v) {
+        const gap = 16, h1 = (g.h - gap) * 0.36;
+        const A = g.graph({ box: [0, 0, g.w, h1], x: [-12, 12], y: [-0.3, 1.4], xTicks: { values: [-10, -5, 0, 5, 10] }, yTicks: false, grid: false, xLabel: "time (s)" });
+        const blip = t => { const u = ((t % v.T) + v.T * 1.5) % v.T - v.T / 2; return Math.abs(u) < 0.5 ? 1 : 0; };
+        FS.curve(A, blip, -12, 12, { color: "blue", width: 2 }, 2400);
+        const B = g.graph({ box: [0, h1 + gap, g.w, g.h - h1 - gap], axes: "frame", x: [0, 3], y: [-0.3, 1.1], xTicks: { values: [0, 1, 2, 3] }, yTicks: [0, 0.5, 1], grid: false, xLabel: "frequency (repeats per second)", yLabel: "amount × T" });
+        B.fn(f => (f === 0 ? 1 : Math.sin(Math.PI * f) / (Math.PI * f)), { color: "muted", width: 1.2, dash: [5, 4] });
+        // Each stem measured by multiplying one repeat of the blip by a cosine and averaging (it is symmetric, so the sine part is zero).
+        for (let n = 0; n / v.T <= 3; n++) {
+          const amt = (1 / v.T) * Num.integrate(t => Math.cos((TAU * n * t) / v.T), -0.5, 0.5, 128) * v.T;
+          B.segment([n / v.T, 0], [n / v.T, amt], { color: "purple", width: 2 });
+          B.points([[n / v.T, amt]], { color: "purple", r: 2.5 });
+        }
+      },
+    });
+  }
+  </script>
+  <p>Measured at each allowed frequency and scaled by <span class="tex">T</span>, the amounts always land on the same curve. As <span class="tex">T</span> grows, the stems fill it in completely, and in the limit a single blip has an amount at every frequency, not just at whole multiples. The sum over speeds becomes an integral over frequency, and the multiply-and-average becomes</p>
+  <div class="tex">\hat f(\nu) = \int_{-\infty}^{\infty} f(t)\, e^{-2\pi i \nu t}\, dt</div>
+  <p>the <strong>Fourier transform</strong>: unspin the signal at frequency <span class="tex">\nu</span> and add up what's left. Going back is the same with the sign of the spin flipped, <span class="tex">f(t) = \int \hat f(\nu)\, e^{2\pi i \nu t}\, d\nu</span>. The dashed curve here is <span class="tex">\sin(\pi\nu)/\pi\nu</span>, the transform of a one-second blip. Its first gap at 1 per second, and the way it spreads wider for shorter blips, is the same trade-off as before: the sharper a signal is in time, the more spread out it is in frequency <a class="cite" href="#ref-korner"></a>.</p>
+</details>
+
+<p>A pen at the end of a chain of turning circles turned out to be enough to copy a note, a fish, or a scribble. Every repeating wave and every closed drawing is a recipe of circles, and the recipe can be read off the shape by multiplying and averaging. The only places it struggles are the sudden jumps, where the 9% overshoot never goes away.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-fourier">Joseph Fourier, <em>Théorie analytique de la chaleur</em>, Paris, 1822. English translation by Alexander Freeman, <em>The Analytical Theory of Heat</em>, Cambridge University Press, 1878.</li>
+  <li id="ref-wilbraham">Henry Wilbraham, “On a certain periodic function”, <em>The Cambridge and Dublin Mathematical Journal</em> 3 (1848), 198-201.</li>
+  <li id="ref-michelson">A. A. Michelson and S. W. Stratton, “A new harmonic analyser”, <em>Philosophical Magazine</em>, series 5, 45 (1898), 85-91.</li>
+  <li id="ref-gibbs">J. Willard Gibbs, “Fourier's series”, <em>Nature</em> 59 (1899), 606.</li>
+  <li id="ref-korner">T. W. Körner, <em>Fourier Analysis</em>, Cambridge University Press, 1988. Short chapters on the mathematics and its history, including Dirichlet's proof and the Gibbs phenomenon.</li>
+  <li id="ref-hanson">Norwood Russell Hanson, “The mathematical power of epicyclical astronomy”, <em>Isis</em> 51(2) (1960), 150-158.</li>
+  <li id="ref-brandenburg">Karlheinz Brandenburg, “MP3 and AAC explained”, <em>AES 17th International Conference on High-Quality Audio Coding</em>, 1999.</li>
+  <li id="ref-wallace">Gregory K. Wallace, “The JPEG still picture compression standard”, <em>Communications of the ACM</em> 34(4) (1991), 30-44.</li>
+  <li id="ref-cooley">James W. Cooley and John W. Tukey, “An algorithm for the machine calculation of complex Fourier series”, <em>Mathematics of Computation</em> 19 (1965), 297-301.</li>
+  <li id="ref-heideman">Michael T. Heideman, Don H. Johnson, and C. Sidney Burrus, “Gauss and the history of the fast Fourier transform”, <em>IEEE ASSP Magazine</em> 1(4) (1984), 14-21.</li>
+  <li id="ref-helmholtz">Hermann von Helmholtz, <em>On the Sensations of Tone as a Physiological Basis for the Theory of Music</em>, translated by Alexander J. Ellis, Longmans, Green, and Co., 1875 (German original 1863).</li>
+  <li id="ref-fletcher">Neville H. Fletcher and Thomas D. Rossing, <em>The Physics of Musical Instruments</em>, 2nd edition, Springer, 1998.</li>
+</ol>
+<!-- explainer:article:end -->
+</article>
+</main>
+</div>
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+</body>
+</html>

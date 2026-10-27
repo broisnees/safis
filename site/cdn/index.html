@@ -1,0 +1,1854 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How a CDN Makes a Faraway Site Fast</title>
+<meta name="description" content="Why a page from the other side of the world loads slowly, and how a content delivery network hides the distance with copies, short round trips, and connections kept warm.">
+<meta name="explainer:category" content="Computing">
+<!-- explainer:runtime:start v3 shared -->
+<link rel="stylesheet" href="../safis.css?v=1ad508e56c">
+<script src="../safis.js?v=282c01de29"></script>
+<!-- explainer:runtime:end -->
+</head>
+<body>
+<div class="page has-toc">
+<nav class="toc" aria-label="All explainers"><!-- explainer:nav:start --><a class="site" href="../index.html">Safis</a><h2>Body</h2><ul><li><a href="../jaw-joint/index.html">The Jaw Joint</a></li></ul><h2>Biology</h2><ul><li><a href="../protein/index.html">How a Cell Builds a Protein</a></li><li><a href="../neuron/index.html">How a Neuron Fires</a></li></ul><h2>Chemistry</h2><ul><li><a href="../battery/index.html">The Lithium-Ion Battery</a></li><li><a href="../ice/index.html">Why Ice Floats</a></li></ul><h2>Physics</h2><ul><li><a href="../pendulum/index.html">How a Pendulum Keeps Time</a></li></ul><h2>Machines</h2><ul><li><a href="../lock/index.html">How a Pin Tumbler Lock Knows Your Key</a></li></ul><h2>Earth &amp; Space</h2><ul><li><a href="../tides/index.html">Why There Are Two Tides a Day</a></li></ul><h2>Computing</h2><ul><li><a href="../cdn/index.html" aria-current="page">How a CDN Makes a Faraway Site Fast</a></li><li><a href="../hash-table/index.html">How a Hash Table Finds Things</a></li><li><a href="../dns/index.html">How DNS Turns a Name into an Address</a></li></ul><h2>AI</h2><ul><li><a href="../next-word/index.html">How a Language Model Picks the Next Word</a></li><li><a href="../learning/index.html">How a Neural Network Learns</a></li><li><a href="../attention/index.html">How Attention Works</a></li></ul><h2>Math</h2><ul><li><a href="../matrix/index.html">How a Matrix Transforms Space</a></li><li><a href="../fourier/index.html">How Spinning Circles Draw Anything</a></li></ul><!-- explainer:nav:end --></nav>
+<main>
+<!-- explainer:back:start --><a class="backlink" href="../index.html">← Safis</a><!-- explainer:back:end -->
+<header>
+  <p class="kicker">Computing</p>
+  <h1>How a CDN Makes a Faraway Site Fast</h1>
+  <p class="dek">Why a page from the other side of the world loads slowly, and how a content delivery network hides the distance with copies, short round trips, and connections kept warm.</p>
+</header>
+<article>
+<!-- explainer:article:start -->
+<script>
+// Shared by every figure below: the map, the cities, the speed of light in fiber,
+// the connection model (handshakes and TCP slow start), the page-load model, and the
+// cache models. Every time and hit ratio on the page is computed from these.
+window.CDN = (() => {
+  const { sin, cos, asin, acos, atan2, sqrt, PI } = Math;
+  const rad = d => (d * PI) / 180, deg = r => (r * 180) / PI;
+
+  // ---------- Geography ----------
+  // [lon, lat]
+  const CITY = {
+    london: { name: "London", at: [-0.13, 51.51] },
+    newyork: { name: "New York", at: [-74.01, 40.71] },
+    losangeles: { name: "Los Angeles", at: [-118.24, 34.05] },
+    saopaulo: { name: "São Paulo", at: [-46.63, -23.55] },
+    johannesburg: { name: "Johannesburg", at: [28.05, -26.2] },
+    mumbai: { name: "Mumbai", at: [72.88, 19.08] },
+    singapore: { name: "Singapore", at: [103.82, 1.35] },
+    tokyo: { name: "Tokyo", at: [139.65, 35.68] },
+    sydney: { name: "Sydney", at: [151.21, -33.87] },
+    frankfurt: { name: "Frankfurt", at: [8.68, 50.11] },
+    melbourne: { name: "Melbourne", at: [144.96, -37.81] },
+    perth: { name: "Perth", at: [115.86, -31.95] },
+    auckland: { name: "Auckland", at: [174.76, -36.85] },
+    hongkong: { name: "Hong Kong", at: [114.17, 22.32] },
+    losangeles2: { name: "San Jose", at: [-121.89, 37.34] },
+  };
+  // Measured round trips from London, data center to data center, in ms
+  // (WonderNetwork's ping statistics, October 2026; typical averages, rounded).
+  const MEASURED = [
+    ["newyork", 70], ["losangeles", 125], ["mumbai", 131], ["singapore", 164],
+    ["johannesburg", 167], ["saopaulo", 192], ["tokyo", 234], ["sydney", 270],
+  ];
+
+  // 48 large cities with rough metro populations in millions, for the coverage figures.
+  // The weights are approximate and only stand in for "where people are".
+  const METROS = [
+    ["Tokyo", 139.7, 35.7, 37], ["Delhi", 77.2, 28.6, 32], ["Shanghai", 121.5, 31.2, 29], ["Dhaka", 90.4, 23.8, 23],
+    ["São Paulo", -46.6, -23.6, 22], ["Cairo", 31.2, 30.0, 22], ["Mexico City", -99.1, 19.4, 22], ["Beijing", 116.4, 39.9, 21],
+    ["Mumbai", 72.9, 19.1, 21], ["Osaka", 135.5, 34.7, 19], ["New York", -74.0, 40.7, 19], ["Karachi", 67.0, 24.9, 17],
+    ["Chongqing", 106.6, 29.6, 17], ["Istanbul", 29.0, 41.0, 16], ["Kinshasa", 15.3, -4.3, 16], ["Lagos", 3.4, 6.5, 15],
+    ["Buenos Aires", -58.4, -34.6, 15], ["Kolkata", 88.4, 22.6, 15], ["Manila", 121.0, 14.6, 15], ["Guangzhou", 113.3, 23.1, 14],
+    ["Lahore", 74.3, 31.5, 13], ["Bangalore", 77.6, 13.0, 13], ["Rio de Janeiro", -43.2, -22.9, 13], ["Los Angeles", -118.2, 34.1, 12.5],
+    ["Moscow", 37.6, 55.8, 12.5], ["Chennai", 80.3, 13.1, 11.5], ["Bogotá", -74.1, 4.7, 11], ["Paris", 2.35, 48.86, 11],
+    ["Jakarta", 106.8, -6.2, 11], ["Lima", -77.0, -12.0, 11], ["Bangkok", 100.5, 13.8, 11], ["Seoul", 127.0, 37.6, 10],
+    ["London", -0.13, 51.5, 9.6], ["Tehran", 51.4, 35.7, 9.5], ["Chicago", -87.6, 41.9, 8.9], ["Ho Chi Minh City", 106.7, 10.8, 9],
+    ["Riyadh", 46.7, 24.7, 7.5], ["Madrid", -3.7, 40.4, 6.7], ["Nairobi", 36.8, -1.3, 5], ["Johannesburg", 28.0, -26.2, 6],
+    ["Toronto", -79.4, 43.7, 6.3], ["Singapore", 103.8, 1.35, 6], ["Sydney", 151.2, -33.9, 5.2], ["Santiago", -70.7, -33.4, 6.8],
+    ["Dallas", -96.8, 32.8, 7.6], ["Frankfurt", 8.7, 50.1, 2.7], ["Miami", -80.2, 25.8, 6.1], ["Lisbon", -9.1, 38.7, 2.9],
+  ].map(([name, lon, lat, pop]) => ({ name, at: [lon, lat], pop }));
+
+  const R_EARTH = 6371;
+  // Great-circle distance in km between two [lon, lat] points.
+  function km(a, b) {
+    const dLat = rad(b[1] - a[1]), dLon = rad(b[0] - a[0]);
+    const h = sin(dLat / 2) ** 2 + cos(rad(a[1])) * cos(rad(b[1])) * sin(dLon / 2) ** 2;
+    return 2 * R_EARTH * asin(Math.min(1, sqrt(h)));
+  }
+  const FIBER = 200;                     // km per millisecond: light in glass, refractive index about 1.5
+  const VACUUM = 299.79;                 // km per millisecond
+  const minRtt = d => (2 * d) / FIBER;   // there and back along the straight line, in fiber
+  const STRETCH = 1.6, ACCESS = 10;      // real routes are longer; the reader's own line adds about 10 ms
+  const estRtt = d => ACCESS + STRETCH * minRtt(d);
+
+  // Edge sites, placed one at a time: start with London (the origin's city), then keep adding
+  // the city that most lowers the population-weighted average round trip to the nearest site.
+  let order = null;
+  function siteOrder() {
+    if (order) return order;
+    const D = METROS.map(a => METROS.map(b => estRtt(km(a.at, b.at))));
+    const total = METROS.reduce((n, m) => n + m.pop, 0);
+    const chosen = [METROS.findIndex(m => m.name === "London")];
+    let best = METROS.map((_, i) => D[i][chosen[0]]);
+    const mean = b => METROS.reduce((n, m, i) => n + m.pop * b[i], 0) / total;
+    const means = [mean(best)];
+    while (chosen.length < METROS.length) {
+      let pickI = -1, pickM = Infinity;
+      METROS.forEach((_, j) => {
+        if (chosen.includes(j)) return;
+        const m = mean(best.map((d, i) => Math.min(d, D[i][j])));
+        if (m < pickM) { pickM = m; pickI = j; }
+      });
+      chosen.push(pickI);
+      best = best.map((d, i) => Math.min(d, D[i][pickI]));
+      means.push(pickM);
+    }
+    return (order = { sites: chosen.map(i => METROS[i]), means });
+  }
+  const nearest = (p, sites) => sites.reduce((b, s) => { const d = km(p, s.at); return d < b.d ? { s, d } : b; }, { s: null, d: Infinity });
+
+  const vec = ([lon, lat]) => [cos(rad(lat)) * cos(rad(lon)), cos(rad(lat)) * sin(rad(lon)), sin(rad(lat))];
+  const unvec = ([x, y, z]) => [deg(atan2(y, x)), deg(asin(Math.max(-1, Math.min(1, z))))];
+  // Points along the great circle from a to b.
+  function arc(a, b, n = 72) {
+    const A = vec(a), B = vec(b);
+    const w = acos(Math.max(-1, Math.min(1, A[0] * B[0] + A[1] * B[1] + A[2] * B[2])));
+    if (w < 1e-6) return [a, b];
+    const out = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, s1 = sin((1 - t) * w) / sin(w), s2 = sin(t * w) / sin(w);
+      out.push(unvec([A[0] * s1 + B[0] * s2, A[1] * s1 + B[1] * s2, A[2] * s1 + B[2] * s2]));
+    }
+    return out;
+  }
+  const along = (pts, f) => {
+    const x = Math.max(0, Math.min(1, f)) * (pts.length - 1), i = Math.min(pts.length - 2, Math.floor(x)), t = x - i;
+    let [a, b] = [pts[i], pts[i + 1]];
+    let dl = b[0] - a[0];
+    if (dl > 180) dl -= 360; else if (dl < -180) dl += 360;
+    let lon = a[0] + dl * t;
+    if (lon > 180) lon -= 360; else if (lon < -180) lon += 360;
+    return [lon, a[1] + (b[1] - a[1]) * t];
+  };
+
+  // A flat world map from the kit (equirectangular, cropped to the inhabited latitudes)
+  // drawn into box; returns P([lon, lat]) -> [px, py], with P.inv, P.box, and the map as P.M.
+  function map(g, box, o = {}) {
+    const [lon0, lon1] = o.lon ?? [-168, 180], [lat0, lat1] = o.lat ?? [-47, 72];
+    const M = g.map({ box, pad: o.pad ?? 2, fit: [[lon0, lat0], [lon1, lat1]], graticule: o.graticule === false ? false : { step: 30, alpha: 0.6 },
+      borders: { alpha: 0.35, width: 0.5 }, land: { stroke: "muted", width: 0.8 } });
+    const P = q => M.project(q) ?? [NaN, NaN];
+    P.inv = p => M.invert(p) ?? [NaN, NaN];
+    P.box = box;
+    P.M = M;
+    return P;
+  }
+  // The great-circle route between two places on a map from map().
+  function route(g, P, a, b, o = {}) {
+    return P.M.arc(a, b, { color: o.color ?? "orange", width: o.width ?? 2, dash: o.dash, alpha: o.alpha });
+  }
+
+  // The house glyphs: a reader is a blue dot; the origin a purple block; an edge a green block.
+  function glyph(g, p, kind, o = {}) {
+    const lit = o.lit ? 1.5 : 1;
+    if (kind === "reader") {
+      g.circle(p, (o.r ?? 5.5) * lit, { fill: o.color ?? "blue", stroke: "panel", width: 1.6 });
+    } else if (kind === "origin") {
+      const s = (o.r ?? 7) * lit;
+      g.rect(p[0] - s, p[1] - s, 2 * s, 2 * s, { r: 2, fill: o.color ?? "purple", stroke: "panel", width: 1.6 });
+      g.line([p[0] - s * 0.55, p[1] - s * 0.2], [p[0] + s * 0.55, p[1] - s * 0.2], { stroke: "panel", width: 1.2 });
+      g.line([p[0] - s * 0.55, p[1] + s * 0.3], [p[0] + s * 0.55, p[1] + s * 0.3], { stroke: "panel", width: 1.2 });
+    } else {
+      const s = (o.r ?? 4.5) * lit;
+      g.rect(p[0] - s, p[1] - s, 2 * s, 2 * s, { r: 1.5, fill: o.color ?? "green", stroke: "panel", width: 1.4, alpha: o.alpha });
+    }
+  }
+
+  // ---------- Connections ----------
+  const MSS = 1460, IW = 10;   // bytes per packet; packets in TCP's first flight (RFC 6928)
+  const PROTO = {
+    tls12: { label: "TCP + TLS 1.2", rtts: 3 },
+    tls13: { label: "TCP + TLS 1.3", rtts: 2 },
+    quic: { label: "QUIC (HTTP/3)", rtts: 1 },
+  };
+  // The handshake messages between client a and server b, starting at t0.
+  function handshake(proto, rtt, t0 = 0, a = 0, b = 1) {
+    const h = rtt / 2, m = [];
+    const msg = (from, k, label, cls = "tcp") => m.push({ from: from ? b : a, to: from ? a : b, t0: t0 + k * h, t1: t0 + (k + 1) * h, kind: "hs", cls, label });
+    if (proto === "quic") {
+      msg(0, 0, "Initial: ClientHello", "tls");
+      msg(1, 1, "ServerHello, certificate, Finished", "tls");
+    } else {
+      msg(0, 0, "SYN");
+      msg(1, 1, "SYN-ACK");
+      msg(0, 2, "ACK, ClientHello", "tls");
+      if (proto === "tls12") {
+        msg(1, 3, "ServerHello, certificate", "tls");
+        msg(0, 4, "key exchange, Finished", "tls");
+        msg(1, 5, "Finished", "tls");
+      } else {
+        msg(1, 3, "ServerHello, certificate, Finished", "tls");
+      }
+    }
+    return { msgs: m, ready: t0 + PROTO[proto].rtts * rtt };
+  }
+  const conn = (rtt, o = {}) => ({ rtt, bw: o.bw ?? 50, cwnd: o.cwnd ?? IW });
+  // Server sends `bytes` to the client, starting at time t. TCP slow start: the first flight
+  // is IW packets, and every packet acknowledged lets the window grow by one, so full flights
+  // double once per round trip. Flights take max(rtt, transmit time) apart. Returns the flights
+  // and the time the last byte reaches the client.
+  function transfer(c, t, bytes) {
+    let left = Math.max(1, Math.ceil(bytes / MSS));
+    const bpms = c.bw * 125, flights = [];
+    while (left > 0) {
+      const n = Math.min(c.cwnd, left), tx = (n * MSS) / bpms;
+      flights.push({ t, n, tx, cwnd: c.cwnd });
+      left -= n;
+      c.cwnd = Math.min(c.cwnd + n, 4000);
+      if (left > 0) t += Math.max(c.rtt, tx);
+    }
+    const last = flights[flights.length - 1];
+    return { flights, end: last.t + last.tx + c.rtt / 2 };
+  }
+  // One request on an open connection, sent at t: half a round trip out, `think` ms at the
+  // server, then the response.
+  function request(c, t, bytes, think = 0) {
+    const r = transfer(c, t + c.rtt / 2 + think, bytes);
+    return { ...r, sent: t, firstByte: r.flights[0].t + c.rtt / 2 };
+  }
+  // Messages for a request and its response flights, for the ladder diagrams.
+  function requestMsgs(c, r, a = 0, b = 1, label = "GET") {
+    const m = [{ from: a, to: b, t0: r.sent, t1: r.sent + c.rtt / 2, kind: "req", label }];
+    r.flights.forEach((f, i) => {
+      m.push({ from: b, to: a, t0: f.t, t1: f.t + c.rtt / 2, tx: f.tx, kind: "data", label: `${f.n} packet${f.n > 1 ? "s" : ""}`, n: f.n, i });
+      // the acknowledgements that let the next, bigger burst go
+      const next = r.flights[i + 1];
+      if (next) m.push({ from: a, to: b, t0: f.t + c.rtt / 2, t1: next.t, kind: "ack" });
+    });
+    return m;
+  }
+
+  // ---------- A page ----------
+  // Sizes in bytes. CSS and JS are Bootstrap 5.3.3 and jQuery 3.7.1, measured raw and with
+  // Brotli at quality 11; the HTML is assumed to compress like a typical article page.
+  const PAGE = [
+    { id: "html", label: "HTML", raw: 80000, br: 16000, wave: 0 },
+    { id: "css", label: "CSS", raw: 232803, br: 22709, wave: 1 },
+    { id: "js", label: "JavaScript", raw: 87533, br: 27445, wave: 1 },
+    { id: "img", label: "4 images", raw: 240000, br: 240000, wave: 1 },
+    { id: "font", label: "font", raw: 30000, br: 30000, wave: 2 },
+  ];
+  // Load the page over one connection (HTTP/2 or 3 sends a wave's files together).
+  // o: { rtt, proto, bw, compress, edge: { rtt (reader to edge), originRtt, html: "hit"|"miss",
+  //     statics: "hit"|"miss", warm } }. Returns phases for drawing and the finish time.
+  function loadPage(o) {
+    const proto = o.proto ?? "tls13", bw = o.bw ?? 50;
+    const near = o.edge ? o.edge.rtt : o.rtt;
+    const c = conn(near, { bw });
+    const hs = handshake(proto, near, o.t0 ?? 0);
+    const phases = [{ kind: "connect", t0: o.t0 ?? 0, t1: hs.ready }];
+    const msgs = [...hs.msgs];
+    let t = hs.ready;
+    const size = f => (o.compress === false ? f.raw : f.br);
+    for (let w = 0; w < 3; w++) {
+      const files = PAGE.filter(f => f.wave === w), bytes = files.reduce((n, f) => n + size(f), 0);
+      let think = o.think ?? (w === 0 ? 20 : 2);
+      let miss = false;
+      if (o.edge) {
+        const status = w === 0 ? o.edge.html : o.edge.statics;
+        if (status === "miss") {
+          // The edge asks the origin: a new connection costs the handshake round trips first;
+          // a warm one is already open with a wide window.
+          miss = true;
+          const oc = conn(o.edge.originRtt, { bw: 1000, cwnd: o.edge.warm ? 4000 : IW });
+          const open = o.edge.warm ? 0 : PROTO[proto].rtts * o.edge.originRtt;
+          const back = transfer(oc, open + oc.rtt / 2 + think, bytes).end;
+          think = back;
+        } else think = 1;
+      }
+      const r = request(c, t, bytes, think);
+      phases.push({ kind: miss ? "origin" : "wave", wave: w, t0: t, t1: r.end, firstByte: r.firstByte, files, bytes, flights: r.flights.length });
+      msgs.push(...requestMsgs(c, r, 0, 1, w === 0 ? "GET page" : w === 1 ? "GET files" : "GET font"));
+      t = r.end;
+    }
+    return { phases, msgs, end: t, rtt: near };
+  }
+
+  // ---------- Caches ----------
+  // Zipf popularity: object k (1-based) is requested in proportion to 1 / k^alpha.
+  function zipf(n, alpha) {
+    const w = new Float64Array(n);
+    let s = 0;
+    for (let k = 0; k < n; k++) { w[k] = 1 / Math.pow(k + 1, alpha); s += w[k]; }
+    for (let k = 0; k < n; k++) w[k] /= s;
+    return w;
+  }
+  // H(k) = 1/1^a + 1/2^a + ... + 1/k^a: exact up to 1,000 terms, then the integral, which is
+  // accurate to a few parts in a million beyond that.
+  function H(k, a) {
+    let s = 0;
+    const m = Math.min(k, 1000);
+    for (let i = 1; i <= m; i++) s += Math.pow(i, -a);
+    if (k > 1000) s += Math.abs(a - 1) < 1e-9 ? Math.log((k + 0.5) / 1000.5) : (Math.pow(k + 0.5, 1 - a) - Math.pow(1000.5, 1 - a)) / (1 - a);
+    return s;
+  }
+  // Share of all requests that go to the k most popular of n objects.
+  const topShare = (k, n, a) => H(k, a) / H(n, a);
+  // n objects in log-spaced bins of rank: each bin's share of requests and the popularity
+  // (probability per request) of an object in the middle of it.
+  function bins(n, a, nb = 120) {
+    const total = H(n, a), out = [];
+    let lo = 1, prev = 0;
+    for (let b = 1; b <= nb; b++) {
+      const hi = Math.max(lo, Math.round(Math.pow(n, b / nb)));
+      if (hi < lo) continue;
+      const Hh = H(hi, a), mid = Math.sqrt(lo * hi);
+      out.push({ lo, hi, mid, count: hi - lo + 1, share: (Hh - prev) / total, p: Math.pow(mid, -a) / total });
+      prev = Hh; lo = hi + 1;
+      if (lo > n) break;
+    }
+    return out;
+  }
+
+  // A cache that keeps each object for ttl seconds after fetching it, with requests arriving
+  // at random (Poisson) at rate lambda per second: a miss starts a fresh copy, and the copy
+  // then serves lambda*ttl hits on average, so the hit ratio is lambda*ttl / (1 + lambda*ttl).
+  const ttlHit = (lambda, ttl) => (lambda * ttl) / (1 + lambda * ttl);
+
+  // A seeded random generator, so every reader sees the same requests.
+  function rng(seed) {
+    return () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  // Draw an index from cumulative weights.
+  function pick(cdf, u) {
+    let lo = 0, hi = cdf.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < u) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+  const cumulative = w => { const c = new Float64Array(w.length); let s = 0; w.forEach((x, i) => { s += x; c[i] = s; }); return c; };
+
+  // ---------- Ladder diagrams ----------
+  // Lanes are vertical lines; time runs down. msgs: { from, to, t0, t1, kind, label, tx }.
+  // o: { lanes: [{ label, color }], tMax, t (draw up to this time), labels, tick }
+  function ladder(g, box, msgs, o) {
+    const [x, y, w, h] = box, n = o.lanes.length;
+    const left = o.axis === false ? 6 : 46, top = 28, bottom = 8;
+    const laneX = o.lanes.map((_, i) => x + left + ((w - left - 12) * (o.at ? o.at[i] : n === 1 ? 0.5 : i / (n - 1))) * (o.span ?? 1) + (o.shift ?? 0));
+    const Y = t => y + top + ((h - top - bottom) * t) / o.tMax;
+    const now = o.t ?? Infinity;
+    // time axis
+    if (o.axis !== false) {
+      const step = o.tick ?? Num.niceStep(o.tMax, 5);
+      for (let t = 0; t <= o.tMax + 1e-9; t += step) {
+        g.line([x + left - 8, Y(t)], [x + w, Y(t)], { stroke: "grid", width: 1 });
+        g.text(t >= 1000 ? `${(t / 1000).toFixed(2)} s` : `${Math.round(t)} ms`, [x + left - 12, Y(t)], { size: 11, color: "muted", align: "right" });
+      }
+    }
+    o.lanes.forEach((l, i) => {
+      g.line([laneX[i], y + top - 4], [laneX[i], y + h - bottom], { stroke: l.color ?? "ink", width: 1.6, alpha: 0.85 });
+      // keep lane names inside the box
+      const st = { size: 12.5, weight: 600, color: l.color ?? "ink" }, tw = g.measure(l.label, st);
+      let lx = laneX[i], align = "center";
+      if (lx + tw / 2 > x + w - 2) { lx = laneX[i] + 6; align = "right"; lx = Math.min(lx, x + w - 2); }
+      else if (lx - tw / 2 < x + 2) { lx = Math.max(x + 2, laneX[i] - 6); align = "left"; }
+      g.text(l.label, [lx, y + 12], { ...st, align });
+    });
+    const colorOf = m => m.color ?? (m.kind === "hs" ? "orange" : m.kind === "data" ? "ink" : m.kind === "origin" ? "purple" : "ink");
+    const labelled = [];
+    for (const m of msgs) {
+      if (m.t0 > now) continue;
+      const xa = laneX[m.from], xb = laneX[m.to], c = colorOf(m);
+      const f = Math.min(1, (now - m.t0) / Math.max(1e-6, m.t1 - m.t0));
+      const a = [xa, Y(m.t0)], b = [xa + (xb - xa) * f, Y(m.t0 + (m.t1 - m.t0) * f)];
+      if (m.kind === "ack") {
+        if (f >= 1) g.arrow(a, b, { stroke: "muted", width: 1, head: 5, dash: [3, 3], alpha: 0.8 });
+        continue;
+      }
+      if (m.kind === "data" && m.tx && Y(m.tx) - Y(0) > 2.5) {
+        // a flight that takes time to transmit is a band, not a line
+        const d = Y(m.tx) - Y(0);
+        g.path([a, b, [b[0], b[1] + d], [a[0], a[1] + d]], { fill: g.rgba(c, 0.18), stroke: c, width: 1, close: true });
+      } else if (f >= 1) g.arrow(a, b, { stroke: c, width: m.kind === "data" ? 2 : 1.6, head: 7 });
+      else g.line(a, b, { stroke: c, width: 1.6 });
+      if (o.labels !== false && m.label && f >= 1) labelled.push({ m, a, b, c });
+    }
+    if (o.labels !== false) {
+      let lastY = -1e9;
+      for (const { m, a, b, c } of labelled) {
+        const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (mid[1] - lastY < 12 && !m.force) continue;
+        lastY = mid[1];
+        g.text(m.label, [mid[0], mid[1] - 7], { size: 11.5, color: c === "ink" ? "muted" : c, halo: true, weight: 500 });
+      }
+    }
+    return { laneX, Y };
+  }
+
+  const ms = t => (t >= 1000 ? `${(t / 1000).toFixed(2)} s` : `${Math.round(t)} ms`);
+  const kb = b => (b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1000)} KB`);
+
+  return {
+    CITY, MEASURED, METROS, km, FIBER, VACUUM, minRtt, STRETCH, ACCESS, estRtt, siteOrder, nearest, arc, along, map, route, glyph,
+    MSS, IW, PROTO, handshake, conn, transfer, request, requestMsgs, PAGE, loadPage,
+    zipf, H, topShare, bins, ttlHit, rng, pick, cumulative, ladder, ms, kb,
+  };
+})();
+</script>
+
+<div class="abstract">
+  <ul>
+    <li>Light in optical fiber covers about 200 km per millisecond, so a reader in Sydney can't get an answer from a server in London in less than 170 ms, and real routes take about 270.</li>
+    <li>Loading a page takes many round trips: the TCP and TLS handshakes, then the page, then the files it names, each sent in growing bursts. Distance multiplies every one, which is why latency matters more than bandwidth.</li>
+    <li>A content delivery network puts copies of the site on servers near readers. Most requests become short local round trips, and only the misses travel to the origin.</li>
+    <li>How well that works depends on popularity, freshness, cache keys, how readers are steered to an edge, and caches stacked behind caches. Even pages that can't be cached load faster through an edge, which keeps warm connections open to the origin.</li>
+  </ul>
+</div>
+
+<p class="lede">Put a website on a server in London and open it from Paris, and it appears before you've finished clicking. Open the same page from Sydney, on a connection just as fast, and you wait two or three seconds watching a blank tab. Nothing is wrong with the server or the line. The page is just far away.</p>
+
+<p>Here are both readers loading the same page, a small article with a stylesheet, a script, four images, and a font, from the same server in London. The bars run in real time. Let it play, then turn on <em>Use a CDN</em>:</p>
+
+<figure class="demo wide" id="hero" aria-label="A globe with an origin server in London, a reader in Paris, and a reader in Sydney. Dots travel the long arc between Sydney and London for each round trip. Beside it, two timelines show each reader's page loading; with a CDN, Sydney is served by an edge server in its own city."></figure>
+<script>
+{
+  const C = CDN, paris = [2.35, 48.86], london = C.CITY.london.at, sydney = C.CITY.sydney.at;
+  const near = C.estRtt(C.km(paris, london)), far = C.estRtt(C.km(sydney, london));
+  const runs = {
+    off: { paris: C.loadPage({ rtt: near }), sydney: C.loadPage({ rtt: far }) },
+    on: { paris: C.loadPage({ rtt: near }), sydney: C.loadPage({ rtt: far, edge: { rtt: C.ACCESS, originRtt: far, html: "hit", statics: "hit" } }) },
+  };
+  const LOOP = 4200, path = C.arc(sydney, london, 96);
+  const WAVE = ["page", "files", "font"];
+
+  demo("hero", {
+    aspect: w => (w < 560 ? 0.74 : 1.9),
+    orbit: { yaw: 0, pitch: 0, minPitch: -1.1, maxPitch: 1.1, speed: 0.006 },
+    state: () => ({ t: 0 }),
+    controls: [{ key: "cdn", label: "Use a CDN", type: "toggle", value: false, color: "green" }],
+    caption: "The same page loading in Paris and in Sydney from a server in London, in real time. Sydney's wait is almost all round trips across 17,000 km; a nearby edge server removes them.",
+    change: (key, s) => { s.t = 0; },
+    step(dt, s) { s.t = (s.t + dt * 1000) % LOOP; },
+    status(s, v) {
+      const r = runs[v.cdn ? "on" : "off"];
+      return `Paris ${C.ms(r.paris.end)} · Sydney ${C.ms(r.sydney.end)}`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = runs[v.cdn ? "on" : "off"];
+      const gb = narrow ? [0, 0, g.w, g.h * 0.55] : [0, 0, g.w * 0.44, g.h];
+      const tb = narrow ? [8, g.h * 0.57, g.w - 16, g.h * 0.43] : [g.w * 0.47, 0, g.w * 0.53 - 8, g.h];
+      const M = g.map({ projection: "globe", box: gb, center: [72, 16], view: s.view, pad: 10, borders: { alpha: 0.4, width: 0.5 } });
+      M.arc(sydney, london, { color: "orange", width: 1.6, dash: [4, 4], alpha: v.cdn ? 0.35 : 0.85 });
+      if (!v.cdn) {
+        for (const m of r.sydney.msgs) {
+          if (s.t < m.t0 || s.t > m.t1) continue;
+          let f = (s.t - m.t0) / (m.t1 - m.t0);
+          if (m.from === 1) f = 1 - f;        // server to reader runs the path backwards
+          const p = M.project(C.along(path, f));
+          if (p) g.circle(p, m.kind === "data" ? 5 : 4, { fill: m.kind === "hs" ? "orange" : "ink", stroke: "panel", width: 1.2 });
+        }
+      }
+      const pts = { london: M.project(london), paris: M.project(paris), sydney: M.project(sydney) };
+      if (pts.london) C.glyph(g, pts.london, "origin", { r: 6 });
+      if (pts.paris) C.glyph(g, pts.paris, "reader", { r: 4.5 });
+      if (pts.sydney) {
+        if (v.cdn) C.glyph(g, [pts.sydney[0] - 9, pts.sydney[1] - 7], "edge", { r: 5 });
+        C.glyph(g, pts.sydney, "reader", { r: 5 });
+      }
+      const mid = gb[0] + gb[2] / 2;
+      g.callouts([
+        pts.london && { at: pts.london, text: "origin, London", color: "purple", dy: -10 },
+        pts.paris && { at: pts.paris, text: "Paris", color: "blue", dy: 8 },
+        pts.sydney && { at: pts.sydney, text: v.cdn ? "Sydney + edge" : "Sydney", color: "blue" },
+      ].filter(Boolean), { split: mid, left: gb[0] + 4, right: g.w - gb[0] - gb[2] + 4, size: 12 });
+
+      // timelines
+      const T = 3000, rows = [["Paris", r.paris, near], ["Sydney", r.sydney, v.cdn ? C.ACCESS : far]];
+      const x0 = tb[0] + 4, x1 = tb[0] + tb[2] - 4, X = t => x0 + ((x1 - x0) * Math.min(t, T)) / T;
+      const rowH = narrow ? 50 : 62, top = tb[1] + Math.max(8, (tb[3] - 2 * rowH - 20) / 2);
+      for (let t = 0; t <= T; t += 500) {
+        g.line([X(t), top - 4], [X(t), top + rowH * 2 + 2], { stroke: "grid", width: 1 });
+        g.text(t ? `${t / 1000} s` : "0", [X(t), top + rowH * 2 + 14], { size: 11, color: "muted" });
+      }
+      rows.forEach(([name, run, rtt], k) => {
+        const y = top + k * rowH, by = y + 20, bh = narrow ? 14 : 16;
+        g.text(`${name}`, [x0, y + 6], { size: 13, weight: 600, color: "blue", align: "left" });
+        const via = k === 1 && v.cdn ? `edge server ${Math.round(rtt)} ms away` : `${Math.round(rtt)} ms round trip to London`;
+        g.text(via, [x0 + g.measure(name, { size: 13, weight: 600 }) + 8, y + 6], { size: 11.5, color: k === 1 && v.cdn ? "green" : "muted", align: "left" });
+        for (const ph of run.phases) {
+          if (s.t < ph.t0) continue;
+          const a = X(ph.t0), b = X(Math.min(s.t, ph.t1));
+          const fill = ph.kind === "connect" ? g.rgba("orange", 0.55) : g.rgba("ink", 0.14 + 0.08 * ph.wave);
+          g.rect(a, by, Math.max(1, b - a), bh, { fill, stroke: ph.kind === "connect" ? "orange" : "faint", width: 1 });
+          if (b - a > 34 && !narrow) g.text(ph.kind === "connect" ? "hello" : WAVE[ph.wave], [(a + b) / 2, by + bh / 2], { size: 10.5, color: "ink" });
+        }
+        if (s.t >= run.end) g.text(`done, ${C.ms(run.end)}`, [Math.min(X(run.end) + 6, x1 - 60), by + bh + 12], { size: 11.5, weight: 600, color: "ink", align: "left" });
+      });
+      g.line([X(s.t), top - 8], [X(s.t), top + rowH * 2 + 2], { stroke: "muted", width: 1, dash: [3, 3] });
+    },
+  });
+}
+</script>
+
+<p>Paris is done in under 0.2 seconds and Sydney in about 2.6, and on the globe you can see why: every <span class="c-orange">orange</span> and black dot is a message crossing 17,000 km of ocean and continent, and Sydney can't move on until each reply comes back. With the CDN on, Sydney talks to a server in its own city and finishes in about 0.12 seconds, sooner than Paris.</p>
+
+<p>That server is part of a <dfn data-def="A network of servers spread around the world that keep copies of websites' files and answer readers from nearby.">content delivery network</dfn>, or CDN: hundreds of machines in cities around the world, each holding copies of other people's websites. This page is about how that works. It starts with the speed of light, because that is the one part nobody can engineer away, and it ends with the tricks edge servers use for the pages they can't keep copies of at all.</p>
+
+<h2>Distance</h2>
+
+<p>An answer from a server has to travel to you and back. Over long distances it travels as pulses of light in glass fiber, and light in glass is slower than in a vacuum: glass has a refractive index of about 1.5, so light covers about 200 km in a millisecond instead of 300 <a class="cite" href="#ref-hpbn"></a>. I've put the <span class="c-purple">origin</span>, the server that holds the real site, in London. Drag the <span class="c-blue">reader</span> anywhere on the map, or jump to <button class="set" data-set="lon=-74 lat=40.7">New York</button>, <button class="set" data-set="lon=72.9 lat=19.1">Mumbai</button>, or <button class="set" data-set="lon=151.2 lat=-33.9">Sydney</button>:</p>
+
+<figure class="demo" id="fiber" aria-label="A world map with an origin server in London and a draggable reader. An orange great-circle route joins them, and a pulse of light travels it there and back, slowed ten times. Readouts give the distance and the shortest possible round trip in fiber."></figure>
+<script>
+{
+  const C = CDN, london = C.CITY.london.at, SLOW = 10;
+  let P;
+  demo("fiber", {
+    aspect: w => (w < 560 ? 1.45 : 2.35),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "lon", label: "Longitude", min: -168, max: 180, step: 0.1, value: 151.2, hidden: true },
+      { key: "lat", label: "Latitude", min: -47, max: 72, step: 0.1, value: -33.9, hidden: true },
+    ],
+    caption: "The shortest path from a reader to London over Earth's surface, with light in fiber running it there and back, slowed ten times. Every 1,000 km of distance adds at least 10 ms to a round trip.",
+    change: (key, s) => { s.t = 0; },
+    step(dt, s, v) {
+      const rtt = C.minRtt(C.km([v.lon, v.lat], london));
+      s.t = (s.t + (dt * 1000) / SLOW) % (rtt + 40);
+    },
+    status(s, v) {
+      const d = C.km([v.lon, v.lat], london);
+      return `${Math.round(d).toLocaleString("en-US")} km · at least ${Math.round(C.minRtt(d))} ms there and back`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, me = [v.lon, v.lat], d = C.km(me, london), rtt = C.minRtt(d);
+      const mb = [0, 0, g.w, g.h - (narrow ? 70 : 58)];
+      P = C.map(g, mb);
+      C.route(g, P, me, london, { color: "orange", width: 2 });
+      const path = C.arc(me, london);
+      if (s.t < rtt) {
+        const f = s.t / rtt, q = C.along(path, f < 0.5 ? 2 * f : 2 - 2 * f);
+        g.circle(P(q), 5, { fill: "orange", stroke: "panel", width: 1.5 });
+      }
+      C.glyph(g, P(london), "origin");
+      g.handle(P(me), { color: "blue" });
+      C.glyph(g, P(me), "reader");
+      const y = mb[3] + 22, cols = narrow ? [g.w * 0.17, g.w * 0.5, g.w * 0.83] : [g.w * 0.18, g.w * 0.5, g.w * 0.82];
+      const big = { size: narrow ? 16 : 19, weight: 600 }, small = { size: 11.5, color: "muted" };
+      g.text(`${Math.round(d).toLocaleString("en-US")} km`, [cols[0], y], { ...big, color: "ink" });
+      g.text("straight line", [cols[0], y + 18], small);
+      g.text(`${Math.round(rtt / 2)} ms`, [cols[1], y], { ...big, color: "orange" });
+      g.text("one way, in fiber", [cols[1], y + 18], small);
+      g.text(`${Math.round(rtt)} ms`, [cols[2], y], { ...big, color: "orange" });
+      g.text("there and back", [cols[2], y + 18], small);
+      g.text("light slowed 10×", [mb[0] + 6, mb[3] - 8], { size: 11, color: "muted", align: "left", halo: true });
+    },
+    drag: {
+      hit: (p, s, v) => P && p[1] < P.box[3],
+      move(p, s, v, d, fig) {
+        const [lon, lat] = P.inv(p);
+        fig.setMany({ lon: clamp(lon, -168, 180), lat: clamp(lat, -47, 72) });
+      },
+    },
+  });
+}
+</script>
+
+<p>From Paris the light is back in under 4 ms. From New York it takes 56, and from Sydney, about as far from London as you can get on land, 170 ms. Those are the <dfn data-def="Round-trip time: how long a message takes to reach the other end and for the reply to come back.">round-trip times</dfn>, or RTTs, for a perfect cable laid along the shortest path over Earth's surface, with nothing in the way. No faster hardware will beat them; the only way to shorten them is to shorten the distance.</p>
+
+<p>Real cables don't follow great circles. They run along coasts, around continents, and through cable landing stations, and every router on the way adds a little time. WonderNetwork pings between its servers around the world every hour <a class="cite" href="#ref-wonder"></a>, and I took the typical round trips from London to eight cities. Step through them and compare each measurement with the straight-line minimum:</p>
+
+<figure class="demo" id="measured" aria-label="A scatter plot of measured round-trip times from London to eight cities against their distance, above the orange line of the fastest possible round trip in fiber. A small map shows the selected city's straight route."></figure>
+<script>
+{
+  const C = CDN, london = C.CITY.london.at;
+  const pts = C.MEASURED.map(([id, rtt]) => ({ name: C.CITY[id].name, at: C.CITY[id].at, d: C.km(C.CITY[id].at, london), rtt }));
+  demo("measured", {
+    aspect: w => (w < 560 ? 0.82 : 1.75),
+    controls: [
+      { key: "i", label: "City", type: "stepper", min: 0, max: pts.length - 1, step: 1, value: 7, format: i => pts[Math.round(i)].name, color: "blue" },
+      { key: "est", label: "Show the page's estimate", type: "toggle", value: false, color: "muted" },
+    ],
+    caption: "Typical measured round trips from London (blue dots) against distance. All of them sit above the fiber minimum (orange): real routes run 1.3 to 2.5 times longer.",
+    status(s, v) {
+      const p = pts[Math.round(v.i)];
+      return `${p.name}: measured ${p.rtt} ms, minimum ${Math.round(C.minRtt(p.d))} ms, ${(p.rtt / C.minRtt(p.d)).toFixed(2)}×`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, sel = pts[Math.round(v.i)];
+      const pb = narrow ? [0, 0, g.w, g.h * 0.64] : [0, 0, g.w * 0.6, g.h];
+      const mb = narrow ? [0, g.h * 0.67, g.w, g.h * 0.33] : [g.w * 0.62, g.h * 0.18, g.w * 0.38, g.h * 0.64];
+      const P = g.graph({ box: pb, x: [0, 18000], y: [0, 300], axes: "frame", xTicks: { values: [0, 5000, 10000, 15000], format: x => (x ? `${x / 1000},000` : "0") },
+        yTicks: { step: 100 }, xLabel: "Distance from London (km)", yLabel: "Round trip (ms)" });
+      P.fn(d => (2 * d) / C.VACUUM, { color: "muted", width: 1.5, dash: [3, 4], label: "light in vacuum", labelAt: 15500, labelOffset: [0, 12] });
+      P.fn(d => C.minRtt(d), { color: "orange", width: 2.5, label: "light in fiber", labelAt: 13500, labelOffset: [-6, -12] });
+      if (v.est) P.fn(d => C.estRtt(d), { color: "ink", width: 1.5, dash: [6, 4], label: "estimate", labelAt: 8000, labelOffset: [-14, -12] });
+      for (const p of pts) {
+        if (p === sel) P.segment([p.d, C.minRtt(p.d)], [p.d, p.rtt], { color: "blue", width: 1.5, dash: [2, 3] });
+        P.points([[p.d, p.rtt]], { r: p === sel ? 6 : 4, color: "blue" });
+      }
+      P.label(sel.name, [sel.d, sel.rtt], { dy: -14, color: "blue", align: sel.d > 14000 ? "right" : "center" });
+      const M = C.map(g, mb, { graticule: false });
+      C.route(g, M, sel.at, london, { color: "orange", width: 1.8 });
+      C.glyph(g, M(london), "origin", { r: 5 });
+      C.glyph(g, M(sel.at), "reader", { r: 4.5 });
+    },
+  });
+}
+</script>
+
+<p>Every dot sits above the orange line. New York, with straight cables under the Atlantic, comes closest at 70 ms against a minimum of 56. Sydney takes 270 ms, 1.6 times its minimum, and Tokyo 2.4 times, because its traffic to Europe goes the long way round. From here on, when I need a round trip between two arbitrary places, I use the <button class="set" data-set="est=true">page's estimate</button>: 1.6 times the straight-line minimum, Sydney's own factor, plus 10 ms for the reader's own connection. That makes Sydney to London about 280 ms.</p>
+
+<p>Light will cross the Pacific no faster next year than this year. Bandwidth has grown a thousandfold in a few decades; the speed of light hasn't changed at all. So the question is how many round trips a page needs.</p>
+
+<h2>Handshakes</h2>
+
+<p>Before a browser can ask for a page, it has to set up a connection, and every setup step is a question that waits for an answer. To draw the waiting, I'll use a <dfn data-def="A diagram with one vertical line per machine and time running down the page; each message is a slanted arrow from sender to receiver.">ladder diagram</dfn>: the <span class="c-blue">reader</span> and the <span class="c-purple">server</span> are vertical lines, time runs down the page, and every message is an arrow that slants because it takes time to arrive. Here is the reader in Sydney connecting to London, 280 ms apart. Step through the messages, then switch the protocol:</p>
+
+<figure class="demo" id="handshake" aria-label="A ladder diagram between a reader in Sydney and a server in London, 280 ms apart. Orange arrows are handshake messages; black arrows are the request and the first part of the reply. A choice switches between TCP with TLS 1.2, TCP with TLS 1.3, and QUIC."></figure>
+<script>
+{
+  const C = CDN, RTT = 280;
+  const build = proto => {
+    const hs = C.handshake(proto, RTT), c = C.conn(RTT);
+    const r = C.request(c, hs.ready, 12000);
+    const msgs = [...hs.msgs, ...C.requestMsgs(c, r, 0, 1, proto === "tls12" ? "GET /" : "Finished, GET /")];
+    msgs[msgs.length - 1].label = "the page";
+    return { msgs, firstByte: r.firstByte };
+  };
+  const RUN = { tls12: build("tls12"), tls13: build("tls13"), quic: build("quic") };
+  demo("handshake", {
+    aspect: w => (w < 560 ? 0.78 : 1.45),
+    controls: [
+      { key: "proto", label: "Protocol", type: "choice", value: "tls13", color: "orange",
+        options: [{ value: "tls12", label: "TLS 1.2" }, { value: "tls13", label: "TLS 1.3" }, { value: "quic", label: "QUIC" }] },
+      { key: "k", label: "Messages", min: 0, max: 8, step: 1, value: 8, color: "orange", format: k => `${Math.round(k)} shown` },
+    ],
+    caption: "Setting up a secure connection, then asking for a page, between Sydney and London. Each orange arrow waits for the one before it, so every pair costs a full round trip.",
+    status(s, v) {
+      const run = RUN[v.proto], k = Math.min(Math.round(v.k), run.msgs.length);
+      if (k < run.msgs.length) return k ? `${run.msgs[k - 1].label} · arrives at ${Math.round(run.msgs[k - 1].t1)} ms` : "nothing sent yet";
+      return `${C.PROTO[v.proto].label}: first byte of the page at ${Math.round(run.firstByte)} ms`;
+    },
+    draw(g, s, v) {
+      const run = RUN[v.proto], k = Math.min(Math.round(v.k), run.msgs.length);
+      const narrow = g.w < 560;
+      const L = C.ladder(g, [0, 0, g.w, g.h], run.msgs.slice(0, k), {
+        lanes: [{ label: "reader, Sydney", color: "blue" }, { label: "server, London", color: "purple" }],
+        tMax: 1300, tick: 280, span: narrow ? 1 : 0.86, shift: narrow ? 0 : g.w * 0.05,
+      });
+      if (k === run.msgs.length) {
+        const y = L.Y(run.firstByte);
+        g.line([L.laneX[0] - 30, y], [L.laneX[0] + 8, y], { stroke: "blue", width: 2 });
+        g.text(`first byte, ${Math.round(run.firstByte)} ms`, [L.laneX[0] + 12, y + 12], { size: 12, weight: 600, color: "blue", align: "left", halo: true });
+      }
+    },
+  });
+}
+</script>
+
+<p>With TLS 1.2, the reader sends <code>SYN</code>, waits for <code>SYN-ACK</code>, and only then starts the encryption handshake, which takes two more round trips. The request goes out after three round trips, 840 ms, and the first byte of the page arrives at 1,120 ms. Nothing in that time was limited by the line's speed. Each arrow simply had to wait for the one before it.</p>
+
+<p>The <dfn data-def="Transmission Control Protocol: sets up a reliable connection with a three-way handshake before any data flows.">TCP</dfn> handshake makes sure both ends are listening. The <dfn data-def="Transport Layer Security: agrees on keys and proves the server's identity, so the connection is encrypted.">TLS</dfn> handshake agrees on encryption keys and lets the server prove who it is with a certificate. <button class="set" data-set="proto=tls13 k=8">TLS 1.3</button> folds the key agreement into a single exchange <a class="cite" href="#ref-tls13"></a>, saving one round trip, and <button class="set" data-set="proto=quic k=8">QUIC</button>, the transport under HTTP/3, does the transport and encryption setup together in one <a class="cite" href="#ref-quic"></a>. Across 280 ms, each saved round trip is a quarter of a second. And this was only the first answer: a page needs more than one, and big answers come in pieces.</p>
+
+<p>TCP doesn't know how much the network between the two ends can carry, so it starts cautiously. The first burst of a reply is 10 packets of about 1,460 bytes, roughly 14 KB <a class="cite" href="#ref-iw10"></a>. When those are acknowledged it sends 20, then 40, doubling every round trip until something gets lost. This is <dfn data-def="TCP's start-up rule: send a small burst, then double the burst each round trip while the acknowledgements come back.">slow start</dfn>. Drag the file size and count the round trips:</p>
+
+<figure class="demo" id="slowstart" aria-label="A ladder diagram of a server in London sending a file to Sydney in bursts of 10, 20, 40, 80 packets, one burst per round trip. A slider sets the file size."></figure>
+<script>
+{
+  const C = CDN, RTT = 280;
+  const run = kbytes => { const c = C.conn(RTT); return C.request(c, 0, kbytes * 1000); };
+  demo("slowstart", {
+    aspect: w => (w < 560 ? 0.8 : 1.55),
+    controls: [{ key: "size", label: "File size", min: 10, max: 1000, step: 5, value: 100, unit: " KB", color: "ink",
+      marks: [{ value: 100, label: "100 KB" }, { value: 250, label: "250 KB" }, { value: 500, label: "500 KB" }, { value: 1000, label: "1 MB" }] }],
+    caption: "A file sent on a new connection from London to Sydney. Each burst can only go when the last one is acknowledged, a round trip later, and each is twice as big.",
+    status(s, v) {
+      const r = run(v.size), n = r.flights.length;
+      return `${Math.round(v.size)} KB: ${n} burst${n > 1 ? "s" : ""}, last byte ${Math.round(r.end)} ms after the request`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = run(v.size);
+      const msgs = C.requestMsgs(C.conn(RTT), r, 0, 1, "GET");
+      msgs.forEach(m => { if (m.kind === "data") m.force = true; });
+      C.ladder(g, [0, 0, g.w, g.h], msgs, {
+        lanes: [{ label: "reader, Sydney", color: "blue" }, { label: "server, London", color: "purple" }],
+        tMax: 2100, tick: 280, span: narrow ? 1 : 0.86, shift: narrow ? 0 : g.w * 0.05,
+      });
+    },
+  });
+}
+</script>
+
+<p>A 14 KB file fits in the first burst and costs one round trip. A <button class="set" data-set="size=100">100 KB</button> image takes three bursts, 10, 20, and the last 39 packets, so three round trips. A <button class="set" data-set="size=1000">megabyte</button> needs seven. The bursts only grow wider on the diagram when the bandwidth starts to matter: at 50 Mbit/s, a burst of 320 packets takes 75 ms just to send.</p>
+
+<div class="quiz">
+  <p>The Sydney reader upgrades from a 10 Mbit/s line to 1,000 Mbit/s, a hundred times faster. How much sooner does a 100 KB image from London arrive on a new connection?</p>
+  <div class="choices"><button>About 100 times sooner</button><button>About twice as soon</button><button data-correct>Less than a tenth sooner</button></div>
+  <p class="why">Almost all of the 1.45 seconds is round trips: two for the handshakes, one for the request and the first burst, and two more while slow start opens up. Only the last burst waits on the line's speed. At 10 Mbit/s it takes about 45 ms to send, at 1,000 Mbit/s under 1 ms, so the upgrade saves about 45 ms.</p>
+</div>
+
+<p>Here is the whole cost of fetching one 100 KB file on a new TLS 1.3 connection, split into time spent waiting for round trips and time spent actually sending bytes. Slide the <span class="c-blue">bandwidth</span>, then the <span class="c-orange">round trip</span>:</p>
+
+<figure class="demo" id="bandwidth" aria-label="A plot of the time to fetch a 100 KB file against bandwidth, on a logarithmic axis from 1 to 1,000 Mbit/s, for the chosen round trip and for a 10 ms round trip. A bar below splits the time into waiting for round trips and sending."></figure>
+<script>
+{
+  const C = CDN, SIZE = 100000;
+  const fetchTime = (rtt, bw) => {
+    const hs = C.handshake("tls13", rtt), c = C.conn(rtt, { bw });
+    const r = C.request(c, hs.ready, SIZE);
+    return r.end;
+  };
+  // "Sending" is the part that more bandwidth could remove: the time beyond what an
+  // infinitely fast line would take.
+  const split = (rtt, bw) => { const total = fetchTime(rtt, bw), wait = fetchTime(rtt, 1e9); return { total, wait, sending: total - wait }; };
+  demo("bandwidth", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    controls: [
+      { key: "bw", label: "Bandwidth", min: 0, max: 3, step: 0.01, value: Math.log10(50), color: "blue", format: x => `${Math.round(10 ** x).toLocaleString("en-US")} Mbit/s`,
+        marks: [{ value: 0, label: "1" }, { value: 1, label: "10" }, { value: 2, label: "100" }, { value: 3, label: "1,000" }] },
+      { key: "rtt", label: "Round trip", min: 10, max: 300, step: 1, value: 280, unit: " ms", color: "orange",
+        marks: [{ value: 10, label: "nearby" }, { value: 280, label: "Sydney–London" }] },
+    ],
+    caption: "Time to fetch 100 KB on a new connection. Past about 20 Mbit/s the curve is flat: the remaining time is round trips, and only a shorter round trip brings it down.",
+    status(s, v) {
+      const r = split(v.rtt, 10 ** v.bw);
+      return `${C.ms(r.total)}: ${Math.round(r.wait)} ms waiting, ${Math.round(r.sending)} ms sending`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, bw = 10 ** v.bw, r = split(v.rtt, bw);
+      const pb = [0, 0, g.w, g.h - (narrow ? 66 : 60)];
+      const P = g.graph({ box: pb, x: [1, 1000], y: [0, 2200], xScale: "log", axes: "frame", yTicks: { step: 500, format: t => (t ? `${t / 1000} s` : "0") },
+        xFormat: x => (x >= 1000 ? "1,000" : String(x)), xLabel: "Bandwidth (Mbit/s)", yLabel: "Time to fetch 100 KB" });
+      P.fn(b => fetchTime(v.rtt, b), { color: "orange", width: 2.5, label: `${Math.round(v.rtt)} ms round trip`, labelAt: 300, labelOffset: [0, -14] });
+      P.fn(b => fetchTime(10, b), { color: "green", width: 2, dash: [5, 4], label: "10 ms round trip", labelAt: 300, labelOffset: [0, -12] });
+      P.marker(bw, r.total, { color: "blue", drop: true });
+      // the split bar
+      const y = pb[1] + pb[3] + 18, x0 = 8, W = g.w - 16, scale = W / 2200;
+      const wait = r.wait;
+      g.rect(x0, y, wait * scale, 16, { fill: g.rgba("orange", 0.5), stroke: "orange", width: 1 });
+      g.rect(x0 + wait * scale, y, Math.max(1, r.sending * scale), 16, { fill: g.rgba("blue", 0.5), stroke: "blue", width: 1 });
+      g.text(`waiting for round trips ${Math.round(wait).toLocaleString("en-US")} ms`, [x0, y + 30], { size: 11.5, color: "orange", align: "left", weight: 600 });
+      g.text(`sending ${Math.round(r.sending)} ms`, [x0 + W, y + 30], { size: 11.5, color: "blue", align: "right", weight: 600 });
+    },
+  });
+}
+</script>
+
+<p>At 280 ms the curve is flat across almost the whole range. From 10 to 1,000 Mbit/s the fetch drops from about 1.45 to 1.40 seconds, because the <span class="c-blue">sending</span> part was small to begin with. <button class="set" data-set="rtt=10">Cut the round trip to 10 ms</button> instead and the same file arrives in about 60 ms. For files of this size, the time it takes is set by the number of round trips times the length of each <a class="cite" href="#ref-hpbn"></a>. Bandwidth only takes over for big downloads, like video, where the bursts have grown wide enough to fill the line.</p>
+
+<p>A page also isn't one file. The browser gets the HTML first and only then learns which stylesheet, script, and images it names. The stylesheet in turn names a font, which can't be requested until the stylesheet arrives. That makes three rounds of discovery after the handshakes, each of which waits for the one before. Slide the round trip and watch the whole load stretch:</p>
+
+<figure class="demo" id="waves" aria-label="A waterfall chart of one page loading: the connection, then the HTML, then the stylesheet, script, and images together, then the font. Tick marks along the time axis count round trips. A slider sets the round-trip time."></figure>
+<script>
+{
+  const C = CDN;
+  const ROWS = [["connect", "handshakes"], ["html", "HTML"], ["css", "CSS"], ["js", "JavaScript"], ["img", "4 images"], ["font", "font"]];
+  demo("waves", {
+    aspect: w => (w < 560 ? 1.05 : 1.9),
+    controls: [{ key: "rtt", label: "Round trip", min: 10, max: 300, step: 1, value: 280, unit: " ms", color: "orange",
+      marks: [{ value: 16, label: "Paris" }, { value: 99, label: "New York" }, { value: 280, label: "Sydney" }] }],
+    caption: "One page loading over a single new connection. Whatever the distance, the load costs about nine round trips, so its time grows in step with the round trip.",
+    status(s, v) {
+      const r = C.loadPage({ rtt: v.rtt });
+      return `${C.ms(r.end)}, about ${(r.end / v.rtt).toFixed(1)} round trips`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = C.loadPage({ rtt: v.rtt });
+      const left = narrow ? 76 : 96, top = 10, bottom = 34, rowH = (g.h - top - bottom) / ROWS.length;
+      const T = 3000, X = t => left + ((g.w - left - 12) * t) / T;
+      // a tick for every round trip
+      for (let k = 1; k * v.rtt <= T; k++) {
+        if (v.rtt * (g.w - left) / T < 4) break;
+        g.line([X(k * v.rtt), top], [X(k * v.rtt), g.h - bottom], { stroke: "grid", width: 1 });
+      }
+      for (let t = 0; t <= T; t += 500) g.text(t ? `${t / 1000} s` : "0", [X(t), g.h - bottom + 14], { size: 11, color: "muted" });
+      ROWS.forEach(([id, label], i) => {
+        const y = top + i * rowH, bh = Math.min(18, rowH * 0.56);
+        g.text(label, [left - 10, y + rowH / 2], { size: 12.5, color: id === "connect" ? "orange" : "ink", align: "right" });
+        const ph = id === "connect" ? r.phases[0] : r.phases.find(p => p.files && p.files.some(f => f.id === id));
+        if (!ph) return;
+        const a = X(ph.t0), b = X(ph.t1);
+        if (id === "connect") g.rect(a, y + (rowH - bh) / 2, b - a, bh, { fill: g.rgba("orange", 0.5), stroke: "orange", width: 1 });
+        else {
+          const fb = X(ph.firstByte);
+          g.rect(a, y + (rowH - bh) / 2, fb - a, bh, { fill: g.rgba("orange", 0.14), stroke: "faint", width: 1 });
+          g.rect(fb, y + (rowH - bh) / 2, Math.max(1.5, b - fb), bh, { fill: g.rgba("ink", 0.35), stroke: "ink", width: 1 });
+        }
+      });
+      g.line([X(r.end), top], [X(r.end), g.h - bottom], { stroke: "ink", width: 1.5, dash: [4, 3] });
+      g.text(`done, ${C.ms(r.end)}`, [Math.min(X(r.end) + 6, g.w - 70), top + 8], { size: 12, weight: 600, align: "left", halo: true });
+    },
+  });
+}
+</script>
+
+<p>Each bar's pale part is the wait for its first byte; the dark part is the bursts arriving. From Sydney the page takes 2.6 seconds, about nine round trips: two for the handshakes and seven more for the three rounds of requests and their bursts. From <button class="set" data-set="rtt=16">Paris</button> it takes 190 ms, and the dark parts, the actual sending, become a visible share of the time. The thin gray ticks mark one round trip each, and nearly every bar starts and ends on one.</p>
+
+<aside class="callout key"><p>A page load costs a fairly fixed number of round trips. The only way to make it much faster from far away is to make each round trip shorter, which means answering from somewhere closer.</p></aside>
+
+<h2>Edges</h2>
+
+<p>If the round trips can't get faster, they have to get shorter. A CDN runs <dfn data-def="A CDN server close to readers that answers them directly, from its own copies when it can.">edge servers</dfn> in many cities, and readers talk to the nearest one instead of the origin. The edge keeps copies of the site's files, so it can usually answer on its own. Here are 20 <span class="c-green">edge sites</span>. Drag the <span class="c-blue">reader</span> around and compare the two round trips:</p>
+
+<figure class="demo" id="edges" aria-label="A world map with 20 green edge sites and the purple origin in London. A draggable reader is joined to its nearest edge by a short green line and to the origin by a faint orange route. Readouts compare the round trips and page-load times."></figure>
+<script>
+{
+  const C = CDN, london = C.CITY.london.at;
+  const sites = C.siteOrder().sites.slice(0, 20);
+  let P;
+  demo("edges", {
+    aspect: w => (w < 560 ? 1.3 : 2.2),
+    controls: [
+      { key: "lon", label: "Longitude", min: -168, max: 180, step: 0.1, value: 116.4, hidden: true },
+      { key: "lat", label: "Latitude", min: -47, max: 72, step: 0.1, value: -31.9, hidden: true },
+    ],
+    caption: "Twenty edge sites and one origin. The reader's page comes from the nearest edge, a short hop away, instead of crossing the world.",
+    status(s, v) {
+      const me = [v.lon, v.lat], n = C.nearest(me, sites);
+      return `nearest edge ${n.s.name}, ${Math.round(n.d).toLocaleString("en-US")} km away`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, me = [v.lon, v.lat];
+      const mb = [0, 0, g.w, g.h - (narrow ? 70 : 58)];
+      P = C.map(g, mb);
+      const n = C.nearest(me, sites), eRtt = C.estRtt(n.d), oRtt = C.estRtt(C.km(me, london));
+      C.route(g, P, me, london, { color: "orange", width: 1.5, dash: [4, 4], alpha: 0.6 });
+      for (const site of sites) C.glyph(g, P(site.at), "edge", { r: 3.6, lit: site === n.s });
+      C.route(g, P, me, n.s.at, { color: "green", width: 2.5 });
+      C.glyph(g, P(london), "origin", { r: 6 });
+      g.handle(P(me), { color: "blue" });
+      C.glyph(g, P(me), "reader");
+      const viaEdge = C.loadPage({ rtt: oRtt, edge: { rtt: eRtt, originRtt: oRtt, html: "hit", statics: "hit" } }).end;
+      const direct = C.loadPage({ rtt: oRtt }).end;
+      const y = mb[3] + 22, cols = [g.w * 0.17, g.w * 0.5, g.w * 0.83];
+      const big = { size: narrow ? 16 : 19, weight: 600 }, small = { size: 11.5, color: "muted" };
+      g.text(`${Math.round(eRtt)} ms`, [cols[0], y], { ...big, color: "green" });
+      g.text(narrow ? "to the edge" : `round trip to ${n.s.name}`, [cols[0], y + 18], small);
+      g.text(C.ms(viaEdge), [cols[1], y], { ...big, color: "green" });
+      g.text("page from the edge", [cols[1], y + 18], small);
+      g.text(C.ms(direct), [cols[2], y], { ...big, color: "orange" });
+      g.text(narrow ? "from London" : `page from London (${Math.round(oRtt)} ms)`, [cols[2], y + 18], small);
+    },
+    drag: {
+      hit: (p) => P && p[1] < P.box[3],
+      move(p, s, v, d, fig) { const [lon, lat] = P.inv(p); fig.setMany({ lon: clamp(lon, -168, 180), lat: clamp(lat, -47, 72) }); },
+    },
+  });
+}
+</script>
+
+<p>From Perth the nearest site is Sydney, 3,200 km away, and the page arrives in about 0.6 seconds instead of 2.2. The nine round trips are still there; each is just a fifth as long. Move the reader to a city with its own site, like <button class="set" data-set="lon=-46.6 lat=-23.6">São Paulo</button>, and the round trip falls to the 10 ms of the reader's own connection.</p>
+
+<p>Where should the sites go? I placed these 20 with a simple rule over 48 of the world's largest cities, weighted by their rough populations: start with London, then keep adding whichever city most lowers the average round trip from everyone to their nearest site. Real networks choose sites where internet exchanges and data centers are, but the rule shows the trade-off. Add sites one at a time:</p>
+
+<figure class="demo" id="coverage" aria-label="A world map with each country shaded by the round trip from its middle to the nearest edge site, above a plot of the population-weighted average round trip against the number of sites."></figure>
+<script>
+{
+  const C = CDN, ORDER = C.siteOrder(), MAX = 40;
+  demo("coverage", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    controls: [{ key: "k", label: "Edge sites", type: "stepper", min: 1, max: MAX, step: 1, value: 6, color: "green" }],
+    caption: "Edge sites added one at a time, each where it most helps. The first handful cut the average round trip from 131 ms to under 50; after twenty, each new site helps a few readers by a few milliseconds.",
+    status: (s, v) => `${Math.round(v.k)} site${v.k > 1 ? "s" : ""}: average round trip ${Math.round(ORDER.means[Math.round(v.k) - 1])} ms`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, k = Math.round(v.k), sites = ORDER.sites.slice(0, k);
+      const mh = Math.min(g.h * 0.6, g.w / 2.6);
+      const mb = [0, 0, g.w, mh];
+      const pb = [0, mh + 8, g.w, g.h - mh - 8];
+      const M = C.map(g, mb, { graticule: false });
+      // every country shaded by the estimated round trip from its middle to the nearest site
+      M.M.choropleth(c => C.estRtt(C.nearest(c.center, sites).d), {
+        color: "orange", range: [10, 250], steps: 6, borderColor: "panel",
+        legend: narrow ? false : { title: "Round trip to the nearest site", at: "bottom-left", format: x => `${Math.round(x)} ms` },
+      });
+      sites.forEach((site, i) => C.glyph(g, M(site.at), "edge", { r: 3.8, lit: i === k - 1 && k > 1 }));
+      if (k > 1) g.label(`newest site: ${sites[k - 1].name}`, [mb[0] + mb[2] - 8, mb[1] + 14], { color: "green", align: "right", size: 12 });
+      const P = g.graph({ box: pb, x: [0, MAX], y: [0, 140], axes: "frame", xTicks: { values: [1, 10, 20, 30, 40] }, yTicks: { values: [0, 50, 100] },
+        xLabel: "Edge sites", yLabel: "Average round trip (ms)" });
+      P.polyline(ORDER.means.slice(0, MAX).map((m, i) => [i + 1, m]), { color: "green", width: 2.5 });
+      P.hline(C.ACCESS, { color: "muted", label: "the reader's own line" });
+      P.marker(k, ORDER.means[k - 1], { color: "green", drop: true, label: `${Math.round(ORDER.means[k - 1])} ms`, pos: "ne" });
+    },
+  });
+}
+</script>
+
+<p>With only the origin in London, the average reader in these 48 cities waits 131 ms per round trip. The second site goes to central China and the third to Bogotá, and by six sites the average is 41 ms. After that the curve flattens: <button class="set" data-set="k=20">twenty sites</button> give 18 ms, and the last twenty together save only another 7, because the remaining gaps serve fewer people. The floor is the reader's own connection, which no CDN can shorten. Large CDNs run hundreds of sites anyway; Akamai described more than 61,000 servers in nearly 1,000 networks in 2010 <a class="cite" href="#ref-akamai"></a>. Being inside the reader's own internet provider, a few milliseconds away, also beats being in the same city.</p>
+
+<p>So far I've assumed the edge already has every file. When it doesn't, it has to fetch the file from the origin, and the reader waits for that too. Here is one 100 KB file requested through the Sydney edge, 10 ms from the reader and 270 ms from London. Switch between a <span class="c-green">hit</span> and a <span class="c-purple">miss</span>:</p>
+
+<figure class="demo" id="hitmiss" aria-label="A ladder diagram with three lanes: the reader in Sydney, the edge in Sydney close beside it, and the origin in London. On a hit, the exchange stays between the first two lanes and takes about 60 ms. On a miss, the edge opens a connection to London and fetches the file, which takes over a second."></figure>
+<script>
+{
+  const C = CDN, RE = 10, RO = 270, SIZE = 100000;
+  function run(miss) {
+    const hs = C.handshake("tls13", RE, 0, 0, 1), c = C.conn(RE);
+    hs.msgs.forEach(m => { m.label = ""; });
+    const msgs = [...hs.msgs];
+    const tReq = hs.ready, atEdge = tReq + RE / 2;
+    msgs.push({ from: 0, to: 1, t0: tReq, t1: atEdge, kind: "req", label: "" });
+    let end;
+    if (!miss) {
+      const r = C.transfer(c, atEdge + 1, SIZE);
+      r.flights.forEach(f => msgs.push({ from: 1, to: 0, t0: f.t, t1: f.t + RE / 2, kind: "data", color: "green" }));
+      end = r.end;
+    } else {
+      // the edge opens its own connection to the origin, asks, and passes each burst on as it arrives
+      const ohs = C.handshake("tls13", RO, atEdge, 1, 2), oc = C.conn(RO, { bw: 1000 });
+      ohs.msgs.forEach(m => { m.color = "purple"; });
+      msgs.push(...ohs.msgs);
+      const r = C.request(oc, ohs.ready, SIZE);
+      msgs.push(...C.requestMsgs(oc, r, 1, 2, "GET").map(m => ({ ...m, color: m.kind === "ack" ? undefined : "purple" })));
+      r.flights.forEach(f => { const t = f.t + RO / 2 + f.tx; msgs.push({ from: 1, to: 0, t0: t, t1: t + RE / 2, kind: "data", color: "green" }); });
+      end = r.end + RE / 2;
+    }
+    return { msgs, end };
+  }
+  const RUN = { hit: run(false), miss: run(true) };
+  demo("hitmiss", {
+    aspect: w => (w < 560 ? 0.8 : 1.5),
+    controls: [{ key: "mode", label: "The edge", type: "choice", value: "miss", color: "purple",
+      options: [{ value: "hit", label: "has the file (hit)" }, { value: "miss", label: "doesn't (miss)" }] }],
+    caption: "One file through an edge. A hit stays inside Sydney. A miss with a fresh connection to the origin pays every London round trip, plus the hop to the edge.",
+    status: (s, v) => `${v.mode === "hit" ? "hit" : "miss"}: file arrives after ${Math.round(RUN[v.mode].end)} ms (straight from London: 1,409 ms)`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = RUN[v.mode];
+      const L = C.ladder(g, [0, 0, g.w, g.h], r.msgs, {
+        lanes: [{ label: "reader", color: "blue" }, { label: "edge, Sydney", color: "green" }, { label: "origin, London", color: "purple" }],
+        at: [0, narrow ? 0.3 : 0.22, 1], tMax: 1500, tick: 270, labels: v.mode === "miss",
+      });
+      const y = L.Y(r.end);
+      g.line([L.laneX[0] - 24, y], [L.laneX[0] + 8, y], { stroke: "blue", width: 2 });
+      g.text(`file complete, ${Math.round(r.end)} ms`, [L.laneX[0] + 6, y + 13], { size: 12, weight: 600, color: "blue", align: "left", halo: true });
+      if (v.mode === "hit") g.label("everything happens up here", [L.laneX[1] + 14, L.Y(40)], { color: "green", align: "left", size: 12 });
+    },
+  });
+}
+</script>
+
+<p>A <dfn data-def="A request the edge answers from its own copy.">hit</dfn> is over in about 60 ms: two short round trips for the handshakes and three for the bursts, all inside Sydney. A <dfn data-def="A request the edge can't answer from its own copy, so it fetches the file from the origin (or another cache) first.">miss</dfn> takes 1.4 seconds. The edge has to open its own connection to London, with the same handshakes and the same slow start across the same 270 ms, before it can pass the bursts along. That's no faster than going to London directly. An edge only speeds things up when it already has the file, so the next question is how often it does.</p>
+
+<h2>Hits and misses</h2>
+
+<p>An edge can't keep a copy of everything; its disks and memory are shared by thousands of sites. When it's full and a new file arrives, something has to go. The usual rule is to evict the <dfn data-def="Least recently used: when the cache is full, throw out the item that has gone longest without being asked for.">least recently used</dfn> file, the one that has waited longest since anyone asked for it. Here is a tiny edge with a few slots, and requests for 40 files arriving one by one. Lower numbers are more popular files. Watch the <span class="c-green">hits</span> and <span class="c-purple">misses</span>, then change how popularity is spread:</p>
+
+<figure class="demo" id="shelf" aria-label="An animated cache: requests for numbered files arrive at the left; files already in the row of cache slots are hits and turn green, others are misses fetched from the origin in purple, pushing the least recently used file off the end. A strip below records recent hits and misses."></figure>
+<script>
+{
+  const C = CDN, N = 40, RATE = 3.2;   // requests per second, slowed so they can be followed
+  const CDFS = { zipf: C.cumulative(C.zipf(N, 1)), flat: C.cumulative(new Array(N).fill(1 / N)) };
+  const next = seed => { let t = (seed + 0x6d2b79f5) | 0; const s2 = t; t = Math.imul(t ^ (t >>> 15), 1 | t); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return [s2, ((t ^ (t >>> 14)) >>> 0) / 4294967296]; };
+  function serve(s, v) {
+    const [seed, u] = next(s.seed);
+    s.seed = seed;
+    const f = C.pick(CDFS[v.pop], u) + 1, i = s.cache.indexOf(f), hit = i >= 0;
+    let evicted = null;
+    if (hit) s.cache.splice(i, 1);
+    else if (s.cache.length >= v.slots) evicted = s.cache.pop();
+    s.cache.unshift(f);
+    s.log.push(hit ? 1 : 0);
+    if (s.log.length > 400) s.log.shift();
+    s.hits += hit; s.n += 1;
+    s.last = { f, hit, evicted };
+  }
+  // the long-run hit ratio for each setting, from 20,000 simulated requests
+  const longRun = {};
+  function lr(v) {
+    const key = `${v.pop}|${v.slots}`;
+    if (longRun[key] == null) { const s = { seed: 7, cache: [], log: [], hits: 0, n: 0 }; for (let i = 0; i < 20000; i++) serve(s, v); longRun[key] = s.hits / s.n; }
+    return longRun[key];
+  }
+  // start with 30 requests already served, so the cache is warm
+  const fresh = (v = { slots: 8, pop: "zipf" }) => { const s = { seed: 11, cache: [], log: [], hits: 0, n: 0, clock: 0, last: null }; for (let i = 0; i < 30; i++) serve(s, v); return s; };
+  demo("shelf", {
+    aspect: w => (w < 560 ? 0.95 : 2.1),
+    state: () => fresh(),
+    reset: (s, v) => Object.assign(s, fresh(v)),
+    controls: [
+      { key: "slots", label: "Cache slots", type: "stepper", min: 2, max: 20, step: 1, value: 8, color: "green" },
+      { key: "pop", label: "Popularity", type: "choice", value: "zipf", color: "ink",
+        options: [{ value: "zipf", label: "a few files are popular" }, { value: "flat", label: "all equally popular" }] },
+    ],
+    caption: "A least-recently-used cache in action. With skewed popularity, eight slots for 40 files catch about half the requests; with even popularity, they catch only a fifth.",
+    change(key, s, v) { Object.assign(s, fresh(v)); },
+    step(dt, s, v) { s.clock += dt * RATE; while (s.clock >= 1) { s.clock -= 1; serve(s, v); } },
+    status: (s, v) => `${s.n ? Math.round((100 * s.hits) / s.n) : 0}% hits so far (${s.n} requests) · long run ${Math.round(100 * lr(v))}%`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, slots = Math.round(v.slots);
+      const top = narrow ? 30 : 34;
+      const inX = narrow ? 10 : 18, cx0 = narrow ? 64 : 110;
+      const cw = Math.min(narrow ? 30 : 44, (g.w - cx0 - 16) / Math.max(slots, 8)), ch = Math.min(cw * 1.2, 44);
+      const rowsWrap = narrow && slots > 9 ? 2 : 1, perRow = Math.ceil(slots / rowsWrap);
+      const cwr = rowsWrap > 1 ? Math.min(cw * 1.6, (g.w - cx0 - 16) / perRow) : cw;
+      g.text("request", [inX, top - 18], { size: 11.5, color: "muted", align: "left" });
+      g.text("cache, most recently used first →", [cx0, top - 18], { size: 11.5, color: "muted", align: "left" });
+      const L = s.last, flash = 1 - (s.clock % 1);
+      if (L) {
+        const c = L.hit ? "green" : "purple";
+        g.rect(inX, top, cw, ch, { r: 4, fill: g.rgba(c, 0.25 + 0.4 * flash), stroke: c, width: 2 });
+        g.text(String(L.f), [inX + cw / 2, top + ch / 2], { font: "mono", size: 13, weight: 600 });
+        g.text(L.hit ? "hit" : "miss", [inX + cw / 2, top + ch + 14], { size: 12, weight: 600, color: c });
+      }
+      for (let i = 0; i < slots; i++) {
+        const r = Math.floor(i / perRow), col = i % perRow;
+        const x = cx0 + col * cwr, y = top + r * (ch + 8);
+        const f = s.cache[i];
+        const fresh = L && i === 0;
+        g.rect(x + 2, y, cwr - 4, ch, { r: 4, fill: f == null ? null : fresh ? g.rgba(L.hit ? "green" : "purple", 0.2) : g.rgba("ink", 0.05), stroke: f == null ? "faint" : "muted", width: 1 });
+        if (f != null) g.text(String(f), [x + cwr / 2, y + ch / 2], { font: "mono", size: 13, color: "ink" });
+      }
+      if (L && L.evicted != null) {
+        const x = cx0 + Math.min(slots, perRow) * cwr + 6, y = top + (rowsWrap - 1) * (ch + 8);
+        if (x + 40 < g.w) g.text(`${L.evicted} out`, [x, y + ch / 2], { size: 12, color: "muted", align: "left" });
+      }
+      // strip of recent results
+      const sy = top + rowsWrap * (ch + 8) + (narrow ? 34 : 40), n = narrow ? 30 : 60, sw = (g.w - 20) / n;
+      g.text("last requests, oldest on the left", [10, sy - 10], { size: 11.5, color: "muted", align: "left" });
+      const recent = s.log.slice(-n);
+      recent.forEach((h, i) => g.rect(10 + i * sw + 1, sy, sw - 2, 14, { r: 2, fill: h ? "green" : "purple", alpha: 0.75 }));
+      for (let i = recent.length; i < n; i++) g.rect(10 + i * sw + 1, sy, sw - 2, 14, { r: 2, stroke: "faint", width: 1 });
+      // the popularity of each file
+      const py = sy + 32, ph = g.h - py - 18, cdf = CDFS[v.pop], bw = (g.w - 20) / N;
+      if (ph > 20) {
+        let prev = 0;
+        for (let k = 0; k < N; k++) {
+          const p = cdf[k] - prev; prev = cdf[k];
+          const hgt = Math.min(1, p / 0.25) * ph;
+          g.rect(10 + k * bw + 1, py + ph - hgt, bw - 2, hgt, { fill: s.cache.includes(k + 1) ? g.rgba("green", 0.6) : g.rgba("ink", 0.18) });
+        }
+        g.text("how often each file is asked for, 1 to 40 (green: in the cache now)", [10, g.h - 6], { size: 11, color: "muted", align: "left" });
+      }
+    },
+  });
+}
+</script>
+
+<p>When <button class="set" data-set="pop=zipf">a few files are popular</button>, the same handful keep coming back. They stay near the front of the row and almost never fall off, so with 8 slots for 40 files about half of all requests are hits. When <button class="set" data-set="pop=flat">all files are equally popular</button>, 8 slots hold 8 random files out of 40, and the hit ratio sinks to about a fifth, no better than 8 in 40. The <dfn data-def="The share of requests an edge answers from its own copies.">hit ratio</dfn> isn't a property of the cache alone. It comes from how unevenly readers want things.</p>
+
+<p>Real traffic is very uneven. Lee Breslau and his colleagues found that requests passing through web proxies follow a <dfn data-def="A popularity pattern where the k-th most popular item is asked for in proportion to 1/k^α.">Zipf-like</dfn> pattern: the file ranked <em>k</em> is asked for in proportion to <span class="tex">1/k^{\alpha}</span>, with <span class="tex">\alpha</span> between about 0.6 and 0.7 in their traces <a class="cite" href="#ref-breslau"></a>. Here is that curve for a site with a million files. Choose how many of the most popular ones the edge keeps, and see what share of requests they cover:</p>
+
+<figure class="demo" id="zipf" aria-label="Left, the popularity of a million files against their rank on logarithmic axes, a straight sloping line, with the most popular files shaded green up to the cache size. Right, the share of all requests covered by caching the top files, rising slowly with the number cached."></figure>
+<script>
+{
+  const C = CDN, N = 1e6;
+  demo("zipf", {
+    aspect: w => (w < 560 ? 0.85 : 2.0),
+    controls: [
+      { key: "k", label: "Cache keeps the top", min: 0, max: 6, step: 0.01, value: 4, color: "green", format: x => `${Math.round(10 ** x).toLocaleString("en-US")} files`,
+        marks: [{ value: 2, label: "100" }, { value: 4, label: "10,000" }, { value: 6, label: "1,000,000" }] },
+      { key: "a", label: "Exponent α", min: 0.5, max: 1.2, step: 0.01, value: 0.8, color: "ink" },
+    ],
+    presets: [{ label: "proxy traces, α 0.65", set: { a: 0.65 } }, { label: "α = 1", set: { a: 1 } }],
+    caption: "Zipf-like popularity over a million files. A small cache catches the head of the curve, but the long tail holds a large share of requests, and each tenfold increase in cache size adds roughly the same share.",
+    status: (s, v) => `top ${Math.round(10 ** v.k).toLocaleString("en-US")} files (${((100 * 10 ** v.k) / N).toPrecision(2)}%) get ${Math.round(100 * C.topShare(Math.round(10 ** v.k), N, v.a))}% of requests`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, k = Math.round(10 ** v.k), a = v.a, total = C.H(N, a);
+      const lb = narrow ? [0, 0, g.w, g.h * 0.5] : [0, 0, g.w * 0.5, g.h];
+      const rb = narrow ? [0, g.h * 0.52, g.w, g.h * 0.48] : [g.w * 0.52, 0, g.w * 0.48, g.h];
+      const pmax = 1 / total, pmin = Math.pow(N, -a) / total;
+      const P = g.graph({ box: lb, x: [1, N], y: [1e-9, 1], xScale: "log", yScale: "log", axes: "frame", xLabel: "Rank of the file", yLabel: "Share of requests",
+        xTicks: { values: [1, 100, 1e4, 1e6] }, yTicks: { values: [1e-8, 1e-6, 1e-4, 1e-2, 1] }, xFormat: x => (x >= 1e6 ? "1M" : x >= 1e4 ? "10k" : String(x)), yFormat: y => (y === 1 ? "1" : `10⁻${String(Math.round(-Math.log10(y))).replace(/\d/g, d => "⁰¹²³⁴⁵⁶⁷⁸⁹"[d])}`) });
+      const pts = [];
+      for (let e = 0; e <= 6.0001; e += 0.05) pts.push([10 ** e, Math.pow(10 ** e, -a) / total]);
+      const head = pts.filter(p => p[0] <= k);
+      if (head.length > 1) P.polyline([...head, [head[head.length - 1][0], 1e-9], [1, 1e-9]], { fill: g.rgba("green", 0.25), color: "green", width: 0 });
+      P.polyline(pts, { color: "ink", width: 2 });
+      P.vline(k, { color: "green" });
+      const Q = g.graph({ box: rb, x: [1, N], y: [0, 1], xScale: "log", axes: "frame", xLabel: "Files kept (most popular first)", yLabel: "Requests covered",
+        xTicks: { values: [1, 100, 1e4, 1e6] }, yTicks: { values: [0, 0.25, 0.5, 0.75, 1], format: y => `${Math.round(y * 100)}%` }, xFormat: x => (x >= 1e6 ? "1M" : x >= 1e4 ? "10k" : String(x)) });
+      Q.fn(x => C.topShare(Math.max(1, Math.round(x)), N, a), { color: "green", width: 2.5 });
+      const sh = C.topShare(k, N, a);
+      Q.marker(k, sh, { color: "green", drop: true, label: `${Math.round(sh * 100)}%`, pos: "nw" });
+    },
+  });
+}
+</script>
+
+<p>On log-log axes the popularity curve is a straight line, and the <span class="c-green">green</span> head looks impressive. But the right-hand plot shows how much lives in the tail. With <span class="tex">\alpha = 0.8</span>, keeping the top 10,000 files, 1% of the site, covers only 36% of requests, and keeping 10% of the site covers 61%. Each tenfold increase in cache size adds roughly the same slice, so the hit ratio grows like the logarithm of the cache size <a class="cite" href="#ref-breslau"></a>. Facebook found the same shape for photos in 2013: the top 1,000 photos drew about a quarter of requests, the next 9,000 another quarter, the next 90,000 a third quarter, and the remaining 2.5 million the last <a class="cite" href="#ref-fb"></a>. That pattern is close to <button class="set" data-set="a=1">α = 1</button>.</p>
+
+<p>The tail has a second, sneakier cost. A CDN splits a site's traffic across all its edges, so each edge sees only its own share of the requests. Take a site with a million files getting 1,000 requests a second in total, and say each edge keeps a copy for an hour after fetching it. A copy only pays off if someone at that edge asks for the file again within the hour. Spread the same traffic over more edges:</p>
+
+<figure class="demo" id="split" aria-label="A plot of the chance that a request is a hit against the rank of the file, on a logarithmic axis. Popular files are near 100%; the curve drops off toward the tail. As the traffic is split across more edges, the drop moves toward the head."></figure>
+<script>
+{
+  const C = CDN, N = 1e6, A = 0.8, LAMBDA = 1000, TTL = 3600;
+  const B = C.bins(N, A);
+  const hitAt = (p, E) => C.ttlHit((LAMBDA * p) / E, TTL);
+  const overall = E => B.reduce((n, b) => n + b.share * hitAt(b.p, E), 0);
+  demo("split", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    controls: [{ key: "e", label: "Edges sharing the traffic", min: 0, max: 2.5, step: 0.01, value: 2, color: "green", format: x => `${Math.round(10 ** x)}`,
+      marks: [{ value: 0, label: "1" }, { value: 1, label: "10" }, { value: 2, label: "100" }] }],
+    caption: "The chance that a request at one edge finds a copy less than an hour old, for files of every popularity. Splitting traffic across more edges pushes more files into the region where copies expire before anyone asks again.",
+    status: (s, v) => { const E = Math.round(10 ** v.e); return `${E} edge${E > 1 ? "s" : ""}, ${(LAMBDA / E).toFixed(E > 100 ? 1 : 0)} requests/s each: ${Math.round(100 * overall(E))}% hits`; },
+    draw(g, s, v) {
+      const E = Math.round(10 ** v.e);
+      const P = g.graph({ x: [1, N], y: [0, 1.05], xScale: "log", axes: "frame", xLabel: "Rank of the file", yLabel: "Chance a request is a hit",
+        xTicks: { values: [1, 10, 100, 1e3, 1e4, 1e5, 1e6] }, xFormat: x => (x >= 1e6 ? "1M" : x >= 1e3 ? `${x / 1e3}k` : String(x)), yTicks: { values: [0, 0.5, 1], format: y => `${Math.round(y * 100)}%` } });
+      const curve = r => hitAt(Math.pow(r, -A) / C.H(N, A), E);
+      P.fn(r => hitAt(Math.pow(r, -A) / C.H(N, A), 1), { color: "muted", width: 1.5, dash: [4, 4], label: "one edge", labelAt: 3e5, labelOffset: [0, -12] });
+      const pts = [];
+      for (let e = 0; e <= 6.0001; e += 0.05) pts.push([10 ** e, curve(10 ** e)]);
+      P.polyline([...pts, [N, 0], [1, 0]], { fill: g.rgba("green", 0.22), color: "green", width: 0 });
+      P.polyline(pts, { color: "green", width: 2.5 });
+      P.hline(overall(E), { color: "ink", label: `overall ${Math.round(100 * overall(E))}%` });
+    },
+  });
+}
+</script>
+
+<p>With <button class="set" data-set="e=0">one edge</button>, even the file ranked 100,000th is asked for about every 12 minutes, so its copy is usually still fresh, and 83% of requests are hits. With <button class="set" data-set="e=2">100 edges</button>, each edge sees 10 requests a second; any file past rank 2,000 or so is asked for less than once an hour at a given edge, and most of its copies expire unused. The overall hit ratio drops to 29%, though nothing about the site changed. I'll come back to this, because it's what the layers of caches later on are for.</p>
+
+<h2>Freshness</h2>
+
+<p>A copy is only useful while it matches the original. The origin says how long that is with a header on every response, such as <code>Cache-Control: max-age=600</code>: keep this for 600 seconds <a class="cite" href="#ref-http"></a>. That span is the copy's <dfn data-def="Time to live: how long a cache may serve its copy before it has to check with the origin again.">time to live</dfn>, or TTL. Here is one file at one edge over two hours. Each <span class="c-purple">miss</span> fetches a copy that lives for one TTL, and the requests in that span are <span class="c-green">hits</span>. At minute 30 the origin publishes a new version. Slide the TTL:</p>
+
+<figure class="demo" id="ttl" aria-label="A two-hour timeline of requests for one file at one edge. Purple ticks are misses that fetch a copy; green bars show each copy's lifetime; green ticks are hits; red ticks are hits served from an out-of-date copy after the origin changed the file at minute 50."></figure>
+<script>
+{
+  const C = CDN, SPAN = 120, CHANGE = 30;
+  const memo = {};
+  function arrivals(rate) {   // request times in minutes, Poisson at `rate` per hour, from a fixed seed
+    if (memo[rate]) return memo[rate];
+    const r = C.rng(21), out = [];
+    for (let t = -Math.log(1 - r()) * 60 / rate; t < SPAN; t += -Math.log(1 - r()) * 60 / rate) out.push(t);
+    return (memo[rate] = out);
+  }
+  function run(ttl, rate) {
+    const ev = [], copies = [];
+    let copy = null;
+    for (const t of arrivals(rate)) {
+      if (!copy || t >= copy.until) { copy = { from: t, until: t + ttl, v: t >= CHANGE ? 2 : 1 }; copies.push(copy); ev.push({ t, kind: "miss" }); }
+      else ev.push({ t, kind: copy.v === 1 && t >= CHANGE ? "stale" : "hit" });
+    }
+    const firstFresh = ev.find(e => e.t >= CHANGE && e.kind !== "stale");
+    return { ev, copies, misses: ev.filter(e => e.kind === "miss").length, stale: ev.filter(e => e.kind === "stale").length, lag: firstFresh ? firstFresh.t - CHANGE : null };
+  }
+  demo("ttl", {
+    aspect: w => (w < 560 ? 1.15 : 2.4),
+    controls: [
+      { key: "ttl", label: "TTL", min: 1, max: 60, step: 1, value: 10, unit: " min", color: "green" },
+      { key: "rate", label: "Requests", min: 6, max: 120, step: 6, value: 30, unit: " per hour", color: "ink" },
+    ],
+    caption: "Requests for one file at one edge. A longer TTL means fewer trips to the origin but a longer stretch of out-of-date answers after the file changes.",
+    status(s, v) {
+      const r = run(v.ttl, v.rate);
+      return `${r.misses} trips to the origin · ${r.stale} out-of-date answers`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = run(v.ttl, v.rate);
+      const x0 = 12, x1 = g.w - 12, X = t => x0 + ((x1 - x0) * t) / SPAN;
+      const yc = narrow ? 70 : 64, yr = yc + 46;
+      g.text("copies at the edge", [x0, yc - 22], { size: 11.5, color: "muted", align: "left" });
+      g.text("requests", [x0, yr - 20], { size: 11.5, color: "muted", align: "left" });
+      // version change
+      g.line([X(CHANGE), 10], [X(CHANGE), yr + 34], { stroke: "purple", width: 1.5, dash: [4, 3] });
+      g.text("new version at origin", [X(CHANGE) + 5, 14], { size: 11.5, color: "purple", align: "left", weight: 600 });
+      for (const c of r.copies) {
+        const a = X(c.from), b = X(Math.min(SPAN, c.until));
+        const old = c.v === 1;
+        g.rect(a, yc - 9, Math.max(2, b - a), 18, { r: 3, fill: g.rgba("green", 0.18), stroke: "green", width: 1 });
+        if (old && c.until > CHANGE) {
+          const s0 = X(Math.max(CHANGE, c.from));
+          g.rect(s0, yc - 9, Math.max(1, b - s0), 18, { r: 3, fill: g.rgba("red", 0.18), stroke: "red", width: 1, hatch: g.rgba("red", 0.4) });
+        }
+        g.text(old ? "v1" : "v2", [a + 3, yc], { size: 10.5, color: "muted", align: "left" });
+      }
+      for (const e of r.ev) {
+        const c = e.kind === "miss" ? "purple" : e.kind === "stale" ? "red" : "green";
+        g.line([X(e.t), yr - 9], [X(e.t), yr + 9], { stroke: c, width: e.kind === "miss" ? 3 : 2 });
+        if (e.kind === "miss") g.circle([X(e.t), yr - 12], 2.5, { fill: "purple" });
+      }
+      // axis
+      const ya = yr + 24;
+      g.line([x0, ya], [x1, ya], { stroke: "muted", width: 1 });
+      for (let t = 0; t <= SPAN; t += 20) { g.line([X(t), ya], [X(t), ya + 4], { stroke: "muted", width: 1 }); g.text(`${t} min`, [X(t), ya + 14], { size: 11, color: "muted", align: t === 0 ? "left" : t === SPAN ? "right" : "center" }); }
+      // legend
+      const ly = ya + 38;
+      const items = [["purple", "miss: fetch from origin"], ["green", "hit"], ["red", "hit, but out of date"]];
+      let lx = x0;
+      for (const [c, t] of items) {
+        g.line([lx, ly - 7], [lx, ly + 7], { stroke: c, width: 2.5 });
+        g.text(t, [lx + 8, ly], { size: 11.5, color: "muted", align: "left" });
+        lx += g.measure(t, { size: 11.5 }) + 30;
+        if (narrow && lx > g.w - 120) { lx = x0; }
+      }
+      if (r.lag != null) g.label(`first fresh answer ${Math.round(r.lag)} min after the change`, [X(CHANGE) + 5, ly + (narrow ? 26 : 26)], { color: "red", align: "left", size: 12 });
+    },
+  });
+}
+</script>
+
+<p>With a 10-minute TTL, the edge goes to the origin 11 times in two hours and, after the change, serves 6 <span class="c-red">out-of-date</span> answers over 8 minutes. Push the TTL to <button class="set" data-set="ttl=60">an hour</button> and the origin hears from this edge only twice, but readers get the old version for 35 minutes after it changed. At <button class="set" data-set="ttl=1">one minute</button> almost every answer is current, and 43 of the 52 requests become trips to London. How long the old version lingers is partly luck: anything up to one TTL, depending on when the edge last fetched its copy. Every TTL is a bet on how often the file changes against how much a stale answer costs.</p>
+
+<p>When a copy expires, the edge doesn't have to download the whole file again. It can ask the origin whether the file changed, sending the version tag it already holds in an <code>If-None-Match</code> header; if nothing changed, the origin answers <code>304 Not Modified</code> with no body. That still costs a round trip to London. The <code>stale-while-revalidate</code> directive lets the edge skip the wait: it answers from the expired copy at once and checks in the background <a class="cite" href="#ref-swr"></a>. Compare the two, and change whether the file was actually updated:</p>
+
+<figure class="demo" id="revalidate" aria-label="A ladder diagram with the reader, the Sydney edge, and the London origin. The edge's copy has expired. Either the reader waits while the edge asks the origin whether the file changed, or the edge answers at once from its old copy and asks in the background."></figure>
+<script>
+{
+  const C = CDN, RE = 10, RO = 270, BODY = 40000;
+  function run(mode, changed) {
+    const m = [{ from: 0, to: 1, t0: 0, t1: RE / 2, kind: "req", label: "GET" }];
+    const ask = RE / 2 + (mode === "swr" ? 1 : 0);
+    m.push({ from: 1, to: 2, t0: ask, t1: ask + RO / 2, kind: "req", color: "purple", label: "GET, If-None-Match: v1" });
+    const back = ask + RO;
+    m.push({ from: 2, to: 1, t0: ask + RO / 2, t1: back, kind: "data", color: "purple", label: changed ? "200 OK + new file (40 KB)" : "304 Not Modified" });
+    let done, served;
+    if (mode === "swr") { m.push({ from: 1, to: 0, t0: RE / 2, t1: RE, kind: "data", color: changed ? "red" : "green", label: changed ? "old copy" : "copy" }); done = RE; served = changed ? "old" : "current"; }
+    else { m.push({ from: 1, to: 0, t0: back, t1: back + RE / 2, kind: "data", color: "green", label: changed ? "new file" : "copy" }); done = back + RE / 2; served = "current"; }
+    return { m, done, served, bytes: changed ? BODY : 300 };
+  }
+  demo("revalidate", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    controls: [
+      { key: "mode", label: "When the copy has expired", type: "choice", value: "wait", color: "green",
+        options: [{ value: "wait", label: "ask, then answer" }, { value: "swr", label: "answer, then ask" }] },
+      { key: "changed", label: "The file changed at the origin", type: "toggle", value: false, color: "red" },
+    ],
+    caption: "Revalidating an expired copy. A 304 answer saves sending the file again but not the round trip; stale-while-revalidate saves the round trip, at the risk of one out-of-date answer.",
+    status(s, v) {
+      const r = run(v.mode, v.changed);
+      return `reader waits ${Math.round(r.done)} ms for the ${r.served} version · origin sends ${r.bytes >= 1000 ? `${r.bytes / 1000} KB` : "a few hundred bytes"}`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = run(v.mode, v.changed);
+      const L = C.ladder(g, [0, 0, g.w, g.h], r.m, {
+        lanes: [{ label: "reader", color: "blue" }, { label: "edge, Sydney", color: "green" }, { label: "origin, London", color: "purple" }],
+        at: [0, narrow ? 0.3 : 0.22, 1], tMax: 320, tick: 50,
+      });
+      const y = L.Y(r.done);
+      g.line([L.laneX[0] - 24, y], [L.laneX[0] + 8, y], { stroke: "blue", width: 2 });
+      g.text(`answered, ${Math.round(r.done)} ms`, [L.laneX[0] + 6, y + 13], { size: 12, weight: 600, color: "blue", align: "left", halo: true });
+    },
+  });
+}
+</script>
+
+<p>Asking first keeps every answer current, and the reader waits 280 ms, one London round trip plus the hop to the edge. A <code>304</code> saves the origin from sending the 40 KB again, which matters for the origin's bandwidth bill more than for the reader. With <button class="set" data-set="mode=swr changed=false">answer, then ask</button>, the reader is done in 10 ms. If the file <button class="set" data-set="mode=swr changed=true">did change</button>, that reader gets the <span class="c-red">old copy</span> one last time, and the next reader gets the new one.</p>
+
+<h2>Which copy</h2>
+
+<p>An edge finds its copies by a <dfn data-def="The string a cache files a response under; requests with the same key share one copy.">cache key</dfn>, by default the full address of the request. Two requests share a copy only if their keys match exactly. That's more fragile than it sounds, because addresses carry parts that don't change the file at all: tracking tags added by newsletters and social sites, or the same search parameters in a different order. Here are 12 requests that reached an edge in a few minutes, really for 4 different files. Change the rules for building the key:</p>
+
+<figure class="demo" id="cachekey" aria-label="A list of twelve requests with their cache keys. Requests sharing a key share one copy: the first is a miss, the rest are hits. Switches drop tracking parameters, sort parameters, and add the reader's cookie to the key."></figure>
+<script>
+{
+  const REQS = [
+    ["/photo.jpg?utm_source=mail", "a91"], ["/app.js", "a91"], ["/photo.jpg", "7f2"], ["/search?q=tide&page=2", "7f2"],
+    ["/photo.jpg?fbclid=IwAR0x", "c33"], ["/app.js", "c33"], ["/search?page=2&q=tide", "e08"], ["/photo.jpg?utm_source=social", "e08"],
+    ["/news.html", "a91"], ["/app.js", "e08"], ["/news.html?utm_source=mail", "7f2"], ["/search?q=tide&page=2", "c33"],
+  ];
+  const TRACKING = /^(utm_[a-z]+|fbclid|gclid)$/;
+  function keyOf(url, cookie, v) {
+    let [path, query] = url.split("?");
+    let params = query ? query.split("&") : [];
+    if (v.track) params = params.filter(p => !TRACKING.test(p.split("=")[0]));
+    if (v.sort) params = [...params].sort();
+    return path + (params.length ? `?${params.join("&")}` : "") + (v.cookie ? `  [session=${cookie}]` : "");
+  }
+  function run(v) {
+    const seen = new Map();
+    return REQS.map(([url, cookie]) => {
+      const key = keyOf(url, cookie, v), hit = seen.has(key);
+      if (!hit) seen.set(key, seen.size);
+      return { url, cookie, key, hit, group: seen.get(key) };
+    });
+  }
+  demo("cachekey", {
+    aspect: w => (w < 560 ? 0.62 : 1.5),
+    controls: [
+      { key: "track", label: "Drop tracking tags", type: "toggle", value: false, color: "green" },
+      { key: "sort", label: "Sort parameters", type: "toggle", value: false, color: "green" },
+      { key: "cookie", label: "Add the cookie to the key", type: "toggle", value: false, color: "red" },
+    ],
+    caption: "Twelve requests for four files. Every distinct cache key costs a miss; normalizing the key turns misses into hits, and putting a per-reader value in it turns almost everything into a miss.",
+    status(s, v) {
+      const r = run(v), keys = new Set(r.map(x => x.key)).size, hits = r.filter(x => x.hit).length;
+      return `${keys} distinct keys · ${hits} of 12 hits (${Math.round((100 * hits) / 12)}%)`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = run(v);
+      const top = 26, rowH = (g.h - top - 6) / REQS.length;
+      const xr = 6, xk = g.w * 0.5, xs = g.w - 8;
+      g.text("request", [xr, 12], { size: 11.5, color: "muted", align: "left" });
+      g.text(narrow ? "key" : "cache key (the number names the copy it shares)", [narrow ? xs - 64 : xk, 12], { size: 11.5, color: "muted", align: narrow ? "right" : "left" });
+      r.forEach((q, i) => {
+        const y = top + i * rowH + rowH / 2;
+        const c = q.hit ? "green" : "purple";
+        if (i) g.line([xr, y - rowH / 2], [g.w - xr, y - rowH / 2], { stroke: "grid", width: 1 });
+        // the copy this request maps to, numbered in order of first appearance
+        const tag = String(q.group + 1);
+        if (narrow) {
+          g.text(q.url, [xr + 2, y - 6], { font: "mono", size: 11, align: "left", color: "ink" });
+          g.text(`${q.cookie}`, [xr + 2, y + 8], { font: "mono", size: 10, align: "left", color: v.cookie ? "red" : "faint" });
+          g.circle([xs - 58, y], 9, { fill: g.rgba("ink", 0.07), stroke: "muted", width: 1 });
+          g.text(tag, [xs - 58, y + 0.5], { size: 11, weight: 600 });
+        } else {
+          g.text(q.url, [xr + 4, y], { font: "mono", size: 12, align: "left", color: "ink" });
+          g.text(`session=${q.cookie}`, [xk - 14, y], { font: "mono", size: 10.5, align: "right", color: v.cookie ? "red" : "faint" });
+          g.circle([xk + 9, y], 9, { fill: g.rgba("ink", 0.07), stroke: "muted", width: 1 });
+          g.text(tag, [xk + 9, y + 0.5], { size: 11, weight: 600 });
+          g.text(q.key.replace(/\s+\[session=.*\]$/, ""), [xk + 26, y], { font: "mono", size: 12, align: "left", color: "ink" });
+          if (v.cookie) g.text(`+${q.cookie}`, [xs - 40, y], { font: "mono", size: 10.5, align: "right", color: "red" });
+        }
+        g.chip(q.hit ? "hit" : "miss", [xs - 18, y], { color: c, size: 10.5 });
+      });
+    },
+  });
+}
+</script>
+
+<p>Keyed on the full address, the 12 requests make 9 different keys, so there are 9 misses and only 3 hits, though there are only 4 files. <button class="set" data-set="track=true sort=false cookie=false">Dropping the tracking tags</button> merges the three photo addresses and the two news addresses, and <button class="set" data-set="track=true sort=true cookie=false">sorting the parameters</button> merges the two searches: 4 keys, 8 hits. Now <button class="set" data-set="track=true sort=true cookie=true">add the reader's cookie</button> to the key, which is what happens when a site varies its responses by cookie. Every reader gets a private copy, and all 12 requests are misses. Keys can also legitimately grow: a response marked <code>Vary: Accept-Encoding</code> is stored once per compression format, because a browser that can't read Brotli must not get the Brotli copy.</p>
+
+<p>Sometimes a file changes and can't wait for its TTL, say a typo on the home page or a broken script. The site can then <dfn data-def="Tell every edge to drop its copy of a file at once, so the next request fetches the current version.">purge</dfn> the file: tell the CDN to drop every copy now. Here are 20 edges holding version 1 of a file with an hour's TTL, each fetched at a different moment. At time zero the origin publishes version 2. Compare waiting with purging:</p>
+
+<figure class="demo" id="purge" aria-label="A world map of 20 edge sites, each red while it still serves version 1 of a file and green once it serves version 2, over the hour after an update. Below, a plot counts the edges serving the new version over time."></figure>
+<script>
+{
+  const C = CDN, sites = C.siteOrder().sites.slice(0, 20), SPAN = 60, SPEED = 6;   // minutes of story per second
+  const r = C.rng(5);
+  const age = sites.map(() => r());        // how far through its TTL each copy is at time zero
+  const nextReq = sites.map(() => 0.3 + 2.5 * r());   // minutes until each edge's next request
+  function at(t, v) {
+    return sites.map((site, i) => {
+      if (v.mode === "purge") return t < 0.05 ? "old" : t < nextReq[i] ? "empty" : "new";
+      return t < (1 - age[i]) * v.ttl ? "old" : "new";
+    });
+  }
+  demo("purge", {
+    aspect: w => (w < 560 ? 1.0 : 1.75),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "mode", label: "After the update", type: "choice", value: "wait", color: "red", options: [{ value: "wait", label: "wait for the TTL" }, { value: "purge", label: "purge" }] },
+      { key: "ttl", label: "TTL", min: 5, max: 60, step: 5, value: 60, unit: " min", color: "green" },
+    ],
+    caption: "Twenty edges after a file changes at the origin. Waiting leaves some edges serving the old version for almost a full TTL; a purge empties them all at once, and each refills on its next request.",
+    change(key, s) { s.t = 0; },
+    step(dt, s) { s.t = s.t + dt * SPEED; if (s.t > SPAN + 6) s.t = 0; },
+    status(s, v) { const st = at(Math.min(s.t, SPAN), v), n = st.filter(x => x === "new").length; return `${Math.min(SPAN, Math.round(s.t))} min after the update: ${n} of 20 edges serve version 2`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, t = Math.min(s.t, SPAN), st = at(t, v);
+      const mh = Math.min(g.h * 0.62, g.w / 2.85);
+      const M = C.map(g, [0, 0, g.w, mh]);
+      const london = C.CITY.london.at;
+      sites.forEach((site, i) => {
+        const fetching = v.mode === "purge" ? Math.abs(t - nextReq[i]) < 0.6 : Math.abs(t - (1 - age[i]) * v.ttl) < 0.8;
+        if (fetching) C.route(g, M, site.at, london, { color: "purple", width: 1.2, alpha: 0.7 });
+      });
+      C.glyph(g, M(london), "origin", { r: 5.5 });
+      sites.forEach((site, i) => {
+        const c = st[i] === "old" ? "red" : st[i] === "new" ? "green" : "faint";
+        C.glyph(g, M(site.at), "edge", { r: 4.2, color: c });
+      });
+      // plot of edges serving v2
+      const P = g.graph({ box: [0, mh + 6, g.w, g.h - mh - 6], x: [0, SPAN], y: [0, 20], axes: "frame", xTicks: { values: [0, 10, 20, 30, 40, 50, 60] }, yTicks: { values: [0, 10, 20] },
+        xLabel: "Minutes after the update", yLabel: "Edges serving version 2" });
+      const pts = [];
+      for (let u = 0; u <= SPAN; u += 0.25) pts.push([u, at(u, v).filter(x => x === "new").length]);
+      P.polyline(pts, { color: "green", width: 2 });
+      P.vline(t, { color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Waiting, the last edge still serves the <span class="c-red">old version</span> almost an hour after the change, because its copy was fetched just before it. <button class="set" data-set="mode=purge">A purge</button> empties every edge within moments, and each one fetches version 2 from the origin on its next request. That's a burst of misses at once, which is why purging popular files is done with some care. Many sites avoid both problems by putting a version in the file's name, like <code>app.3f9a2c.js</code>. A changed file gets a new name and therefore a new key, so it can be cached for a year, and only the page that names it needs a short TTL or a purge.</p>
+
+<h2>Finding the nearest edge</h2>
+
+<p>All of this assumes the reader reaches a nearby edge, but the browser only knows the site's name. Something has to turn that name into the address of an edge close to this particular reader. CDNs do it in one of two ways.</p>
+
+<p>The first works through DNS, the internet's directory of names<span class="sidenote">How a name becomes an address, step by step, is the subject of a <a href="../dns/index.html">separate page on DNS</a>. Here only the last step matters.</span>. The browser asks a <dfn data-def="The DNS server that looks up names on the reader's behalf, usually run by the reader's internet provider or a public service.">resolver</dfn> for the site's address, and the resolver asks the CDN's own name server. That server picks an edge and answers with its address. But it sees the question coming from the resolver, not from the reader, so it picks the edge nearest the <span class="c-brass">resolver</span>. Drag the reader and the resolver apart:</p>
+
+<figure class="demo" id="steer" aria-label="A world map with green edge sites, a blue reader, and a brass resolver, both draggable. The reader is sent to the edge nearest the resolver; a switch lets the resolver pass on the reader's network, so the reader is sent to its own nearest edge."></figure>
+<script>
+{
+  const C = CDN, sites = C.siteOrder().sites.slice(0, 20);
+  let P, grab = null;
+  demo("steer", {
+    aspect: w => (w < 560 ? 1.3 : 2.2),
+    state: () => ({}),
+    controls: [
+      { key: "ecs", label: "Resolver passes on the reader's network", type: "toggle", value: false, color: "green" },
+      { key: "rlon", label: "Reader longitude", min: -168, max: 180, step: 0.1, value: 151.2, hidden: true },
+      { key: "rlat", label: "Reader latitude", min: -47, max: 72, step: 0.1, value: -33.9, hidden: true },
+      { key: "dlon", label: "Resolver longitude", min: -168, max: 180, step: 0.1, value: 103.8, hidden: true },
+      { key: "dlat", label: "Resolver latitude", min: -47, max: 72, step: 0.1, value: 1.35, hidden: true },
+    ],
+    caption: "DNS-based steering. Without the reader's network in the question, the CDN can only send the reader to the edge nearest its resolver, which may be in another country.",
+    status(s, v) {
+      const me = [v.rlon, v.rlat], res = [v.dlon, v.dlat];
+      const sent = C.nearest(v.ecs ? me : res, sites).s, best = C.nearest(me, sites).s;
+      return `sent to ${sent.name}, ${Math.round(C.estRtt(C.km(me, sent.at)))} ms · nearest edge ${best.name}, ${Math.round(C.estRtt(C.km(me, best.at)))} ms`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, me = [v.rlon, v.rlat], res = [v.dlon, v.dlat];
+      const mb = [0, 0, g.w, g.h - (narrow ? 70 : 58)];
+      P = C.map(g, mb);
+      const sent = C.nearest(v.ecs ? me : res, sites).s, best = C.nearest(me, sites).s;
+      for (const site of sites) C.glyph(g, P(site.at), "edge", { r: 3.4, alpha: 0.7 });
+      C.route(g, P, me, res, { color: "brass", width: 1.5, dash: [4, 4] });
+      if (!v.ecs) C.route(g, P, res, sent.at, { color: "brass", width: 1, dash: [2, 4] });
+      C.route(g, P, me, sent.at, { color: "green", width: 2.5 });
+      if (sent !== best) g.circle(P(best.at), 10, { stroke: "green", width: 1.5, dash: [3, 3] });
+      C.glyph(g, P(sent.at), "edge", { r: 4.5, lit: true });
+      g.handle(P(res), { color: "brass" });
+      g.circle(P(res), 5, { fill: "brass", stroke: "panel", width: 1.5 });
+      g.handle(P(me), { color: "blue" });
+      C.glyph(g, P(me), "reader");
+      g.callouts([{ at: P(me), text: "reader", color: "blue" }, { at: P(res), text: "resolver", color: "brass" }, { at: P(sent.at), text: `sent to ${sent.name}`, color: "green" }], { size: 12 });
+      const y = mb[3] + 22, cols = [g.w * 0.25, g.w * 0.75];
+      const big = { size: narrow ? 16 : 19, weight: 600 }, small = { size: 11.5, color: "muted" };
+      g.text(`${Math.round(C.estRtt(C.km(me, sent.at)))} ms`, [cols[0], y], { ...big, color: sent === best ? "green" : "red" });
+      g.text(`round trip to ${sent.name}`, [cols[0], y + 18], small);
+      g.text(`${Math.round(C.estRtt(C.km(me, best.at)))} ms`, [cols[1], y], { ...big, color: "green" });
+      g.text(`to the nearest edge, ${best.name}`, [cols[1], y + 18], small);
+    },
+    drag: {
+      hit(p, s, v) {
+        if (!P) return false;
+        const d1 = Math.hypot(...[0, 1].map(i => p[i] - P([v.rlon, v.rlat])[i])), d2 = Math.hypot(...[0, 1].map(i => p[i] - P([v.dlon, v.dlat])[i]));
+        grab = d1 < 26 && d1 <= d2 ? "r" : d2 < 26 ? "d" : null;
+        return !!grab;
+      },
+      move(p, s, v, d, fig) {
+        const [lon, lat] = P.inv(p), q = { lon: clamp(lon, -168, 180), lat: clamp(lat, -47, 72) };
+        fig.setMany(grab === "r" ? { rlon: q.lon, rlat: q.lat } : { dlon: q.lon, dlat: q.lat });
+      },
+    },
+  });
+}
+</script>
+
+<p>The reader is in Sydney, but uses a public resolver whose nearest server is in Singapore. The CDN sees a question from Singapore and sends the reader to Ho Chi Minh City, 120 ms away, while the Sydney edge sits 10 ms away unused. With a resolver run by the reader's own provider, <button class="set" data-set="dlon=150.5 dlat=-33.5 ecs=false">in Sydney</button>, the guess is right. The fix for public resolvers is an extension called EDNS Client Subnet: the resolver includes the first part of the reader's address in its question, enough to locate the reader's network but not the reader <a class="cite" href="#ref-ecs"></a>. <button class="set" data-set="dlon=103.8 dlat=1.35 ecs=true">Turn it on</button> and the CDN can answer for the reader instead of the resolver.</p>
+
+<p>The second way skips the guessing. With <dfn data-def="Announcing the same network address from many places, so the internet's routing delivers each packet to one of them, usually a nearby one.">anycast</dfn>, every edge announces the same address to the internet, and the routers between networks, which speak a protocol called BGP, carry each reader's packets to whichever announcement looks closest. But BGP doesn't measure kilometers. It counts how many networks a route passes through and follows the business deals between them. Here is a reader whose provider is in Auckland, with two carriers to choose from:</p>
+
+<figure class="demo" id="anycast" aria-label="A map of the Pacific with a reader's provider in Auckland, two carriers, and CDN edges in Sydney and Los Angeles that announce the same address. The chosen route, highlighted in green, is the one through the fewest networks, which can lead across the Pacific."></figure>
+<script>
+{
+  const C = CDN, E = lon => (lon < 0 ? lon + 360 : lon);
+  const N = {
+    isp: { at: [174.8, -36.8], label: "reader's provider, Auckland", color: "blue" },
+    a: { at: [146, -26], label: "carrier A" },
+    c: { at: [132, -12], label: "carrier C" },
+    b: { at: [E(-150), 8], label: "carrier B" },
+    syd: { at: [151.2, -33.9], label: "edge, Sydney", edge: true },
+    la: { at: [E(-118.2), 34.1], label: "edge, Los Angeles", edge: true },
+  };
+  function routes(v) {
+    const out = [];
+    if (!v.down) out.push({ via: ["isp", "a", "c", "syd"], edge: "syd" });
+    out.push({ via: ["isp", "b", "la"], edge: "la" });
+    if (v.peer && !v.down) out.push({ via: ["isp", "syd"], edge: "syd", direct: true });
+    return out.sort((x, y) => x.via.length - y.via.length);   // BGP: fewest networks wins
+  }
+  const rtt = id => C.estRtt(C.km(N.isp.at, [N[id].at[0] > 180 ? N[id].at[0] - 360 : N[id].at[0], N[id].at[1]]));
+  let P;
+  demo("anycast", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    controls: [
+      { key: "peer", label: "CDN connects straight to the provider", type: "toggle", value: false, color: "green" },
+      { key: "down", label: "Sydney edge offline", type: "toggle", value: false, color: "red" },
+    ],
+    caption: "Anycast routing from Auckland. Both edges announce the same address; the route through the fewest networks wins, whatever the distance, and when an edge goes offline the traffic shifts to the next one on its own.",
+    status(s, v) {
+      const r = routes(v)[0];
+      return `${r.via.length - 1} network hop${r.via.length > 2 ? "s" : ""} to ${N[r.edge].label}, about ${Math.round(rtt(r.edge))} ms`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, rs = routes(v), win = rs[0];
+      P = C.map(g, [0, 0, g.w, g.h], { lon: [110, 250], lat: [-48, 46] });
+      const link = (a, b, o) => g.line(P(N[a].at), P(N[b].at), o);
+      const all = [["isp", "a"], ["a", "c"], ["c", "syd"], ["isp", "b"], ["b", "la"], ...(v.peer ? [["isp", "syd"]] : [])];
+      for (const [a, b] of all) link(a, b, { stroke: "muted", width: 1.2, dash: [3, 3] });
+      for (let i = 0; i < win.via.length - 1; i++) link(win.via[i], win.via[i + 1], { stroke: "green", width: 3 });
+      for (const [id, n] of Object.entries(N)) {
+        const p = P(n.at);
+        if (n.edge) C.glyph(g, p, "edge", { r: 6, color: id === "syd" && v.down ? "faint" : "green" });
+        else if (id === "isp") C.glyph(g, p, "reader", { r: 6 });
+        else g.rect(p[0] - 7, p[1] - 7, 14, 14, { r: 7, fill: "panel", stroke: "ink", width: 1.5 });
+      }
+      g.callouts(Object.entries(N).map(([id, n]) => ({ at: P(n.at), text: id === "syd" && v.down ? "edge, Sydney (offline)" : n.label, color: n.edge ? (id === "syd" && v.down ? "muted" : "green") : n.color ?? "ink" })),
+        { size: narrow ? 11 : 12, split: g.w * 0.55 });
+      g.text("both edges announce 203.0.113.0/24", [g.w / 2, g.h - 12], { size: 11.5, color: "muted", halo: true });
+      // the candidate routes, as the provider's router sees them
+      if (!narrow) rs.forEach((r, i) => g.text(`${i === 0 ? "✓" : " "} ${r.via.slice(1).map(x => (N[x].edge ? "CDN" : N[x].label.replace("carrier ", ""))).join(" → ")}  (${r.via.length - 1})`,
+        [g.w * 0.52, 22 + i * 18], { size: 12, font: "mono", align: "left", color: i === 0 ? "green" : "muted", halo: true }));
+    },
+  });
+}
+</script>
+
+<p>The provider in Auckland hears the address through carrier B in two steps and through carrier A in three, so it sends the reader across the Pacific to Los Angeles, about 180 ms away, though Sydney is 45 ms away. Distance never entered the decision. A team at Microsoft measured this on Bing's anycast CDN and found it worked well for most clients, but about 20% were sent to an edge that wasn't their best one <a class="cite" href="#ref-anycast"></a>. CDNs fix such cases by <button class="set" data-set="peer=true down=false">connecting directly to big providers</button>, which makes their own route the shortest. Anycast also brings a gift: when an edge fails, it stops announcing, and the routers find the next one by themselves. Take the <button class="set" data-set="peer=true down=true">Sydney edge offline</button> and the reader lands in Los Angeles again, with no change to any DNS answer.</p>
+
+<h2>Caches behind caches</h2>
+
+<p>Back to the problem from the hit-ratio section: a CDN splits each site's traffic across many edges, so each edge sees too little of the long tail to keep useful copies, and every edge's misses land on the origin. The fix is another layer. Instead of going to the origin, an edge that misses asks a second cache, an <dfn data-def="A cache layer between the edges and the origin: edges ask it on a miss, and only its own misses reach the origin.">origin shield</dfn>, which serves all the edges. Here is the site from before, a million files, 1,000 requests a second, copies kept an hour. Add edges, then turn on the shield:</p>
+
+<figure class="demo" id="shield" aria-label="A world map of edge sites and the origin in London, with lines whose width shows the requests each edge sends upstream. With a shield, the lines run to a cache near the origin, and only one thinner line continues to the origin."></figure>
+<script>
+{
+  const C = CDN, N = 1e6, A = 0.8, LAMBDA = 1000, TTL = 3600, B = C.bins(N, A);
+  const SHIELD = { name: "Frankfurt", at: C.CITY.frankfurt.at }, london = C.CITY.london.at;
+  function loads(E, shield) {
+    let edgeMiss = 0, originMiss = 0;
+    for (const b of B) {
+      const he = C.ttlHit((LAMBDA * b.p) / E, TTL);
+      const missRate = LAMBDA * b.p * (1 - he);          // requests per second for one file, from all edges together
+      const hs = shield ? C.ttlHit(missRate, TTL) : 0;
+      edgeMiss += b.share * (1 - he);
+      originMiss += b.share * (1 - he) * (1 - hs);
+    }
+    return { edgeHit: 1 - edgeMiss, up: LAMBDA * edgeMiss, origin: LAMBDA * originMiss };
+  }
+  demo("shield", {
+    aspect: w => (w < 560 ? 1.0 : 1.85),
+    controls: [
+      { key: "e", label: "Edges", type: "stepper", min: 1, max: 40, step: 1, value: 20, color: "green" },
+      { key: "shield", label: "Origin shield", type: "toggle", value: false, color: "green" },
+    ],
+    caption: "Misses flowing upstream. Without a shield the origin gets every edge's misses, which grow as traffic is split further; a shield sees all of them together and catches most, so the origin's load stays near what one big cache would let through.",
+    status(s, v) { const r = loads(v.e, v.shield); return `edges hit ${Math.round(r.edgeHit * 100)}% · origin gets ${Math.round(r.origin)} requests/s`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, E = Math.round(v.e), sites = C.siteOrder().sites.slice(0, E), r = loads(E, v.shield);
+      const mh = Math.min(g.h * 0.66, g.w / 2.85);
+      const M = C.map(g, [0, 0, g.w, mh]);
+      const per = r.up / E, wEdge = Math.max(0.8, Math.sqrt(per) * 0.45);
+      const hub = v.shield ? SHIELD.at : london;
+      for (const site of sites) C.route(g, M, site.at, hub, { color: "purple", width: wEdge, alpha: 0.55 });
+      if (v.shield) {
+        C.route(g, M, SHIELD.at, london, { color: "purple", width: Math.max(1, Math.sqrt(r.origin) * 0.45) });
+        g.rect(M(SHIELD.at)[0] - 7, M(SHIELD.at)[1] - 7, 14, 14, { r: 2, fill: "green", stroke: "ink", width: 1.5 });
+        g.label("shield", [M(SHIELD.at)[0] + 18, M(SHIELD.at)[1] + 14], { color: "green", size: 12 });
+      }
+      for (const site of sites) C.glyph(g, M(site.at), "edge", { r: 3.6 });
+      C.glyph(g, M(london), "origin", { r: 6 });
+      // bars: what reaches the origin
+      const by = mh + (narrow ? 26 : 30), bw = g.w - 24, scale = bw / LAMBDA;
+      const base = loads(E, false).origin;
+      g.text("requests per second reaching the origin (out of 1,000)", [12, by - 12], { size: 11.5, color: "muted", align: "left" });
+      g.rect(12, by, bw, 16, { fill: "grid" });
+      g.rect(12, by, base * scale, 16, { fill: g.rgba("purple", v.shield ? 0.18 : 0.6), stroke: "purple", width: 1 });
+      if (v.shield) g.rect(12, by, r.origin * scale, 16, { fill: g.rgba("purple", 0.65), stroke: "purple", width: 1 });
+      g.text(`${Math.round(r.origin)}`, [12 + r.origin * scale + 6, by + 8], { size: 12.5, weight: 600, color: "purple", align: "left", halo: true });
+      if (v.shield) g.text(`without the shield: ${Math.round(base)}`, [12 + base * scale + 6, by + 30], { size: 11.5, color: "muted", align: base * scale > bw * 0.6 ? "right" : "left" });
+    },
+  });
+}
+</script>
+
+<p>With 20 edges, each hits only 45% of the time, so 553 of every 1,000 requests reach the origin. <button class="set" data-set="e=20 shield=true">Turn on the shield</button> and the origin's share drops to 163. The shield sees the misses of all 20 edges together, so a tail file that each edge sees once a day, the shield sees 20 times a day, often enough to keep a copy. Add <button class="set" data-set="e=40 shield=true">more edges</button> and the edges get worse, but the origin barely notices: the shield makes the whole network look like one big cache to it. Breslau's group saw the other side of this in their traces: requests reaching a parent cache followed a flatter popularity curve, because the children had already answered the popular ones <a class="cite" href="#ref-breslau"></a>. Facebook's photo stack showed the same: its edge caches hit 59% of the time, and the cache behind them still caught a third of what got through <a class="cite" href="#ref-fb"></a>.</p>
+
+<p>Shields also help with a sharper problem. When a popular file's copy expires, or a breaking story goes up, many readers can ask the same edge for it within the same fraction of a second. If the edge forwards every one of those misses, the origin gets hit by a crowd. Here are requests for one file arriving at an edge over 300 ms, just after its copy expired. Change how many, then let the edge combine them:</p>
+
+<figure class="demo" id="collapse" aria-label="A ladder diagram: many readers' requests arrive at the edge over 300 ms. Without request collapsing, each is forwarded to the origin. With it, only the first is forwarded and the rest wait at the edge for the same answer."></figure>
+<script>
+{
+  const C = CDN, RE = 10, RO = 270;
+  function run(n, collapse) {
+    const r = C.rng(9), arrive = Array.from({ length: n }, (_, i) => (i === 0 ? 0 : 300 * r())).sort((a, b) => a - b);
+    const m = [], served = [];
+    let fetched = null, toOrigin = 0;
+    for (const t of arrive) {
+      const at = t + RE / 2;
+      m.push({ from: 0, to: 1, t0: t, t1: at, kind: "req", color: "blue" });
+      if (collapse && fetched !== null) {
+        const ready = fetched + RO;
+        const go = Math.max(at, ready);
+        m.push({ from: 1, to: 0, t0: go, t1: go + RE / 2, kind: "data", color: "green" });
+        if (at < ready) served.push(at);
+      } else {
+        fetched = fetched ?? at;
+        toOrigin++;
+        m.push({ from: 1, to: 2, t0: at, t1: at + RO / 2, kind: "req", color: "purple" });
+        m.push({ from: 2, to: 1, t0: at + RO / 2, t1: at + RO, kind: "data", color: "purple" });
+        m.push({ from: 1, to: 0, t0: at + RO, t1: at + RO + RE / 2, kind: "data", color: "green" });
+      }
+    }
+    return { m, toOrigin, waiting: served };
+  }
+  demo("collapse", {
+    aspect: w => (w < 560 ? 0.85 : 1.7),
+    controls: [
+      { key: "n", label: "Requests in 300 ms", min: 1, max: 60, step: 1, value: 20, color: "blue" },
+      { key: "collapse", label: "Collapse requests", type: "toggle", value: false, color: "green" },
+    ],
+    caption: "A burst of requests for a file whose copy just expired. Collapsing sends one request to the origin and holds the rest until its answer arrives.",
+    status: (s, v) => { const r = run(Math.round(v.n), v.collapse); return `${r.toOrigin} request${r.toOrigin > 1 ? "s" : ""} to the origin for ${Math.round(v.n)} readers`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = run(Math.round(v.n), v.collapse);
+      const L = C.ladder(g, [0, 0, g.w, g.h], r.m, {
+        lanes: [{ label: "readers", color: "blue" }, { label: "edge", color: "green" }, { label: "origin, London", color: "purple" }],
+        at: [0, narrow ? 0.3 : 0.22, 1], tMax: 600, tick: 100, labels: false,
+      });
+      for (const t of r.waiting) g.circle([L.laneX[1] + 4, L.Y(t)], 2.6, { fill: "green" });
+      if (v.collapse && r.waiting.length) g.label("waiting for the first answer", [L.laneX[1] + 12, L.Y(150)], { color: "green", align: "left", size: 12 });
+    },
+  });
+}
+</script>
+
+<p>Without collapsing, 20 readers make 20 identical trips to London, each costing the origin the same work. <button class="set" data-set="collapse=true">Collapsing</button> forwards only the first. The readers who come in while it's on its way wait at the edge, shown as green dots, and get the same answer when it arrives; the few who come after it are plain hits. The origin sees one request. A shield multiplies the effect, since it collapses the requests from all the edges as well. The readers who arrived during the wait still pay most of a London round trip, but nobody pays more than that, and the origin stays standing.</p>
+
+<h2>What can't be cached</h2>
+
+<p>Everything so far works because many readers want the same bytes. A page that greets you by name, shows your basket, or lists your messages is different: it's yours, and handing a cached copy to the next reader would be a bug, possibly a security hole. Such responses are marked <code>Cache-Control: private</code>, and the edge passes them through without keeping a copy. Often only a small part of a page is personal. Here is an article page, with each part colored by who sends it. Sign the reader in, then change how the page is built:</p>
+
+<figure class="demo" id="pieces" aria-label="A wireframe of a web page: a header, an article with an image, and a sidebar. Parts sent by the edge are green; parts that must come from the origin are purple. Signing the reader in adds a greeting, a basket, and recommendations, which make the whole page personal unless they are split out."></figure>
+<script>
+{
+  const C = CDN;
+  const SIZES = { html: 16000, personal: 2000, files: 320000 };
+  demo("pieces", {
+    aspect: w => (w < 560 ? 0.78 : 1.6),
+    controls: [
+      { key: "signed", label: "Reader is signed in", type: "toggle", value: true, color: "purple" },
+      { key: "mode", label: "Build the page as", type: "choice", value: "whole", color: "green",
+        options: [{ value: "whole", label: "one page per reader" }, { value: "split", label: "shared page + personal parts" }] },
+    ],
+    caption: "One page, colored by who sends each part. A few personal details make the whole HTML uncacheable; moving them into a small separate request lets the rest be shared again.",
+    status(s, v) {
+      const personalHtml = v.signed && v.mode === "whole";
+      const fromOrigin = !v.signed ? 0 : personalHtml ? SIZES.html : SIZES.personal;
+      const fromEdge = SIZES.files + (personalHtml ? 0 : SIZES.html);
+      return `from the edge ${C.kb(fromEdge)} · from London ${fromOrigin ? C.kb(fromOrigin) : "nothing"}`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, personalHtml = v.signed && v.mode === "whole";
+      const x0 = narrow ? 8 : g.w * 0.08, w = narrow ? g.w - 16 : g.w * 0.62, y0 = 8, h = g.h - 16;
+      const shared = personalHtml ? "purple" : "green";
+      const part = (x, y, ww, hh, color, label, o = {}) => {
+        g.rect(x, y, ww, hh, { r: 4, fill: g.rgba(color, o.alpha ?? 0.16), stroke: color, width: 1.3, dash: o.dash });
+        if (label) g.text(label, [x + 8, y + 14], { size: 11.5, color: color === "faint" ? "muted" : color, align: "left", weight: 600 });
+      };
+      // the page frame
+      g.rect(x0, y0, w, h, { r: 6, stroke: "muted", width: 1.2 });
+      const hh = h * 0.11;
+      part(x0 + 6, y0 + 6, w * 0.4, hh, shared, "header, logo");
+      if (v.signed) part(x0 + w * 0.58, y0 + 6, w * 0.42 - 6, hh, "purple", narrow ? "Hi, Asha · 2" : "Hi, Asha · basket (2)", { dash: v.mode === "split" ? [4, 3] : undefined });
+      const ay = y0 + hh + 14, aw = v.signed ? w * 0.64 : w - 12;
+      part(x0 + 6, ay, aw, h * 0.1, shared, "headline");
+      part(x0 + 6, ay + h * 0.12, aw, h * 0.34, "green", "4 images (shared files)");
+      part(x0 + 6, ay + h * 0.48, aw, h * 0.26, shared, "article text");
+      if (v.signed) part(x0 + aw + 12, ay, w - aw - 18, h * 0.74, "purple", narrow ? "for you" : "recommended for you", { dash: v.mode === "split" ? [4, 3] : undefined });
+      part(x0 + 6, y0 + h - h * 0.1 - 6, w - 12, h * 0.1, "green", "stylesheet, script, font (shared files)", { alpha: 0.1 });
+      if (!narrow) {
+        // a key on the right
+        const kx = x0 + w + 24, ky = y0 + 20;
+        const rows = [["green", "sent by the edge, from a copy"], ["purple", "must come from London"]];
+        rows.forEach(([c, t], i) => { g.rect(kx, ky + i * 26 - 7, 14, 14, { r: 3, fill: g.rgba(c, 0.25), stroke: c, width: 1.2 }); g.text(t, [kx + 22, ky + i * 26], { size: 12, color: "muted", align: "left" }); });
+        const lines = !v.signed ? ["Nobody is signed in, so", "the whole page is the", "same for everyone."]
+          : personalHtml ? ["The greeting is inside the", "HTML, so the whole HTML", "(16 KB) is private."]
+          : ["The shared HTML is cached.", "The dashed parts arrive in", "a 2 KB request of their own."];
+        lines.forEach((t, i) => g.text(t, [kx, ky + 70 + i * 18], { size: 12.5, color: "ink", align: "left" }));
+      }
+    },
+  });
+}
+</script>
+
+<p>Signed out, every part of the page is the same for everyone, and all of it comes from the edge. Signed in, three small personal details turn the whole 16 KB of HTML <span class="c-purple">purple</span>: the edge can't reuse it, so every page view waits on London. <button class="set" data-set="signed=true mode=split">Splitting the page</button> fixes most of that. The shared HTML is cached like any file, and the greeting, basket, and recommendations arrive in a 2 KB request of their own that the page fills in. The article appears from the edge, and only the dashed boxes wait for London.</p>
+
+<p>That small personal request still has to cross the world, and so does any request that can't be cached at all: a search, a login, a payment. Yet even these get faster when they go through the edge, which is less obvious than it sounds. Here is a 16 KB personal page fetched from Sydney three ways:</p>
+
+<figure class="demo" id="warm" aria-label="A ladder diagram of an uncacheable page: straight from the reader to London, through the Sydney edge with a new connection to London, and through the edge with a connection to London that is already open and warmed up."></figure>
+<script>
+{
+  const C = CDN, RE = 10, RO = 270, DIRECT = 282, SIZE = 16000, THINK = 20;
+  function run(mode) {
+    const m = [];
+    if (mode === "direct") {
+      const hs = C.handshake("tls13", DIRECT, 0, 0, 2), c = C.conn(DIRECT);
+      const r = C.request(c, hs.ready, SIZE, THINK);
+      return { m: [...hs.msgs, ...C.requestMsgs(c, r, 0, 2, "GET")], end: r.end };
+    }
+    const hs = C.handshake("tls13", RE, 0, 0, 1);
+    hs.msgs.forEach(x => { x.label = ""; });
+    m.push(...hs.msgs);
+    const atEdge = hs.ready + RE / 2;
+    m.push({ from: 0, to: 1, t0: hs.ready, t1: atEdge, kind: "req", label: "" });
+    let oc, start = atEdge;
+    if (mode === "cold") {
+      const ohs = C.handshake("tls13", RO, atEdge, 1, 2);
+      m.push(...ohs.msgs);
+      start = ohs.ready;
+      oc = C.conn(RO, { bw: 1000 });
+    } else oc = C.conn(RO, { bw: 1000, cwnd: 1000 });   // open for minutes, its window long since grown
+    const r = C.request(oc, start, SIZE, THINK);
+    m.push(...C.requestMsgs(oc, r, 1, 2, "GET").map(x => ({ ...x, color: x.kind === "ack" ? undefined : "purple" })));
+    r.flights.forEach(f => { const t = f.t + RO / 2 + f.tx; m.push({ from: 1, to: 0, t0: t, t1: t + RE / 2, kind: "data", color: "green" }); });
+    return { m, end: r.end + RE / 2 };
+  }
+  const RUN = { direct: run("direct"), cold: run("cold"), warm: run("warm") };
+  demo("warm", {
+    aspect: w => (w < 560 ? 0.8 : 1.5),
+    controls: [{ key: "mode", label: "Route", type: "choice", value: "direct", color: "green",
+      options: [{ value: "direct", label: "straight to London" }, { value: "cold", label: "edge, new connection" }, { value: "warm", label: "edge, warm connection" }] }],
+    caption: "An uncacheable 16 KB page from Sydney. Through an edge that keeps its connection to the origin open, the handshakes and slow start happen over 10 ms instead of 280, and only the request itself crosses the world.",
+    status: (s, v) => `page arrives after ${Math.round(RUN[v.mode].end).toLocaleString("en-US")} ms`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = RUN[v.mode];
+      const L = C.ladder(g, [0, 0, g.w, g.h], r.m, {
+        lanes: [{ label: "reader, Sydney", color: "blue" }, { label: v.mode === "direct" ? "(edge unused)" : "edge, Sydney", color: v.mode === "direct" ? "faint" : "green" }, { label: "origin, London", color: "purple" }],
+        at: [0, narrow ? 0.3 : 0.22, 1], tMax: 1250, tick: 250,
+      });
+      const y = L.Y(r.end);
+      g.line([L.laneX[0] - 24, y], [L.laneX[0] + 8, y], { stroke: "blue", width: 2 });
+      g.text(`page complete, ${Math.round(r.end).toLocaleString("en-US")} ms`, [L.laneX[0] + 6, y + 13], { size: 12, weight: 600, color: "blue", align: "left", halo: true });
+    },
+  });
+}
+</script>
+
+<p>Straight to London, the page takes 1,140 ms: two round trips of handshakes, one for the request, and one more because 16 KB is a little more than slow start's first burst. Going <button class="set" data-set="mode=cold">through the edge on a new connection</button> saves nothing, since the edge has to do the same handshakes with London. The gain comes from the <button class="set" data-set="mode=warm">warm connection</button>. Edges keep connections to busy origins open for many requests from many readers, with the encryption already set up and TCP's window already grown <a class="cite" href="#ref-hpbn"></a>. The reader's own handshakes happen over 10 ms to the edge, and only the request and its answer cross the world: 320 ms, a quarter of the direct time. Big CDNs also route these requests over their own backbone, which can beat the public internet's path.</p>
+
+<p>The edge can also make the bytes themselves fewer. Text files such as HTML, CSS, and JavaScript shrink a lot with compression, and the edge can compress them once and keep the compressed copy. Fewer bytes means fewer slow-start bursts, so compression saves round trips, not just bandwidth. I compressed three real files with gzip and with Brotli <a class="cite" href="#ref-brotli"></a>. Pick a file and an encoding, and count the bursts it needs on a new connection:</p>
+
+<figure class="demo" id="compress" aria-label="The size of a file uncompressed, with gzip, and with Brotli, above a grid of packets arranged into TCP slow-start bursts of 10, 20, 40, 80 and 160; the packets the file needs are filled in."></figure>
+<script>
+{
+  const C = CDN;
+  // Measured with Node's zlib: gzip level 6, Brotli quality 11.
+  const FILES = {
+    jquery: { label: "jQuery 3.7.1 (JavaScript)", raw: 87533, gzip: 30406, br: 27445 },
+    bootstrap: { label: "Bootstrap 5.3.3 (CSS)", raw: 232803, gzip: 30829, br: 22709 },
+    wiki: { label: "a Wikipedia article (HTML)", raw: 402421, gzip: 71247, br: 53869 },
+  };
+  const BURSTS = [10, 20, 40, 80, 160];
+  const packets = b => Math.ceil(b / C.MSS);
+  const bursts = n => { let k = 0, s = 0; while (s < n) s += BURSTS[k++] ?? 320; return k; };
+  demo("compress", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    controls: [
+      { key: "file", label: "File", type: "choice", value: "bootstrap", color: "ink",
+        options: [{ value: "jquery", label: "jQuery" }, { value: "bootstrap", label: "Bootstrap CSS" }, { value: "wiki", label: "Wikipedia page" }] },
+      { key: "enc", label: "Encoding", type: "choice", value: "raw", color: "green",
+        options: [{ value: "raw", label: "none" }, { value: "gzip", label: "gzip" }, { value: "br", label: "Brotli" }] },
+    ],
+    caption: "Real files compressed with gzip and Brotli. On a new connection each burst costs a round trip, so shrinking a 233 KB stylesheet to 23 KB saves three of them.",
+    status(s, v) {
+      const f = FILES[v.file], n = packets(f[v.enc]), k = bursts(n);
+      return `${C.kb(f[v.enc])}: ${n} packets in ${k} burst${k > 1 ? "s" : ""}, ${k * 280} ms of round trips from London, ${k * 10} ms from an edge`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, f = FILES[v.file];
+      // sizes
+      const max = 402421, bx = narrow ? 64 : 92, bw = g.w - bx - 70;
+      g.text(f.label, [8, 14], { size: 13, weight: 600, align: "left" });
+      [["raw", "none"], ["gzip", "gzip"], ["br", "Brotli"]].forEach(([k, name], i) => {
+        const y = 36 + i * 24, on = k === v.enc;
+        g.text(name, [bx - 10, y], { size: 12, color: on ? "ink" : "muted", align: "right", weight: on ? 600 : 500 });
+        g.rect(bx, y - 7, (bw * f[k]) / max, 14, { r: 2, fill: on ? g.rgba("green", 0.55) : g.rgba("ink", 0.12), stroke: on ? "green" : "faint", width: 1 });
+        g.text(C.kb(f[k]), [bx + (bw * f[k]) / max + 6, y], { size: 12, color: on ? "ink" : "muted", align: "left" });
+      });
+      // packets, in bursts: burst k is 10·2^k packets, drawn as columns of 10
+      const n = packets(f[v.enc]), top = 36 + 3 * 24 + 22;
+      const cols = BURSTS.reduce((a, b) => a + b / 10, 0), gap = narrow ? 8 : 14;
+      const sq = Math.min(narrow ? 9 : 11, (g.w - 16 - gap * (BURSTS.length - 1)) / cols, (g.h - top - 30) / 10);
+      let x = 8, used = 0;
+      BURSTS.forEach((b, k) => {
+        const c0 = x;
+        for (let i = 0; i < b; i++) {
+          const cx = x + Math.floor(i / 10) * sq, cy = top + (i % 10) * sq;
+          const filled = used + i < n;
+          g.rect(cx + 0.5, cy + 0.5, sq - 1.5, sq - 1.5, { r: 1, fill: filled ? g.rgba("green", 0.7) : null, stroke: filled ? "green" : "faint", width: 0.8 });
+        }
+        const w = (b / 10) * sq;
+        const live = used < n;
+        g.text(`round trip ${k + 1}`, [c0 + w / 2, top + 10 * sq + 14], { size: narrow ? 10 : 11, color: live ? "ink" : "faint", weight: live ? 600 : 500 });
+        used += b;
+        x += w + gap;
+      });
+    },
+  });
+}
+</script>
+
+<p>Bootstrap's stylesheet is 233 KB as written, 160 packets that need five bursts. Brotli shrinks it to <button class="set" data-set="enc=br">23 KB</button>, 16 packets in two bursts. From London on a new connection, that's three round trips, about 0.8 seconds, saved by compression alone. Brotli beats gzip by about a quarter on this file, and the edge can afford its slowest, smallest setting because it compresses each file once and serves the result many times. JPEG photos and video are already compressed, so compressing them again gains almost nothing.</p>
+
+<h2>Sydney again</h2>
+
+<p>Here is the page from the start of this one, loaded from Sydney, with its HTML now personal so it can't be cached. The stylesheet, script, images, and font can. Switch on the pieces one at a time and watch where the time goes:</p>
+
+<figure class="demo" id="whole" aria-label="A waterfall chart of the opening page loading in Sydney, with switches for serving it through the Sydney edge, compressing text with Brotli, and using HTTP/3 over QUIC. Tick marks count round trips of the connection in use."></figure>
+<script>
+{
+  const C = CDN, FAR = C.estRtt(C.km(C.CITY.sydney.at, C.CITY.london.at));
+  const ROWS = [["connect", "handshakes"], ["html", "HTML (personal)"], ["css", "CSS"], ["js", "JavaScript"], ["img", "4 images"], ["font", "font"]];
+  const load = v => C.loadPage({ rtt: FAR, proto: v.quic ? "quic" : "tls13", compress: v.br,
+    edge: v.cdn ? { rtt: C.ACCESS, originRtt: 270, html: "miss", statics: "hit", warm: true } : null });
+  demo("whole", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    controls: [
+      { key: "cdn", label: "Through the Sydney edge", type: "toggle", value: false, color: "green" },
+      { key: "br", label: "Brotli", type: "toggle", value: true, color: "green" },
+      { key: "quic", label: "HTTP/3 (QUIC)", type: "toggle", value: false, color: "orange" },
+    ],
+    presets: [{ label: "nothing", set: { cdn: false, br: false, quic: false } }, { label: "everything", set: { cdn: true, br: true, quic: true } }],
+    caption: "The opening page, from Sydney, with each technique switched on or off. The edge removes most of the time; what remains is the one trip to London for the personal HTML.",
+    status: (s, v) => { const r = load(v); return `page done after ${C.ms(r.end)}`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, r = load(v);
+      const left = narrow ? 96 : 120, top = 10, bottom = 34, rowH = (g.h - top - bottom) / ROWS.length;
+      const T = 3000, X = t => left + ((g.w - left - 12) * t) / T;
+      for (let t = 0; t <= T; t += 500) {
+        g.line([X(t), top], [X(t), g.h - bottom], { stroke: "grid", width: 1 });
+        g.text(t ? `${t / 1000} s` : "0", [X(t), g.h - bottom + 14], { size: 11, color: "muted" });
+      }
+      ROWS.forEach(([id, label], i) => {
+        const y = top + i * rowH, bh = Math.min(18, rowH * 0.56), yb = y + (rowH - bh) / 2;
+        g.text(label, [left - 10, y + rowH / 2], { size: 12.5, color: id === "connect" ? "orange" : "ink", align: "right" });
+        const ph = id === "connect" ? r.phases[0] : r.phases.find(p => p.files && p.files.some(f => f.id === id));
+        if (!ph) return;
+        const a = X(ph.t0), b = X(ph.t1);
+        if (id === "connect") { g.rect(a, yb, Math.max(2, b - a), bh, { fill: g.rgba("orange", 0.5), stroke: "orange", width: 1 }); return; }
+        const fb = X(ph.firstByte), c = ph.kind === "origin" ? "purple" : v.cdn ? "green" : "ink";
+        g.rect(a, yb, Math.max(1, fb - a), bh, { fill: g.rgba(c, 0.12), stroke: "faint", width: 1 });
+        g.rect(fb, yb, Math.max(2, b - fb), bh, { fill: g.rgba(c, 0.45), stroke: c, width: 1 });
+      });
+      g.line([X(r.end), top], [X(r.end), g.h - bottom], { stroke: "ink", width: 1.5, dash: [4, 3] });
+      g.text(`done, ${C.ms(r.end)}`, [Math.min(X(r.end) + 6, g.w - 76), top + 8], { size: 12, weight: 600, align: "left", halo: true });
+    },
+  });
+}
+</script>
+
+<p>With nothing but compression, the page takes 2.6 seconds, as it did at the start. <button class="set" data-set="cdn=true br=true quic=false">Through the edge</button> it takes about 0.4. The handshakes and every slow-start burst now happen over 10 ms, the shared files come from the edge's copies, and the <span class="c-purple">personal HTML</span> crosses to London once over the edge's warm connection, which is most of what's left. <button class="set" data-set="cdn=false br=true quic=true">HTTP/3 alone</button> saves one round trip of handshake, a quarter of a second from Sydney, but only about 10 ms through the edge, where round trips are cheap. Compression changes little here, because by the time the big files go, slow start has already opened the window. The order of the gains matches the order of this page: distance first, then everything else.</p>
+
+<p>No CDN can make light faster. What it does is rearrange the work so that almost every round trip a page needs happens over a short distance: handshakes with a nearby edge, files from that edge's copies, misses gathered behind a shield, and the unavoidable trips to the origin sent over a connection that's already open. Some CDNs now also let sites run their own code on the edges, so that more of the personal page can be assembled near the reader. The trip that remains is set by the size of the planet: about 270 ms from Sydney to London and back.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-hpbn">Ilya Grigorik, <em>High Performance Browser Networking</em>, O'Reilly, 2013. Chapters 1 to 4 (latency, TCP, TLS) are free online at hpbn.co.</li>
+  <li id="ref-wonder">WonderNetwork, “Global Ping Statistics”, hourly pings between its servers; London to eight cities, typical averages for October 2026.</li>
+  <li id="ref-tls13">E. Rescorla, “The Transport Layer Security (TLS) Protocol Version 1.3”, RFC 8446, IETF, 2018.</li>
+  <li id="ref-quic">J. Iyengar and M. Thomson, “QUIC: A UDP-Based Multiplexed and Secure Transport”, RFC 9000, IETF, 2021.</li>
+  <li id="ref-iw10">J. Chu, N. Dukkipati, Y. Cheng and M. Mathis, “Increasing TCP's Initial Window”, RFC 6928, IETF, 2013.</li>
+  <li id="ref-akamai">Erik Nygren, Ramesh K. Sitaraman and Jennifer Sun, “The Akamai Network: A Platform for High-Performance Internet Applications”, <em>ACM SIGOPS Operating Systems Review</em> 44(3), 2010.</li>
+  <li id="ref-breslau">Lee Breslau, Pei Cao, Li Fan, Graham Phillips and Scott Shenker, “On the Implications of Zipf's Law for Web Caching”, Technical Report 1371, Computer Sciences Department, University of Wisconsin-Madison, 1998; published as “Web Caching and Zipf-like Distributions: Evidence and Implications”, <em>IEEE INFOCOM</em> 1999.</li>
+  <li id="ref-fb">Qi Huang, Ken Birman, Robbert van Renesse, Wyatt Lloyd, Sanjeev Kumar and Harry C. Li, “An Analysis of Facebook Photo Caching”, <em>Proceedings of the 24th ACM Symposium on Operating Systems Principles (SOSP)</em>, 2013.</li>
+  <li id="ref-http">R. Fielding, M. Nottingham and J. Reschke, “HTTP Caching”, RFC 9111, IETF, 2022.</li>
+  <li id="ref-swr">M. Nottingham, “HTTP Cache-Control Extensions for Stale Content”, RFC 5861, IETF, 2010.</li>
+  <li id="ref-ecs">C. Contavalli, W. van der Gaast, D. Lawrence and W. Kumari, “Client Subnet in DNS Queries”, RFC 7871, IETF, 2016.</li>
+  <li id="ref-anycast">Matt Calder, Ashley Flavel, Ethan Katz-Bassett, Ratul Mahajan and Jitendra Padhye, “Analyzing the Performance of an Anycast CDN”, <em>Proceedings of the ACM Internet Measurement Conference (IMC)</em>, 2015.</li>
+  <li id="ref-brotli">J. Alakuijala and Z. Szabadka, “Brotli Compressed Data Format”, RFC 7932, IETF, 2016.</li>
+</ol>
+<!-- explainer:article:end -->
+</article>
+</main>
+</div>
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+</body>
+</html>

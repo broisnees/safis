@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Lithium-Ion Battery</title>
+<meta name="description" content="How a lithium-ion cell stores energy by moving lithium out of graphite and into a metal oxide, and why every charge wears it down a little.">
+<meta name="explainer:category" content="Chemistry">
+<!-- explainer:runtime:start v3 shared -->
+<link rel="stylesheet" href="../safis.css?v=1ad508e56c">
+<script src="../safis.js?v=282c01de29"></script>
+<!-- explainer:runtime:end -->
+</head>
+<body>
+<div class="page has-toc">
+<nav class="toc" aria-label="All explainers"><!-- explainer:nav:start --><a class="site" href="../index.html">Safis</a><h2>Body</h2><ul><li><a href="../jaw-joint/index.html">The Jaw Joint</a></li></ul><h2>Biology</h2><ul><li><a href="../protein/index.html">How a Cell Builds a Protein</a></li><li><a href="../neuron/index.html">How a Neuron Fires</a></li></ul><h2>Chemistry</h2><ul><li><a href="../battery/index.html" aria-current="page">The Lithium-Ion Battery</a></li><li><a href="../ice/index.html">Why Ice Floats</a></li></ul><h2>Physics</h2><ul><li><a href="../pendulum/index.html">How a Pendulum Keeps Time</a></li></ul><h2>Machines</h2><ul><li><a href="../lock/index.html">How a Pin Tumbler Lock Knows Your Key</a></li></ul><h2>Earth &amp; Space</h2><ul><li><a href="../tides/index.html">Why There Are Two Tides a Day</a></li></ul><h2>Computing</h2><ul><li><a href="../cdn/index.html">How a CDN Makes a Faraway Site Fast</a></li><li><a href="../hash-table/index.html">How a Hash Table Finds Things</a></li><li><a href="../dns/index.html">How DNS Turns a Name into an Address</a></li></ul><h2>AI</h2><ul><li><a href="../next-word/index.html">How a Language Model Picks the Next Word</a></li><li><a href="../learning/index.html">How a Neural Network Learns</a></li><li><a href="../attention/index.html">How Attention Works</a></li></ul><h2>Math</h2><ul><li><a href="../matrix/index.html">How a Matrix Transforms Space</a></li><li><a href="../fourier/index.html">How Spinning Circles Draw Anything</a></li></ul><!-- explainer:nav:end --></nav>
+<main>
+<!-- explainer:back:start --><a class="backlink" href="../index.html">← Safis</a><!-- explainer:back:end -->
+<header>
+  <p class="kicker">Chemistry</p>
+  <h1>The Lithium-Ion Battery</h1>
+  <p class="dek">How a lithium-ion cell stores energy by moving lithium out of graphite and into a metal oxide, and why every charge wears it down a little.</p>
+</header>
+<article>
+<!-- explainer:article:start -->
+<script>
+// Shared by the figures below: one real cell, an LG M50 (a 5 Ah cylinder 21 mm across and 70 mm long, with a
+// nickel-rich NMC 811 cathode and a graphite anode), described by the electrode curves that Chen and others
+// fitted to measurements of it (2020). Potentials are in volts against lithium metal.
+window.BAT = (() => {
+  const t = Math.tanh, ex = Math.exp;
+  // Graphite: potential against the fraction x of its lithium sites that are filled.
+  const Un = x => 1.9793 * ex(-39.3631 * x) + 0.2482 - 0.0909 * t(29.8538 * (x - 0.1234)) - 0.04478 * t(14.9159 * (x - 0.2769)) - 0.0205 * t(30.4444 * (x - 0.6103));
+  // NMC 811: potential against the fraction y of its lithium sites that are filled.
+  const Up = y => -0.809 * y + 4.4875 - 0.0428 * t(18.5138 * (y - 0.5542)) - 17.7326 * t(15.789 * (y - 0.3117)) + 17.5842 * t(15.9308 * (y - 0.312));
+  // How full each electrode is when the cell reads empty (2.5 V) and full (4.2 V).
+  const X0 = 0.0279, X1 = 0.9014, Y0 = 0.9084, Y1 = 0.2661;
+  const CAP = 5;                                   // Ah between 2.5 V and 4.2 V
+  const QN = CAP / (X1 - X0), QP = CAP / (Y0 - Y1); // Ah of room in the whole anode and the whole cathode
+  const LI = QN * X0 + QP * Y0;                    // Ah of lithium that can move
+  const xAt = s => X0 + (X1 - X0) * s, yAt = s => Y0 + (Y1 - Y0) * s;   // s: state of charge, 0 to 1
+  const ocv = s => Up(yAt(s)) - Un(xAt(s));
+  const VMIN = 2.5, VMAX = 4.2;
+
+  // Lithium iron phosphate (LFP) against the same graphite, for comparison (fit by Afshar and others, 2017).
+  const Ulfp = y => 3.4077 - 0.020269 * y + 0.5 * ex(-150 * y) - 0.9 * ex(-30 * (1 - y));
+  const ocvLfp = s => Ulfp(0.985 - 0.98 * s) - Un(xAt(s));
+
+  // Resistance. A round 30 mΩ at 25 °C, rising in the cold (activation energy 30 kJ/mol). Illustrative.
+  const RG = 8.314;
+  const arrh = (Ea, T) => ex((Ea / RG) * (1 / 298.15 - 1 / (T + 273.15)));
+  const R = (T = 25) => 0.03 * arrh(30000, T);
+
+  // Constant-current discharge from full until the terminal voltage reaches 2.5 V.
+  function discharge(I, T = 25, n = 300) {
+    const r = R(T), q = [], v = [], o = [];
+    let E = 0;
+    for (let i = 0; i <= n; i++) {
+      const s = 1 - i / n, V = ocv(s) - I * r;
+      if (V < VMIN && i > 0) {
+        // Land exactly on the cutoff.
+        const sPrev = 1 - (i - 1) / n, f = Num.solve(z => ocv(z) - I * r - VMIN, s, sPrev);
+        const qq = (1 - f) * CAP;
+        E += (VMIN + v[v.length - 1]) / 2 * (qq - q[q.length - 1]);
+        q.push(qq); v.push(VMIN); o.push(ocv(f));
+        break;
+      }
+      if (i > 0) E += (V + v[v.length - 1]) / 2 * (CAP / n);
+      q.push((1 - s) * CAP); v.push(V); o.push(ocv(s));
+    }
+    const Q = q[q.length - 1];
+    return { q, v, o, Q, E, heat: I * I * r * (Q / Math.max(I, 1e-9)) };
+  }
+
+  // Constant current until 4.2 V, then constant voltage until the current falls to C/20. Times in minutes.
+  function charge(I, T = 25, s0 = 0) {
+    const r = R(T), dt = 5, out = { t: [0], s: [s0], v: [ocv(s0) + I * r], i: [I], cvAt: null };
+    let s = s0, time = 0;
+    for (let k = 0; k < 20000; k++) {
+      let cur = I, V = ocv(s) + I * r;
+      if (V >= VMAX) { cur = (VMAX - ocv(s)) / r; V = VMAX; if (out.cvAt === null) out.cvAt = time / 60; }
+      if (cur < CAP / 20) break;
+      s += (cur * dt) / (CAP * 3600);
+      time += dt;
+      if (k % 6 === 5) { out.t.push(time / 60); out.s.push(s); out.v.push(V); out.i.push(cur); }
+    }
+    out.end = time / 60;
+    return out;
+  }
+
+  // Storage fade: lithium lost to the film on the graphite grows with the square root of time, faster when the
+  // graphite sits at a low potential (a full cell) and about twice as fast for every 10 °C. Tuned to the size of
+  // fade reported in storage tests; illustrative, not a fit to one cell.
+  const fadeRate = (soc, T) => 0.04 * arrh(53000, T) * ex(-(Un(xAt(soc)) - 0.092) / 0.24);   // fraction per √year
+  const fade = (soc, T, years) => fadeRate(soc, T) * Math.sqrt(Math.max(0, years));
+
+  // Drawing helpers shared by the 2D figures.
+  function li(g, p, r = 5, o = {}) {
+    g.circle(p, r, { fill: o.fill ?? g.mix("panel", "purple", 0.55), stroke: "purple", width: 1.3, alpha: o.alpha ?? 1 });
+    if (o.plus) g.text("+", [p[0], p[1] + 0.5], { size: Math.max(9, r * 1.6), color: "purple", weight: 700, alpha: o.alpha ?? 1 });
+  }
+  function electron(g, p, r = 3.2, o = {}) {
+    g.circle(p, r, { fill: "blue", alpha: o.alpha ?? 1 });
+  }
+  const fitDistance = (r, fovDeg, aspect, margin = 0.9) => {
+    const k = Math.tan((fovDeg * Math.PI) / 360) * margin;
+    return r / Math.sin(Math.atan(Math.min(k, k * aspect)));
+  };
+  // A small seeded random number generator, so "random" pictures are the same on every load.
+  const rng = seed => { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let z = a; z = Math.imul(z ^ (z >>> 15), z | 1); z ^= z + Math.imul(z ^ (z >>> 7), z | 61); return ((z ^ (z >>> 14)) >>> 0) / 4294967296; }; };
+
+  return { Un, Up, X0, X1, Y0, Y1, CAP, QN, QP, LI, xAt, yAt, ocv, VMIN, VMAX, Ulfp, ocvLfp, arrh, R, discharge, charge, fadeRate, fade, li, electron, fitDistance, rng };
+})();
+</script>
+<div class="abstract"><ul>
+  <li>A lithium-ion cell stores energy as lithium parked in the wrong place: packed into graphite, it would much rather sit in a metal oxide, and the cell lets it move only if its electrons take the long way round, through whatever the cell powers.</li>
+  <li>The cell's voltage is the energy each lithium gives up on that move. It sags as the oxide fills and the graphite empties, which is why a discharge curve has the shape it has.</li>
+  <li>Charging pushes the lithium back uphill. A charger can push hard until the cell is nearly full, then has to ease off, which is why the last fifth takes so long.</li>
+  <li>Every cell slowly loses lithium to a thin film on the graphite, faster when it is hot and full. Charging too fast or too cold plates lithium out as metal, which wears the cell faster and can grow spikes that short it.</li>
+</ul></div>
+
+<p class="lede">A phone that lasted a full day when it was new is often dying by mid-afternoon two or three years later. Nothing inside it has visibly changed: no part has worn through, nothing leaks, the battery still charges to 100%. Yet the same 100% holds less. To see why, we first need to know what a charged battery actually holds, and that turns out to be a surprisingly concrete thing: a few grams of lithium, moved from one material to another and waiting to move back.</p>
+
+<p>Phones use flat cells, and electric cars and power tools often use cylinders, but inside they are built the same way. Here is one of the cylinders, a 21700 cell, 21 mm across and 70 mm long, holding 5 amp-hours (Ah) at about 3.6 volts. Drag to turn it, and slide the cut to open it:</p>
+
+<figure class="demo wide" id="hero" aria-label="A 3D cylindrical lithium-ion cell. A slider cuts it open to show a rolled-up strip of dark anode, pale cathode, and thin separator inside the steel can."></figure>
+<script>
+{
+  const { mesh } = E3;
+  const scene = E3.scene({ shadow: { opacity: 0.14 } });
+  const cell = scene.group({ rotation: [0, 0, -Math.PI / 2] });   // built standing up, then laid on its side
+  cell.add(mesh.lathe([[0, -35], [10.5, -35], [10.5, 33.6], [10.2, 33.6], [10.2, -34.6], [0, -34.6]], { segments: 80 }), { material: "steel", name: "can" });
+  cell.add(mesh.lathe([[0, 33.5], [10.4, 33.5], [10.4, 34.9], [4.4, 34.9], [4.4, 36], [0, 36]], { segments: 80 }), { material: "steel", name: "cap" });
+  // The roll: seven turns of an Archimedean spiral (a real cell has about twenty).
+  const TURNS = 7, R0 = 2.3, PITCH = (9.95 - R0) / TURNS;
+  const rAt = (th, off) => R0 + (PITCH * th) / TAU + off;
+  const path = off => Array.from({ length: 64 * TURNS + 1 }, (_, i) => {
+    const th = (i / (64 * TURNS)) * TURNS * TAU, r = rAt(th, off);
+    return [r * Math.cos(th), 0, -r * Math.sin(th)];
+  });
+  const strip = (off, thick, h, y = 0) => mesh.transform(mesh.sweep(path(off), [[-thick / 2, -h / 2], [thick / 2, -h / 2], [thick / 2, h / 2], [-thick / 2, h / 2]], { up: [0, 1, 0] }), E3.m4.translation([0, y, 0]));
+  const LAYERS = [
+    { name: "anode", off: 0.27, t: 0.46, h: 65.5, material: "graphite" },
+    { name: "separator", off: 0.53, t: 0.05, h: 67, material: "paper" },
+    { name: "cathode", off: 0.77, t: 0.42, h: 64.5, material: "porcelain" },
+    { name: "separator", off: 1.03, t: 0.05, h: 67, material: "paper" },
+  ];
+  for (const L of LAYERS) cell.add(strip(L.off, L.t, L.h, -0.6), { material: L.material, name: L.name });
+
+  // A point on a layer's turn k that faces the viewer (+z), at height y.
+  const facing = (off, k, y) => { const th = k * TAU + 1.5 * Math.PI, r = rAt(th, off); return [r * Math.cos(th), y, -r * Math.sin(th)]; };
+
+  demo("hero", {
+    aspect: w => (w < 560 ? 0.95 : 1.7),
+    caption: "A 21700 lithium-ion cell. Inside the steel can is one long sandwich of anode, separator, and cathode, rolled up tight; I've drawn seven turns of it, with the layers thicker than life.",
+    orbit: { yaw: -0.75, pitch: 0.3, minPitch: -0.5, maxPitch: 1.2 },
+    controls: [{ key: "cut", label: "Cut open", min: 0, max: 100, step: 1, value: 60, unit: "%", color: "ink" }],
+    status: (s, v) => (v.cut > 1 ? `end ${Math.max(0, 40 * v.cut / 100 - 1.3).toFixed(0)} mm cut away` : "closed"),
+    draw(g, s, v) {
+      const d = 36.3 - 40 * v.cut / 100;
+      scene.cutPlane = v.cut > 0 ? [1, 0, 0, d] : null;
+      const k = Math.tan((24 * Math.PI) / 360) * 0.9;
+      const view = g.render3d(scene, { ...s.view, fov: 24, target: [0, 0, 0], distance: Math.max(40 / (k * g.w / g.h), 26 / k) });
+      const W = p => cell.toWorld(p);
+      const items = [{ at: view.project(W([0, -22, 10.5])), text: "steel can (negative end)", color: "ink", side: "left" }];
+      if (v.cut < 3) items.push({ at: view.project(W([0, 36, 0])), text: "positive terminal", color: "ink" });
+      if (v.cut > 8) {
+        const y = Math.min(d, 33);
+        items.push({ at: view.project(W(facing(0.27, 5, y))), text: "anode", color: "ink" });
+        items.push({ at: view.project(W(facing(0.77, 3, y))), text: "cathode", color: "ink" });
+        items.push({ at: view.project(W(facing(1.03, 6, y + 0.3))), text: "separator", color: "ink" });
+      }
+      g.callouts(items, { split: g.w * 0.5 });
+    },
+  });
+}
+</script>
+
+<p>Under the can is one long, thin sandwich, rolled up like a jelly roll. Unrolled, it is about 79 cm long and 6.5 cm wide<a class="cite" href="#ref-chen"></a>, and in a real cell it goes round about twenty times<span class="sidenote">My estimate: each turn of the roll is about 0.37 mm thick, and the roll fills the space between a 3 mm hole in the middle and the inside of the can.</span>. The dark strip is the negative electrode, called the <dfn data-def="The negative electrode of a cell while it discharges. In a lithium-ion cell it is a coating of graphite on copper foil.">anode</dfn>. The pale strip is the positive electrode, the <dfn data-def="The positive electrode of a cell while it discharges. In a lithium-ion cell it is a coating of a lithium metal oxide on aluminum foil.">cathode</dfn>. Between them, on both sides, runs a plastic film thinner than a hair, the <dfn data-def="A porous plastic film between the electrodes that lets ions through but keeps the electrodes from touching.">separator</dfn>. The steel can is wired to the anode and the button on top to the cathode.</p>
+
+<p>Cut a small square out of the roll, peel its layers apart, and lay them out one above the other. Pull them apart with the slider and point at a layer to name it:</p>
+
+<figure class="demo" id="stack" aria-label="A 3D exploded stack of the five layers in a cell: copper foil, graphite anode coating, separator, oxide cathode coating, aluminum foil. A slider pulls them apart; pointing at a layer names it."></figure>
+<script>
+{
+  const { mesh } = E3;
+  const UM = 0.25;   // drawing units per micrometer of thickness
+  const LAYERS = [
+    { name: "aluminum foil", um: 16.3, material: "steel", what: "aluminum foil, 16 µm: carries electrons to and from the cathode" },
+    { name: "cathode coating", um: 75.6, material: "porcelain", what: "cathode coating, 76 µm: grains of lithium nickel manganese cobalt oxide (NMC)" },
+    { name: "separator", um: 12, material: "paper", what: "separator, 12 µm: porous plastic soaked in electrolyte" },
+    { name: "anode coating", um: 85.2, material: "graphite", what: "anode coating, 85 µm: grains of graphite" },
+    { name: "copper foil", um: 11.7, material: "copper", what: "copper foil, 12 µm: carries electrons to and from the anode" },
+  ];
+  const W = 40, D = 28, GAP = 9;
+  const total = LAYERS.reduce((a, L) => a + L.um * UM, 0);
+  const scene = E3.scene({ shadow: { opacity: 0.12 } });
+  const nodes = LAYERS.map(L => scene.add(mesh.box(W, L.um * UM, D, { round: Math.min(0.6, L.um * UM * 0.45) }), { material: L.material, name: L.name }));
+  const RADIUS = Math.hypot((total + GAP * 4) / 2, W / 2, D / 2);
+  let view = null;
+
+  demo("stack", {
+    aspect: w => (w < 560 ? 0.95 : 1.6),
+    caption: "The five layers of the sandwich, with their thicknesses to scale with one another. The whole stack is about a fifth of a millimeter thick; the sheet is drawn far narrower than it really is.",
+    orbit: { yaw: 0.6, pitch: 0.38, minPitch: -0.3, maxPitch: 1.2 },
+    state: () => ({ hover: null }),
+    controls: [{ key: "apart", label: "Pull apart", min: 0, max: 1, step: 0.01, value: 0.55, color: "ink" }],
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const n = hit ? hit.node.name : null; if (n === s.hover) return false; s.hover = n; return true; },
+    status: s => { const L = LAYERS.find(l => l.name === s.hover); return L ? L.what : "Point at a layer to name it."; },
+    draw(g, s, v) {
+      let y = -(total + GAP * 4 * v.apart) / 2;
+      LAYERS.forEach((L, i) => { const h = L.um * UM; nodes[i].position = [0, y + h / 2, 0]; nodes[i].highlight = s.hover === L.name; y += h + GAP * v.apart; });
+      view = g.render3d(scene, { ...s.view, fov: 26, target: [0, 0, 0], distance: BAT.fitDistance(RADIUS, 26, g.w / g.h, 0.94) });
+      g.callouts(LAYERS.map((L, i) => ({ at: view.project(E3.v3.add(nodes[i].position, [W / 2, 0, D / 2])), text: L.name, color: s.hover === L.name ? "ink" : "muted" })), { split: g.w * 0.35 });
+    },
+  });
+}
+</script>
+
+<p>The two foils are just wires spread flat: copper on the anode side, aluminum on the cathode side. The coatings do the work. The anode coating is a paste of graphite grains, the stuff of pencil leads. The cathode coating is a paste of grains of a metal oxide, here one made of lithium, nickel, manganese, cobalt, and oxygen, called NMC. Each coating is about as thick as a human hair, and the whole stack is about a fifth of a millimeter, two sheets of paper. Every gap in it, including the pores of the separator, is soaked in a liquid, the <dfn data-def="The liquid that fills a cell's pores: a lithium salt dissolved in organic solvents. It carries lithium ions but not electrons.">electrolyte</dfn>.</p>
+
+<p>Nothing in this stack moves, and nothing burns. A charged cell can sit on a shelf for months and still hold most of its charge. So where, in a few grams of graphite and oxide, is 18 watt-hours of energy hiding? The answer lies in what those two coatings would do if they were allowed to touch.</p>
+<h2>Two materials, kept apart</h2>
+
+<p>Start with two materials. One is lithium metal, whose atoms each hold one outer electron loosely. The other is a cobalt oxide with empty spaces for lithium, the material in the first lithium-ion cells, which pulls hard on electrons. Pull them apart and push them back together with the switch, and watch the boundary:</p>
+
+<figure class="demo" id="contact" aria-label="A block of lithium atoms next to a block of cobalt oxide with empty sites. When they touch, lithium atoms move across one by one with their electrons and the boundary glows with heat."></figure>
+<script>
+{
+  const ROWS = 6, COLS = 5, N = ROWS * COLS;
+  const src = m => [COLS - 1 - Math.floor(m / ROWS), m % ROWS];   // lithium nearest the boundary goes first
+  const dst = m => [Math.floor(m / ROWS), m % ROWS];               // into the nearest empty site
+  let P;
+  demo("contact", {
+    aspect: w => (w < 560 ? 1.15 : 2),
+    caption: "Lithium metal against a cobalt oxide with room for lithium. Where they touch, each lithium hands its electron (blue) to the oxide and follows it in; the energy comes out as heat at the boundary.",
+    state: () => ({ pos: 0, moved: 0, f: 0, heat: 0, wait: 0 }),
+    controls: [{ key: "touch", label: "Blocks", type: "choice", options: [{ value: 1, label: "Touching" }, { value: 0, label: "Apart" }], value: 1 }],
+    reset: true,
+    status: (s, v) => (s.pos > 0.02 ? `apart: nothing happens · ${s.moved} lithium moved` : `${s.moved} lithium moved · about ${4 * s.moved} eV released as heat`),
+    step(dt, s, v) {
+      const target = v.touch ? 0 : 1;
+      s.pos += (target - s.pos) * Math.min(1, dt * 6);
+      if (Math.abs(target - s.pos) < 0.002) s.pos = target;
+      s.heat *= Math.exp(-dt * 1.6);
+      if (s.pos > 0.01) { s.f = 0; return; }
+      if (s.moved >= N) { s.wait += dt; if (s.wait > 1.6) Object.assign(s, { moved: 0, f: 0, wait: 0 }); return; }
+      s.f += dt * 2.2;
+      if (s.f >= 1) { s.moved++; s.f = 0; s.heat = Math.min(1, s.heat + 0.45); }
+    },
+    draw(g, s, v) {
+      P = g.fit(0, 100, -8, 44, { pad: 10 });
+      const sp = 5.6, gap = s.pos * 12;
+      const L0 = 50 - gap - COLS * sp, R0 = 50 + gap * 0.2;
+      const site = (x0, c, r) => [x0 + sp * (c + 0.5), 4 + sp * (r + 0.5)];
+      const r = 0.36 * sp * P.sx;
+      // The oxide: pale slabs with empty sites between them.
+      const a = P([R0, 4]), b = P([R0 + COLS * sp, 4 + ROWS * sp]);
+      g.rect(a[0], b[1], b[0] - a[0], a[1] - b[1], { fill: g.rgba("muted", 0.08), stroke: "ink", width: 1.5 });
+      for (let rr = 0; rr <= ROWS; rr++) { const y = 4 + sp * rr; g.line(P([R0 + 0.6, y]), P([R0 + COLS * sp - 0.6, y]), { stroke: "muted", width: 3, alpha: 0.5 }); }
+      for (let c = 0; c < COLS; c++) for (let rr = 0; rr < ROWS; rr++) g.circle(P(site(R0, c, rr)), r * 0.9, { stroke: "muted", width: 1, dash: [2, 2] });
+      // The lithium block.
+      const la = P([L0, 4]), lb = P([L0 + COLS * sp, 4 + ROWS * sp]);
+      g.rect(la[0], lb[1], lb[0] - la[0], la[1] - lb[1], { fill: g.rgba("purple", 0.06), stroke: "ink", width: 1.5 });
+      // The boundary glows while lithium crosses.
+      if (s.heat > 0.02 && s.pos < 0.05) g.circle(P([50, 4 + ROWS * sp / 2]), (8 + 10 * s.heat) * P.sx, { fill: g.rgba("red", 0.18 * s.heat) });
+      for (let m = 0; m < N; m++) {
+        const [c, rr] = src(m), [c2, r2] = dst(m);
+        let p = P(site(L0, c, rr)), gone = m < s.moved, moving = m === s.moved && s.f > 0;
+        if (gone) p = P(site(R0, c2, r2));
+        if (moving) { const e = smoothstep(0, 1, s.f); p = P([lerp(site(L0, c, rr)[0], site(R0, c2, r2)[0], e), lerp(site(L0, c, rr)[1], site(R0, c2, r2)[1], e)]); }
+        BAT.li(g, p, r, { plus: gone || moving });
+        if (!gone) BAT.electron(g, [p[0] + r * 0.75 + (moving ? r * 1.2 * smoothstep(0, 0.4, s.f) : 0), p[1] - r * 0.75], Math.max(2.4, r * 0.32));
+        else BAT.electron(g, [p[0] - r * 1.25, p[1] - r * 0.9], Math.max(2.4, r * 0.32), { alpha: 0.75 });
+      }
+      g.label("lithium metal", P([L0 + COLS * sp / 2, 4 + ROWS * sp + 3.5]));
+      g.label("cobalt oxide", P([R0 + COLS * sp / 2, 4 + ROWS * sp + 3.5]));
+      if (s.heat > 0.15 && s.pos < 0.05) g.label("heat", P([50, -2.5]), { color: "red" });
+    },
+  });
+}
+</script>
+
+<p>Where the blocks touch, a lithium atom hands its outer <span class="c-blue">electron</span> to the oxide, and the <span class="c-purple">lithium</span>, now a positive ion, slips in after it. Each one that crosses releases about 4 electronvolts (eV) of energy, the energy an electron picks up crossing 4 volts. Pull the blocks apart and it stops at once: electrons can't jump a gap.</p>
+
+<p>One material losing electrons is called <dfn data-def="Losing electrons. In a discharging lithium-ion cell, the lithium in the anode is oxidized.">oxidation</dfn>; the other gaining them is <dfn data-def="Gaining electrons. In a discharging lithium-ion cell, the cathode is reduced.">reduction</dfn>. Together they make a <dfn data-def="A reaction in which electrons pass from one substance (oxidized) to another (reduced).">redox reaction</dfn>, the kind behind rust and fire. Touching, the two halves happen in the same spot, and all the energy turns to heat right there. A battery is a redox reaction with its two halves held apart, so the only way the electrons can cross is a route we choose.</p>
+
+<script>
+// A sketch shared by the next two figures: two electrodes, the space between them, and a wire through a lamp.
+window.CIRCUIT = (() => {
+  const L = [6, 30], R = [70, 94], Y = [4, 34], TOP = 50;
+  const wire = [[18, Y[1]], [18, TOP], [50, TOP], [82, TOP], [82, Y[1]]];
+  const segLen = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const total = wire.slice(1).reduce((t, p, i) => t + segLen(wire[i], p), 0);
+  function along(f) {
+    let d = ((f % 1) + 1) % 1 * total;
+    for (let i = 1; i < wire.length; i++) {
+      const l = segLen(wire[i - 1], wire[i]);
+      if (d <= l) return [lerp(wire[i - 1][0], wire[i][0], d / l), lerp(wire[i - 1][1], wire[i][1], d / l)];
+      d -= l;
+    }
+    return wire[wire.length - 1];
+  }
+  const IONY = [9, 27, 15, 31, 21, 7, 25, 12, 18, 29, 10, 23];
+  // o: { electrolyte, ePhase, iPhase, lamp (0-1), q (0-1 charge piled up), bridge (0, 1, 2), bPhase, hot (0-1) }
+  function draw(g, P, o) {
+    const rect = (x0, x1, style) => { const a = P([x0, Y[0]]), b = P([x1, Y[1]]); g.rect(a[0], b[1], b[0] - a[0], a[1] - b[1], style); };
+    if (o.electrolyte) rect(L[1], R[0], { fill: g.rgba("blue", 0.07) });
+    rect(L[0], L[1], { fill: g.rgba("purple", 0.07), stroke: "ink", width: 1.5 });
+    rect(R[0], R[1], { fill: g.rgba("muted", 0.1), stroke: "ink", width: 1.5 });
+    if (o.electrolyte) {
+      const a = P([48.6, Y[0]]), b = P([51.4, Y[1]]);
+      g.rect(a[0], b[1], b[0] - a[0], a[1] - b[1], { fill: g.rgba("muted", 0.12), hatch: g.rgba("muted", 0.5), hatchGap: 4 });
+    }
+    // Wire and lamp.
+    g.path(wire.map(P), { stroke: "ink", width: 2 });
+    const lc = P([50, TOP]), lr = 4.2 * P.sx;
+    if (o.lamp > 0.02) g.circle(lc, lr * (1.6 + 1.4 * o.lamp), { fill: g.rgba("orange", 0.25 * o.lamp) });
+    g.circle(lc, lr, { fill: o.lamp > 0.02 ? g.mix("panel", "orange", 0.25 + 0.6 * o.lamp) : "panel", stroke: "ink", width: 1.5 });
+    g.line([lc[0] - lr * 0.6, lc[1] - lr * 0.6], [lc[0] + lr * 0.6, lc[1] + lr * 0.6], { stroke: "ink", width: 1.2 });
+    g.line([lc[0] - lr * 0.6, lc[1] + lr * 0.6], [lc[0] + lr * 0.6, lc[1] - lr * 0.6], { stroke: "ink", width: 1.2 });
+    // Electrons in the wire.
+    for (let i = 0; i < 14; i++) BAT.electron(g, P(along(o.ePhase + i / 14)), 3.2);
+    // Lithium ions in the electrolyte, crossing from left to right.
+    if (o.electrolyte) for (let i = 0; i < IONY.length; i++) {
+      const f = ((o.iPhase + i / IONY.length) % 1 + 1) % 1, x = lerp(L[1] + 2, R[0] - 2, f);
+      BAT.li(g, P([x, IONY[i]]), 4.6, { plus: true, alpha: smoothstep(0, 0.08, f) * smoothstep(1, 0.92, f) });
+    }
+    // Charge piled up at the faces when ions can't follow the electrons.
+    const n = Math.round((o.q || 0) * 6);
+    for (let i = 0; i < n; i++) {
+      const y = lerp(Y[0] + 4, Y[1] - 4, (i + 0.5) / 6);
+      g.text("+", P([L[1] - 2.6, y]), { size: 15, weight: 700, color: "ink" });
+      g.text("−", P([R[0] + 2.6, y]), { size: 15, weight: 700, color: "blue" });
+    }
+    // A metal bridge through the separator: a short circuit.
+    if (o.bridge) {
+      const w = o.bridge === 2 ? 3.2 : 1.1, y = 19;
+      if (o.hot > 0.02) g.circle(P([50, y]), (7 + 5 * o.hot) * P.sx, { fill: g.rgba("red", 0.22 * o.hot) });
+      const pts = [[L[1], y - w], [44, y - w * 0.7], [50, y - w * 0.4], [56, y - w * 0.7], [R[0], y - w], [R[0], y + w], [56, y + w * 0.7], [50, y + w * 0.4], [44, y + w * 0.7], [L[1], y + w]];
+      g.path(pts.map(P), { fill: g.mix("panel", "purple", 0.45), stroke: "purple", width: 1.3, close: true });
+      for (let i = 0; i < 6; i++) BAT.electron(g, P([lerp(L[1] + 1, R[0] - 1, (((o.bPhase || 0) + i / 6) % 1 + 1) % 1), y]), 2.6);
+    }
+    g.label("lithium", P([(L[0] + L[1]) / 2, Y[0] - 3.5]));
+    g.label("oxide", P([(R[0] + R[1]) / 2, Y[0] - 3.5]));
+    g.label("lamp", P([50, TOP + 8]));
+    if (o.electrolyte) g.label(o.bridge ? "separator" : "electrolyte and separator", P([50, Y[0] - 3.5]), { color: "muted" });
+  }
+  return { draw };
+})();
+</script>
+
+<p>So keep them apart, and give the electrons another way across: a wire through a lamp. In between, the cell can hold an electrolyte or nothing at all. Switch the electrolyte <button class="set" data-set="ely=0">off</button> and <button class="set" data-set="ely=1">on</button>, and watch the current in the wire:</p>
+
+<figure class="demo" id="wire" aria-label="Lithium and oxide blocks joined by a wire through a lamp, with a plot of current over time. With no electrolyte the current dies as charge piles up; with electrolyte, lithium ions cross between the blocks and the current keeps flowing."></figure>
+<script>
+{
+  const E = 1, RL = 1, C = 0.55, K = 22;   // normalized: the current dies in about half a second without ions
+  let P;
+  const fresh = () => ({ q: 0, t: 0, eP: 0, iP: 0, I: 0, Iion: 0, log: [] });
+  demo("wire", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    caption: "Two electrodes joined by a wire and a lamp. Without an electrolyte, charge piles up on the faces (+ and −) and stops the current; with one, a lithium ion crosses inside for every electron outside, and the current keeps flowing. Time is slowed down enormously.",
+    state: fresh,
+    controls: [{ key: "ely", label: "Electrolyte", type: "choice", options: [{ value: 1, label: "Filled" }, { value: 0, label: "Empty" }], value: 1, color: "blue" }],
+    change(key, s) { Object.assign(s, fresh()); },
+    status: (s, v) => `current ${(100 * s.I).toFixed(0)}% of full`,
+    step(dt, s, v) {
+      // Electrons through the wire pile up charge q; lithium ions through the electrolyte carry it away.
+      const n = 10, h = dt / n;
+      for (let i = 0; i < n; i++) {
+        const I = (E - s.q) / RL, Iion = v.ely ? K * s.q : 0;
+        s.q = clamp(s.q + ((I - Iion) / C) * h, 0, 1);
+      }
+      s.I = (E - s.q) / RL;
+      s.t += dt;
+      s.eP += dt * 0.32 * s.I;
+      s.iP += dt * 0.32 * (v.ely ? s.I : 0);
+      s.log.push([s.t, s.I]);
+      while (s.log.length && s.log[0][0] < s.t - 6) s.log.shift();
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, top = [0, 0, g.w, g.h * (narrow ? 0.66 : 0.7)], bot = [0, top[3], g.w, g.h - top[3]];
+      P = g.fit(0, 100, -2, 60, { box: top, pad: 8 });
+      CIRCUIT.draw(g, P, { electrolyte: !!v.ely, ePhase: s.eP, iPhase: s.iP, lamp: s.I, q: v.ely ? 0 : s.q });
+      const t1 = Math.max(6, s.t), Q = g.graph({ box: [bot[0] + 8, bot[1] + 4, bot[2] - 16, bot[3] - 8], x: [t1 - 6, t1], y: [0, 1.1], axes: "frame", xTicks: false, yTicks: [0, 1], yFormat: y => (y ? "full" : "0"), yLabel: "Current", grid: false });
+      Q.polyline(s.log, { color: "blue", width: 2.2 });
+    },
+  });
+}
+</script>
+
+<p>With the cell empty of electrolyte, a burst of <span class="c-blue">electrons</span> flows through the lamp and then stops. Each electron that arrives makes the oxide more negative and leaves the lithium more positive, and within moments that piled-up charge pushes back as hard as the reaction pulls. Fill the space with electrolyte and the current keeps going, because for every electron that goes round the wire, a <span class="c-purple">lithium ion</span> crosses inside, and neither side builds up charge.</p>
+
+<p>The electrolyte is a lithium salt, usually lithium hexafluorophosphate, dissolved in a mix of organic solvents. It carries ions freely and electrons not at all. That is the whole trick of a battery: the same charge has to cross by two roads, ions inside and electrons outside, and the only road open to electrons runs through whatever we want to power.</p>
+
+<p>That is also why the separator matters as much as the electrolyte. It is soaked through, so ions pass, but it keeps the electrodes from touching. Let a sliver of metal bridge it, <button class="set" data-set="bridge=1">thin</button> or <button class="set" data-set="bridge=2">thick</button>, and watch where the electrons go:</p>
+
+<figure class="demo" id="short" aria-label="The same circuit with electrolyte, where a purple metal bridge can be grown through the separator. Electrons stream through the bridge instead of the lamp, the lamp dims, and the bridge glows with heat."></figure>
+<script>
+{
+  const r = 0.05, RL = 1, RB = [Infinity, 0.25, 0.012];   // internal, lamp, and bridge resistances, normalized
+  const split = b => {
+    const par = b ? (RL * RB[b]) / (RL + RB[b]) : RL, I = 1 / (r + par), V = 1 - I * r;
+    return { I, lamp: V / RL, bridge: b ? V / RB[b] : 0, heat: b ? (V * V) / RB[b] : 0 };
+  };
+  const normal = split(0);
+  let P;
+  demo("short", {
+    aspect: w => (w < 560 ? 1.15 : 1.9),
+    caption: "A metal bridge through the separator. Electrons take the easy path through it instead of the lamp, and the cell's energy turns to heat in one small spot. Resistances are illustrative.",
+    state: () => ({ eP: 0, iP: 0, bP: 0, hot: 0 }),
+    controls: [{ key: "bridge", label: "Separator", type: "choice", options: [{ value: 0, label: "Intact" }, { value: 1, label: "Thin bridge" }, { value: 2, label: "Thick bridge" }], value: 1, color: "purple" }],
+    status: (s, v) => {
+      const c = split(v.bridge);
+      return v.bridge ? `lamp at ${(100 * c.lamp * c.lamp / (normal.lamp * normal.lamp)).toFixed(0)}% power · bridge heating at ${(c.heat / (normal.lamp * normal.lamp)).toFixed(1)}× the lamp's normal power` : "all the current goes through the lamp";
+    },
+    step(dt, s, v) {
+      const c = split(v.bridge);
+      s.eP += dt * 0.32 * c.lamp;
+      s.iP += dt * 0.32 * Math.min(c.I, 3);
+      s.bP += dt * 0.5 * Math.min(c.bridge, 6);
+      s.hot += ((v.bridge ? 1 : 0) - s.hot) * Math.min(1, dt * 2);
+    },
+    draw(g, s, v) {
+      const c = split(v.bridge);
+      P = g.fit(0, 100, -2, 60, { pad: 8 });
+      CIRCUIT.draw(g, P, { electrolyte: true, ePhase: s.eP, iPhase: s.iP, lamp: (c.lamp / normal.lamp) ** 2, bridge: v.bridge, bPhase: s.bP, hot: s.hot });
+      if (v.bridge && s.hot > 0.5) g.label("hot spot", P([50, 26]), { color: "red" });
+    },
+  });
+}
+</script>
+
+<p>Electrons take the easiest road, and metal is far easier than a lamp. A <button class="set" data-set="bridge=1">thin bridge</button> steals most of the current and the lamp dims; a <button class="set" data-set="bridge=2">thick one</button> takes nearly all of it, and the lamp goes dark. Either way, the cell's energy now pours into a spot smaller than a pinhead, at about three times the power the lamp was getting. This is an <dfn data-def="A path for electrons through the inside of a cell, from anode to cathode, that bypasses the outside circuit.">internal short circuit</dfn>. Separators are tested for holes, and cells are built clean, because a short like this sits behind most battery fires<a class="cite" href="#ref-feng"></a>. We'll see later how a cell can grow its own bridge.</p>
+<h2>Why lithium</h2>
+
+<p>Some materials hold their electrons loosely and others grab for more. Chemists rank them by a voltage, the <dfn data-def="The voltage of a material's electron-giving reaction measured against a standard hydrogen electrode. The more negative, the more eagerly it gives electrons away.">standard electrode potential</dfn>: the more negative it is, the more eagerly the material gives its electrons away. Any two make a cell whose voltage is the gap between them, with electrons flowing from the lower to the higher. Pick a pair:</p>
+
+<figure class="demo" id="ladder" aria-label="A vertical ladder of metals ranked by standard electrode potential, from lithium at the bottom to silver at the top. Choosing one metal to give electrons and one to take them draws an orange bracket whose length is the cell voltage."></figure>
+<script>
+{
+  const METALS = [["Li", "lithium", -3.04], ["K", "potassium", -2.93], ["Na", "sodium", -2.71], ["Mg", "magnesium", -2.37], ["Al", "aluminum", -1.66], ["Zn", "zinc", -0.76], ["Fe", "iron", -0.44], ["Pb", "lead", -0.13], ["Cu", "copper", 0.34], ["Ag", "silver", 0.8]];
+  const by = sym => METALS.find(m => m[0] === sym);
+  demo("ladder", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    caption: "Metals ranked by standard electrode potential, measured in water against hydrogen. A cell built from two of them gives roughly the gap between them in volts.",
+    controls: [
+      { key: "neg", label: "Gives electrons", type: "choice", options: ["Li", "Na", "Mg", "Al", "Zn"].map(x => ({ value: x, label: x })), value: "Zn", color: "purple" },
+      { key: "pos", label: "Takes electrons", type: "choice", options: ["Pb", "Cu", "Ag"].map(x => ({ value: x, label: x })), value: "Cu" },
+    ],
+    presets: [{ label: "Zinc and copper", set: { neg: "Zn", pos: "Cu" } }, { label: "Lithium and copper", set: { neg: "Li", pos: "Cu" } }],
+    status: (s, v) => { const a = by(v.neg), b = by(v.pos); return `${a[1]} and ${b[1]}: ${(b[2] - a[2]).toFixed(2)} V`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560;
+      const P = g.fit(-1, 1, -3.35, 1.15, { uniform: false, pad: 16 });
+      const axisX = P([narrow ? -0.62 : -0.35, 0])[0];
+      g.line([axisX, P([0, -3.25])[1]], [axisX, P([0, 1.05])[1]], { stroke: "muted", width: 1.5 });
+      for (let t = -3; t <= 1; t++) {
+        const y = P([0, t])[1];
+        g.line([axisX - 4, y], [axisX, y], { stroke: "muted", width: 1 });
+        g.text(`${t > 0 ? "+" : t < 0 ? "−" : ""}${Math.abs(t)} V`, [axisX - 8, y], { size: 11.5, color: "muted", align: "right" });
+      }
+      const a = by(v.neg), b = by(v.pos);
+      // Rungs, nudged apart where they would overlap.
+      let lastY = -1e9;
+      const ys = METALS.map(m => P([0, m[2]])[1]).map((y, i, arr) => y).slice();
+      const labelY = [];
+      for (let i = 0; i < METALS.length; i++) { let y = ys[i]; if (lastY > -1e8 && lastY - y < 15) y = lastY - 15; labelY.push(y); lastY = y; }
+      METALS.forEach((m, i) => {
+        const on = m === a || m === b, y = ys[i], ly = labelY[i];
+        g.line([axisX, y], [axisX + 26, y], { stroke: on ? (m === a ? "purple" : "ink") : "muted", width: on ? 3 : 1.5 });
+        if (Math.abs(ly - y) > 1) g.line([axisX + 26, y], [axisX + 34, ly], { stroke: "muted", width: 1 });
+        g.text(`${m[1]}  ${m[2] > 0 ? "+" : "−"}${Math.abs(m[2]).toFixed(2)}`, [axisX + 38, ly], { size: 12.5, align: "left", weight: on ? 700 : 500, color: on ? (m === a ? "purple" : "ink") : "muted" });
+      });
+      // The gap between the two chosen metals is the cell voltage.
+      const bx = axisX + (narrow ? 175 : 210), ya = P([0, a[2]])[1], yb = P([0, b[2]])[1];
+      g.line([bx - 6, ya], [bx + 6, ya], { stroke: "orange", width: 2 });
+      g.line([bx - 6, yb], [bx + 6, yb], { stroke: "orange", width: 2 });
+      g.line([bx, ya], [bx, yb], { stroke: "orange", width: 3 });
+      g.text(`${(b[2] - a[2]).toFixed(2)} V`, [bx + 12, (ya + yb) / 2], { size: 16, weight: 700, color: "orange", align: "left" });
+      g.arrow([bx + 70, ya - 6], [bx + 70, yb + 10], { stroke: "blue", width: 2 });
+      if (!narrow) g.text("electrons", [bx + 80, (ya + yb) / 2 + 22], { size: 12, color: "blue", align: "left" });
+    },
+  });
+}
+</script>
+
+<p><button class="set" data-set="neg=Zn pos=Cu">Zinc and copper</button>, the pair in some of the first batteries, give 1.10 V. <button class="set" data-set="neg=Li pos=Cu">Lithium and copper</button> give 3.38 V. Lithium sits at the very bottom, at −3.04 V, so it opens a bigger gap with any partner than anything else on the list. Its single outer electron comes off fairly easily, though sodium's and potassium's come off more easily still. What puts lithium lower is the ion it leaves behind: it is so small that the molecules around it cling to it unusually hard, and that grip pays back more of the cost of losing the electron than for any other metal<span class="sidenote">These potentials are measured in water, where lithium metal would fizz away. In a battery's organic electrolyte the numbers shift, but lithium stays at the bottom.</span>.</p>
+
+<p>Voltage is only half of what makes a battery good. The other half is weight. Here every metal from the ladder is placed by its potential and by how much charge a gram of it can give. Point at a dot to name it, or pick one:</p>
+
+<figure class="demo" id="perGram" aria-label="A scatter plot of metals: standard potential across, charge per gram up. Lithium sits alone in the top left corner, the most negative and the most charge per gram."></figure>
+<script>
+{
+  const F = 96485;
+  // [symbol, name, potential V, electrons per atom, molar mass g/mol]
+  const M = [["Li", "lithium", -3.04, 1, 6.94], ["K", "potassium", -2.93, 1, 39.1], ["Ca", "calcium", -2.87, 2, 40.08], ["Na", "sodium", -2.71, 1, 22.99], ["Mg", "magnesium", -2.37, 2, 24.31], ["Al", "aluminum", -1.66, 3, 26.98], ["Zn", "zinc", -0.76, 2, 65.38], ["Fe", "iron", -0.44, 2, 55.85], ["Pb", "lead", -0.13, 2, 207.2]];
+  const mAh = m => (m[3] * F) / m[4] / 3.6;
+  let Q = null;
+  demo("perGram", {
+    aspect: w => (w < 560 ? 1.0 : 1.75),
+    caption: "Charge per gram against standard potential. Lithium is both the lightest carrier of charge and the most eager to give it up.",
+    state: () => ({ hover: null }),
+    controls: [{ key: "pick", label: "Metal", min: 0, max: M.length - 1, step: 1, value: 0, hidden: true }],
+    presets: M.slice(0, 7).filter(m => m[0] !== "K" && m[0] !== "Ca").map(m => ({ label: m[1][0].toUpperCase() + m[1].slice(1), set: { pick: M.indexOf(m) } })),
+    hover(p, s, v, fig) {
+      if (!p || !Q) return false;
+      let best = -1, bd = 22;
+      M.forEach((m, i) => { const q = Q([m[2], mAh(m)]); const d = Math.hypot(p[0] - q[0], p[1] - q[1]); if (d < bd) { bd = d; best = i; } });
+      if (best >= 0 && best !== v.pick) { fig.set("pick", best); return true; }
+      return false;
+    },
+    status: (s, v) => { const m = M[v.pick]; return `${m[1]}: ${m[2].toFixed(2)} V, ${Math.round(mAh(m)).toLocaleString("en")} mAh per gram (${m[3]} electron${m[3] > 1 ? "s" : ""} per atom, ${m[4]} g/mol)`; },
+    draw(g, s, v) {
+      Q = g.graph({ x: [-3.3, 0.2], y: [0, 4300], axes: "frame", xLabel: "Standard potential (V)", yLabel: "Charge per gram (mAh/g)", yTicks: [0, 1000, 2000, 3000, 4000], xTicks: [-3, -2, -1, 0], yFormat: y => y.toLocaleString("en") });
+      M.forEach((m, i) => {
+        const on = i === v.pick, lithium = m[0] === "Li";
+        Q.points([[m[2], mAh(m)]], { color: lithium ? "purple" : on ? "ink" : "muted", r: on ? 7 : 5 });
+        Q.label(m[0], [m[2], mAh(m)], { dy: -14, color: lithium ? "purple" : on ? "ink" : "muted" });
+      });
+    },
+  });
+}
+</script>
+
+<p><span class="c-purple">Lithium</span> is the lightest metal, 6.94 grams per mole, light enough to float on oil. Each atom gives one electron, so a gram of it can deliver 3,860 milliamp-hours (mAh), more than any other metal here, and it does so at the most negative potential. <button class="set" data-set="pick=5">Aluminum</button> comes closest on charge per gram, because each atom gives three electrons, but at about half lithium's voltage, and its triply charged ion is hard to move in and out of solids. <button class="set" data-set="pick=3">Sodium</button> gives a similar voltage at less than a third of the charge per gram.</p>
+
+<p>Lithium metal has a dark side, though. Recharged, it doesn't plate back smoothly but grows spikes, and the first rechargeable lithium-metal cells were prone to shorting and catching fire. The answer, the idea behind every lithium-ion cell, was never to let lithium be metal at all: keep it as ions, stored inside two host materials, and move it back and forth between them.</p>
+
+<aside class="callout history"><p>Stanley Whittingham built a rechargeable cell in the 1970s from lithium metal and titanium disulfide, a solid that takes lithium between its layers<a class="cite" href="#ref-whittingham"></a>. In 1980 John Goodenough's group showed that lithium cobalt oxide could give lithium up and take it back at about 4 V<a class="cite" href="#ref-mizushima"></a>. Akira Yoshino paired that cathode with a carbon anode in 1985, and Sony sold the first lithium-ion cells in 1991. The three shared the 2019 Nobel Prize in Chemistry<a class="cite" href="#ref-nobel"></a>.</p></aside>
+<h2>Rooms for lithium</h2>
+
+<p>Both electrodes of a lithium-ion cell are hosts: solids full of empty spaces that lithium ions can slip into and out of without the solid falling apart. The anode's host is graphite, a stack of flat sheets of carbon atoms joined in a honeycomb. Turn the stack, and fill it with <span class="c-purple">lithium</span>:</p>
+
+<figure class="demo" id="graphite" aria-label="A 3D model of four graphite sheets. A slider fills the gaps between them with purple lithium atoms, which enter from the edges; the gaps widen and the sheets slide into line as they fill."></figure>
+<script>
+{
+  const { mesh, m4, v3 } = E3;
+  const A = 2.46, S3 = Math.sqrt(3), RAD = 6.7;
+  const a1 = [A, 0], a2 = [A / 2, (A * S3) / 2];
+  const C0 = [(2 / 3) * (a1[0] + a2[0]), (2 / 3) * (a1[1] + a2[1])];   // a hexagon center, put at the origin
+  const atoms = [];
+  for (let i = -8; i <= 8; i++) for (let j = -8; j <= 8; j++) for (const b of [0, 1 / 3]) {
+    const u = i + b, w = j + b, q = [u * a1[0] + w * a2[0] - C0[0], u * a1[1] + w * a2[1] - C0[1]];
+    if (Math.hypot(q[0], q[1]) < RAD) atoms.push(q);
+  }
+  const parts = [];
+  for (const q of atoms) parts.push(mesh.transform(mesh.sphere(0.3, { segments: 7 }), m4.translation([q[0], 0, q[1]])));
+  for (let i = 0; i < atoms.length; i++) for (let j = i + 1; j < atoms.length; j++) {
+    const a = atoms[i], b = atoms[j], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (d < 1.5) parts.push(mesh.transform(mesh.cylinder(0.11, d, { segments: 6, caps: false }), m4.multiply(m4.translation([(a[0] + b[0]) / 2, 0, (a[1] + b[1]) / 2]), m4.alignY([b[0] - a[0], 0, b[1] - a[1]]))));
+  }
+  const SHEET = mesh.merge(...parts);
+  const scene = E3.scene({ shadow: { opacity: 0.12 } });
+  const sheets = [0, 1, 2, 3].map(k => scene.add(SHEET, { material: "graphite", name: "carbon sheet" }));
+  // Lithium sites: one hexagon center in three (the √3 × √3 pattern of LiC6), filled from the edges inward.
+  const sites = [];
+  for (let i = -6; i <= 6; i++) for (let j = -6; j <= 6; j++) {
+    if (((i - j) % 3 + 3) % 3) continue;
+    const q = [i * a1[0] + j * a2[0], i * a1[1] + j * a2[1]];
+    if (Math.hypot(q[0], q[1]) < RAD - 1.2) sites.push(q);
+  }
+  sites.sort((p, q) => Math.hypot(q[0], q[1]) - Math.hypot(p[0], p[1]));
+  const LiMesh = mesh.sphere(0.55, { segments: 16 });
+  const lis = [0, 1, 2].map(() => sites.map(() => scene.add(LiMesh, { material: "purple", name: "lithium" })));
+  const SHIFT = [(a1[0] + a2[0]) / 3, (a1[1] + a2[1]) / 3];   // the offset between neighboring sheets in graphite (AB stacking)
+  // Gallery fills for an overall lithium fraction x: the middle gap fills first, then the outer two.
+  const fills = x => { const m = clamp(x * 3, 0, 1), o = clamp((x * 3 - 1) / 2, 0, 1); return [o, m, o]; };
+  const geom = x => {
+    const f = fills(x), gap = f.map(v => 3.35 + 0.35 * v);
+    const y = [0, gap[0], gap[0] + gap[1], gap[0] + gap[1] + gap[2]], mid = y[3] / 2;
+    const off = [[0, 0]];
+    for (let g = 0; g < 3; g++) { const s = (g % 2 ? -1 : 1) * (1 - smoothstep(0.6, 1, f[g])); off.push([off[g][0] + s * SHIFT[0], off[g][1] + s * SHIFT[1]]); }
+    return { f, gap, y: y.map(v => v - mid), off, height: y[3] };
+  };
+  let view = null;
+  demo("graphite", {
+    aspect: w => (w < 560 ? 1.0 : 1.6),
+    caption: "Four sheets of graphite drawn to scale, with lithium (purple) filling the gaps between them. A full gap is about 10% wider than an empty one, and its two sheets line up directly over each other.",
+    orbit: { yaw: 0.5, pitch: 0.2, minPitch: -0.6, maxPitch: 1.3 },
+    controls: [{ key: "x", label: "Lithium", min: 0, max: 1, step: 0.01, value: 0.55, color: "purple", format: x => `${Math.round(x * 100)}% full`, marks: [{ value: 0, label: "empty" }, { value: 1, label: "LiC₆" }] }],
+    status: (s, v) => { const G = geom(v.x); return `stack ${(G.height / 10).toFixed(3)} nm tall (empty: 1.005 nm) · gaps ${G.gap.map(h => (h / 10).toFixed(3)).join(", ")} nm`; },
+    draw(g, s, v) {
+      const G = geom(v.x);
+      sheets.forEach((n, k) => { n.position = [G.off[k][0], G.y[k], G.off[k][1]]; });
+      lis.forEach((list, gal) => {
+        const n = Math.round(G.f[gal] * sites.length), base = G.off[gal];
+        list.forEach((node, i) => { node.visible = i < n; node.position = [sites[i][0] + base[0], (G.y[gal] + G.y[gal + 1]) / 2, sites[i][1] + base[1]]; });
+      });
+      view = g.render3d(scene, { ...s.view, fov: 26, target: [0, 0, 0], distance: BAT.fitDistance(Math.hypot(RAD, 4), 26, g.w / g.h, 0.95) });
+      const items = [{ at: view.project([G.off[3][0] - RAD + 0.8, G.y[3], G.off[3][1]]), text: "carbon sheet", color: "ink" }];
+      const shown = lis[1].find(n => n.visible);
+      if (shown) items.push({ at: view.project(shown.position), text: "lithium", color: "purple" });
+      g.callouts(items, { split: g.w * 0.5 });
+    },
+  });
+}
+</script>
+
+<p>Each <span class="c-purple">lithium</span> slides in from the edge of the sheets, since the honeycomb itself is too tight to pass through, and settles over the middle of a hexagon. Its electron joins the carbon sheets, which conduct like a metal along their plane. At most one lithium fits for every six carbons, a compound written LiC₆, which gives graphite a capacity of 372 mAh per gram: a tenth of lithium metal's, the price of keeping lithium out of its metallic form. A full gap is 0.370 nm wide instead of 0.335 nm, so graphite swells by about a tenth as it fills, and the sheets on either side of a full gap slide to sit exactly over one another. Slipping guests between the layers of a host like this is called <dfn data-def="Storing atoms or ions between the layers (or in the tunnels) of a host crystal, which keeps its structure.">intercalation</dfn>.</p>
+
+<p>Notice that lithium filled the middle gap before touching the outer two. Graphite prefers to fill some gaps completely while leaving others empty. Here is a side view of a whole stack of gaps in a graphite grain, with the electrolyte to its right. Fill it, and watch the potential of the graphite measured against lithium metal:</p>
+
+<figure class="demo" id="staging" aria-label="Left: a side view of twelve gaps in a graphite grain filling with purple lithium in stages, every third gap, then every second, then all, with a front moving in from the electrolyte. Right: the graphite's potential against lithium metal as it fills, with flat steps where two stages share the grain."></figure>
+<script>
+{
+  const NG = 12, SLOTS = 22;
+  const rank = (() => { const r = BAT.rng(11), out = []; for (let g = 0; g < NG; g++) { const l = Array.from({ length: SLOTS }, (_, i) => i); for (let i = SLOTS - 1; i > 0; i--) { const k = Math.floor(r() * (i + 1)); [l[i], l[k]] = [l[k], l[i]]; } const rk = []; l.forEach((s, i) => (rk[s] = i)); out.push(rk); } return out; })();
+  const D = rho => () => rho, S3 = rho => g => (g % 3 === 1 ? rho : 0), S2 = rho => g => (g % 2 === 1 ? rho : 0), S1 = () => 1;
+  // The arrangement for a filling x of the anode in Figure 1: a sketch, with the changes placed on the curve's steps.
+  function picture(x) {
+    if (x <= 0.15) return { name: "a few lithium in every gap", L: D((x / 0.15) * 0.2), R: null, f: 0 };
+    if (x <= 0.3) return { name: "every third gap filling", L: D(0.2), R: S3(0.8), f: (x - 0.15) / 0.15 };
+    if (x <= 0.35) return { name: "every third gap", L: S3(lerp(0.8, 1, (x - 0.3) / 0.05)), R: null, f: 0 };
+    if (x <= 0.6) return { name: "every second gap filling", L: S3(1), R: S2(0.85), f: (x - 0.35) / 0.25 };
+    if (x <= 0.65) return { name: "every second gap", L: S2(lerp(0.85, 1, (x - 0.6) / 0.05)), R: null, f: 0 };
+    return { name: "every gap filling", L: S2(1), R: S1, f: (x - 0.65) / 0.35 };
+  }
+  let Q = null;
+  demo("staging", {
+    aspect: w => (w < 560 ? 0.78 : 1.9),
+    caption: "Lithium filling a graphite grain in stages, beside the potential of the anode in Figure 1 as it fills. The arrangement on the left is a sketch; the curve is a fit to measurements.",
+    controls: [{ key: "x", label: "Lithium", min: 0, max: 1, step: 0.005, value: 0.47, color: "purple", format: x => `${Math.round(x * 100)}% full` }],
+    presets: [{ label: "Every third", set: { x: 0.33 } }, { label: "Every second", set: { x: 0.62 } }, { label: "Full", set: { x: 1 } }],
+    status: (s, v) => `${picture(v.x).name} · ${(BAT.Un(v.x) * 1000).toFixed(0)} mV against lithium metal`,
+    draw(g, s, v) {
+      const narrow = g.w < 560;
+      const left = narrow ? [0, 0, g.w, g.h * 0.48] : [0, 0, g.w * 0.46, g.h];
+      const right = narrow ? [0, g.h * 0.48, g.w, g.h * 0.52] : [g.w * 0.46, 0, g.w * 0.54, g.h];
+      const pic = picture(v.x);
+      g.clip(left, () => {
+        const P = g.fit(-1, 25.5, -2.6, NG + 1.6, { box: left, pad: 10, uniform: false });
+        const e = P([22.6, 0]), e2 = P([25.5, NG]);
+        g.rect(e[0], e2[1], e2[0] - e[0], e[1] - e2[1], { fill: g.rgba("blue", 0.08) });
+        for (let k = 0; k <= NG; k++) g.line(P([0, k]), P([22, k]), { stroke: "ink", width: 2 });
+        const front = 22 * (1 - pic.f);
+        for (let gg = 0; gg < NG; gg++) for (let i = 0; i < SLOTS; i++) {
+          const xx = (i + 0.5) * (22 / SLOTS), arr = pic.R && xx > front ? pic.R : pic.L;
+          if (rank[gg][i] < arr(gg) * SLOTS - 1e-9) BAT.li(g, P([xx, gg + 0.5]), Math.min(4.2, P.sx * 0.38));
+        }
+        if (pic.R) g.line(P([front, -0.3]), P([front, NG + 0.3]), { stroke: "purple", width: 1.5, dash: [4, 3] });
+        g.label("graphite grain", P([11, -1.5]));
+        g.label("electrolyte", P([24, -1.5]), { color: "blue" });
+      });
+      Q = g.graph({ box: right, x: [0, 1], y: [0, 0.5], axes: "frame", xLabel: "How full", yLabel: "Potential (V)", xTicks: [0, 0.25, 0.5, 0.75, 1], xFormat: x => `${Math.round(x * 100)}%`, yTicks: [0, 0.1, 0.2, 0.3, 0.4, 0.5] });
+      Q.fn(BAT.Un, { color: "ink", width: 2 });
+      Q.marker(v.x, Math.min(0.5, BAT.Un(v.x)), { color: "purple", drop: true });
+      for (const [x0, x1, y] of [[0.17, 0.27, 0.21], [0.37, 0.57, 0.133], [0.66, 0.99, 0.092]]) Q.segment([x0, y + 0.03], [x1, y + 0.03], { color: "purple", width: 1, dash: [3, 3] });
+    },
+  });
+}
+</script>
+
+<p>At first a few lithium scatter through every gap. Then they gather into every fourth or third gap, then every second, then all of them, each arrangement spreading in from the edge as a front. These arrangements are called <dfn data-def="Ordered ways that lithium fills graphite: in stage n, every nth gap between sheets is full and the rest are empty.">stages</dfn><a class="cite" href="#ref-dahn"></a>. While one stage is turning into the next, the two share the grain and the potential holds steady, which is why the curve has flat steps near <button class="set" data-set="x=0.22">0.21 V</button>, <button class="set" data-set="x=0.47">0.13 V</button>, and <button class="set" data-set="x=0.8">0.09 V</button>. Most of graphite's lithium goes in below 0.2 V, barely above lithium metal itself. So a lithium stored in graphite carries almost as much energy as one in the metal, which keeps the cell's voltage high. It also leaves very little margin, and that will come back to bite when we charge too fast.</p>
+
+<p>The cathode is a host of a different kind: a metal oxide built of flat slabs, with lithium in single layers between them. Here is a small piece of it. Take lithium out with the slider, and turn it to look along the layers:</p>
+
+<figure class="demo" id="oxide" aria-label="A 3D model of a layered metal oxide: three slabs of metal-oxygen octahedra with layers of purple lithium between them. A slider removes lithium, leaving the slabs in place."></figure>
+<script>
+{
+  const { mesh, m4, v3 } = E3;
+  const a = 2.87, c = 14.2, zO = 0.241, S3 = Math.sqrt(3), RIN = 7.2;
+  const T = [[0, 0], [2 / 3, 1 / 3], [1 / 3, 2 / 3]];   // in-plane offsets of the three stacking positions
+  const cart = (u, w, z) => [(u - w / 2) * a, z * c, ((w * S3) / 2) * a];   // hexagonal axes at 120°
+  const layer = (t, z, R = RIN) => {
+    const out = [];
+    for (let i = -6; i <= 6; i++) for (let j = -6; j <= 6; j++) { const p = cart(i + T[t][0], j + T[t][1], z); if (Math.hypot(p[0], p[2]) < R) out.push(p); }
+    return out;
+  };
+  // Metal at z = 1/6, 1/2, 5/6; lithium between them at 1/3 and 2/3; oxygen above and below each metal.
+  const METAL = [[2, 1 / 6], [0, 1 / 2], [1, 5 / 6]], LI = [[1, 1 / 3], [2, 2 / 3]], OX = [[1, 1 / 6 - (zO - 1 / 6)], [0, zO], [2, 1 / 2 - (zO - 1 / 6)], [1, 1 / 2 + (zO - 1 / 6)], [0, 5 / 6 - (zO - 1 / 6)], [2, 5 / 6 + (zO - 1 / 6)]];
+  const allO = OX.flatMap(([t, z]) => layer(t, z, RIN + 3));
+  const metals = METAL.flatMap(([t, z]) => layer(t, z));
+  const octs = [], usedO = new Set();
+  for (const m of metals) {
+    const nb = allO.filter(o => v3.dist(o, m) < 2.3);
+    if (nb.length !== 6) continue;
+    nb.forEach(o => usedO.add(o));
+    const tris = [];
+    for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++) for (let k = j + 1; k < 6; k++) {
+      if (v3.dist(nb[i], nb[j]) > 3.3 || v3.dist(nb[j], nb[k]) > 3.3 || v3.dist(nb[i], nb[k]) > 3.3) continue;
+      const n = v3.cross(v3.sub(nb[j], nb[i]), v3.sub(nb[k], nb[i])), out = v3.dot(n, v3.sub(nb[i], m)) > 0;
+      tris.push(out ? [i, j, k] : [i, k, j]);
+    }
+    octs.push(mesh.custom(nb, tris.flat()));
+  }
+  const scene = E3.scene({ shadow: { opacity: 0.12 } });
+  const mid = c / 2;
+  scene.add(mesh.transform(mesh.merge(...octs), m4.translation([0, -mid, 0])), { material: "porcelain", name: "metal oxide slab" });
+  scene.add(mesh.merge(...[...usedO].map(o => mesh.transform(mesh.sphere(0.36, { segments: 10 }), m4.translation([o[0], o[1] - mid, o[2]])))), { color: E3.ELEMENTS.O.color, name: "oxygen" });
+  const liSites = LI.flatMap(([t, z]) => layer(t, z));
+  const order = (() => { const r = BAT.rng(3), l = liSites.map((_, i) => i); for (let i = l.length - 1; i > 0; i--) { const k = Math.floor(r() * (i + 1)); [l[i], l[k]] = [l[k], l[i]]; } return l; })();
+  const LiMesh = mesh.sphere(0.6, { segments: 16 });
+  const lis = liSites.map(p => scene.add(LiMesh, { material: "purple", name: "lithium", position: [p[0], p[1] - mid, p[2]] }));
+  const R = Math.hypot(RIN + 1, c * 0.38);
+  let view = null;
+  demo("oxide", {
+    aspect: w => (w < 560 ? 1.0 : 1.6),
+    caption: "A layered oxide like the cathode's NMC, drawn to scale: slabs of metal atoms, each inside an octahedron of six oxygens (red), with lithium (purple) in the layers between. Taking lithium out leaves the slabs standing.",
+    orbit: { yaw: 0.35, pitch: 0.22, minPitch: -0.8, maxPitch: 1.3 },
+    controls: [{ key: "y", label: "Lithium", min: 0.2, max: 1, step: 0.01, value: 0.6, color: "purple", format: y => `${Math.round(y * 100)}% full`, marks: [{ value: 0.27, label: "cell full" }, { value: 0.91, label: "cell empty" }] }],
+    status: (s, v) => `${Math.round(v.y * liSites.length)} of ${liSites.length} lithium sites filled · layers ${(c / 30).toFixed(2)} nm apart`,
+    draw(g, s, v) {
+      const n = Math.round(v.y * liSites.length);
+      order.forEach((idx, k) => { lis[idx].visible = k < n; });
+      view = g.render3d(scene, { ...s.view, fov: 26, target: [0, 0, 0], distance: BAT.fitDistance(R, 26, g.w / g.h, 0.95) });
+      const shown = order.slice(0, n).map(i => lis[i]).find(nd => nd.position[1] > 0);
+      const items = [{ at: view.project([-RIN + 1, (5 / 6) * c - mid + 1.0, 0]), text: "metal oxide slab", color: "ink" }];
+      if (shown) items.push({ at: view.project(shown.position), text: "lithium", color: "purple" });
+      g.callouts(items, { split: g.w * 0.5 });
+    },
+  });
+}
+</script>
+
+<p>Each slab is a sheet of metal atoms, here mostly nickel with some manganese and cobalt, each at the center of an octahedron of six oxygen atoms. The <span class="c-purple">lithium</span> sits in single layers between the slabs, which repeat about every 0.47 nm. When a lithium ion leaves, its electron leaves too, taken from one of the metal atoms in the slab, whose charge rises by one. The slabs stay put, so lithium can go out and come back thousands of times. Not all of it can leave, though. Strip out too much and the empty layers let the slabs shift and shed oxygen, so a cell is built to stop with about a quarter of the cathode's lithium still in place when it reads 100%.</p>
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-chen">C.-H. Chen, F. Brosa Planella, K. O’Regan, D. Gastol, W. D. Widanage, and E. Kendrick, “Development of experimental techniques for parameterization of multi-scale lithium-ion battery models,” <em>Journal of The Electrochemical Society</em> 167 (2020), 080534. The teardown of the LG M50 cell, and the electrode curves used throughout this page.</li>
+  <li id="ref-feng">X. Feng, M. Ouyang, X. Liu, L. Lu, Y. Xia, and X. He, “Thermal runaway mechanism of lithium ion battery for electric vehicles: A review,” <em>Energy Storage Materials</em> 10 (2018), 246–267.</li>
+  <li id="ref-whittingham">M. S. Whittingham, “Electrical energy storage and intercalation chemistry,” <em>Science</em> 192 (1976), 1126–1127.</li>
+  <li id="ref-mizushima">K. Mizushima, P. C. Jones, P. J. Wiseman, and J. B. Goodenough, “Li<sub>x</sub>CoO<sub>2</sub> (0 &lt; x ≤ 1): A new cathode material for batteries of high energy density,” <em>Materials Research Bulletin</em> 15 (1980), 783–789.</li>
+  <li id="ref-nobel">The Nobel Prize in Chemistry 2019, awarded to John B. Goodenough, M. Stanley Whittingham, and Akira Yoshino “for the development of lithium-ion batteries.” <a href="https://www.nobelprize.org/prizes/chemistry/2019/summary/">nobelprize.org</a>.</li>
+  <li id="ref-dahn">J. R. Dahn, “Phase diagram of Li<sub>x</sub>C<sub>6</sub>,” <em>Physical Review B</em> 44 (1991), 9170–9177.</li>
+</ol>
+<!-- explainer:article:end -->
+</article>
+</main>
+</div>
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+</body>
+</html>
