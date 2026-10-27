@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: photosynthesis-in-depth
+expected_outcome: |
+  An in-depth Biology explainer that separates the light reactions from the Calvin cycle and accounts for every input and output.
+  Category: Biology.

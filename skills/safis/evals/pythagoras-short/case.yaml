@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: pythagoras-short
+expected_outcome: |
+  A short Math piece (not an in-depth article) with a proof the reader can manipulate.
+  Category: Math.

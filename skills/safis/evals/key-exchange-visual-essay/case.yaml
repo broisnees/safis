@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: key-exchange-visual-essay
+expected_outcome: |
+  An in-depth Computing explainer on Diffie-Hellman key exchange built on modular arithmetic, with honest limits on what it protects against.
+  Category: Computing.

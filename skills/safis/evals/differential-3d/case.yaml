@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: differential-3d
+expected_outcome: |
+  An in-depth Machines explainer with a 3D differential the reader can turn and drive, showing the ring gear, carrier, spider gears and side gears.
+  Category: Machines.

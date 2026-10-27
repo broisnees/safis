@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: rainbow-in-depth
+expected_outcome: |
+  An in-depth Physics explainer that traces rays through a raindrop, explains the rainbow angle and dispersion, and covers the secondary bow.
+  Category: Physics.

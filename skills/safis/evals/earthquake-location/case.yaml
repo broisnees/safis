@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: earthquake-location
+expected_outcome: |
+  An in-depth Earth & Space explainer on P and S waves, travel-time differences, and locating an epicenter from several stations.
+  Category: Earth & Space.
