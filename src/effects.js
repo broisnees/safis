@@ -1,6 +1,7 @@
-/* Effects kit: g.fx and window.Fx draw fire, exhaust, smoke, steam, glow, ripples, caustics,
-   sparks, arcs, shimmer, and airflow, each a pure function of time t and a seed. Shaders share
-   one WebGL2 context, with 2D versions without it. Reference: references/effects.md. */
+/* Effects kit: g.fx and window.Fx draw fire, exhaust, smoke, steam, dust, glow, water, ripples,
+   caustics, sparks, arcs, shimmer, airflow, and wind around bodies, each a pure function of time
+   t and a seed. Shaders share one WebGL2 context, with 2D versions without it.
+   Reference: references/effects.md. */
 (() => {
   "use strict";
   const TAU = Math.PI * 2, PI = Math.PI;
@@ -78,8 +79,10 @@
 
   // ---------- parameters: options resolved against the box ----------
   const common = o => ({ t: num(o.t, 0), seed: num(o.seed, 1) | 0 }), bp = (b, x, y) => [b[0] + b[2] * x, b[1] + b[3] * y];
+  // A source oscillates from its start time on; with dur it rings for about dur seconds and dies
+  // away, sending out a packet of rings (a dropped pebble) instead of a steady train.
   const sources = (list, b) => (list?.length ? list : [bp(b, 0.5, 0.5)]).slice(0, 8).map(s =>
-    Array.isArray(s) ? { x: s[0], y: s[1], phase: 0, amp: 1, start: -1e6 } : { x: s.at[0], y: s.at[1], phase: num(s.phase, 0), amp: num(s.amp, 1), start: num(s.start, -1e6) });
+    Array.isArray(s) ? { x: s[0], y: s[1], phase: 0, amp: 1, start: -1e6, dur: 1e9 } : { x: s.at[0], y: s.at[1], phase: num(s.phase, 0), amp: num(s.amp, 1), start: num(s.start, -1e6), dur: max(0.05, num(s.dur, 1e9)) });
   function water(b, o, lam, c) {
     const f = o.frame, X = f?.x ?? [1, 0], Y = f?.y ?? [0, 1], org = f?.origin ?? [0, 0], det = X[0] * Y[1] - Y[0] * X[1] || 1;
     return { k: TAU / lam, om: TAU * c / lam, c, damp: max(0, num(o.damping, 0)), A: 0.04 * lam * num(o.amp, 1), src: sources(o.sources, b),
@@ -89,7 +92,8 @@
     fire: (b, o) => {
       const power = cn(o.power, 0.7, 0, 1);   // flame height grows as heat release to the 2/5 power
       return { ...common(o), base: o.base ?? bp(b, 0.5, 0.99), width: num(o.width, min(b[2] * 0.42, b[3] * 0.45)),
-        height: num(o.height, b[3] * 0.9) * power ** 0.4, power, wind: cn(o.wind, 0, -1, 1), soot: cn(o.soot, 1, 0, 1), size: cn(o.size, 0.3, 0.005, 50) };
+        height: num(o.height, b[3] * 0.9) * power ** 0.4, power, wind: cn(o.wind, 0, -1, 1), soot: cn(o.soot, 1, 0, 1), size: cn(o.size, 0.3, 0.005, 50),
+        embers: cn(o.embers, 0, 0, 1), smoke: cn(o.smoke, 0, 0, 1) };
     },
     plume: (b, o) => {
       const thr = cn(o.throttle, 0.8, 0, 1), amb = cn(o.ambient, 1, 0, 1), a = num(o.angle, PI / 2), r = num(o.width, min(b[2], b[3]) * 0.16) / 2;
@@ -102,8 +106,51 @@
     },
     smoke: (b, o) => {
       const steam = o.kind === "steam";
+      // Light comes from o.light (canvas radians toward the light; upper left by default), and the
+      // smoke shades itself: puffs are bright on the lit side and dark under their own density.
+      const la = num(o.light, -2.16);
       return { ...common(o), steam, at: o.at ?? bp(b, 0.5, 0.995), width: num(o.width, b[2] * 0.1), rise: num(o.rise, 0.35) * b[3],
-        wind: cn(o.wind, 0, -3, 3), density: cn(o.density, 0.7, 0, 1), spread: cn(o.spread, 0.12, 0, 1), fade: (steam ? 4 : 0.3) / b[3], H: b[3] };
+        wind: cn(o.wind, 0, -3, 3), density: cn(o.density, 0.7, 0, 1), spread: cn(o.spread, 0.12, 0, 1), fade: (steam ? 4 : 0.3) / b[3], H: b[3],
+        light: [cos(la), sin(la)], shadow: cn(o.shadow, steam ? 0.45 : 1, 0, 2), billows: cn(o.billows, steam ? 0.6 : 1, 0, 1) };
+    },
+    // Dust thrown up from a ground line by a footstep or an impact (a burst) or by a jet blowing
+    // down on it (a wall jet that spreads both ways and rolls up at its front).
+    dust: (b, o) => {
+      const ground = num(o.ground, b[1] + b[3] * 0.92), la = num(o.light, -2.16), scale = max(4, num(o.scale, b[3] * 0.24));
+      const list = (o.sources?.length ? o.sources : [{ at: [b[0] + b[2] / 2, ground] }]).slice(0, 4).map(q => ({
+        x: Array.isArray(q) ? q[0] : num(q.at?.[0], b[0] + b[2] / 2), kind: (q.kind ?? "burst") === "jet" ? 1 : 0,
+        start: num(q.start, 0), strength: cn(q.strength, 1, 0, 3), angle: num(q.angle, 0) }));
+      return { ...common(o), ground, scale, src: list, light: [cos(la), sin(la)], shadow: cn(o.shadow, 1, 0, 2), density: cn(o.density, 1, 0, 1.5),
+        grains: cn(o.grains, 1, 0, 3), color: o.color ?? "brass", settle: max(0.3, num(o.settle, 2.6)) };
+    },
+    // A body of water: seen from above (a pool, its floor through the surface) or in section.
+    water: (b, o) => {
+      const view = o.view === "side" ? "side" : "top", scale = max(4, num(o.scale, 80)), s = num(o.seed, 1) | 0;
+      const w = water(b, o, max(2, num(o.wavelength, 32)), num(o.speed, 48));
+      if (!o.sources) w.src = [];
+      const G = (TAU / 1.6) ** 2 * scale / TAU, n = o.calm ? 0 : 6, waves1 = [];
+      for (let j = 0; j < n; j++) {
+        const k = TAU / (scale * (0.55 + 0.9 * rnd(s, j, 1))), th = num(o.wind, 0.6) + (j + 0.7 * rnd(s, j, 2)) * PI / n;
+        w.waves.push({ kx: k * cos(th), ky: k * sin(th), om: sqrt(G * k), ph: TAU * rnd(s, j, 3), A: 0.09 * num(o.amp, 1) / k });
+      }
+      // In section the waves run along the surface: amplitude in px, deep-water dispersion.
+      for (let j = 0; j < 5; j++) {
+        const k = TAU / (scale * (0.45 + 1.1 * rnd(s, j, 7))) * (rnd(s, j, 8) < 0.5 ? 1 : -1);
+        waves1.push({ k, om: sqrt(G * abs(k)) * Math.sign(k), ph: TAU * rnd(s, j, 9), A: num(o.amp, 1) * 0.11 * scale / (1 + j * 0.6) * (0.6 + 0.8 * rnd(s, j, 10)) / TAU * 2.2 });
+      }
+      return { ...common(o), ...w, view, scale, waves1, depth: max(0, num(o.depth, view === "top" ? scale * 2 : b[3] * 0.6)),
+        level: num(o.level, b[1] + b[3] * 0.28), bottom: num(o.bottom, b[1] + b[3] * 0.97), clarity: max(1, num(o.clarity, view === "top" ? scale * 3 : b[3] * 0.55)),
+        floor: ["tiles", "sand", "plain"].includes(o.floor) ? o.floor : view === "top" ? "tiles" : "sand", tile: max(4, num(o.tile, scale * 0.55)),
+        tilt: cn(o.tilt, 0.35, 0, 1.3), foam: cn(o.foam, view === "top" ? 0 : 0.6, 0, 1), color: o.color ?? "blue", n: cn(o.n, 1.333, 1, 2.5), specks: o.specks !== false };
+    },
+    // Wind past bodies: uniform flow, each round body a doublet with optional circulation, and a
+    // street of vortices it sheds, convected downstream. Streaks are particles followed for trail s.
+    wind: (b, o) => {
+      const a = num(o.angle, 0), U = max(1, num(o.speed, b[2] * 0.22));
+      const bodies = (o.bodies ?? []).slice(0, 4).map(q => ({ c: q.at ?? [q[0], q[1]], r: max(1, num(q.r ?? q[2], 20)), spin: cn(q.spin, 0, -2, 2), shed: q.shed !== false }));
+      return { ...common(o), box: b, U, dir: [cos(a), sin(a)], bodies, density: cn(o.density, 1, 0, 4), trail: cn(o.trail, 0.8, 0.05, 3),
+        width: num(o.width, 1.1), turbulence: cn(o.turbulence, 0.25, 0, 2), color: o.color ?? "blue", colorBy: o.colorBy === "none" ? "none" : "speed",
+        spacing: max(3, num(o.spacing, 10)), shedding: cn(o.shedding, 1, 0, 2), dye: o.dye !== false, dyeColor: o.dyeColor ?? null };
     },
     glow: (b, o) => {
       const T = num(o.temp, 2700);
@@ -138,8 +185,8 @@
       const F = frame(inlet, o.axis ?? (nz ? [nz.center[0] - inlet.center[0], nz.center[1] - inlet.center[1]] : null), o.along);
       const sN = nz ? ((nz.center[0] - F.C[0]) * F.A[0] + (nz.center[1] - F.C[1]) * F.A[1]) / (F.A[0] ** 2 + F.A[1] ** 2 || 1) : 4;
       return { ...common(o), F, sN, throttle: cn(o.throttle, 0.7, 0, 1), temperature: num(o.temperature, 900), speed: cn(o.speed, 0.1, 0, 1),
-        rN: nz ? max(abs(nz.rx), abs(nz.ry)) / F.R : 0.75, ground: num(o.ground, null), density: cn(o.density, 1, 0, 4), trail: cn(o.trail, 0.35, 0.05, 1),
-        width: num(o.width, 1.2), intake: o.intake !== false, exhaust: o.exhaust !== false && sN > 0 };
+        rN: nz ? max(abs(nz.rx), abs(nz.ry)) / F.R : 0.75, ground: num(o.ground, null), density: cn(o.density, 1, 0, 4), trail: cn(o.trail, 0.45, 0.05, 1),
+        width: num(o.width, 1.1), intake: o.intake !== false, exhaust: o.exhaust !== false && sN > 0 };
     },
   };
   const params = (name, box, o = {}) => DEF[name](box, o);
@@ -151,7 +198,7 @@
     const o = [0, 0, 0, 0, 0, 0];
     for (const s of w.src) {
       const dx = p[0] - s.x, dy = p[1] - s.y, r = max(hypot(dx, dy), 1e-3), ex = dx / r, ey = dy / r;
-      const f = s.amp * w.A / sqrt(1 + r * w.k / TAU) * exp(-w.damp * r) * (1 - smooth(-TAU / w.k, 0, r - w.c * (t - s.start)));
+      const f = s.amp * w.A / sqrt(1 + r * w.k / TAU) * exp(-w.damp * r) * (1 - smooth(-TAU / w.k, 0, r - w.c * (t - s.start))) * exp(-max(0, t - s.start - r / w.c) / s.dur);
       const ph = w.k * r - w.om * t + s.phase, C = cos(ph), u1 = -f * w.k * sin(ph), u2 = -f * w.k * w.k * C, q = u1 / max(r, 0.3 / w.k);
       o[0] += f * C; o[1] += u1 * ex; o[2] += u1 * ey;
       o[3] += u2 * ex * ex + q * (1 - ex * ex); o[4] += (u2 - q) * ex * ey; o[5] += u2 * ey * ey + q * (1 - ey * ey);
@@ -188,6 +235,189 @@
     }
     return out;
   }
+
+  // Embers: flecks lofted from a fire's base by its plume, wandering on the turbulence more the
+  // higher they climb, and cooling from yellow to dull red before they go dark.
+  function embers(p) {
+    const rate = 16 * p.embers * (0.35 + p.power), out = [], hz = puff(p.size), q = p.seed + 3;
+    for (let k = Math.ceil((p.t - 2.2) * rate); rate > 0 && k <= floor(p.t * rate); k++) {
+      const age = p.t - k / rate, L = 2.2 * (0.45 + 0.55 * rnd(q, k, 2));
+      if (age < 0 || age > L) continue;
+      const x0 = p.base[0] + (rnd(q, k, 0) - 0.5) * p.width * 0.7, y0 = p.base[1] - p.height * (0.1 + 0.25 * rnd(q, k, 1));
+      const up = p.height * (0.8 + 1.1 * rnd(q, k, 3)), drift = p.wind * p.width * 1.4;
+      const pos = s => {
+        s = clamp(s, 0, L);
+        const f = (1 - exp(-1.5 * s)) / (1 - exp(-1.5 * L)), wob = p.width * 0.55 * f * noise1(k * 1.37 + s * hz * 0.7, q);
+        return [x0 + drift * f + wob, y0 - up * f];
+      };
+      const T = 1700 * (1 - 0.5 * age / L), level = glowLevel(T) * smooth(0, 0.1, age) * (1 - smooth(0.75, 1, age / L));
+      out.push({ k, p: pos(age), tail: pos(age - 0.02), T, age, life: L, level });
+    }
+    return out;
+  }
+
+  // Grains thrown out of a dust cloud: ballistic from a burst (a footstep, an impact) at its start
+  // time, or a steady spray low along the ground from a jet. They land and stop.
+  function grains(p) {
+    const out = [], G = p.scale * 11;
+    p.src.forEach((s, si) => {
+      const throwOne = (k, age, a, v, x0, salt) => {
+        const sy = sin(a), tl = sy < 0 ? (-2 * sy * v) / G : 0, pos = t => { t = min(t, tl); return [x0 + cos(a) * v * t, p.ground + sy * v * t + 0.5 * G * t * t]; };
+        if (age > tl + 0.35) return;
+        const r = rnd(p.seed + salt, k, 9);
+        out.push({ p: pos(age), tail: pos(max(0, age - 0.025)), size: 0.7 + 1.3 * r, alpha: age > tl ? 1 - (age - tl) / 0.35 : 1, landed: age > tl });
+      };
+      if (s.kind === 0) {
+        const age = p.t - s.start;
+        if (age <= 0 || age > 3) return;
+        const n = Math.round(46 * p.grains * s.strength);
+        for (let k = 0; k < n; k++) {
+          const r = j => rnd(p.seed + 11 + si * 97, k, j);
+          throwOne(k, age, -PI / 2 + (r(0) - 0.5) * 2.5 + s.angle, p.scale * (1.4 + 3.4 * r(1)) * sqrt(s.strength), s.x + (r(2) - 0.5) * p.scale * 0.4, 11 + si * 97);
+        }
+      } else {
+        const rate = 34 * p.grains * s.strength, life = 1.6;
+        for (let k = Math.ceil((p.t - s.start - life) * rate); k <= floor((p.t - s.start) * rate); k++) {
+          const age = p.t - s.start - k / rate;
+          if (age < 0) continue;
+          const r = j => rnd(p.seed + 23 + si * 97, k, j), side = r(0) < 0.5 ? -1 : 1, el = 0.12 + 0.5 * r(1);
+          throwOne(k, age, side > 0 ? -el : PI + el, p.scale * (2 + 3.5 * r(2)) * sqrt(s.strength), s.x + side * p.scale * (0.15 + 0.4 * r(3)), 23 + si * 97);
+        }
+      }
+    });
+    return out;
+  }
+
+  // Wind past round bodies: a uniform stream, each body a doublet (potential flow round a
+  // cylinder) with circulation from its spin, shedding a von Karman street of vortices of
+  // alternating sign at a Strouhal number of 0.2, which drift downstream at 0.85 U and spread.
+  // Time runs on a fixed grid of WH seconds, so the street at step i is the same however the
+  // figure got there, and particle paths can be cached between frames without changing them.
+  const WH = 1 / 30;
+  function windField(p) {
+    const U = p.U, d = p.dir, memo = new Map();
+    const street = i => {
+      let v = memo.get(i);
+      if (v) return v;
+      const t = i * WH;
+      v = [];
+      for (const B of p.bodies) {
+        if (!B.shed || !p.shedding) continue;
+        const D = 2 * B.r, f = (0.2 * U) / D, Gm = 3.2 * U * B.r * p.shedding, reach = max(p.box[2], p.box[3]) * 1.5, t0 = floor(t * 2 * f);
+        for (let k = t0; k > t0 - 14; k--) {
+          const age = t - k / (2 * f), sg = k & 1 ? 1 : -1, along = B.r * 1.5 + 0.85 * U * age, side = sg * B.r * 0.45 * (1 + 0.2 * min(age * f, 4));
+          if (age < 0 || along > reach) continue;
+          v.push({ x: B.c[0] + d[0] * along - d[1] * side, y: B.c[1] + d[1] * along + d[0] * side,
+            G: sg * Gm * min(1, age * f * 2.5) * exp(-age * f * 0.1), rc: B.r * (0.28 + 0.06 * age * f) });
+        }
+      }
+      if (memo.size > 600) memo.clear();
+      memo.set(i, v);
+      return v;
+    };
+    const tu = p.turbulence * U * 0.12, ph = [0, 1, 2, 3].map(j => TAU * rnd(p.seed, 77, j));
+    // Velocity at (x, y) at grid step i (fractional i is fine: the street uses its step).
+    return (x, y, i) => {
+      let u = U * d[0], v = U * d[1];
+      for (const B of p.bodies) {
+        const rx = x - B.c[0], ry = y - B.c[1], X = rx * d[0] + ry * d[1], Y = -rx * d[1] + ry * d[0], r2 = X * X + Y * Y, R2 = B.r * B.r;
+        if (r2 < R2) return null;
+        // u - iv = U (1 - R²/z²) + iΓ/(2πz), the perturbation in the body's frame, turned back.
+        // Real flow separates: behind the body the doublet weakens, so the stream doesn't close in.
+        const r4 = r2 * r2, Gam = B.spin * 4 * PI * U * B.r, kd = X > 0 ? 1 - 0.6 * smooth(0, 1.4 * B.r, X) * exp(-(Y * Y) / (2.2 * R2)) : 1;
+        const du = (-kd * U * R2 * (X * X - Y * Y)) / r4 + (Gam * Y) / (TAU * r2), dv = -((2 * kd * U * R2 * X * Y) / r4 + (Gam * X) / (TAU * r2));
+        u += du * d[0] - dv * d[1]; v += du * d[1] + dv * d[0];
+      }
+      for (const w of street(floor(i))) { const dx = x - w.x, dy = y - w.y, q = w.G / (TAU * (dx * dx + dy * dy + w.rc * w.rc)); u -= dy * q; v += dx * q; }
+      if (tu) { const t = i * WH; u += tu * sin(y * 0.031 + t * 1.3 + ph[0]) * cos(x * 0.017 - t * 0.7 + ph[1]); v += tu * sin(x * 0.027 - t * 1.1 + ph[2]) * cos(y * 0.021 + t * 0.9 + ph[3]); }
+      return [u, v];
+    };
+  }
+  // Streaks: particles released along the upstream edge at seeded steps, followed on the grid,
+  // keeping the last trail seconds of path and speed. Each particle's state is cached between
+  // frames (cleared when any setting changes, recomputed when time runs backward).
+  const WIND = { key: "", parts: new Map() };
+  function wind(p) {
+    const F = windField(p), n = Math.ceil(p.trail / WH), b = p.box, d = p.dir, nm = [-d[1], d[0]], out = [];
+    const key = JSON.stringify([b, p.U, p.dir, p.bodies, p.density, p.trail, p.turbulence, p.spacing, p.shedding, p.seed, p.dye]);
+    if (WIND.key !== key) { WIND.key = key; WIND.parts.clear(); }
+    const cx = b[0] + b[2] / 2, cy = b[1] + b[3] / 2, half = hypot(b[2], b[3]) / 2, x0 = cx - d[0] * half, y0 = cy - d[1] * half;
+    const lanes = Math.ceil((2 * half) / p.spacing), life = ((2 * half) / p.U) * 1.25, rate = p.density / (p.trail * 2.4), pad = 30;
+    const inBox = (x, y) => x > b[0] - pad && x < b[0] + b[2] + pad && y > b[1] - pad && y < b[1] + b[3] + pad;
+    const it = p.t / WH, iNow = floor(it), frac = it - iNow, seen = new Set();
+    const rk = (x, y, i, h) => {
+      const v1 = F(x, y, i);
+      if (!v1) return null;
+      const v2 = F(x + (v1[0] * h) / 2, y + (v1[1] * h) / 2, i) ?? v1;
+      return [x + v2[0] * h, y + v2[1] * h, hypot(v2[0], v2[1]) / p.U];
+    };
+    for (let lane = 0; lane < lanes; lane++) {
+      const off = (lane + 0.5) * p.spacing - half;
+      for (let k = Math.ceil((p.t - life) * rate); k <= floor(p.t * rate); k++) {
+        const u = j => rnd(p.seed + 17, lane * 7919 + k, j), b0 = Math.round((k + 0.85 * u(0)) / rate / WH);
+        if (b0 > iNow || (iNow - b0) * WH > life) continue;
+        const id = lane * 1e6 + k;
+        let e = WIND.parts.get(id);
+        if (!e || e.i > iNow) {
+          const o2 = off + (u(1) - 0.5) * p.spacing * 0.7, x = x0 + nm[0] * o2, y = y0 + nm[1] * o2;
+          e = { i: b0, x, y, pts: [[x, y]], sp: [1], idx: [b0], entered: inBox(x, y), done: false };
+          WIND.parts.set(id, e);
+        }
+        seen.add(id);
+        while (e.i < iNow && !e.done) {
+          const q = rk(e.x, e.y, e.i, WH);
+          e.i++;
+          if (!q) { e.done = true; break; }
+          [e.x, e.y] = q;
+          e.pts.push([q[0], q[1]]); e.sp.push(q[2]); e.idx.push(e.i);
+          const inside = inBox(q[0], q[1]);
+          if (inside) e.entered = true; else if (e.entered) e.done = true;   // it left the box: let its trail run out of view
+          if (e.pts.length > n + 1) { e.pts.shift(); e.sp.shift(); e.idx.shift(); }
+        }
+        let pts = [], sp = [];
+        for (let j = 0; j < e.pts.length; j++) if (e.idx[j] > iNow - n) { pts.push(e.pts[j]); sp.push(e.sp[j]); }
+        if (!e.done && frac > 0) { const q = rk(e.x, e.y, iNow, frac * WH); if (q) { pts.push([q[0], q[1]]); sp.push(q[2]); } }
+        if (pts.length < 2 || !e.entered) continue;
+        out.push({ points: pts, speed: sp, alpha: smooth(0, 0.3, (iNow - b0) * WH) });
+      }
+    }
+    // Dye from each body's separation points (just behind its shoulders): it traces the wake.
+    if (p.dye) p.bodies.forEach((B, bi) => {
+      const rateD = 14 * p.density, lifeD = life * 0.8;
+      for (const side of [-1, 1]) {
+        const ang = Math.atan2(d[1], d[0]) + side * 1.62, sx = B.c[0] + Math.cos(ang) * B.r * 1.06, sy = B.c[1] + Math.sin(ang) * B.r * 1.06;
+        for (let k = Math.ceil((p.t - lifeD) * rateD); k <= floor(p.t * rateD); k++) {
+          const b0 = Math.round(k / rateD / WH);
+          if (b0 > iNow || (iNow - b0) * WH > lifeD) continue;
+          const id = -(bi * 2 + (side + 1) / 2 + 1) * 1e7 - k;
+          let e = WIND.parts.get(id);
+          if (!e || e.i > iNow) { e = { i: b0, x: sx, y: sy, pts: [[sx, sy]], sp: [1], idx: [b0], entered: true, done: false }; WIND.parts.set(id, e); }
+          seen.add(id);
+          while (e.i < iNow && !e.done) {
+            const q = rk(e.x, e.y, e.i, WH);
+            e.i++;
+            if (!q) { e.done = true; break; }
+            [e.x, e.y] = q;
+            e.pts.push([q[0], q[1]]); e.sp.push(q[2]); e.idx.push(e.i);
+            if (!inBox(q[0], q[1])) e.done = true;
+            if (e.pts.length > 2 * n + 1) { e.pts.shift(); e.sp.shift(); e.idx.shift(); }
+          }
+          let pts = [], sp = [];
+          for (let j = 0; j < e.pts.length; j++) if (e.idx[j] > iNow - 2 * n) { pts.push(e.pts[j]); sp.push(e.sp[j]); }
+          if (!e.done && frac > 0) { const q = rk(e.x, e.y, iNow, frac * WH); if (q) { pts.push([q[0], q[1]]); sp.push(q[2]); } }
+          if (pts.length >= 2) out.push({ points: pts, speed: sp, alpha: smooth(0, 0.3, (iNow - b0) * WH), dye: true });
+        }
+      }
+    });
+    for (const id of WIND.parts.keys()) if (!seen.has(id)) WIND.parts.delete(id);
+    return out;
+  }
+  // Water in section: the surface height (px, up) and its first two derivatives along x.
+  const surf1 = (x, p, t) => {
+    let h = 0, d1 = 0, d2 = 0;
+    for (const w of p.waves1) { const ph = w.k * x - w.om * t + w.ph, S = sin(ph), C = cos(ph); h += w.A * S; d1 += w.A * w.k * C; d2 -= w.A * w.k * w.k * S; }
+    return [h, d1, d2];
+  };
 
   // A midpoint-displaced path whose kinks drift in time, plus branches that strike and fade.
   function arc(p) {
@@ -296,15 +526,44 @@ float nz(vec2 p) {
 float fbm(vec2 p) { float s = 0.0, a = 0.5; for (int k = 0; k < 4; k++) { s += a * nz(p); p = mat2(1.6, 1.2, -1.2, 1.6) * p + 7.1; a *= 0.5; } return s; }
 vec3 rampOf(vec3 r[4], float x) { x = clamp(x, 0.0, 1.0) * 3.0; int i = min(int(x), 2); return mix(r[i], r[i + 1], x - float(i)); }
 vec4 emit(vec3 c, float a) { a = clamp(a, 0.0, 1.0); return vec4(c * a, a); }
+// 3D gradient noise in about [-0.7, 0.7]; the third axis is time, so a pattern evolves instead of sliding.
+vec3 gr3(ivec3 c) {
+  uvec3 u = uvec3(c & 0x7fffffff);
+  uint h = hs(u.x * 0x9e3779b1u ^ hs(u.y * 0x85ebca6bu ^ hs(u.z + uSeed)));
+  float a = float(h & 0xffffu) * 9.5873799e-5, z = float(h >> 16) * 3.0518044e-5 - 1.0, r = sqrt(max(0.0, 1.0 - z * z));
+  return vec3(r * cos(a), r * sin(a), z);
+}
+float nz3(vec3 p) {
+  ivec3 i = ivec3(floor(p)); vec3 f = fract(p), u = f * f * (3.0 - 2.0 * f);
+  float n000 = dot(gr3(i), f), n100 = dot(gr3(i + ivec3(1, 0, 0)), f - vec3(1, 0, 0));
+  float n010 = dot(gr3(i + ivec3(0, 1, 0)), f - vec3(0, 1, 0)), n110 = dot(gr3(i + ivec3(1, 1, 0)), f - vec3(1, 1, 0));
+  float n001 = dot(gr3(i + ivec3(0, 0, 1)), f - vec3(0, 0, 1)), n101 = dot(gr3(i + ivec3(1, 0, 1)), f - vec3(1, 0, 1));
+  float n011 = dot(gr3(i + ivec3(0, 1, 1)), f - vec3(0, 1, 1)), n111 = dot(gr3(i + ivec3(1, 1, 1)), f - 1.0);
+  return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y), mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z);
+}
+// Billows: folded noise, so puffs have rounded tops and creases between them, like cauliflower.
+float billow(vec3 p, int oct) {
+  float s = 0.0, a = 0.5, w = 0.0;
+  for (int k = 0; k < 5; k++) { if (k >= oct) break; s += a * (1.0 - 1.5 * abs(nz3(p))); w += a; p = p * 2.07 + vec3(1.7, 9.2, 3.1); a *= 0.52; }
+  return s / w;
+}
+// Black-body color at T kelvin, brightest channel 1 (the Planckian-locus fit Fx.blackbody uses).
+vec3 bbc(float T) {
+  float t = clamp(T, 800.0, 12000.0) / 100.0;
+  float r = t <= 66.0 ? 1.0 : clamp(1.29293618 * pow(t - 60.0, -0.1332047592), 0.0, 1.0);
+  float g = t <= 66.0 ? clamp(0.39008157 * log(t) - 0.63184144, 0.0, 1.0) : clamp(1.12989086 * pow(t - 60.0, -0.0755148492), 0.0, 1.0);
+  float b = t >= 66.0 ? 1.0 : t <= 19.0 ? 0.0 : clamp(0.54320678 * log(t - 10.0) - 1.19625408, 0.0, 1.0);
+  return vec3(r, g, b);
+}
 `;
   const SURF = `
-uniform vec4 uSrc[8], uWv[6]; uniform float uStart[8], uWa[6]; uniform int uN, uNw; uniform float uKk, uOm, uCs, uDamp, uAmp; uniform mat2 uInv; uniform vec2 uOrg;
+uniform vec4 uSrc[8], uWv[6]; uniform float uStart[8], uDur[8], uWa[6]; uniform int uN, uNw; uniform float uKk, uOm, uCs, uDamp, uAmp; uniform mat2 uInv; uniform vec2 uOrg;
 void surf(vec2 p, out vec3 a, out vec3 b) {
   a = vec3(0.0); b = vec3(0.0);
   for (int i = 0; i < 8; i++) {
     if (i >= uN) break;
     vec2 d = p - uSrc[i].xy; float r = max(length(d), 1e-3); vec2 e = d / r;
-    float f = uSrc[i].w * uAmp * inversesqrt(1.0 + r * uKk * 0.1591549) * exp(-uDamp * r) * (1.0 - smoothstep(-6.2831853 / uKk, 0.0, r - uCs * (uT - uStart[i])));
+    float f = uSrc[i].w * uAmp * inversesqrt(1.0 + r * uKk * 0.1591549) * exp(-uDamp * r) * (1.0 - smoothstep(-6.2831853 / uKk, 0.0, r - uCs * (uT - uStart[i]))) * exp(-max(0.0, uT - uStart[i] - r / uCs) / uDur[i]);
     float ph = uKk * r - uOm * uT + uSrc[i].z, c = cos(ph), u1 = -f * uKk * sin(ph), u2 = -f * uKk * uKk * c, q = u1 / max(r, 0.3 / uKk);
     a += vec3(f * c, u1 * e);
     b += vec3(u2 * e.x * e.x + q * (1.0 - e.x * e.x), (u2 - q) * e.x * e.y, u2 * e.y * e.y + q * (1.0 - e.y * e.y));
@@ -319,15 +578,35 @@ void surf(vec2 p, out vec3 a, out vec3 b) {
 vec2 sp() { return uInv * (px() - uOrg); }
 `;
   const FS = {
-    fire: `uniform vec2 uBase; uniform float uW, uH, uWind, uSoot, uPow, uHz; uniform vec3 uBlue[4];
+    // Layered flame. A temperature field from the flame's shape and its rising turbulence colors
+    // the sooty part by black-body light (dull red at the edges to yellow-white in the core); the
+    // premixed base burns blue (CH and C2 emission) in a thin cone. The flame puffs at its
+    // flicker frequency and its tip breaks into licks.
+    fire: `uniform vec2 uBase; uniform float uW, uH, uWind, uSoot, uPow, uHz, uDk; uniform vec3 uBlue[4];
 void main() {
   vec2 p = px();
-  float y = (uBase.y - p.y) / (uH * (1.0 + 0.08 * sin(6.2831853 * uT * uHz))), x = (p.x - uBase.x) / uW - uWind * y * y * 0.9;
-  vec2 q = vec2(x * 2.4, y * 2.2 - uT * uHz * 1.2);
-  float n = fbm(q + 0.4 * vec2(fbm(q * 1.7 + vec2(0.0, -uT * uHz)), 0.0)), d = abs(x + 0.45 * y * n) / (0.5 * pow(clamp(1.0 - y, 0.0, 1.0), 0.65) + 0.015);
-  float heat = ((1.0 - d * d) * (1.05 - 0.55 * y) + n * (0.3 + 1.1 * y)) * smoothstep(-0.05, 0.04, y) * (1.0 - smoothstep(0.75, 1.2, y)) * (0.55 + 0.55 * uPow);
-  float sm = uSoot * smoothstep(0.02, 0.22, y);   // soot forms only above the blue base
-  o = emit(mix(rampOf(uBlue, heat), rampOf(uRamp, heat), sm), smoothstep(0.06, 0.4, heat) * mix(0.75, 1.0, sm));
+  float flick = 1.0 + 0.09 * sin(6.2831853 * uT * uHz) + 0.07 * nz(vec2(uT * uHz * 0.7, 3.1));
+  float y = (uBase.y - p.y) / (uH * flick), x = (p.x - uBase.x) / uW - uWind * y * y * 0.9;
+  o = vec4(0.0);
+  if (y < -0.08 || y > 1.5) return;
+  vec2 q = vec2(x * 2.2, y * 2.0 - uT * uHz * 1.25);
+  vec2 w = vec2(fbm(q * 1.3 + vec2(0.0, -uT * uHz * 0.6)), fbm(q * 1.3 + vec2(4.1, -uT * uHz * 0.8)));
+  float n = fbm(q + 0.55 * w);
+  float wid = 0.5 * pow(clamp(1.0 - y * 0.85, 0.0, 1.0), 0.62) + 0.02;
+  float d = abs(x + 0.42 * y * (w.x + 0.5 * n)) / wid;
+  float body = (1.0 - d * d) * smoothstep(-0.04, 0.05, y);
+  float f = (body + n * (0.25 + 0.9 * y) - smoothstep(0.55, 1.15, y + 0.35 * n) * 1.2) * (0.6 + 0.5 * uPow);
+  if (f <= 0.0) return;
+  float T = mix(950.0, 2000.0, clamp(f * 1.15, 0.0, 1.0)) * (1.0 - 0.12 * y) * (uDk > 0.5 ? 1.0 : 0.9);
+  // Radiance climbs steeply with temperature; an exposure curve takes the core to yellow-white.
+  vec3 lum = bbc(T) * pow(T / 1500.0, 4.0) * (0.45 + 0.8 * smoothstep(0.0, 0.9, f));
+  float baseZ = 1.0 - smoothstep(0.03, 0.22, y), cone = exp(-sq(d - 0.72) * 10.0) * (1.0 - smoothstep(0.0, 0.38, y));
+  vec3 blue = rampOf(uBlue, 0.55 + 0.45 * clamp(body, 0.0, 1.0)) * (0.65 * baseZ + 0.85 * cone + 0.35 * (1.0 - uSoot) * body);
+  float soot = uSoot * smoothstep(0.02, 0.2, y);
+  if (uDk < 0.5) lum = rampOf(uRamp, clamp((T - 950.0) / 1000.0, 0.0, 1.0)) * (0.9 + 0.1 * smoothstep(0.0, 0.9, f));
+  vec3 c = mix(blue * 1.25, lum, soot) + blue * baseZ * 0.5 * soot;
+  c = uDk > 0.5 ? 1.0 - exp(-c * 1.5) : clamp(c, 0.0, 1.0);
+  o = emit(c, smoothstep(0.0, 0.22, f) * mix(0.78, 1.0, soot));
 }`,
     // Ray-marched: the inverse of the drawing's projection gives each pixel's line of sight.
     plume: `uniform vec2 uC, uA, uE1, uE2; uniform float uThr, uL, uSp, uSpr, uBody, uDia, uInk;
@@ -361,14 +640,84 @@ void main() {
   float E = max(body, 0.0) + hot + dia;
   o = emit(rampOf(uRamp, (body * 0.4 + hot * 0.75 + dia) / max(E, 1e-4)), (1.0 - exp(-E * uInk)) * smoothstep(0.0, 0.12, uThr));
 }`,
-    smoke: `uniform vec2 uSrc; uniform float uR0, uRise, uDrift, uDen, uSpr, uFade, uH; uniform vec3 uCol, uCol2;
+    // A rising column as a lit volume. Density is the plume's profile (wider and thinner with
+    // height) times folded noise that billows: domain-warped by a swirl that grows as the column
+    // rises, and evolving in time rather than sliding. Each pixel looks toward the light through
+    // the column's own density, so puffs are bright on the lit side and dark under the rest.
+    smoke: `uniform vec2 uSrc, uL; uniform float uR0, uRise, uDrift, uDen, uSpr, uFade, uH, uShadow, uBill; uniform vec3 uCol, uCol2;
+float dens(vec2 p, int oct) {
+  float z = uSrc.y - p.y, zp = max(z, 0.0), x = p.x - uSrc.x - uDrift * zp, b = uR0 + uSpr * zp, e = x / b;
+  float prof = exp(-0.75 * e * e) * smoothstep(-uR0 * 0.5, uR0 * 0.8, z) * exp(-zp * uFade);
+  if (prof < 0.01) return 0.0;
+  // Billows grow with the column; the swirl that folds them grows as it rises.
+  float sc = uR0 * 1.4 + 0.04 * uH + 0.26 * b;
+  vec3 q = vec3(x / sc, (z - uT * uRise * 0.9) / sc, uT * 0.18);
+  q.xy += vec2(nz3(q * 0.5 + vec3(0.0, 0.0, 3.1)), nz3(q * 0.5 + vec3(5.2, 1.3, 7.7))) * (0.6 + 1.4 * smoothstep(0.0, uH * 0.45, zp));
+  float n = billow(q, oct);
+  float c = prof * (0.35 + 0.95 * n) - 0.42;
+  float puffs = smoothstep(0.0, 0.32, c) * (0.35 + 0.9 * n * n);
+  return mix(prof * (0.6 + 0.6 * n), puffs, uBill) * pow(uR0 / b, 0.6) * 1.15;
+}
 void main() {
-  vec2 p = px(); float z = uSrc.y - p.y, zp = max(z, 0.0), x = p.x - uSrc.x - uDrift * zp, b = uR0 + uSpr * zp, e = x / b;
-  vec2 q = vec2(x, z - uT * uRise) / (uR0 * 1.5 + 0.12 * uH);
-  float n = fbm(q + 1.2 * vec2(fbm(q * 0.7 + vec2(0.0, uT * 0.15)), fbm(q * 0.7 + vec2(5.2, -uT * 0.1))));
-  float rho = exp(-1.4 * e * e) * pow(uR0 / b, 0.6) * smoothstep(-uR0, uR0 * 0.5, z) * exp(-zp * uFade) * clamp(0.55 + 1.6 * n, 0.0, 1.5);
-  float a = 1.0 - exp(-rho * 2.5 * uDen);
-  o = vec4(mix(uCol, uCol2, clamp(0.5 + n, 0.0, 1.0)) * a, a);
+  vec2 p = px();
+  float d = dens(p, 4);
+  if (d < 0.003) { o = vec4(0.0); return; }
+
+  // Shading: the density is treated as relief, so each billow has a face toward the light and
+  // one away from it; the shadow is the density between the pixel and the light.
+  float e1 = 4.0, dx = dens(p + vec2(e1, 0.0), 3) - dens(p - vec2(e1, 0.0), 3), dy = dens(p + vec2(0.0, e1), 3) - dens(p - vec2(0.0, e1), 3);
+  vec3 nrm = normalize(vec3(-dx, -dy, 0.22));
+  float face = clamp(dot(nrm, normalize(vec3(uL, 0.75))), 0.0, 1.0);
+  float tau = dens(p + uL * 9.0, 2) + dens(p + uL * 22.0, 2);
+  float lit = clamp((0.25 + 0.95 * face) * exp(-tau * uShadow * 0.55), 0.0, 1.0);
+  float a = 1.0 - exp(-d * 2.6 * uDen);
+  vec3 c = mix(uCol2, uCol, lit);
+  o = vec4(c * a, a);
+}`,
+    // Dust raised from a ground line. A burst is a cloud that spreads fast, slows, piles up at its
+    // rim (the rolling front), and settles; a jet feeds a layer that runs outward both ways,
+    // thickening as it goes. Billows advect away from each source; light shades it like smoke.
+    dust: `uniform vec4 uDs[4]; uniform int uNd; uniform float uGr, uSc, uSettle, uShadow, uDen; uniform vec2 uL; uniform vec3 uCol, uCol2;
+float dens(vec2 p, int oct) {
+  float h = uGr - p.y;
+  if (h < -2.0) return 0.0;
+  float d = 0.0, near = 1e9, dir = 0.0;
+  for (int i = 0; i < 4; i++) {
+    if (i >= uNd) break;
+    vec4 s = uDs[i];
+    float dx = p.x - s.x, age = uT - s.y;
+    if (age <= 0.0) continue;
+    if (abs(dx) < near) { near = abs(dx); dir = sign(dx); }
+    if (s.w < 0.5) {
+      float g = sqrt(s.z), R = uSc * (0.3 + 1.6 * (1.0 - exp(-age / 0.7))) * g, Hc = uSc * (0.3 + 0.9 * (1.0 - exp(-age / 1.4))) * g;
+      float rim = exp(-sq((abs(dx) - R * 0.72) / (R * 0.3))) * exp(-max(h, 0.0) / (Hc * 1.25)), body = exp(-sq(dx / R)) * exp(-max(h, 0.0) / Hc);
+      d += s.z * (0.6 * body + 0.85 * rim) * exp(-age / uSettle) * smoothstep(0.0, 0.06, age);
+    } else {
+      float ax = abs(dx), reach = uSc * 3.2 * s.z, th = uSc * (0.12 + 0.16 * ax / uSc);
+      float front = exp(-sq((ax - reach * 0.85) / (uSc * 0.5))) * exp(-max(h, 0.0) / (uSc * 0.45));
+      d += s.z * (0.8 * exp(-max(h, 0.0) / th) * exp(-ax / reach) + 0.6 * front) * smoothstep(0.0, 1.0, age * 2.0) * smoothstep(-uSc * 0.25, uSc * 0.3, ax);
+    }
+  }
+  if (d < 0.01) return 0.0;
+  vec3 q = vec3((p.x - dir * uT * uSc * 0.35) / uSc, (h - uT * uSc * 0.08) / uSc, uT * 0.15);
+  q.xy += vec2(nz3(q * 0.45 + 2.0), nz3(q * 0.45 + vec3(5.2, 1.3, 7.7))) * 0.55;
+  float n = billow(q, oct), c = min(d, 1.4) * (0.3 + 0.95 * n) - 0.32;
+  return smoothstep(0.0, 0.4, c) * (0.4 + 0.8 * n * n) * 1.3 * smoothstep(-2.0, 2.0, h);
+}
+void main() {
+  vec2 p = px();
+  float d = dens(p, 4);
+  if (d < 0.003) { o = vec4(0.0); return; }
+
+  // Shading: the density is treated as relief, so each billow has a face toward the light and
+  // one away from it; the shadow is the density between the pixel and the light.
+  float e1 = 4.0, dx = dens(p + vec2(e1, 0.0), 3) - dens(p - vec2(e1, 0.0), 3), dy = dens(p + vec2(0.0, e1), 3) - dens(p - vec2(0.0, e1), 3);
+  vec3 nrm = normalize(vec3(-dx, -dy, 0.22));
+  float face = clamp(dot(nrm, normalize(vec3(uL, 0.75))), 0.0, 1.0);
+  float tau = dens(p + uL * 9.0, 2) + dens(p + uL * 22.0, 2);
+  float lit = clamp((0.25 + 0.95 * face) * exp(-tau * uShadow * 0.55), 0.0, 1.0);
+  float a = (1.0 - exp(-d * 1.6 * uDen)) * 0.88;
+  o = vec4(mix(uCol2, uCol, lit) * a, a);
 }`,
     // Bloom: a core, a near exponential falloff, a far tail that ends smoothly.
     glow: `uniform vec4 uSeg[96]; uniform float uSegW[96]; uniform int uNs; uniform float uW, uSpr, uI, uCore; uniform vec3 uHue, uHalo;
@@ -395,6 +744,78 @@ void main() {
   vec2 p = sp(); vec3 a, b; surf(p, a, b); surf(p - uD * a.yz, a, b);
   float I = 1.0 / max(abs((1.0 + uD * b.x) * (1.0 + uD * b.z) - uD * uD * b.y * b.y), 0.12);
   o = vec4(min(mix(uShadow, uFloor, min(I, 1.0)) + uLight * max(I - 1.2, 0.0) * 0.22, vec3(1.0)), 1.0);
+}`,
+    // A pool seen from above. The floor is seen through the surface, shifted by refraction; it is
+    // lit by the caustics the same surface focuses; red is absorbed first on the way down and
+    // back, so depth turns it blue-green; the surface reflects the sky by Fresnel (more at a
+    // grazing view, set by tilt) and the sun as glints; crests whiter than foam break.
+    water: SURF + `uniform float uD, uDepth, uClar, uTile, uTilt, uFoam, uFloorK, uIor; uniform vec3 uWater, uFlA, uFlB, uSky, uSkyH; uniform vec3 uSunD;
+vec3 floorAt(vec2 q) {
+  if (uFloorK < 0.5) {
+    vec2 g = fract(q / uTile), e = min(g, 1.0 - g) * uTile;
+    float grout = 1.0 - smoothstep(0.5, 1.6, min(e.x, e.y));
+    return mix(uFlA, uFlB, grout) * (0.95 + 0.05 * nz(q / uTile * 2.7));
+  }
+  if (uFloorK < 1.5) { float r = 0.5 + 0.5 * sin(q.x * 0.11 + 2.0 * fbm(q * 0.02)); return mix(uFlA, uFlB, 0.35 * r + 0.25 * fbm(q * 0.05)); }
+  return uFlA;
+}
+void main() {
+  vec2 p = sp(); vec3 a, b; surf(p, a, b);
+  vec2 fp = p - uD * a.yz;
+  vec3 a2, b2; surf(fp, a2, b2);
+  float I = 1.0 / max(abs((1.0 + uD * b2.x) * (1.0 + uD * b2.z) - uD * uD * b2.y * b2.y), 0.12);
+  vec3 fl = floorAt(fp) * (0.5 + 0.55 * min(I, 2.6));
+  vec3 Tr = exp(-vec3(1.7, 0.55, 0.38) * (2.0 * uDepth) / uClar);
+  vec3 under = fl * Tr + uWater * (1.0 - Tr);
+  vec3 nrm = normalize(vec3(-a.y, -a.z, 1.0)), v = normalize(vec3(0.0, -sin(uTilt), cos(uTilt)));
+  float c = max(dot(nrm, v), 0.0), F = 0.02 + 0.98 * pow(1.0 - c, 5.0);
+  vec3 r = reflect(-v, nrm);
+  vec3 col = mix(under, mix(uSkyH, uSky, clamp(r.z, 0.0, 1.0)), F);
+  col += vec3(1.0) * pow(max(dot(r, uSunD), 0.0), 260.0) * 2.2;
+  float foam = uFoam > 0.0 ? smoothstep(1.0 - uFoam * 0.55, 1.15 - uFoam * 0.5, a.x / max(uAmp * 1.6, 1e-4)) * smoothstep(-0.1, 0.3, fbm(p * 0.09 + uT * 0.25)) : 0.0;
+  o = vec4(mix(col, vec3(0.97), foam * 0.85), 1.0);
+}`,
+    // Water in section: waves on the surface, light shafts below it (each crest is a lens that
+    // focuses the light into a bright sheet), color deepening with depth, a sandy floor lit by
+    // the same focusing, and drifting specks that catch the light.
+    waterSide: `uniform vec4 uW1[5]; uniform float uLevel, uBot, uClar, uFoam, uIor, uAmpS, uSpecks; uniform vec3 uTop, uDeep, uLight, uSand, uSurf;
+vec3 s1(float x) { vec3 r = vec3(0.0); for (int j = 0; j < 5; j++) { vec4 w = uW1[j]; float ph = w.x * x - w.y * uT + w.z, S = sin(ph), C = cos(ph); r += w.w * vec3(S, w.x * C, -w.x * w.x * S); } return r; }
+void main() {
+  vec2 p = px();
+  vec3 h = s1(p.x);
+  float ys = uLevel - h.x, z = p.y - ys;
+  o = vec4(0.0);
+  if (z < -1.2) return;
+  float edge = 1.0 - smoothstep(0.0, 1.3, abs(z));
+  float k = 1.0 - 1.0 / uIor;
+  float x0 = p.x;
+  for (int it = 0; it < 2; it++) x0 = p.x + z * k * s1(x0).y;
+  vec3 h0 = s1(x0);
+  float I = 1.0 / max(abs(1.0 - z * k * h0.z), 0.12);
+  I = 1.0 + (I - 1.0) * exp(-max(z, 0.0) / (uClar * 1.5));   // farther down, the sheets blur out
+  float fade = exp(-max(z, 0.0) / uClar);
+  vec3 col = mix(uDeep, uTop, fade);
+  float shaft = clamp(I - 1.0, -0.6, 3.0) * fade * (0.55 + 0.45 * nz(vec2(x0 * 0.05, uT * 0.3)));
+  col += uLight * shaft * 0.3;
+  if (p.y > uBot) {
+    float sand = 0.85 + 0.15 * fbm(p * 0.06) + 0.08 * sin(p.x * 0.18 + fbm(p * 0.03) * 3.0);
+    vec3 fl = uSand * sand * (0.6 + 0.4 * min(I, 2.2)) * (0.35 + 0.65 * fade);
+    col = mix(col, fl, smoothstep(uBot, uBot + 2.0, p.y));
+  }
+  if (uSpecks > 0.5 && z > 2.0) {
+    vec2 cell = floor(vec2(p.x, p.y + uT * 3.0) / 26.0), f = fract(vec2(p.x, p.y + uT * 3.0) / 26.0);
+    uvec2 u = uvec2(ivec2(cell) & 0x7fffffff); uint hh = hs(u.x * 0x9e3779b1u ^ hs(u.y + uSeed));
+    vec2 c = vec2(float(hh & 0xffu), float((hh >> 8) & 0xffu)) / 255.0;
+    c += 0.08 * vec2(sin(uT * 0.7 + float(hh & 63u)), cos(uT * 0.5 + float(hh & 31u)));
+    float sp = 1.0 - smoothstep(0.02, 0.05, length(f - c));
+    col += uLight * sp * 0.35 * fade * float((hh >> 16) & 1u);
+  }
+  col += uLight * (1.0 - smoothstep(0.0, 7.0, z)) * 0.12;
+  float cap = uFoam > 0.0 ? smoothstep(uAmpS * (1.3 - uFoam * 0.6), uAmpS * (1.6 - uFoam * 0.6), h.x) * (1.0 - smoothstep(0.0, 5.0, z)) * smoothstep(-0.2, 0.3, fbm(vec2(p.x * 0.08, uT))) : 0.0;
+  col = mix(col, vec3(0.96), cap);
+  col = mix(col, uSurf, edge * 0.85);
+  float al = smoothstep(-1.2, 0.4, z);
+  o = vec4(col * al, al);
 }`,
     shimmer: `uniform sampler2D uTex; uniform vec4 uBx; uniform vec2 uCv; uniform float uDpr, uStr, uNs, uRise;
 void main() {
@@ -556,7 +977,7 @@ void main() {
     const pad = (a, n) => a.concat(Array(max(0, n - a.length)).fill(0)).slice(0, n);
     const waterU = p => ({
       uN: p.src.length, uNw: p.waves.length, uKk: p.k, uOm: p.om, uCs: p.c, uDamp: p.damp, uAmp: p.A, uInv: p.inv, uOrg: p.org,
-      uSrc: pad(p.src.flatMap(s => [s.x, s.y, s.phase, s.amp]), 32), uStart: pad(p.src.map(s => s.start), 8),
+      uSrc: pad(p.src.flatMap(s => [s.x, s.y, s.phase, s.amp]), 32), uStart: pad(p.src.map(s => s.start), 8), uDur: pad(p.src.map(s => s.dur), 8).map(v => v || 1e9),
       uWv: pad(p.waves.flatMap(w => [w.kx, w.ky, w.om, w.ph]), 24), uWa: pad(p.waves.map(w => w.A), 6),
     });
     // Glow shader input: segments in box px, each with a weight.
@@ -570,10 +991,25 @@ void main() {
     };
     const fx = {}, def = (name, fn) => { fx[name] = (b, o = {}) => { const box = boxOf(b); return { box, ...fn(box, DEF[name](box, o), o, isDark()) }; }; };
 
+    // Hot specks with a glowing streak (sparks and embers share the look).
+    const flecks = (c, list, width, dk) => {
+      c.lineCap = "round";
+      for (const s of list) {
+        const col = hue(blackbody(s.T)).map(v => (dk ? v : v ** 1.6));
+        c.strokeStyle = css(col, s.level * 0.25); c.lineWidth = width * 3.5; stroke(c, [s.tail, s.p]);
+        c.strokeStyle = css(dk ? mixc(col, W1, 0.4 * s.level) : col, s.level); c.lineWidth = width; stroke(c, [s.tail, s.p]);
+      }
+    };
     def("fire", (box, p, o, dk) => {
-      const F = FIRE[dk ? "d" : "l"], B = BLUE[dk ? "d" : "l"];
-      return { gpu: p.height >= 1 && draw(box, o, p, true, "fire", { uRamp: F.flat(), uBlue: B.flat(), uBase: local(p.base, box), uW: p.width, uH: p.height,
-        uWind: p.wind, uSoot: p.soot, uPow: p.power, uHz: puff(p.size) }, c => fire2d(c, p, F, B)), height: p.height, tip: [p.base[0] + p.wind * 0.9 * p.width, p.base[1] - p.height] };
+      const F = FIRE[dk ? "d" : "l"], B = BLUE[dk ? "d" : "l"], tip = [p.base[0] + p.wind * 0.9 * p.width, p.base[1] - p.height];
+      // Soot that leaves the tip as smoke: drawn first, so the flame shines over its root.
+      if (p.smoke > 0 && p.soot > 0.05 && p.height > 4) fx.smoke(box, { t: p.t, seed: p.seed + 9, at: [tip[0], tip[1] + p.height * 0.18], width: p.width * 0.55,
+        rise: 0.5, density: 0.75 * p.smoke * p.soot * (0.4 + 0.6 * p.power), wind: p.wind * 0.8, spread: 0.16, res: 0.5, color: o.smokeColor, alpha: o.alpha });
+      const gpu = p.height >= 1 && draw(box, o, p, true, "fire", { uRamp: F.flat(), uBlue: B.flat(), uBase: local(p.base, box), uW: p.width, uH: p.height,
+        uWind: p.wind, uSoot: p.soot, uPow: p.power, uHz: puff(p.size), uDk: dk ? 1 : 0 }, c => fire2d(c, p, F, B));
+      const em = p.embers > 0 ? embers(p) : [];
+      if (em.length) draw(box, o, p, true, "", null, c => flecks(c, em, 1.1, dk));
+      return { gpu, height: p.height, tip, embers: em };
     });
 
     def("plume", (box, p, o, dk) => {
@@ -584,9 +1020,11 @@ void main() {
     });
 
     def("smoke", (box, p, o, dk) => {
-      const col = o.color ? pal(o.color) : p.steam ? (dk ? [0.9, 0.92, 0.95] : [0.6, 0.65, 0.72]) : dk ? [0.6, 0.6, 0.62] : [0.3, 0.3, 0.32];
-      return { gpu: draw(box, o, p, false, "smoke", { uSrc: local(p.at, box), uR0: max(1, p.width / 2), uRise: p.rise, uDrift: p.wind, uDen: p.density, uSpr: p.spread,
-        uFade: p.fade, uH: p.H, uCol: col, uCol2: mixc(col, dk ? W1 : [0, 0, 0], p.steam ? 0.12 : 0.18) }, c => smoke2d(c, p, col)) };
+      // Lit and shadowed tones: smoke is grey, lighter on the lit side; steam is white with cool blue shadows.
+      const col = o.color ? pal(o.color) : p.steam ? (dk ? [0.9, 0.92, 0.95] : [0.66, 0.7, 0.77]) : dk ? [0.66, 0.65, 0.64] : [0.42, 0.41, 0.4];
+      const lit = mixc(col, W1, p.steam ? 0.35 : dk ? 0.22 : 0.3), shade = p.steam ? mixc(col, [0.35, 0.42, 0.55], dk ? 0.45 : 0.3) : mixc(col, [0.06, 0.06, 0.07], dk ? 0.6 : 0.5);
+      return { gpu: draw(box, { res: 0.5, ...o }, p, false, "smoke", { uSrc: local(p.at, box), uR0: max(1, p.width / 2), uRise: p.rise, uDrift: p.wind, uDen: p.density, uSpr: p.spread,
+        uFade: p.fade, uH: p.H, uCol: lit, uCol2: shade, uL: p.light, uShadow: p.shadow, uBill: p.billows }, c => smoke2d(c, p, col)) };
     });
     fx.steam = (b, o = {}) => fx.smoke(b, { ...o, kind: "steam" });
 
@@ -616,16 +1054,80 @@ void main() {
       return { gpu, intensity: q => focus(toSurface(p, q), p, p.t, p.depth) };
     });
 
-    def("sparks", (box, p, o, dk) => {
-      const list = sparks(p);
-      draw(box, o, p, true, "", null, c => {
-        c.lineCap = "round";
-        for (const s of list) {
-          const col = hue(blackbody(s.T)).map(v => (dk ? v : v ** 1.6));
-          c.strokeStyle = css(col, s.level * 0.25); c.lineWidth = p.width * 3.5; stroke(c, [s.tail, s.p]);
-          c.strokeStyle = css(dk ? mixc(col, W1, 0.4 * s.level) : col, s.level); c.lineWidth = p.width; stroke(c, [s.tail, s.p]);
+    def("dust", (box, p, o, dk) => {
+      const base = pal(p.color), col = dk ? mixc(base, [0.75, 0.68, 0.55], 0.4) : mixc(base, [0.62, 0.52, 0.38], 0.45);
+      const lit = mixc(col, W1, dk ? 0.18 : 0.28), shade = mixc(col, [0.08, 0.06, 0.04], dk ? 0.62 : 0.5);
+      const gpu = draw(box, { res: 0.5, ...o }, p, false, "dust", { uDs: pad(p.src.flatMap(q => [q.x - box[0], q.start, q.strength, q.kind]), 16), uNd: p.src.length,
+        uGr: p.ground - box[1], uSc: p.scale, uSettle: p.settle, uShadow: p.shadow, uDen: p.density, uL: p.light, uCol: lit, uCol2: shade }, c => {
+        for (const q of p.src) {   // without WebGL2: a soft dome per source
+          const age = p.t - q.start, R = p.scale * (0.35 + 2.3 * (1 - exp(-age / 0.8))) * sqrt(q.strength);
+          if (age <= 0) continue;
+          const gr = c.createRadialGradient(q.x, p.ground, 0, q.x, p.ground, R * 1.2), a = p.density * 0.55 * exp(-age / p.settle);
+          gr.addColorStop(0, css(col, a)); gr.addColorStop(1, css(col, 0));
+          c.fillStyle = gr; c.fillRect(q.x - R * 1.2, p.ground - R * 1.2, R * 2.4, R * 1.2);
         }
       });
+      const gs = p.grains > 0 ? grains(p) : [];
+      if (gs.length) draw(box, o, p, false, "", null, c => {
+        const gcol = mixc(col, [0.1, 0.08, 0.05], 0.55);
+        c.lineCap = "round";
+        for (const q of gs) { c.strokeStyle = css(gcol, 0.85 * q.alpha); c.lineWidth = q.size; stroke(c, [q.tail, q.p]); }
+      });
+      return { gpu, ground: p.ground, grains: gs };
+    });
+
+    def("water", (box, p, o, dk) => {
+      const tint = pal(p.color), deep = mixc(tint, [0.05, 0.55, 0.6], 0.5).map(v => v * (dk ? 0.34 : 0.72));
+      if (p.view === "side") {
+        const top = mixc(tint, [0.3, 0.8, 0.82], 0.55).map(v => v * (dk ? 0.6 : 0.98)), sand = dk ? [0.42, 0.38, 0.3] : [0.86, 0.79, 0.62];
+        const surfCol = dk ? mixc(top, W1, 0.55) : mixc(tint, [0.05, 0.15, 0.25], 0.35), ampS = p.waves1.reduce((a, w) => a + abs(w.A), 0) * 0.55;
+        const gpu = draw(box, o, p, false, "waterSide", { uW1: pad(p.waves1.flatMap(w => [w.k, w.om, w.ph, w.A]), 20), uLevel: p.level - box[1], uBot: p.bottom - box[1],
+          uClar: p.clarity, uFoam: p.foam, uIor: p.n, uAmpS: ampS, uSpecks: p.specks ? 1 : 0, uTop: top, uDeep: deep.map(v => v * 0.8), uLight: dk ? [0.75, 0.92, 1] : [1, 1, 0.94], uSand: sand, uSurf: surfCol }, c => {
+          const pts = [];
+          for (let x = box[0]; x <= box[0] + box[2] + 2; x += 3) pts.push([x, p.level - surf1(x - box[0], p, p.t)[0]]);
+          const gr = c.createLinearGradient(0, p.level, 0, box[1] + box[3]);
+          gr.addColorStop(0, css(top, 1)); gr.addColorStop(1, css(deep, 1));
+          trace(c, [...pts, [box[0] + box[2], box[1] + box[3]], [box[0], box[1] + box[3]]]); c.fillStyle = gr; c.fill();
+          c.strokeStyle = css(surfCol, 1); c.lineWidth = 1.5; stroke(c, pts);
+        });
+        return { gpu, level: x => p.level - surf1(x - box[0], p, p.t)[0] };
+      }
+      const fA = p.floor === "sand" ? (dk ? [0.48, 0.44, 0.36] : [0.9, 0.84, 0.68]) : dk ? [0.58, 0.64, 0.68] : [0.95, 0.97, 0.97];
+      const fB = p.floor === "sand" ? (dk ? [0.36, 0.33, 0.27] : [0.78, 0.7, 0.54]) : dk ? [0.3, 0.36, 0.42] : [0.62, 0.7, 0.75];
+      const sky = dk ? [0.16, 0.2, 0.3] : [0.82, 0.9, 1], skyH = dk ? [0.42, 0.48, 0.58] : [1, 1, 1], sun = [0.35, -0.55, 0.76];
+      const gpu = draw(box, o, p, false, "water", { ...waterU(p), uD: p.depth * (1 - 1 / p.n), uDepth: p.depth, uClar: p.clarity, uTile: p.tile, uTilt: p.tilt, uFoam: p.foam,
+        uFloorK: { tiles: 0, sand: 1, plain: 2 }[p.floor], uIor: p.n, uWater: deep, uFlA: fA, uFlB: fB, uSky: sky, uSkyH: skyH, uSunD: sun.map(v => v / hypot(...sun)) }, c => grid(c, box, (x, y) => {
+        const I = focus(toSurface(p, [x, y]), p, p.t, p.depth), Tr = [1.7, 0.55, 0.38].map(k => exp((-k * 2 * p.depth) / p.clarity));
+        return fA.map((v, i) => v * (0.5 + 0.55 * min(I, 2.6)) * Tr[i] + deep[i] * (1 - Tr[i]));
+      }));
+      return { gpu, height: q => surf(toSurface(p, q), p, p.t)[0] / p.A, intensity: q => focus(toSurface(p, q), p, p.t, p.depth) };
+    });
+
+    def("wind", (box, p, o, dk) => {
+      const trails = wind(p), base = pal(p.color), fast = dk ? mixc(base, W1, 0.7) : mixc(base, [0.02, 0.05, 0.25], 0.45), dye = pal(p.dyeColor ?? (dk ? "orange" : "red"));
+      draw(box, o, p, false, "", null, c => {
+        c.lineCap = "butt"; c.lineJoin = "round";
+        // Each streak is one path: a gradient from its tail (clear) to its head, and the front
+        // half drawn again a little wider, so it tapers without the beads overlapping caps make.
+        for (const tr of trails) {
+          const pts = tr.points, n = pts.length - 1, a = pts[0], h = pts[n];
+          const sp = clamp((tr.speed[n] - 0.6) / 1.2, 0, 1), col = tr.dye ? dye : p.colorBy === "speed" ? mixc(base, fast, sp) : base;
+          const k = tr.dye ? tr.alpha * 0.26 : tr.alpha * (dk ? 0.85 : 0.75), gr = c.createLinearGradient(a[0], a[1], h[0], h[1]);
+          gr.addColorStop(0, css(col, 0)); gr.addColorStop(0.55, css(col, k * 0.45)); gr.addColorStop(1, css(col, k));
+          c.strokeStyle = gr;
+          c.lineCap = tr.dye ? "round" : "butt";
+          c.lineWidth = tr.dye ? p.width * 2.4 : p.width * 0.55;
+          stroke(c, pts);
+          if (!tr.dye && n > 3) { c.lineWidth = p.width; stroke(c, pts.slice(floor(n / 2))); }
+        }
+      });
+      const F = windField(p);
+      return { gpu: false, count: trails.length, velocity: q => F(q[0], q[1], p.t / WH) };
+    });
+
+    def("sparks", (box, p, o, dk) => {
+      const list = sparks(p);
+      draw(box, o, p, true, "", null, c => flecks(c, list, p.width, dk));
       return { gpu: false, sparks: list };
     });
 
@@ -649,14 +1151,14 @@ void main() {
       const trails = flow(p), stops = ["blue", "purple", "red", "orange"].map(pal);
       draw(box, o, p, false, "", null, c => {
         c.lineCap = c.lineJoin = "round";
+        // Each streak tapers from a full-width head to a hairline tail and fades with it.
         for (const tr of trails) {
-          const pts = tr.points, n = pts.length - 1;
-          c.lineWidth = p.width * (tr.stream === "exhaust" ? 1.15 : 1);
-          for (let j = 0, i0 = 0, i1; j < 3; j++, i0 = i1) {
-            i1 = floor((j + 1) * n / 3);
-            if (i1 <= i0) continue;
-            c.strokeStyle = css(ramp(stops, clamp((tr.T[i1] - TA) / (900 - TA), 0, 1) ** 0.75), tr.alpha * [0.2, 0.5, 0.9][j] * (tr.stream === "ground" ? 0.7 : dk ? 0.85 : 1));
-            stroke(c, pts.slice(i0, i1 + 1));
+          const pts = tr.points, n = pts.length - 1, k = tr.alpha * (tr.stream === "ground" ? 0.7 : dk ? 0.85 : 1), w = p.width * (tr.stream === "exhaust" ? 1.15 : 1);
+          for (let i = 1; i <= n; i++) {
+            const f = i / n;
+            c.strokeStyle = css(ramp(stops, clamp((tr.T[i] - TA) / (900 - TA), 0, 1) ** 0.75), k * f ** 1.4);
+            c.lineWidth = w * (0.3 + 0.7 * f);
+            stroke(c, [pts[i - 1], pts[i]]);
           }
         }
       });
@@ -671,6 +1173,9 @@ void main() {
     hash, noise: noise1, blackbody, glowLevel, puff, follow, frame, ellipse, project: onScreen, params,
     surface: model("caustics", (p, q) => surf(q, p, p.t)), focus: model("caustics", (p, q) => focus(q, p, p.t, p.depth)),
     sparks: model("sparks", sparks), arc: model("arc", arc), flow: model("flow", flow),
+    embers: model("fire", embers), grains: model("dust", grains), wind: model("wind", wind),
+    windVelocity: (box, o, q) => { const p = params("wind", box, o); return windField(p)(q[0], q[1], p.t / WH); },
+    waterLevel: (box, o, x) => { const p = params("water", box, { ...o, view: "side" }); return p.level - surf1(x - box[0], p, p.t)[0]; },
     force2d: false,
     get gpu() { return !this.force2d && !!context(); },
     get still() { return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches; },

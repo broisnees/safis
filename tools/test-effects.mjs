@@ -174,6 +174,34 @@ check("hash is deterministic and spreads", Fx.hash(1, 2, 3) === Fx.hash(1, 2, 3)
   check("an inlet high above the ground has no ground vortex", Fx.flow(box, { ...o, ground: 480 }).every(tr => tr.stream !== "ground"));
 }
 
+// ---------- embers, dust grains, wind, water in section ----------
+{
+  const fire = { t: 3, embers: 1, power: 0.8 }, em = Fx.embers(box, fire);
+  check("embers: seeded, alive, and rising above the base", em.length > 5 && same(em, Fx.embers(box, fire)) && em.every(e => e.p[1] < Fx.params("fire", box, fire).base[1] + 1));
+  check("embers cool as they age", em.every(e => e.T <= 1700 + 1e-9 && e.T >= 840));
+  check("no embers unless asked", Fx.embers(box, { t: 3 }).length === 0);
+  const ground = 360, burst = { t: 0.5, ground, sources: [{ at: [320, ground], start: 0 }] }, gs = Fx.grains(box, burst);
+  check("dust: a burst throws grains that stay on or above the ground", gs.length > 10 && gs.every(q => q.p[1] <= ground + 1e-6));
+  check("dust: grains are seeded", same(gs, Fx.grains(box, burst)));
+  check("dust: nothing before the burst starts", Fx.grains(box, { ...burst, t: -0.1 }).length === 0);
+  const late = Fx.grains(box, { ...burst, t: 2.9 });
+  check("dust: grains land and stop", late.every(q => q.landed));
+  const jet = Fx.grains(box, { t: 2, ground, sources: [{ at: [320, ground], kind: "jet" }] });
+  check("dust: a jet sprays grains both ways", jet.some(q => q.p[0] < 320) && jet.some(q => q.p[0] > 320));
+  const wo = { t: 4, bodies: [{ at: [250, 200], r: 40 }] };
+  const v0 = Fx.windVelocity(box, { ...wo, shedding: 0, turbulence: 0 }, [-1e4, 200]);
+  check("wind: free stream far upstream", Math.abs(v0[0] - Fx.params("wind", box, wo).U) < 1 && Math.abs(v0[1]) < 1);
+  const top = Fx.windVelocity(box, { ...wo, shedding: 0, turbulence: 0 }, [250, 200 - 40.5]);
+  check("wind: twice the stream speed over the top of a cylinder", Math.abs(top[0] / Fx.params("wind", box, wo).U - 2) < 0.05, (top[0] / Fx.params("wind", box, wo).U).toFixed(3));
+  check("wind: no velocity inside the body", Fx.windVelocity(box, wo, [250, 200]) === null);
+  const w1 = JSON.stringify(Fx.wind(box, { ...wo, t: 4.5 }));
+  Fx.wind(box, { ...wo, t: 1, seed: 9 });   // another setting clears the cache
+  check("wind: the same frame from a cold cache and a warm one", w1 === JSON.stringify(Fx.wind(box, { ...wo, t: 4.5 })));
+  check("wind: dye leaves the body's shoulders", Fx.wind(box, wo).some(q => q.dye));
+  const lv = x => Fx.waterLevel(box, { t: 1, level: 120 }, x);
+  check("water in section: the surface moves about its level", Math.abs(lv(100) - 120) < 40 && lv(100) !== lv(300));
+}
+
 // ---------- in a browser: shaders, determinism, fallback, smooth envelopes ----------
 if (!findChrome() || typeof WebSocket === "undefined") console.log("skip browser checks (no Chrome or Node < 22)");
 else {
@@ -193,6 +221,7 @@ ${fig("fire", "(g, t, x) => g.fx.fire(null, { power: x, t, size: 0.3 })")}
 ${fig("glow", "(g, t, x) => g.fx.glow(null, { path: [[60, g.h / 2], [g.w - 60, g.h / 2]], temp: 900 + 1000 * x })")}
 ${fig("water", "(g, t, x) => (g.fx.caustics(null, { t, depth: 60 + 120 * x }), g.fx.ripples([0, 0, g.w / 2, g.h], { t, sources: [[80, 80]] }))")}
 ${fig("misc", "(g, t, x) => (g.fx.smoke(null, { t, density: x }), g.fx.sparks(null, { t, rate: 20 + 60 * x }), g.fx.arc(null, { t, intensity: x + 0.3 }), g.fx.shimmer(null, { t, strength: 3 * x }))")}
+${fig("fresh", "(g, t, x) => { const h = g.h / 2, w = g.w / 2; g.fx.dust([0, 0, w, h], { t: t + 0.5, sources: [{ at: [w / 2, h * 0.9], start: 0 }], density: x + 0.3 }); g.fx.water([w, 0, w, h], { t, depth: 40 + 100 * x }); g.fx.water([0, h, w, h], { view: 'side', t, amp: x + 0.2 }); g.fx.wind([w, h, w, h], { t: t + 2, bodies: [{ at: [w * 1.3, h * 1.5], r: 14 }] }); return g.fx.fire([0, 0, g.w, g.h], { t, power: x, embers: 1, smoke: 0.6 }); }")}
 </main>`;
   const dir = await mkdtemp(path.join(os.tmpdir(), "fx-test-")), file = path.join(dir, "index.html");
   await writeFile(file, html);
@@ -211,7 +240,7 @@ ${fig("misc", "(g, t, x) => (g.fx.smoke(null, { t, density: x }), g.fx.sparks(nu
         for (let i = 0; i < d.length; i += 4) { if ((i >> 2) % 3 === 0) { s += Math.abs(L(d[i], d[i + 1], d[i + 2]) - L0) / 255; n++; } h = Math.imul(h ^ d[i] ^ (d[i + 1] << 8) ^ (d[i + 2] << 16), 16777619); }
         return { ink: s / n, hash: h >>> 0 };
       };`);
-    const ids = ["plume", "flow", "fire", "glow", "water", "misc"];
+    const ids = ["plume", "flow", "fire", "glow", "water", "misc", "fresh"];
     check("the shaders compile (SwiftShader WebGL2)", (await ev("Fx.gpu")) && (await ev("Fx.errors.length")) === 0, await ev("Fx.errors.join('; ')"));
     for (const id of ids) await ev(`drive("${id}", { steps: 1 })`);
     check("shader effects report gpu: true", await ev(`["plume", "fire", "glow", "water"].every(id => out[id].gpu)`));

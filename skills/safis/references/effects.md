@@ -1,6 +1,6 @@
-# Effects: fire, exhaust, smoke, glow, water, sparks, arcs, airflow
+# Effects: fire, exhaust, smoke, dust, glow, water, sparks, arcs, airflow, wind
 
-The effects kit (`src/effects.js`) draws what lines can't: a flame, a rocket plume with shock diamonds, smoke and steam, the glow of hot metal or a filament, ripples and the light pattern on a pool floor, sparks, an electric arc, heat shimmer, and streaks of air flowing through an engine.
+The effects kit (`src/effects.js`) draws what lines can't: a flame with embers and soot, a rocket plume with shock diamonds, smoke and steam that billow and shade themselves, dust thrown up from the ground, the glow of hot metal or a filament, water seen from above or in section, ripples and the light pattern on a pool floor, sparks, an electric arc, heat shimmer, streaks of air flowing through an engine, and wind curling round bodies into a vortex street.
 
 - **`g.fx.<name>(box, o)`** draws one effect into `box = [x, y, w, h]` (figure px; `null` for the whole canvas) and returns what the figure needs to label it.
 - **`Fx`** is the global namespace: easing (`Fx.follow`), camera matching (`Fx.ellipse`), black-body color, and the bare models for labels and tests.
@@ -21,9 +21,12 @@ Leave effects out when they are decoration. A glow behind a title, smoke that no
 
 | The figure shows | Use |
 |---|---|
-| A flame: color from soot or premixing, height from heat release, flicker | `g.fx.fire` |
+| A flame: color from soot or premixing, height from heat release, flicker, embers, soot smoke | `g.fx.fire` |
 | Rocket or jet exhaust, shock diamonds, a plume ballooning at altitude | `g.fx.plume` |
 | A chimney, a kettle, a plume spreading and bending in wind | `g.fx.smoke`, `g.fx.steam` |
+| Dust from a footstep, an impact, or a jet blowing on the ground | `g.fx.dust` |
+| A pool from above (refracted floor, caustics, Fresnel sky), or water in section (light shafts, floor, foam) | `g.fx.water` |
+| Air past a body: streamlines, separation, a vortex street, lift from spin | `g.fx.wind` |
 | Hot metal, a lamp filament, a weld pool, anything incandescent | `g.fx.glow` (color from `temp`) |
 | Waves from point sources, interference, a tilted water surface | `g.fx.ripples` |
 | Light focused by a wavy surface onto a floor | `g.fx.caustics` |
@@ -79,6 +82,10 @@ Positions and lengths are figure px. Angles are canvas radians (y down, so `-Mat
 | `soot` | 1 | 1 is a sooty yellow flame, 0 a fully premixed blue one. The base stays blue either way. |
 | `wind` | 0 | -1 to 1; leans the top over. |
 | `size` | 0.3 | The fire's real diameter in meters. Sets the flicker: flames puff at 1.5 / sqrt(D) Hz, about 3 Hz for a campfire and 15 Hz for a candle. |
+| `embers` | 0 | 0 to 1: glowing flecks lofted from the base, wandering more as they climb and cooling from yellow to dull red. Returned as `embers` (each `{ p, T, level }`). |
+| `smoke` | 0 | 0 to 1: soot leaving the tip as a smoke column (drawn first, so the flame shines over its root). Only where `soot` is up. `smokeColor` sets its tone. |
+
+The flame is layered: a temperature field from its shape and rising turbulence colors the sooty part by black-body light, dull red at the edges to yellow-white in the core (on dark pages an exposure curve takes the core to white); the premixed base burns in a thin blue cone; the tip breaks into licks.
 
 **`g.fx.plume(box, o)`**: rocket or jet exhaust, ray-marched as a round jet so it fits a nozzle drawn at any angle. Returns `{ length, end, diamonds }`: the visible length in px, the end of the axis, and a point at each shock diamond (for labels and highlights).
 
@@ -103,6 +110,46 @@ Positions and lengths are figure px. Angles are canvas radians (y down, so `-Mat
 | `spread` | 0.12 | Widening per unit height. |
 | `kind` | `"smoke"` | `"steam"` (what `g.fx.steam` sets). |
 | `color` | grey | A palette name, such as `"brass"` for dust. |
+| `light` | -2.16 | Direction toward the light, canvas radians (upper left). The column shades itself: each billow is bright on its lit face and darker on the far side and under the rest. |
+| `shadow` | 1 (steam 0.45) | How dark the self-shadowing gets, 0 to 2. |
+| `billows` | 1 (steam 0.6) | 0 is a soft column; 1 breaks it into puffs with edges (folded noise that evolves in time and swirls more as it rises). |
+
+Smoke renders at `res: 0.5` by default; pass `res: 1` for a small, sharp figure.
+
+**`g.fx.dust(box, o)`**: dust raised from a ground line. A burst (a footstep, an impact) is a cloud that spreads fast, slows, piles up into a rolling rim, and settles; a jet blowing down on the ground feeds a layer that runs outward both ways, thickening, with a rolled-up front. Grains are thrown ballistically and land. Lit and self-shadowed like smoke. Returns `{ ground, grains }`.
+
+| option | default | |
+|---|---|---|
+| `ground` | 92% down the box | Screen y of the ground. |
+| `sources` | one burst at the box center | Up to 4: `{ at: [x, y], kind: "burst" \| "jet", start, strength, angle }`. A burst happens at `start` (a time); press a button that sets `start: s.t` for another. `strength` 0 to 3. |
+| `scale` | `0.24 h` | Size of the cloud in px (a burst spreads to about 2 scales). |
+| `density`, `settle`, `grains` | 1, 2.6 s, 1 | Opacity, how long a burst takes to settle, how many grains (0 for none). |
+| `light`, `shadow`, `color` | upper left, 1, `"brass"` | As for smoke. |
+
+**`g.fx.water(box, o)`**: a body of water. `view: "top"` (default) is a pool seen from above: the floor (`"tiles"`, `"sand"`, or `"plain"`) is seen through the surface, shifted by refraction; it is lit by the caustics the same surface focuses; red is absorbed first on the way down and back, so depth turns it blue-green; the surface reflects the sky by Fresnel (more at a grazing view) and the sun as glints. `view: "side"` is a section: waves on the surface, light shafts below it (each crest focuses the light into a sheet), color deepening with depth, a sandy floor lit by the same focusing, drifting specks, and foam on the crests. Returns `{ height(p), intensity(p) }` from above, `{ level(x) }` in section.
+
+| option | default | |
+|---|---|---|
+| `view` | `"top"` | `"side"` for a section. |
+| `depth`, `clarity` | `2 scale`, `3 scale` (top) | px. Clarity is how far light goes before green falls to 1/e; murky water is a small number. In section, `clarity` sets how fast color deepens and shafts fade. |
+| `scale`, `amp`, `wind`, `calm` | 80, 1, 0.6, false | Wind waves, as in `g.fx.caustics`. |
+| `sources`, `wavelength`, `speed`, `damping` | | Ripples on top, as in `g.fx.ripples`. A source with `dur` rings for that long and dies away: `{ at, start: s.t, dur: 0.7, amp: 3 }` is a dropped pebble. |
+| `floor`, `tile` | `"tiles"` (top), `"sand"` (side); `0.55 scale` | Floor pattern and tile size in px. |
+| `tilt` | 0.35 | View angle from straight down, radians: more tilt, more sky reflected. |
+| `foam` | 0 (top), 0.6 (side) | Whitecaps on the highest crests, 0 to 1. |
+| `level`, `bottom` | 28% and 97% down the box | In section: screen y of the still surface and of the floor. |
+| `n`, `color`, `specks` | 1.333, `"blue"`, true | Index of refraction, tint, drifting specks in section. |
+
+**`g.fx.wind(box, o)`**: air past round bodies. Each body is a doublet in a uniform stream (potential flow round a cylinder), with circulation from `spin`; behind it the flow is slack (it separates), and it sheds a von Kármán street of vortices of alternating sign at a Strouhal number of 0.2, drifting downstream at 0.85 of the stream. Streaks are particles released along the upstream edge and followed for `trail` seconds; dye released at each body's shoulders traces the wake. Paths are cached between frames on a fixed time grid, so a frame depends only on `t` and costs about one integration step per streak. Draw the body after the wind. Returns `{ count, velocity(p) }`.
+
+| option | default | |
+|---|---|---|
+| `bodies` | none | Up to 4: `{ at: [x, y], r, spin, shed }`. `spin` -2 to 2: 1 puts the two stagnation points together, and the side moving with the stream speeds up (lift). `shed: false` turns its wake off. |
+| `speed`, `angle` | `0.22 w` px/s, 0 | Stream speed and direction (canvas radians). |
+| `density`, `spacing`, `trail`, `width` | 1, 10 px, 0.8 s, 1.1 | Streak count, lane spacing, streak length in seconds, width. |
+| `turbulence`, `shedding` | 0.25, 1 | Gusts in the stream; strength of the vortex street (0 for none). |
+| `color`, `colorBy` | `"blue"`, `"speed"` | Streaks lighten where the air is fast; `colorBy: "none"` keeps one color. |
+| `dye`, `dyeColor` | true, red (orange on dark) | Smoke from the bodies' separation points. |
 
 **`g.fx.glow(box, o)`**: a hot body and its bloom, colored by temperature. Returns `{ color, level }`: the CSS color and the brightness used, for a matching label or legend.
 
@@ -120,7 +167,7 @@ Positions and lengths are figure px. Angles are canvas radians (y down, so `-Mat
 
 | option | default | |
 |---|---|---|
-| `sources` | the box center | Up to 8: `[x, y]`, or `{ at, phase, amp, start }`. With `start` (a time), the rings spread out from that moment at the wave speed. |
+| `sources` | the box center | Up to 8: `[x, y]`, or `{ at, phase, amp, start, dur }`. With `start` (a time), the rings spread out from that moment at the wave speed; with `dur`, the source rings for about that many seconds and dies away, so it sends a packet of rings (a dropped pebble). |
 | `wavelength`, `speed` | 32, 48 | px and px/s. |
 | `amp`, `damping` | 1, 0 | Wave height scale; amplitude lost per px. |
 | `style` | `"water"` | `"height"` colors crests `high` and troughs `low` on the paper, to show interference plainly. |
@@ -172,7 +219,7 @@ Positions and lengths are figure px. Angles are canvas radians (y down, so `-Mat
 | `temperature` | 900 | Exhaust temperature in K. The ramp runs from palette blue (288 K) through purple and red to orange (900 K and up). |
 | `speed` | 0.1 | Forward speed, 0 to 1. Narrows the air the inlet captures and blows the ground vortex away. |
 | `ground` | none | Screen y of the ground under the inlet. The ground vortex needs it, and weakens as the inlet sits higher. |
-| `density`, `trail`, `width` | 1, 0.35, 1.2 | Streak count (0 to 4), streak length in seconds, line width. |
+| `density`, `trail`, `width` | 1, 0.45, 1.1 | Streak count (0 to 4), streak length in seconds, line width. Each streak tapers from its head to a hairline tail. |
 | `intake`, `exhaust` | true, true | Turn either stream off. |
 
 ## Fx
@@ -186,7 +233,8 @@ Positions and lengths are figure px. Angles are canvas radians (y down, so `-Mat
 | `Fx.puff(D)` | Flicker frequency in Hz of a fire `D` meters across. |
 | `Fx.params(name, box, o)` | The options an effect would use, defaults and limits applied. |
 | `Fx.surface(box, o, [x, y])`, `Fx.focus(box, o, [x, y])` | The caustics' water surface `[h, h_x, h_y, h_xx, h_xy, h_yy]` (add `calm: true` for ripples alone), and the floor brightness. |
-| `Fx.sparks(box, o)`, `Fx.arc(box, o)`, `Fx.flow(box, o)` | The models' output without drawing. |
+| `Fx.sparks(box, o)`, `Fx.arc(box, o)`, `Fx.flow(box, o)`, `Fx.embers(box, o)`, `Fx.grains(box, o)`, `Fx.wind(box, o)` | The models' output without drawing. |
+| `Fx.windVelocity(box, o, [x, y])`, `Fx.waterLevel(box, o, x)` | The wind's velocity at a point (`null` inside a body); the surface's screen y in section. |
 | `Fx.gpu`, `Fx.force2d`, `Fx.errors` | WebGL2 is in use; set to draw every effect in 2D; shader compile messages. |
 | `Fx.still` | The reader prefers reduced motion. |
 | `Fx.hash(a, b, c)`, `Fx.noise(x, seed)` | Seeded integer hash and smooth 1D noise, for a custom effect. |
@@ -299,6 +347,15 @@ The duct's rims come from the same projector as its outline, so the streaks ente
 }
 </script>
 ```
+
+## Recipes
+
+- **A campfire.** `g.fx.fire(box, { power, soot: 1, embers: 1, smoke: 0.7, size: 0.5, t: s.t })` over a drawn hearth; a "Draft" slider into `wind`. Embers and smoke come with it.
+- **A footstep in dust.** A ground line, `g.fx.dust(null, { ground, sources: [{ at: [x, ground], start: s.stepAt }], t: s.t })`, and a button whose `action` sets `s.stepAt = s.t`. Start `s.stepAt` a second before `s.t` so the still frame shows a cloud.
+- **Downwash on dust.** A rotor or a jet above the ground: `sources: [{ at: [x, ground], kind: "jet", strength: v.power }]`; a dashed line for the jet.
+- **A pool and a pebble.** `g.fx.water(null, { depth, sources: [{ at, start: s.drop, dur: 0.7, amp: 3 }], t: s.t })` and a "Drop a pebble" button. Depth sharpens and then blurs the caustics, and turns the water from clear to blue-green.
+- **Light under the sea.** `g.fx.water(null, { view: "side", amp, clarity, level, bottom, t: s.t })`; the shafts focus under the crests and fade with depth.
+- **Wind past a cylinder, and the Magnus effect.** `g.fx.wind(null, { bodies: [{ at: c, r, spin: v.spin }], t: s.t })` then `g.circle(c, r, ...)`. At `spin: 0` the wake is a vortex street; spin it and the streaks speed up on one side.
 
 ## Pitfalls
 
