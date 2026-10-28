@@ -1,14 +1,16 @@
-# Publishes the prebuilt site/ folder to GitHub Pages.
+# Builds the website (website/, Astro) and publishes it to GitHub Pages, under the repository's
+# Pages path (for example /safis/ on a project page).
 # Turn Pages on first: Settings > Pages > Source: GitHub Actions.
 # Runs by hand (Actions > Deploy site to GitHub Pages > Run workflow), or on every
-# push to main that touches site/ once the repository variable PAGES_AUTO_DEPLOY is "true".
+# push to main that touches the site or the runtime once the repository variable
+# PAGES_AUTO_DEPLOY is "true".
 name: Deploy site to GitHub Pages
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["site/**"]
+    paths: ["site/**", "src/**", "web/**", "website/**"]
 
 permissions:
   contents: read
@@ -29,12 +31,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # page dates for the "New" cards come from git history
       - name: Set up Pages
+        id: pages
         uses: actions/configure-pages@v5
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Build
+        run: npm ci && npm run site:build
+        env:
+          SAFIS_BASE: ${{ steps.pages.outputs.base_path }}
+          SAFIS_SITE: ${{ steps.pages.outputs.origin }}
       - name: Upload site
         uses: actions/upload-pages-artifact@v4
         with:
-          path: site
+          path: website/dist
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

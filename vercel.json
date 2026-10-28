@@ -1,10 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "",
-  "buildCommand": "",
-  "outputDirectory": "site",
+  "installCommand": "npm ci",
+  "buildCommand": "npm run site:build",
+  "outputDirectory": "website/dist",
+  "trailingSlash": true,
   "headers": [
-    { "source": "/(.*)/thumb.(png|webp)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400" }] }
+    { "source": "/_astro/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+    { "source": "/fonts/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+    { "source": "/(.*)/thumb.webp", "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400" }] }
   ]
 }

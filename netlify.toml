@@ -1,9 +1,8 @@
-# The site is prebuilt in site/, so there is nothing to build.
+# Builds the website (website/, Astro) from the explainers in site/ and the runtime in src/.
+# Cache headers come from website/public/_headers, which Netlify reads from the build.
 [build]
-  publish = "site"
-  command = "echo 'site/ is prebuilt'"
+  command = "npm run site:build"
+  publish = "website/dist"
 
-[[headers]]
-  for = "/*/thumb.*"
-  [headers.values]
-    Cache-Control = "public, max-age=86400"
+[build.environment]
+  NODE_VERSION = "22"

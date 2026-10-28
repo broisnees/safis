@@ -1,5 +1,6 @@
-// Cloudflare Workers static assets: serves the prebuilt site/ folder.
-// Deploy with `npm run deploy` or `npx wrangler deploy` (log in once with `npx wrangler login`).
+// Cloudflare Workers static assets: serves the Astro build in website/dist, made from site/ and src/.
+// Deploy with `npm run deploy` (builds first) or tools/deploy-site.sh (builds, checks, deploys).
+// Log in once with `npx wrangler login`.
 // Live at https://safis.fyi (and www.safis.fyi); safis.jotko.workers.dev still answers too.
 // The custom domains need the safis.fyi zone in this account; Cloudflare makes their DNS
 // records and certificates on the first deploy.
@@ -14,7 +15,7 @@
     { "pattern": "www.safis.fyi", "custom_domain": true }
   ],
   "assets": {
-    "directory": "./site",
+    "directory": "./website/dist",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page"
   }

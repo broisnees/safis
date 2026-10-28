@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Final pass: build, test, render, thumbnails, check every page, stage the passing
-# pages, deploy. Prints only summary lines.
+# Final pass: build, test, render, thumbnails, check every standalone page in site/, build
+# the website from them and check it again as served, then deploy. Prints only summary lines.
 # Usage: finish.sh [--deploy]
 set -u
 cd "$(dirname "$0")/.."
@@ -20,11 +20,12 @@ for p in site/*/index.html; do
   [[ "$last" == PASS* ]] && pass+=("$slug")
 done
 echo "passing: ${#pass[@]} pages"
+# The website: built from site/ and src/, every page verified again as it will be served.
+npm run site:build --silent >/dev/null && echo "website: built"
+node tools/check-website.mjs --jobs 3 >"$S/website.log" 2>&1; web=$?
+grep -E '^(links|pages):|FAIL|broken' "$S/website.log"
 if [[ "${1:-}" == "--deploy" ]]; then
-  D="$S/deploy-site"; rm -rf "$D"; mkdir -p "$D"
-  cp site/404.html site/safis.css site/safis.js "$D/"
-  for s in "${pass[@]}"; do [ -d "drafts/$s" ] && { echo "skipped $s (still in drafts/)"; continue; }; cp -r "site/$s" "$D/"; done
-  node skills/safis/scripts/site.mjs "$D" --shared --home web/home.html | tail -1
-  npx -y wrangler@4 deploy --assets "$D" 2>&1 | grep -E 'Uploaded [0-9]+ files|safis.fyi|Version ID|ERROR|error' | head -6
+  [[ $web == 0 ]] || { echo "the website fails its check; not deploying"; exit 1; }
+  npx -y wrangler@4 deploy 2>&1 | grep -E 'Uploaded [0-9]+ files|safis.fyi|Version ID|ERROR|error' | head -6
   for h in safis.fyi www.safis.fyi; do curl -s -o /dev/null -w "$h %{http_code}\n" --max-time 15 "https://$h/"; done
 fi
