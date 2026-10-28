@@ -1,0 +1,5 @@
+---
+interface Props { cmd: string }
+const { cmd } = Astro.props;
+---
+<div class="cmd"><span class="pr">$</span><code>{cmd}</code><button class="copy" type="button" data-copy={cmd}>Copy</button></div>

@@ -1,0 +1,15 @@
+---
+// A content page: the bar, the page, the footer.
+import Base from "./Base.astro";
+import SiteHeader from "../components/SiteHeader.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+interface Props { title: string; description: string; current?: string; kits?: string[]; figures?: boolean; ogImage?: string; slug?: string }
+const { title, description, current, kits = [], figures = false, ogImage, slug = current ?? "page" } = Astro.props;
+---
+<Base title={title} description={description} kits={kits} figures={figures} slug={slug} ogImage={ogImage} type="website">
+  <SiteHeader current={current} />
+  <main class="site" id="content">
+    <slot />
+  </main>
+  <SiteFooter />
+</Base>

@@ -1,0 +1,6 @@
+---
+// The Safis mark: a porcelain disc, half hatched, with an orange pin. `id` keeps the SVG ids unique.
+interface Props { id?: string; class?: string }
+const { id = "mk", class: cls = "mark" } = Astro.props;
+---
+<svg class={cls} viewBox="0 0 32 32" aria-hidden="true"><defs><pattern id={`${id}-h`} width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="3.2" stroke="currentColor" stroke-width="1.1"/></pattern><clipPath id={`${id}-c`}><rect x="16" y="0" width="16" height="32"/></clipPath></defs><circle cx="16" cy="16" r="12.6" fill={`url(#${id}-h)`} clip-path={`url(#${id}-c)`} opacity="0.55"/><circle cx="16" cy="16" r="12.6" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M16 3.4v25.2" stroke="currentColor" stroke-width="2.2"/><circle cx="16" cy="16" r="3.4" fill="var(--brand, #bd4f08)"/></svg>

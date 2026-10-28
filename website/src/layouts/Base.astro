@@ -1,0 +1,59 @@
+---
+import "../generated/safis.css";
+import "../styles/site.css";
+import fonts from "../generated/fonts.json";
+import kitfiles from "../generated/kitfiles.json";
+interface Props { title: string; description: string; slug?: string; kits?: string[]; figures?: boolean; ogImage?: string; type?: string }
+const { title, description, slug, kits = [], figures = kits.length > 0, ogImage, type = "article" } = Astro.props;
+// A page with figures loads its kits as ordinary scripts in the head, in the template's order, so
+// each figure is built where it stands while the page parses: nothing below it moves later. The
+// kits are minified, fingerprinted, and cached for a year; a page without figures loads none.
+const kitUrls = figures ? kitfiles.order.filter(n => n === "base" || n === "runtime" || kits.includes(n)).map(n => kitfiles.files[n]) : [];
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+<!doctype html>
+<html lang="en" data-slug={slug} data-kits={kits.join(" ")}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<meta name="description" content={description}>
+<link rel="canonical" href={canonical}>
+<meta property="og:title" content={title}>
+<meta property="og:description" content={description}>
+<meta property="og:url" content={canonical}>
+<meta property="og:type" content={type}>
+<meta property="og:site_name" content="Safis">
+{ogImage && <meta property="og:image" content={new URL(ogImage, Astro.site)}>}
+<meta name="twitter:card" content={ogImage ? "summary_large_image" : "summary"}>
+<meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+<link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml">
+<link rel="sitemap" href={`${base}sitemap-index.xml`}>
+<link rel="preload" href={fonts["serif-text.woff2"]} as="font" type="font/woff2" crossorigin>
+<link rel="preload" href={fonts["sans.woff2"]} as="font" type="font/woff2" crossorigin>
+<script is:inline>
+  // Before the first paint: the reader's theme (and which icon the theme button shows) and the index choice.
+  (() => {
+    const r = document.documentElement;
+    let mode = "auto";
+    try {
+      const t = localStorage.getItem("safis-theme");
+      if (t === "light" || t === "dark") { r.setAttribute("data-theme", t); mode = t; }
+      if (localStorage.getItem("safis-toc") === "hidden") r.classList.add("safis-toc-hidden");
+    } catch {}
+    r.dataset.themeMode = mode;
+  })();
+</script>
+{kitUrls.map(u => <script is:inline src={u}></script>)}
+<slot name="head" />
+</head>
+<body>
+<slot />
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+<script>
+  import "../lib/site.js";
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# Fingerprinted files never change: cache them for a year.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+# Card images are replaced in place when a page's first figure changes.
+/*/thumb.webp
+  Cache-Control: public, max-age=86400

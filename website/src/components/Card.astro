@@ -1,0 +1,18 @@
+---
+// An explainer card. Both theme images are lazy and the hidden one has no box, so only one loads.
+interface Props { page: { slug: string; title: string; dek: string; category: string; figures: number; minutes: number; thumb: boolean; thumbDark?: boolean }; isNew?: boolean; eager?: boolean }
+const { page: p, isNew = false, eager = false } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+const loading = eager ? "eager" : "lazy";
+---
+<a class="ecard" href={`${base}${p.slug}/`} data-cat={p.category} data-text={`${p.title} ${p.dek} ${p.category}`.toLowerCase()}>
+  <span class="shot">
+    {p.thumb ? <img class="thumb-light" src={`${base}${p.slug}/thumb.webp`} alt="" width="640" height="400" loading={loading} decoding="async" /> : <span class="noimg"></span>}
+    {p.thumbDark && <img class="thumb-dark" src={`${base}${p.slug}/thumb-dark.webp`} alt="" width="640" height="400" loading={loading} decoding="async" />}
+    {isNew && <b class="badge-new">New</b>}
+  </span>
+  <span class="cat-x">{p.category}</span>
+  <span class="t">{p.title}</span>
+  <span class="d">{p.dek}</span>
+  <span class="m">{p.figures} figures · {p.minutes} min read</span>
+</a>

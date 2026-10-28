@@ -1,0 +1,17 @@
+{
+  "name": "safis-website",
+  "private": true,
+  "type": "module",
+  "description": "safis.fyi: the product home and every example explainer, built with Astro from site/ so each page loads only the runtime kits it uses.",
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "dev": "npm run sync && astro dev",
+    "build": "npm run sync && astro build",
+    "preview": "astro preview",
+    "check": "node ../tools/check-website.mjs"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.7.4",
+    "astro": "^7.4.2"
+  }
+}

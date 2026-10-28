@@ -1,0 +1,10 @@
+---
+// Highlighted at build time in both themes; the colors follow the page's theme.
+import { Code } from "astro:components";
+interface Props { code: string; lang?: string; title?: string; wrap?: boolean }
+const { code, lang = "js", title, wrap = true } = Astro.props;
+---
+<figure class="codebox">
+  <div class="cb-head"><span>{title ?? lang}</span><button class="copy" type="button" data-copy={code}>Copy</button></div>
+  <Code code={code} lang={lang as any} themes={{ light: "github-light", dark: "github-dark" }} defaultColor={false} wrap={wrap} />
+</figure>

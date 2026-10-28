@@ -18,3 +18,11 @@ skills/safis/evals/results/
 
 # Article drafts for unfinished example pages
 drafts/
+
+# Built by website/scripts/sync.mjs from src/ and site/
+website/src/generated/
+website/public/fonts/
+website/public/*/thumb.webp
+website/.astro/
+website/public/*/thumb-dark.webp
+website/public/kits/

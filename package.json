@@ -4,7 +4,8 @@
   "description": "Safis: a Claude skill and toolkit for interactive explainer pages. The npm packages live in packages/, example apps in examples/.",
   "workspaces": [
     "packages/*",
-    "examples/*"
+    "examples/*",
+    "website"
   ],
   "scripts": {
     "build": "npm run build:template && npm run build:packages",
@@ -14,10 +15,15 @@
     "site": "node skills/safis/scripts/site.mjs site --thumbs --shared --home web/home.html",
     "verify": "node skills/safis/scripts/verify.mjs",
     "explore": "node skills/safis/scripts/explore.mjs",
-    "test": "node tools/test-engine.mjs && node tools/test-tex.mjs && node tools/test-plot.mjs && node tools/test-sim.mjs && node tools/test-geo.mjs && node tools/test-optics.mjs && node tools/test-sound.mjs && node tools/test-image.mjs && node tools/test-effects.mjs && node tools/test-iso.mjs && node tools/test-engine3d-pro.mjs && node tools/test-parts3d.mjs",
+    "test": "node tools/test-engine.mjs && node tools/test-tex.mjs && node tools/test-plot.mjs && node tools/test-sim.mjs && node tools/test-geo.mjs && node tools/test-optics.mjs && node tools/test-sound.mjs && node tools/test-image.mjs && node tools/test-effects.mjs && node tools/test-iso.mjs && node tools/test-engine3d-pro.mjs && node tools/test-parts3d.mjs && node tools/test-bio3d.mjs",
     "test:packages": "node tools/test-packages.mjs",
-    "deploy": "npx -y wrangler@4 deploy",
-    "deploy:examples": "npm run build:packages && npm run deploy -w examples/react-vite -w examples/vue-vite -w examples/svelte-vite -w examples/astro-blog"
+    "deploy": "npm run site:build && npx -y wrangler@4 deploy",
+    "deploy:examples": "npm run build:packages && npm run deploy -w examples/react-vite -w examples/vue-vite -w examples/svelte-vite -w examples/astro-blog",
+    "publish:packages": "npm run build:packages && npm publish -w packages/safis -w packages/react -w packages/vue -w packages/svelte -w packages/astro --access public",
+    "site:sync": "npm run sync -w website",
+    "site:dev": "npm run dev -w website",
+    "site:build": "npm run build -w website",
+    "site:check": "node tools/check-website.mjs"
   },
   "engines": {
     "node": ">=22"
