@@ -9,7 +9,7 @@ Contents: [Body](#body), [Biology](#biology), [Chemistry](#chemistry), [Physics]
 Anatomy and physiology: joints, organs, the heart's valves, the inner ear, how muscles pull.
 
 - **Figures that work:** a 3D model of the structure with labels and hover-to-name; a 2D cross-section (sagittal or transverse) with hatched bone, which is how anatomy is usually taught; the same section through a range of motion; a healthy versus a failing version side by side or behind a toggle; a small whole-body or whole-organ drawing in a corner to show where the section is.
-- **Build:** bones in profile as `extrude` with bevels, long bones and vessels as `sweep`/`tube`, round heads as `ellipsoid`, muscles as tubes thicker in the middle. Share one model between 2D sections and 3D (extrude the section profiles across the body).
+- **Build:** start from [`E3.bio`](bio3d.md): `heart`, `eye`, `knee`, `tooth`, and `skin` are finished assemblies with real dimensions, a pose that shows them working, and a cutaway section. For anything else use its helpers: implicit surfaces blended into smooth organic shapes (`E3.bio.sd`, `polygonize`), `muscle` for fusiform muscles with tendons, `vesselTree` for vessels by Murray's law, `longBone` for cortical and cancellous bone. Bones in profile for 2D can still be `extrude` with bevels. Share one model between 2D sections and 3D.
 - **Materials and colors:** `bone`, `cartilage`, `enamel`, `muscle`, `tendon`, `tissue`, `nerve`, `artery`, `vein`. In 2D: bone as hatched pale brass, cartilage and discs `blue`, muscle `red`, soft tissue `purple`, nerves `orange`.
 - **Accuracy:** use real dimensions and ranges of motion from anatomy references; name structures with their anatomical names once, then plain words. Show variation honestly ("about", "usually"). Don't diagnose or prescribe; one plain sentence on when to see a clinician is enough when the page is about a disorder.
 - **Example topics:** the jaw joint and why it locks; how the knee's ligaments keep it stable; heart valves; how the eye focuses; the inner ear's balance organs.
@@ -19,7 +19,7 @@ Anatomy and physiology: joints, organs, the heart's valves, the inner ear, how m
 Cells, molecules of life, genetics, ecology, evolution.
 
 - **Figures that work:** zoom ladders (organism, tissue, cell, molecule) with each figure starting where the last ended; step-throughs of processes (mitosis, transcription) on an integer slider; population simulations with a plot; molecular machines in 3D (ATP synthase, a ribosome) simplified to their working parts.
-- **Build:** cells as `lathe` or `ellipsoid` shells with `opacity`, membranes as ghosted surfaces, DNA as two `helix` backbones with bars, proteins as clusters of spheres or smoothed blobs.
+- **Build:** `E3.bio.cell` (membrane, nucleus with pores, ER, Golgi, mitochondria with cristae, cytoskeleton, quarter cutaway) and `E3.bio.neuron` (dendrites by Rall's law, myelinated axon, saltatory conduction) are ready to use, in micrometers ([bio3d.md](bio3d.md)). Otherwise: membranes as implicit-surface shells, DNA as two `helix` backbones with bars, proteins as clusters of spheres or smoothed blobs.
 - **Accuracy:** scale is the big trap: say how big things are and how fast they happen, and say when a figure slows time down or enlarges things by a factor. Avoid "designed to" and other purpose language for evolved structures.
 - **Example topics:** how a neuron fires; how DNA is copied; why antibiotics stop working.
 

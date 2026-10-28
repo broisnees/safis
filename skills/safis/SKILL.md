@@ -82,6 +82,7 @@ Pick how each figure draws by what it has to show:
 |---|---|---|
 | A mechanism in cross-section, a graph, a process that moves | the 2D canvas and plot kit | runtime.md, plots.md |
 | A machine or device made of many parts, a cutaway, an exploded view | E3 with `E3.parts` (real materials, turns freely), or `Iso` for a flat technical illustration | parts3d.md, engine3d.md, iso.md |
+| An organ, a joint, a cell, or a tissue block in 3D (Body, Biology) | E3 with `E3.bio`: anatomy built from smooth implicit surfaces, with real dimensions, motion (a beating heart, a bending knee), and cutaway sections | bio3d.md, engine3d.md |
 | A shape that must turn freely in 3D, a surface, a molecule | E3 | engine3d.md |
 | Anything located on Earth | `Geo` | maps.md |
 | Light: rays, lenses, mirrors, the eye | `Optics` | optics.md |
@@ -91,7 +92,9 @@ Pick how each figure draws by what it has to show:
 
 For a machine, list its named parts (40 or more for a whole machine) before writing any geometry. Most of a technical figure's quality comes from that list.
 
-Every 3D figure follows "Making 3D that looks real" in [references/engine3d.md](references/engine3d.md): real dimensions first, then the named parts list, then [`E3.parts`](references/parts3d.md) builders and assemblies, materials by what each real part is made of, a `scene.look` preset, and turntable checks at 2x. A 3D figure that looks like a toy (wrong proportions, flat metal, floating parts, one material everywhere) is a fault like any other: fix it before calling the page done.
+Every 3D figure follows "Making 3D that looks real" in [references/engine3d.md](references/engine3d.md): real dimensions first, then the named parts list, then [`E3.parts`](references/parts3d.md) builders and assemblies, materials by what each real part is made of, a `scene.look` preset, and turntable checks at 2x. A 3D figure that looks like a toy (wrong proportions, flat metal, floating parts, one material everywhere) is a fault like any other: fix it before calling the page done. Show only the subject: no stands, tables, floors, or pads unless the idea needs them (a jet hitting a pad does; a model on a display stand doesn't), since E3 already grounds the object with its shadow.
+
+Every moving particle obeys the physics of what it is, in 3D and 2D alike. Smoke and steam rise because they are hot and slow as they cool; dust, sand, water, and sparks fall to their terminal speed and land; bubbles rise; sound moves air back and forth along the wave without carrying it away; light goes straight at its speed in each medium and bends only at a boundary. Use `matter` on `E3.particles` (with `units`) rather than hand-tuned forces, and the effects and optics kits rather than invented motion. Particles that pile up in one place, hang still mid-air, or move against their physics are a fault: fix them like a wrong number.
 
 When several figures show the same object, build one **shared model** first (geometry, kinematics, simulation) in a single script and have every figure draw from it. Side views and 3D views then always agree, and a fix in one place fixes every figure.
 
@@ -115,7 +118,7 @@ Leave the runtime block in `<head>` alone.
 
 ### 4. Build section by section
 
-Read [references/runtime.md](references/runtime.md) before the first 2D figure, [references/plots.md](references/plots.md) before the first graph or science diagram, [references/simulations.md](references/simulations.md) before the first simulation, [references/math.md](references/math.md) before the first equation, [references/article.md](references/article.md) before the first sidenote, citation, or callout, [references/engine3d.md](references/engine3d.md) before the first 3D figure, and the reference from the table in step 2 before the first figure of each other kind ([parts3d](references/parts3d.md), [iso](references/iso.md), [maps](references/maps.md), [optics](references/optics.md), [effects](references/effects.md), [sound](references/sound.md), [images](references/images.md), [diagrams and code](references/diagrams.md)). Then write each section's prose and figure together, in page order:
+Read [references/runtime.md](references/runtime.md) before the first 2D figure, [references/plots.md](references/plots.md) before the first graph or science diagram, [references/simulations.md](references/simulations.md) before the first simulation, [references/math.md](references/math.md) before the first equation, [references/article.md](references/article.md) before the first sidenote, citation, or callout, [references/engine3d.md](references/engine3d.md) before the first 3D figure, and the reference from the table in step 2 before the first figure of each other kind ([parts3d](references/parts3d.md), [bio3d](references/bio3d.md), [iso](references/iso.md), [maps](references/maps.md), [optics](references/optics.md), [effects](references/effects.md), [sound](references/sound.md), [images](references/images.md), [diagrams and code](references/diagrams.md)). Then write each section's prose and figure together, in page order:
 
 ```html
 <p>Open the mouth <span class="scrub" data-key="open"></span> and watch the <span class="c-green" data-part="condyle">condyle</span> slide:</p>
@@ -170,7 +173,7 @@ If something can't be fixed, say so in the report instead of hiding it. If the c
 
 If the scripts can't run (no Node 22+, no Chrome), say so in the report and suggest opening the page with `?check` on the end of the URL, which shows the same self-check in a panel.
 
-When the person wants the figures inside their own app or blog (React, Vue, Svelte, Astro/MDX) rather than standalone pages, the same runtime ships as packages for each framework (`safis`, `@safis/react`, `@safis/vue`, `@safis/svelte`, `@safis/astro`), with source and setup under `packages/` in https://github.com/broisnees/safis. Figure specs are identical; only the mounting differs.
+When the person wants the figures inside their own app or blog (React, Vue, Svelte, Astro/MDX) rather than standalone pages, the same runtime ships as npm packages under one scope (`@safis/core`, `@safis/react`, `@safis/vue`, `@safis/svelte`, `@safis/astro`), with source and setup under `packages/` in https://github.com/broisnees/safis. Figure specs are identical; only the mounting differs.
 
 ### 7. Build the site (when there is one)
 
@@ -178,7 +181,7 @@ When the person wants the figures inside their own app or blog (React, Vue, Svel
 node scripts/site.mjs <root> [--title "..."] [--intro "..."] [--thumbs] [--shared | --inline]
 ```
 
-It reads each page's title, summary, and category, writes `<root>/index.html`, and updates the sidebar in every page. Run it again whenever a page is added or renamed. `--thumbs` screenshots each page's first figure for the home page cards. `--shared` moves the runtime and fonts out of the pages into one `<root>/safis.css` and `<root>/safis.js`, which takes a page from about 950 KB to about 100 KB. Use it for a site that will be hosted. The pages still open from disk, but only inside the site folder, so leave it off when someone wants standalone files. The choice sticks for later runs, and `--inline` reverses it. Pages from an older template can be brought up to date with `scripts/upgrade.mjs <page>...`.
+It reads each page's title, summary, and category, writes `<root>/index.html`, and updates the sidebar in every page (readers hide or show it with the corner button or Ctrl+B / Cmd+B, remembered across pages). Run it again whenever a page is added or renamed. `--thumbs` screenshots each page's first figure, in light and dark, for the home page cards. `--shared` moves the runtime and fonts out of the pages into one `<root>/safis.css` and `<root>/safis.js`, which takes a page from about 950 KB to about 100 KB. Use it for a site that will be hosted. The pages still open from disk, but only inside the site folder, so leave it off when someone wants standalone files. The choice sticks for later runs, and `--inline` reverses it. Pages from an older template can be brought up to date with `scripts/upgrade.mjs <page>...`.
 
 ### 8. Report
 
