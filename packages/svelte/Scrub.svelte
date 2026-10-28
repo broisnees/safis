@@ -1,6 +1,6 @@
 <script>
   // A number in the sentence the reader drags; mirrors control `k` of figure `figure`.
-  import { enhance } from "safis";
+  import { enhance } from "@safis/core";
 
   let { figure = undefined, k } = $props();
   $effect(() => { enhance(document); });

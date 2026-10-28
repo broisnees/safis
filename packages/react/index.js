@@ -1,7 +1,7 @@
 // React components for safis figures. Plain JavaScript (no JSX), so it needs no build.
 import { createElement as h, useEffect, useRef } from "react";
-import { enhance, mount, typeset } from "safis";
-import { toMathML } from "safis/tex";
+import { enhance, mount, typeset } from "@safis/core";
+import { toMathML } from "@safis/core/tex";
 
 const cx = (...names) => names.filter(Boolean).join(" ");
 const setString = values => Object.entries(values ?? {}).map(([k, v]) => `${k}=${v}`).join(" ");

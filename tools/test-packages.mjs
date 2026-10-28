@@ -4,7 +4,9 @@
 // change their figures, prose links work, theme CSS and fonts load, and unmounting
 // or navigating leaves no stale figures behind. Saves one screenshot per example.
 //
-// Usage: node tools/test-packages.mjs [--skip-build] [example...]
+// Usage: node tools/test-packages.mjs [--skip-build] [--apps <dir>] [example...]
+// --apps checks already-built copies of the examples in <dir> (for instance apps that installed
+// the packed tarballs, the way a user installs from npm) instead of the ones in examples/.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
@@ -17,14 +19,15 @@ import { describeException, openBrowser, sleep } from "../skills/safis/scripts/l
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const argv = process.argv.slice(2);
-const skipBuild = argv.includes("--skip-build");
+const appsDir = argv.includes("--apps") ? path.resolve(argv[argv.indexOf("--apps") + 1]) : null;
+const skipBuild = argv.includes("--skip-build") || !!appsDir;
 const EXAMPLES = {
   "react-vite": { kind: "toggle" },
   "vue-vite": { kind: "toggle" },
   "svelte-vite": { kind: "toggle" },
   "astro-blog": { kind: "navigate", start: "/posts/springs-and-gears/" },
 };
-const only = argv.filter(a => !a.startsWith("--"));
+const only = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== "--apps");
 const names = only.length ? only : Object.keys(EXAMPLES);
 const shots = path.join(os.tmpdir(), "safis-packages-test");
 await mkdir(shots, { recursive: true });
@@ -91,7 +94,7 @@ await b.setMedia("light");
 try {
   for (const name of names) {
     const ex = EXAMPLES[name];
-    const dist = path.join(root, "examples", name, "dist");
+    const dist = path.join(appsDir ?? path.join(root, "examples"), name, "dist");
     const server = await serve(dist);
     const base = `http://127.0.0.1:${server.address().port}`;
     const fails = [];

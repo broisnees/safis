@@ -1,6 +1,6 @@
 import type { DefineComponent } from "vue";
-import type { Color, FigureSpec } from "safis";
-export { enhance, mount, typeset } from "safis";
+import type { Color, FigureSpec } from "@safis/core";
+export { enhance, mount, typeset } from "@safis/core";
 
 export const Figure: DefineComponent<{ spec: FigureSpec | (() => FigureSpec); id?: string; caption?: string | false; label?: string; wide?: boolean }>;
 export const Explainer: DefineComponent<{ as?: string }>;

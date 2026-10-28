@@ -1,6 +1,6 @@
 <script>
   // A colored term that lights part `part` of figure `figure` while the reader points at it.
-  import { enhance } from "safis";
+  import { enhance } from "@safis/core";
 
   let { color = undefined, part = undefined, figure = undefined, children } = $props();
   $effect(() => { if (part) enhance(document); });

@@ -4,7 +4,7 @@
 ---
 <button type="button" class="theme-toggle" data-safis-theme-toggle aria-label="Theme"></button>
 <script>
-  import { setTheme } from "safis";
+  import { setTheme } from "@safis/core";
 
   const ORDER = ["auto", "light", "dark"];
   const saved = () => { try { return localStorage.getItem("safis-theme") || "auto"; } catch { return "auto"; } };

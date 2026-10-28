@@ -1,7 +1,7 @@
 // Vue 3 components for safis figures, written with render functions so they need no build.
 import { defineComponent, h, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from "vue";
-import { enhance, mount, typeset } from "safis";
-import { toMathML } from "safis/tex";
+import { enhance, mount, typeset } from "@safis/core";
+import { toMathML } from "@safis/core/tex";
 
 const setString = values => Object.entries(values ?? {}).map(([k, v]) => `${k}=${v}`).join(" ");
 const slotText = slots => (slots.default?.() ?? []).map(n => (typeof n.children === "string" ? n.children : "")).join("");

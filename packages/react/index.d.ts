@@ -1,6 +1,6 @@
 import type { CSSProperties, ElementType, MutableRefObject, ReactNode, JSX } from "react";
-import type { Color, FigureHandle, FigureSpec } from "safis";
-export { enhance, mount, typeset } from "safis";
+import type { Color, FigureHandle, FigureSpec } from "@safis/core";
+export { enhance, mount, typeset } from "@safis/core";
 
 export interface FigureProps<S = any> {
   /** The demo() spec, or a function returning it. Keep its identity stable. */

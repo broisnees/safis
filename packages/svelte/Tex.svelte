@@ -1,6 +1,6 @@
 <script>
   // TeX math, rendered to MathML during render (works with server rendering too).
-  import { toMathML } from "safis/tex";
+  import { toMathML } from "@safis/core/tex";
 
   let { src = "", display = false } = $props();
   const html = $derived(toMathML(src, { display }));

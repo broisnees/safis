@@ -1,14 +1,46 @@
 {
   "name": "@safis/svelte",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Svelte 5 components for safis interactive figures.",
   "type": "module",
   "svelte": "./index.js",
   "types": "./index.d.ts",
-  "exports": { ".": { "types": "./index.d.ts", "svelte": "./index.js", "default": "./index.js" } },
-  "files": ["*.svelte", "index.js", "index.d.ts"],
-  "peerDependencies": { "svelte": ">=5" },
-  "dependencies": { "safis": "0.3.0" },
-  "license": "UNLICENSED",
-  "repository": { "type": "git", "url": "https://github.com/broisnees/safis.git", "directory": "packages/svelte" }
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "svelte": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "*.svelte",
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "svelte": ">=5"
+  },
+  "dependencies": {
+    "@safis/core": "^0.4.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/broisnees/safis.git",
+    "directory": "packages/svelte"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://safis.fyi",
+  "keywords": [
+    "explainer",
+    "figures",
+    "interactive",
+    "safis",
+    "svelte"
+  ],
+  "bugs": "https://github.com/broisnees/safis/issues"
 }

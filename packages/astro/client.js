@@ -5,7 +5,7 @@
 //     import { mountFigures } from "@safis/astro/client";
 //     mountFigures(import.meta.glob("../figures/*.js"));
 //   </script>
-import { enhance, mount, typeset } from "safis";
+import { enhance, mount, typeset } from "@safis/core";
 
 const live = new Map(); // figure element -> handle
 

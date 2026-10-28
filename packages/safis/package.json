@@ -1,23 +1,59 @@
 {
-  "name": "safis",
-  "version": "0.3.0",
+  "name": "@safis/core",
+  "version": "0.4.0",
   "description": "Interactive explainer figures: a 2D canvas runtime with instrument-like controls, a small WebGL engine, TeX math, and a plotting kit, styled like a science book.",
   "type": "module",
   "main": "./dist/safis.js",
   "module": "./dist/safis.js",
   "types": "./index.d.ts",
   "exports": {
-    ".": { "types": "./index.d.ts", "default": "./dist/safis.js" },
-    "./tex": { "types": "./tex.d.ts", "default": "./dist/tex.js" },
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./dist/safis.js"
+    },
+    "./tex": {
+      "types": "./tex.d.ts",
+      "default": "./dist/tex.js"
+    },
     "./style.css": "./dist/style.css",
     "./scoped.css": "./dist/scoped.css",
     "./iife": "./dist/safis.iife.js",
     "./package.json": "./package.json"
   },
-  "files": ["dist", "index.d.ts", "tex.d.ts"],
-  "sideEffects": ["*.css", "./dist/safis.js", "./dist/safis.iife.js"],
-  "keywords": ["explorable", "interactive", "explainer", "canvas", "webgl", "visualization", "education"],
-  "license": "UNLICENSED",
-  "repository": { "type": "git", "url": "https://github.com/broisnees/safis.git", "directory": "packages/safis" },
-  "scripts": { "build": "node ../../tools/build-packages.mjs" }
+  "files": [
+    "dist",
+    "index.d.ts",
+    "tex.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "*.css",
+    "./dist/safis.js",
+    "./dist/safis.iife.js"
+  ],
+  "keywords": [
+    "explorable",
+    "interactive",
+    "explainer",
+    "canvas",
+    "webgl",
+    "visualization",
+    "education"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/broisnees/safis.git",
+    "directory": "packages/safis"
+  },
+  "scripts": {
+    "build": "node ../../tools/build-packages.mjs",
+    "prepublishOnly": "node ../../tools/build-packages.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://safis.fyi",
+  "bugs": "https://github.com/broisnees/safis/issues"
 }

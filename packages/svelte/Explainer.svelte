@@ -1,6 +1,6 @@
 <script>
   // A stretch of prose in the book style. Binds scrubs, "try" links and terms inside it, and typesets .tex.
-  import { enhance, typeset } from "safis";
+  import { enhance, typeset } from "@safis/core";
 
   let { as = "article", class: className = "", children } = $props();
   let el;

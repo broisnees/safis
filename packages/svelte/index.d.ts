@@ -1,6 +1,6 @@
 import type { Component, Snippet } from "svelte";
-import type { Color, FigureHandle, FigureSpec } from "safis";
-export { enhance, mount, typeset } from "safis";
+import type { Color, FigureHandle, FigureSpec } from "@safis/core";
+export { enhance, mount, typeset } from "@safis/core";
 
 export const Figure: Component<{ spec: FigureSpec | (() => FigureSpec); id?: string; caption?: string | false; label?: string; wide?: boolean; class?: string; onready?: (handle: FigureHandle) => void }>;
 export const Explainer: Component<{ as?: string; class?: string; children?: Snippet }>;

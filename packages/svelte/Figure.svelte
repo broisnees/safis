@@ -1,6 +1,6 @@
 <script>
   // A live figure. `spec` is the same object demo() takes, or a function returning it.
-  import { enhance, mount } from "safis";
+  import { enhance, mount } from "@safis/core";
 
   let { spec, id = undefined, caption = undefined, label = undefined, wide = false, class: className = "", onready = undefined } = $props();
   let el;

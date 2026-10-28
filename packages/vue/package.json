@@ -1,15 +1,45 @@
 {
   "name": "@safis/vue",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Vue 3 components for safis interactive figures.",
   "type": "module",
   "main": "./index.js",
   "types": "./index.d.ts",
-  "exports": { ".": { "types": "./index.d.ts", "default": "./index.js" } },
-  "files": ["index.js", "index.d.ts"],
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "sideEffects": false,
-  "peerDependencies": { "vue": ">=3.3" },
-  "dependencies": { "safis": "0.3.0" },
-  "license": "UNLICENSED",
-  "repository": { "type": "git", "url": "https://github.com/broisnees/safis.git", "directory": "packages/vue" }
+  "peerDependencies": {
+    "vue": ">=3.3"
+  },
+  "dependencies": {
+    "@safis/core": "^0.4.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/broisnees/safis.git",
+    "directory": "packages/vue"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://safis.fyi",
+  "keywords": [
+    "explainer",
+    "figures",
+    "interactive",
+    "safis",
+    "vue"
+  ],
+  "bugs": "https://github.com/broisnees/safis/issues"
 }

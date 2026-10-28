@@ -1,7 +1,7 @@
 ---
 // TeX math rendered to MathML at build time, so it needs no JavaScript.
 // In MDX, pass the source as a string: <Tex src="T = 2\pi\sqrt{L/g}" />
-import { toMathML } from "safis/tex";
+import { toMathML } from "@safis/core/tex";
 interface Props { src: string; display?: boolean }
 const { src, display = false } = Astro.props;
 const html = toMathML(src, { display });

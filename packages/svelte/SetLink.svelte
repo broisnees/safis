@@ -1,6 +1,6 @@
 <script>
   // A "try this" link: glides figure `figure` to `values`, optionally pressing a button or playing.
-  import { enhance } from "safis";
+  import { enhance } from "@safis/core";
 
   let { figure = undefined, values = {}, press = undefined, play = undefined, children } = $props();
   const data = $derived(Object.entries(values).map(([k, v]) => `${k}=${v}`).join(" "));
