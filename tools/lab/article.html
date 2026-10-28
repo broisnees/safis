@@ -1,0 +1,495 @@
+<script>window.LAB = { scenes: {}, handles: {} };</script>
+<h1>3D lab</h1>
+<p class="dek">Proof figures for the engine and the parts library. <code>tools/check-3d.mjs</code> renders every figure here, turns it, and reports errors, tiers, and triangle counts.</p>
+
+<h2>Fire and smoke</h2>
+<p>The home page hero: the rocket engine firing at a pad, with a cutaway:</p>
+<figure class="demo" id="engine" aria-label="The rocket engine firing at a pad."></figure>
+<script>
+{
+  // The engine from E3.parts, firing: the plume leaves the bell and cools into an exhaust cloud
+  // that drifts off. No stand or floor: the engine is the subject. "Cut open" sections it on the
+  // side facing the viewer to show the flame in the chamber and both pumps turning. Millimeters.
+  const scene = E3.scene({ look: "night", shadow: false });
+  const eng = E3.parts.rocketEngine();
+  scene.add(eng);
+  const Hn = eng.info.height;
+  eng.fire(1);
+  const L = eng.plume.length;
+  // Exhaust past the flame: the jet's gas, cooling as it mixes with the air, streaming away and
+  // widening at a turbulent jet's 12 degree half-angle. Its momentum outlasts its lift for
+  // hundreds of meters, so inside this frame it streams on (no buoyancy) instead of billowing up.
+  const cloud = scene.add(E3.particles({
+    matter: "exhaust", units: "mm", count: 1300, seed: 3, life: [0.9, 1.7], size: [1400, 5200], sizeJitter: 0.6, opacity: 0.6, glow: 0.8, temperature: [1500, 500], fade: [0.08, 0.5],
+    color: "#d9d4cb", volume: { erosion: 0.6, density: 1, flow: [400, -7000, 100] },
+    emitter: { shape: "disk", radius: eng.info.exit * 1.1, position: [0, -L * 0.8, 0], direction: [0, -1, 0], speed: [9000, 15000], spread: 0.21 },
+    forces: { drag: 0.35, buoyancy: 0, wind: [600, 0, 150] },
+  }));
+  let view = null;
+  const nameOf = node => { for (let n = node; n; n = n.parent) if (n.name && eng.notes[n.name]) return n.name; return null; };
+  const read = v => { const thr = v.throttle / 100; return { kN: 550 * thr, pc: 9.7 * thr, pe: 0.8 * (0.35 + 0.65 * thr) }; };
+  const fig = demo("engine", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    orbit: { yaw: 0.55, pitch: 0.18, minPitch: -0.4, maxPitch: 1.1 },
+    state: () => ({ t: 0, spin: 0, hover: null, inside: 0 }),
+    controls: [
+      { key: "throttle", label: "Throttle", min: 40, max: 100, step: 1, value: 100, unit: "%", color: "orange" },
+      { key: "cut", label: "Cut open", type: "toggle", value: false },
+    ],
+    presets: [{ label: "Minimum", set: { throttle: 40 } }, { label: "Full", set: { throttle: 100 } }, { label: "Look inside", set: { cut: true } }],
+    caption: "A gas-generator kerosene engine firing, built to real proportions. Cut it open to see the flame in the chamber and the two pumps turning. The plume and the exhaust cloud follow physical rules, not a fluid simulation. Point at a part to name it.",
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    step(dt, s, v) { s.t += dt; s.spin += dt * (2 + 4 * v.throttle / 100); },
+    change(key, s, v, f) { if (key === "cut" && !f.playing) s.inside = v.cut ? 1 : 0; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      scene.look = E3.dark ? "night" : "outdoor";
+      const r = read(v);
+      eng.fire(v.throttle / 100).cutaway(v.cut).pose({ spin: s.spin, fuelSpin: s.spin * 1.35 });
+      scene.cutPlane = v.cut ? { facing: "camera", at: [0, Hn * 0.5, 0] } : null;
+      cloud.density = 0.25 + 0.75 * v.throttle / 100;
+      for (const n of Object.values(eng.parts)) n.highlight = n.name === s.hover;
+      // Cutting it open also glides the camera in on the engine.
+      s.inside += ((v.cut ? 1 : 0) - s.inside) * (fig && fig.playing ? 0.12 : 1);
+      if (Math.abs((v.cut ? 1 : 0) - s.inside) > 0.002) g.wantsFrame = true;
+      const k = s.inside * s.inside * (3 - 2 * s.inside);
+      view = g.render3d(scene, { ...s.view, fov: 28, target: [0, Hn * (0.05 + 0.4 * k) - L * 0.35 * (1 - k), 0], distance: 13500 - 6500 * k });
+      const x = 16, y = g.w < 560 ? 18 : g.h - 122, rows = [[r.pe < 0.9 ? "over-expanded" : "matched", ""], [`${v.throttle}%`, "throttle"], [`${r.kN.toFixed(0)} kN`, "thrust"], [`${r.pc.toFixed(1)} MPa`, "chamber"]];
+      rows.forEach(([a, b], i) => { g.text(a, [x, y + i * 31], { font: i ? "mono" : undefined, size: i ? 14.5 : 15, weight: 600, align: "left", color: i === 3 || !i ? "orange" : "ink" }); if (b) g.text(b, [x, y + 14 + i * 31], { size: 11.5, align: "left", color: "muted" }); });
+      if (s.hover) { const node = eng.parts[s.hover]; const at = view.project(node.toWorld(node.mesh ? node.mesh.bounds.center : [0, 0, 0])); g.callouts([{ at, text: s.hover, side: "right" }]); }
+      else if (v.cut) g.callouts(eng.labels().filter(l => view.kept(l.at) && /chamber|turbine|impeller|pump|nozzle|injector/.test(l.text)).slice(0, 5).map(l => ({ at: view.project(l.at), text: l.text, side: "right" })));
+    },
+    status: (s, v) => { const r = read(v); return s.hover ? `${s.hover}: ${eng.notes[s.hover]}` : `${v.throttle}% throttle · ${r.kN.toFixed(0)} kN · chamber ${r.pc.toFixed(1)} MPa`; },
+  });
+  if (window.LAB) { LAB.scenes.engine = scene; LAB.handles.engine = fig; }
+}
+</script>
+
+<p>The plume alone, side on, for every fuel:</p>
+<figure class="demo" id="plume" aria-label="A bell nozzle firing downward, seen from the side; fuel, throttle, and expansion ratio are controls."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "night", shadow: false });
+  const noz = E3.parts.bellNozzle({ throat: 110, expansion: 16 });
+  scene.add(noz, { material: "inconel", name: "nozzle", temperature: { axis: [0, 1, 0], stops: [[-900, 500], [0, 1100]] } });
+  const exitR = noz.exit.radius, exitY = noz.exit.center[1];
+  const plume = scene.add(E3.plume({ radius: exitR, length: exitR * 14, fuel: "kerosene", temperature: 2700, cells: 1.4, turbulence: 1.1 }), { position: [0, exitY, 0] });
+  window.LAB.scenes.plume = scene;
+  LAB.handles.plume = demo("plume", {
+    aspect: w => (w < 560 ? 0.8 : 1.1),
+    orbit: { yaw: 0.1, pitch: 0.05 },
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "fuel", label: "Fuel", type: "choice", options: [{ value: "kerosene", label: "kerosene" }, { value: "methane", label: "methane" }, { value: "hydrogen", label: "hydrogen" }, { value: "solid", label: "solid" }], value: "kerosene" },
+      { key: "throttle", label: "Throttle", min: 40, max: 100, step: 1, value: 100, unit: "%", color: "orange" },
+      { key: "expansion", label: "Exit pressure / ambient", min: 0.3, max: 3, step: 0.05, value: 0.8 },
+    ],
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      plume.fuel = v.fuel; plume.throttle = v.throttle / 100; plume.expansion = v.expansion;
+      g.render3d(scene, { ...s.view, fov: 24, target: [0, exitY - exitR * 5, 0], distance: exitR * 40 });
+    },
+  });
+}
+</script>
+
+<p>A campfire in a studio: fire, glowing soot cooling into grey smoke, and a steel pole throwing its shadow onto the smoke. The wind slider pushes it over:</p>
+<figure class="demo" id="smoke" aria-label="A small fire on a plate with smoke rising past a steel pole. Wind blows the smoke sideways."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  scene.add(E3.mesh.cylinder(0.05, 2.6, { segments: 24 }), { material: "brushed", position: [0.55, 1.3, -0.2], name: "pole" });
+  scene.add(E3.mesh.torus(0.3, 0.05, { segments: 48 }), { material: "steel", position: [0, 0.05, 0], name: "ring" });
+  const fire = scene.add(E3.particles({
+    matter: "fire", units: "m", count: 500, seed: 11, size: [0.12, 0.28], temperature: [1500, 900],
+    emitter: { shape: "disk", radius: 0.22, position: [0, 0.05, 0], speed: [0.3, 0.8], spread: 0.25 },
+  }));
+  const smoke = scene.add(E3.particles({
+    matter: "smoke", units: "m", count: 700, seed: 12, life: [3, 5], size: [0.14, 1.1], opacity: 0.9, fade: [0.12, 0.45], ground: 0,
+    volume: { erosion: 0.6 },
+    emitter: { shape: "disk", radius: 0.18, position: [0, 0.45, 0], speed: [0.6, 1.2], spread: 0.3 },
+  }));
+  window.LAB.scenes.smoke = scene;
+  LAB.handles.smoke = demo("smoke", {
+    aspect: w => (w < 560 ? 0.9 : 1.3),
+    orbit: { yaw: -0.4, pitch: 0.18 },
+    state: () => ({ t: 0 }),
+    controls: [{ key: "wind", label: "Wind", min: 0, max: 2, step: 0.05, value: 0.4, unit: " m/s", color: "blue" }],
+    caption: "Fire particles emit by black-body color; the smoke's soot starts hot and glowing, then cools to grey as it rises.",
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      smoke.forces.wind = [v.wind, 0, 0];
+      fire.forces.wind = [v.wind * 0.6, 0, 0];
+      g.render3d(scene, { ...s.view, fov: 28 });
+    },
+  });
+}
+</script>
+
+<h2>Air</h2>
+<p>Tracers follow the potential flow past a wing; each ribbon walks its own streamline backwards, so the air curls over the leading edge and leaves the trailing edge smoothly:</p>
+<figure class="demo" id="wing" aria-label="Air tracers streaming past a wing section. The angle of attack is a slider."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", shadow: { opacity: 0.1 } });
+  const FLOW = { type: "airfoil", chord: 1, thickness: 0.12, camber: 0.04, alpha: 0.12, U: 1 };
+  const build = alpha => E3.mesh.transform(E3.mesh.extrude(E3.flow.airfoil({ ...FLOW, alpha }).outline(140), 2.4, { bevel: 0.004 }), E3.m4.translation([0, 0, -1.2]));
+  const wing = scene.add(build(FLOW.alpha), { material: "aluminum", name: "wing" });
+  const air = scene.add(E3.particles({
+    count: 1100, seed: 5, life: [3.2, 3.2], style: "streak", trail: 0.45, width: 0.007, segments: 14, color: "blue", colorBy: "speed", range: [0.5, 1.7], opacity: 0.9,
+    emitter: { shape: "box", size: [0.02, 1.5, 2.2], position: [-1.7, 0, 0], rake: 20, speed: 1 },
+    flow: FLOW, kill: { min: [-2, -2, -2], max: [2.3, 2, 2] },
+  }));
+  let lastAlpha = FLOW.alpha;
+  window.LAB.scenes.wing = scene;
+  LAB.handles.wing = demo("wing", {
+    aspect: w => (w < 560 ? 0.9 : 1.5),
+    orbit: { yaw: 0.35, pitch: 0.2 },
+    state: () => ({ t: 0 }),
+    controls: [{ key: "alpha", label: "Angle of attack", min: -4, max: 14, step: 0.5, value: 7, unit: "°", color: "blue" }],
+    caption: "Blue is slow, pale is fast: the air over the top runs faster than the air underneath, which is where the lift comes from.",
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      const alpha = v.alpha * Math.PI / 180;
+      if (alpha !== lastAlpha) { wing.mesh = build(alpha); air.flow = { ...FLOW, alpha }; lastAlpha = alpha; }
+      g.render3d(scene, { ...s.view, fov: 26 });
+    },
+  });
+}
+</script>
+
+<p>A turbofan with the air following its surfaces: drawn into the inlet, split into core and bypass, out through both nozzles:</p>
+<figure class="demo" id="fan" aria-label="A turbofan, cut away, with air tracers following the engine's surfaces through the inlet, fan duct, core, and both jets."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const tf = E3.parts.turbofan({ cutaway: true });
+  scene.add(tf);
+  const F = tf.airflow({ speed: 2400 }), em = tf.airflowEmitters(F), I = F.info;
+  const kill = { min: [I.yUp - 200, -4000, -4000], max: [I.yDn - 100, 4000, 4000] };
+  const tracer = (e, color, count, seed, range, opacity, width) => scene.add(E3.particles({
+    count, seed, life: [6, 6], style: "streak", trail: 0.55, width, segments: 14, color, colorBy: "speed", range, opacity,
+    emitter: { ...e, rake: 0 }, flow: F, kill,
+  }));
+  tracer(em.outside, ["#6f8fb8", "#9db7d8"], 700, 21, [900, 1400], 0.55, 9);
+  tracer(em.bypass, ["blue", "#7fb0ff"], 1100, 22, [1500, 3200], 0.9, 10);
+  tracer(em.core, ["blue", "orange"], 420, 23, [1500, 5000], 0.95, 10);
+  window.LAB.scenes.fan = scene;
+  LAB.handles.fan = demo("fan", {
+    aspect: w => (w < 560 ? 0.9 : 1.7),
+    orbit: { yaw: 0.6, pitch: 0.2 },
+    state: () => ({ t: 0, low: 0, high: 0 }),
+    controls: [{ key: "cut", label: "Cut away", type: "toggle", value: true }],
+    caption: "Air follows the engine: the streamtube narrows into the inlet, about one part in eight goes through the core, and both jets leave faster than they came in. Tracers are slowed far below real speeds.",
+    step(dt, s) { s.t += dt; s.low += dt * 0.8; s.high += dt * 2.6; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      tf.cutaway(v.cut).pose({ low: s.low, high: s.high });
+      const view = g.render3d(scene, { ...s.view, fov: 26, target: [1200, 0, 0], distance: 13000 });
+      g.callouts(tf.labels().slice(0, 6).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>Gas</h2>
+<p>Molecules in a cylinder under a piston. The wall hits are counted, so the pressure on the piston is measured, not drawn:</p>
+<figure class="demo" id="gas" aria-label="Gas molecules bouncing inside a glass cylinder under a steel piston. The piston height is a slider; the readout shows the measured pressure."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", ao: false });
+  const side = 1, N = 320, sigma = 1.3;
+  scene.add(E3.mesh.box(1.5, 0.08, 1.5, { round: 0.01 }), { material: "steel", position: [0, -0.04, 0], name: "base" });
+  const wall = scene.add(E3.mesh.box(side + 0.04, 1.6, side + 0.04, { round: 0.004 }), { material: "glass", position: [0, 0.8, 0], name: "cylinder", castShadow: false });
+  const piston = scene.add(E3.mesh.cylinder(side * 0.52, 0.12, { segments: 48 }), { material: "steel", name: "piston" });
+  const rod = scene.add(E3.mesh.cylinder(0.05, 1.2, { segments: 16 }), { material: "brushed", name: "rod" });
+  const gas = scene.add(E3.particles({
+    count: N, seed: 3, life: Infinity, style: "sphere", size: [0.022, 0.022], sizeJitter: 0, color: "blue", cpu: true, measure: true, measureWindow: 1, step: 1 / 120,
+    emitter: { shape: "box", size: [side * 0.9, 1.0, side * 0.9], position: [0, 0.55, 0], speed: 0, thermal: sigma },
+    colliders: [{ plane: [0, -1, 0, -1.2], bounce: 1 }, { plane: [0, 1, 0, 0], bounce: 1 }, { plane: [1, 0, 0, -side / 2], bounce: 1 }, { plane: [-1, 0, 0, -side / 2], bounce: 1 }, { plane: [0, 0, 1, -side / 2], bounce: 1 }, { plane: [0, 0, -1, -side / 2], bounce: 1 }],
+  }));
+  window.LAB.scenes.gas = scene;
+  LAB.handles.gas = demo("gas", {
+    aspect: w => (w < 560 ? 1 : 1.3),
+    orbit: { yaw: 0.4, pitch: 0.15 },
+    state: () => ({ t: 3 }), // warmed up: the pressure is an average over the last second of hits
+    controls: [{ key: "h", label: "Piston height", min: 0.5, max: 1.4, step: 0.01, value: 1.2, unit: " m", color: "orange" }],
+    status: (s, v) => { const p = (gas.hits[0] || 0) / (side * side), ideal = N * sigma * sigma / (side * side * v.h); return `measured ${p.toFixed(0)} Pa, ideal gas ${ideal.toFixed(0)} Pa`; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      gas.colliders[0].plane[3] = -v.h;
+      piston.position = [0, v.h + 0.06, 0];
+      rod.position = [0, v.h + 0.72, 0];
+      g.render3d(scene, { ...s.view, fov: 28, target: [0, 0.7, 0] });
+    },
+  });
+}
+</script>
+
+<h2>Glass</h2>
+<p>A glass prism and a lens in front of colored bars, with soft shadows:</p>
+<figure class="demo" id="prism" aria-label="A glass prism and a lens on a white table in front of red, green, and blue bars; the bars bend through the glass."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", shadow: { softness: 1.2 } });
+  const tri = [[-0.8, 0], [0.8, 0], [0, 1.3]];
+  scene.add(E3.mesh.transform(E3.mesh.extrude(tri, 1.2, { bevel: 0.01 }), E3.m4.translation([-1.2, 0, -0.6])), { material: "glass", name: "prism" });
+  const lens = E3.mesh.lathe([[0, -0.18], [0.5, -0.12], [0.72, -0.04], [0.78, 0], [0.72, 0.04], [0.5, 0.12], [0, 0.18]], { segments: 64 });
+  scene.add(lens, { material: { base: "glass", ior: 1.52, thickness: 0.36 }, position: [1.3, 0.8, 0], rotation: [Math.PI / 2, 0, 0], name: "lens" });
+  scene.add(E3.mesh.cylinder(0.12, 0.8, { segments: 24 }), { material: "brushed", position: [1.3, 0.4, 0], name: "stand" });
+  ["red", "green", "blue", "orange", "purple"].forEach((c, i) => scene.add(E3.mesh.box(0.35, 1.6, 0.35, { round: 0.03 }), { material: "paint", color: c, position: [-2.4 + i * 1.2, 0.8, -1.4], name: `${c} bar` }));
+  scene.add(E3.mesh.sphere(0.4, { segments: 48 }), { material: "chrome", position: [2.4, 0.4, 0.6], name: "ball" });
+  window.LAB.scenes.prism = scene;
+  LAB.handles.prism = demo("prism", {
+    aspect: w => (w < 560 ? 0.9 : 1.5),
+    orbit: { yaw: 0.2, pitch: 0.2 },
+    caption: "Glass refracts what is behind it, with a little dispersion at the edges, and throws a lighter shadow than the solids.",
+    draw(g, s) { g.render3d(scene, { ...s.view, fov: 26 }); },
+  });
+}
+</script>
+
+<h2>Water and heat</h2>
+<p>A pool with ripples, a sunken steel block, and colored tiles; and a hot jet that makes the bars behind it waver:</p>
+<figure class="demo" id="water" aria-label="A pool of water over tiles with a steel block on the bottom; ripples move the refracted floor and the sun glints."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "outdoor" });
+  scene.add(E3.mesh.box(4.2, 0.2, 3.2, { round: 0.02 }), { material: "concrete", position: [0, -0.1, 0], name: "floor" });
+  ["red", "orange", "green", "blue", "purple"].forEach((c, i) => scene.add(E3.mesh.box(0.7, 0.04, 2.6, { round: 0.01 }), { material: "paint", color: c, position: [-1.6 + i * 0.8, 0.02, 0], name: `${c} tile` }));
+  scene.add(E3.mesh.box(0.6, 0.35, 0.6, { round: 0.03 }), { material: "steel", position: [0.6, 0.2, 0.4], name: "block" });
+  for (const [x, w, d] of [[-2.15, 0.1, 3.2], [2.15, 0.1, 3.2]]) scene.add(E3.mesh.box(w, 0.9, d), { material: "concrete", position: [x, 0.45, 0], name: "wall" });
+  scene.add(E3.mesh.box(4.2, 0.8, 3.2), { material: "water", position: [0, 0.4, 0], name: "water", castShadow: false });
+  window.LAB.scenes.water = scene;
+  LAB.handles.water = demo("water", {
+    aspect: w => (w < 560 ? 0.9 : 1.5), orbit: { yaw: 0.4, pitch: 0.55 }, state: () => ({ t: 0 }),
+    step(dt, s) { s.t += dt; },
+    draw(g, s) { scene.time = s.t; g.render3d(scene, { ...s.view, fov: 30 }); },
+  });
+}
+</script>
+<figure class="demo" id="shimmer" aria-label="A jet engine's hot core exhaust in front of striped bars; the bars waver through the hot air."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  ["red", "orange", "green", "blue", "purple", "red", "orange"].forEach((c, i) => scene.add(E3.mesh.box(0.25, 2.4, 0.25), { material: "paint", color: c, position: [-2.4 + i * 0.8, 1.2, -1.2], name: "bar" }));
+  scene.add(E3.mesh.cylinder(0.35, 1.2, { segments: 48 }), { material: "inconel", position: [-3, 1.0, 0.4], rotation: [0, 0, Math.PI / 2], name: "nozzle", temperature: 900 });
+  scene.shimmer = [{ from: [-2.4, 1.0, 0.4], to: [3.5, 1.2, 0.4], radius: [0.35, 1.2], strength: 3 }];
+  window.LAB.scenes.shimmer = scene;
+  LAB.handles.shimmer = demo("shimmer", {
+    aspect: w => (w < 560 ? 0.9 : 1.6), orbit: { yaw: 0.1, pitch: 0.1 }, state: () => ({ t: 0 }),
+    step(dt, s) { s.t += dt; },
+    draw(g, s) { scene.time = s.t; g.render3d(scene, { ...s.view, fov: 30 }); },
+  });
+}
+</script>
+
+<h2>Machines</h2>
+<p>The piston engine, sectioned across cylinder one:</p>
+<figure class="demo" id="piston" aria-label="A four-cylinder piston engine; a section through cylinder one shows the piston, rod, crank, and valves. The crank angle is a slider."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const pe = E3.parts.pistonEngine();
+  scene.add(pe);
+  window.LAB.scenes.piston = scene;
+  LAB.handles.piston = demo("piston", {
+    aspect: w => (w < 560 ? 0.9 : 1.4),
+    orbit: { yaw: 0.6, pitch: 0.25 },
+    state: () => ({ crank: 0 }),
+    controls: [{ key: "cut", label: "Section", type: "toggle", value: true }, { key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0 }],
+    step(dt, s) { s.crank += dt * 2.5; },
+    draw(g, s, v) {
+      pe.explode(v.apart).pose({ crank: s.crank });
+      scene.cutPlane = v.cut ? [-1, 0, 0, -pe.cylinders[0].x] : null;
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(pe.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>The rocket engine with its pumps cut open, rotors spinning:</p>
+<figure class="demo" id="rocket" aria-label="A rocket engine; the pump housings are cut open to show the impellers and turbines turning."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const eng = E3.parts.rocketEngine();
+  scene.add(eng);
+  window.LAB.scenes.rocket = scene;
+  LAB.handles.rocket = demo("rocket", {
+    aspect: w => (w < 560 ? 0.8 : 1.2),
+    orbit: { yaw: 0.5, pitch: 0.18 },
+    state: () => ({ spin: 0 }),
+    controls: [{ key: "cut", label: "Open the pumps", type: "toggle", value: true }, { key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0 }, { key: "pitch", label: "Gimbal", min: -6, max: 6, step: 0.1, value: 0, unit: "°" }],
+    step(dt, s) { s.spin += dt * 4; },
+    draw(g, s, v) {
+      if (eng.cutaway) eng.cutaway(v.cut);
+      eng.explode(v.apart).pose({ pitch: (v.pitch * Math.PI) / 180, spin: s.spin, fuelSpin: s.spin * 1.3 });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(eng.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>The exploded turbopump:</p>
+<figure class="demo" id="pump" aria-label="A turbopump taken apart along its axis: volute, impeller, bearings, shaft, turbine, housings."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const tp = E3.parts.turbopump({ impeller: 75 });
+  scene.add(tp);
+  window.LAB.scenes.pump = scene;
+  LAB.handles.pump = demo("pump", {
+    aspect: w => (w < 560 ? 0.8 : 1.1),
+    orbit: { yaw: 0.5, pitch: 0.15 },
+    state: () => ({ spin: 0 }),
+    controls: [{ key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0.7 }],
+    step(dt, s) { s.spin += dt * 3; },
+    draw(g, s, v) {
+      tp.explode(v.apart).pose({ spin: s.spin });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(tp.labels().map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>Every part type in the library on one board:</p>
+<figure class="demo" id="board" aria-label="A board of machine parts: fasteners, flanges, pipes, bearings, shafts, springs, gears, nozzles, impellers, blades, tanks."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const P = E3.parts;
+  const items = [
+    ["bolt", () => P.bolt({ d: 12, length: 50 })], ["nut", () => P.nut({ d: 12 })], ["washer", () => P.washer({ d: 12 })],
+    ["flange", () => P.flange({ pipe: 30 })], ["pipe", () => P.pipe([[0, 0, 0], [120, 0, 0], [120, 100, 0]], { radius: 18 })],
+    ["bracket", () => P.bracket()], ["bearing", () => P.bearing({ bore: 20, outer: 47 })], ["shaft", () => P.shaft({ steps: [[40, 10], [60, 14], [40, 10]] })],
+    ["spring", () => P.spring()], ["gear", () => P.gear({ teeth: 24, module: 3 })], ["strut", () => P.strut([0, 0, 0], [0, 120, 0])],
+    ["housing", () => P.housing()], ["bellows", () => P.bellows()], ["valve", () => P.valve({ pipe: 20 })],
+    ["bellNozzle", () => P.bellNozzle({ throat: 30, expansion: 10 })], ["combustionChamber", () => P.combustionChamber({ throat: 30 })], ["injectorPlate", () => P.injectorPlate({ radius: 60 })],
+    ["impeller", () => P.impeller({ radius: 50 })], ["volute", () => P.volute({ radius: 50 })], ["gimbal", () => P.gimbal({ size: 80 })],
+    ["actuator", () => P.actuator({ bore: 30, length: 150 })], ["tank", () => P.tank({ radius: 50, length: 160 })], ["blade", () => P.blade({ span: 120, chord: 30 })],
+    ["rotorStage", () => P.rotorStage({ blades: 20, hub: 40, tip: 80 })], ["statorStage", () => P.statorStage({ vanes: 18, inner: 40, outer: 80 })], ["spinner", () => P.spinner({ radius: 50 })],
+    ["nacelle", () => P.nacelle()], ["harness", () => P.harness([[0, 0, 0], [80, 20, 0], [120, 90, 10]])],
+  ];
+  const cell = 260, cols = 7;
+  const boundsOf = n => {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    const visit = (node, M) => {
+      const W = E3.m4.multiply(M, node.local ? node.local() : E3.m4.identity());
+      if (node.mesh) { const b = node.mesh.bounds; for (const c of [[b.min[0], b.min[1], b.min[2]], [b.max[0], b.max[1], b.max[2]]]) { const p = E3.m4.apply(W, c); for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], p[k]); max[k] = Math.max(max[k], p[k]); } } }
+      for (const c of node.children || []) visit(c, W);
+    };
+    if (n.mesh || n.children) visit(n, E3.m4.identity()); else { const b = n.bounds; return { min: b.min, max: b.max }; }
+    return { min, max };
+  };
+  const labels = [];
+  items.forEach(([name, make], i) => {
+    let part;
+    try { part = make(); } catch (e) { console.error(`board: ${name}: ${e.message}`); return; }
+    const node = part.mesh || part.children ? part : E3.node(part, { name });
+    const b = boundsOf(node), span = Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) || 1;
+    const k = cell * 0.7 / span, c = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
+    const x = ((i % cols) - (cols - 1) / 2) * cell, z = (Math.floor(i / cols) - 1.5) * cell;
+    const holder = scene.group({ name });
+    holder.position = [x - c[0] * k, (b.max[1] - b.min[1]) / 2 * k - b.min[1] * k, z - c[2] * k];
+    holder.scale = k;
+    holder.add(node);
+    labels.push({ at: [x, 0, z + cell * 0.42], text: name });
+  });
+  scene.add(E3.mesh.box(cols * cell + 60, 20, 4 * cell + 60, { round: 6 }), { material: "porcelain", position: [0, -10, 0], name: "board" });
+  window.LAB.scenes.board = scene;
+  LAB.handles.board = demo("board", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    orbit: { yaw: 0.0, pitch: 0.7 },
+    draw(g, s) {
+      const view = g.render3d(scene, { ...s.view, fov: 24 });
+      g.callouts(labels.map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>More machines</h2>
+<p>The newer assemblies, each with its pose and explode:</p>
+<figure class="demo" id="gearbox" aria-label="A two-stage gearbox in a split housing; the lid lifts off and the gears turn."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const gb = E3.parts.gearbox();
+  scene.add(gb);
+  window.LAB.scenes.gearbox = scene;
+  LAB.handles.gearbox = demo("gearbox", {
+    aspect: w => (w < 560 ? 0.9 : 1.4), orbit: { yaw: 0.6, pitch: 0.3 }, state: () => ({ a: 0 }),
+    controls: [{ key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0.5 }],
+    step(dt, s) { s.a += dt * 3; },
+    draw(g, s, v) { gb.explode(v.apart).pose({ input: s.a }); const view = g.render3d(scene, { ...s.view, fov: 26 }); g.callouts(gb.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text }))); },
+  });
+}
+</script>
+<figure class="demo" id="motor" aria-label="An electric motor; the end bell and fan cowl come off to show the stator and rotor."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const mo = E3.parts.electricMotor();
+  scene.add(mo);
+  window.LAB.scenes.motor = scene;
+  LAB.handles.motor = demo("motor", {
+    aspect: w => (w < 560 ? 0.9 : 1.4), orbit: { yaw: 0.7, pitch: 0.25 }, state: () => ({ a: 0 }),
+    controls: [{ key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0.6 }],
+    step(dt, s) { s.a += dt * 6; },
+    draw(g, s, v) { mo.explode(v.apart).pose({ spin: s.a }); const view = g.render3d(scene, { ...s.view, fov: 26 }); g.callouts(mo.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text }))); },
+  });
+}
+</script>
+<figure class="demo" id="cpump" aria-label="A centrifugal pump with its motor on a base plate; the volute is cut open."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const pu = E3.parts.pump({ motor: true });
+  scene.add(pu);
+  window.LAB.scenes.cpump = scene;
+  LAB.handles.cpump = demo("cpump", {
+    aspect: w => (w < 560 ? 0.9 : 1.5), orbit: { yaw: -0.6, pitch: 0.25 }, state: () => ({ a: 0 }),
+    controls: [{ key: "cut", label: "Cut open", type: "toggle", value: true }, { key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0 }],
+    step(dt, s) { s.a += dt * 6; },
+    draw(g, s, v) { if (pu.cutaway) pu.cutaway(v.cut); pu.explode(v.apart).pose({ spin: s.a }); const view = g.render3d(scene, { ...s.view, fov: 26 }); g.callouts(pu.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text }))); },
+  });
+}
+</script>
+<figure class="demo" id="bike" aria-label="A bicycle drivetrain: cranks, chainrings, chain, cassette, and rear derailleur. The gear is a stepper."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const bk = E3.parts.bicycleDrivetrain();
+  scene.add(bk);
+  window.LAB.scenes.bike = scene;
+  LAB.handles.bike = demo("bike", {
+    aspect: w => (w < 560 ? 0.9 : 1.6), orbit: { yaw: 0.3, pitch: 0.15 }, state: () => ({ a: 0 }),
+    controls: [{ key: "gear", label: "Gear", min: 1, max: 11, step: 1, value: 5 }, { key: "ring", label: "Ring", min: 1, max: 2, step: 1, value: 2 }],
+    step(dt, s) { s.a += dt * 2; },
+    draw(g, s, v) { bk.pose({ crank: s.a, gear: v.gear, ring: v.ring }); const view = g.render3d(scene, { ...s.view, fov: 26 }); g.callouts(bk.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text }))); },
+  });
+}
+</script>
+<figure class="demo" id="turbine" aria-label="An axial steam turbine with its top casing lifted off to show the bladed rotor."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const tb = E3.parts.turbine();
+  scene.add(tb);
+  window.LAB.scenes.turbine = scene;
+  LAB.handles.turbine = demo("turbine", {
+    aspect: w => (w < 560 ? 0.9 : 1.6), orbit: { yaw: 0.5, pitch: 0.3 }, state: () => ({ a: 0 }),
+    controls: [{ key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0.5 }],
+    step(dt, s) { s.a += dt * 4; },
+    draw(g, s, v) { tb.explode(v.apart).pose({ spin: s.a }); const view = g.render3d(scene, { ...s.view, fov: 26 }); g.callouts(tb.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text }))); },
+  });
+}
+</script>

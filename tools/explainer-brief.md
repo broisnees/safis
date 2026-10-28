@@ -1,0 +1,21 @@
+The user's bar, in their words: content and teaching must be "proper ... like we saw in the ciechanowski website, proper like everything a blog like and tutorial like", "a proper scientific like research and proper blog like understanding". That means Bartosz Ciechanowski depth: start from an everyday experience, build the model one idea at a time, and give every idea its own figure the reader moves. The prose tells them what to try (ending in a colon), and the next paragraph names what they saw. Use real numbers and the complications, all the way to how it really works.
+
+Work in /Users/nees/safis. Follow skills/safis/SKILL.md exactly (read it and the references it lists for your figure kinds). Use the in-depth default: about 25 figures in 7–12 sections, 130–180 words of main text per figure, an "In brief" abstract, sidenotes, predictions before surprising figures, callouts, collapsed deep dives, colored terms tied to figure parts, scrubbable numbers, numbered citations to real sources you have checked (search the web to confirm each one), and a references list. Build in passes, verifying as you go.
+
+Rules the user added this week, all binding:
+- **Only the subject.** No stands, tables, floors, pads, or props in 3D unless the idea needs them (a jet hitting a pad does; a model on a display stand doesn't).
+- **Every particle moves by its physics.** Smoke and steam rise because they are hot; dust, sand, water, and sparks fall to their terminal speed and land; bubbles rise; air tracers go where the air goes; light goes straight and bends only at boundaries; sound moves air back and forth without carrying it away. In 3D use `E3.particles({ matter, units, ground })` (matters: smoke, exhaust, steam, fire, dust, mist, sand, water, rain, snow, spark, ember, bubble, air), never hand-tuned forces; see "Every particle moves by the physics of what it is" in skills/safis/references/engine3d.md. Particles that pile up in one place, hang still mid-air, or move against their physics are a fault.
+- **Cutaways stay put.** `scene.cutPlane = { facing: "camera", at }` opens the side facing the reader when it is switched on and then stays fixed to the model as they turn it. Tie it to a "Cut open" control; don't leave a model cut by default unless the figure is about its inside.
+- **Pick fidelity by need** (engine3d.md): a simple model stays in the diagram look; physical materials only when the look of the real thing is the point.
+- **Glass:** a glass part that holds another solid is drawn with thin walls automatically; don't fake it with opacity.
+
+Kits available: E3 (volumetric smoke and fire with `volume`, plumes with `impact` and `profile`, tube flows, spectral glass, water, heat shimmer, the `"anatomy"` look), `E3.parts` (rocketEngine with `fire()`, `gasPath()`, `cutaway()`; turbofan with `airflow()`; gearbox, motor, pump, bicycle, turbine), `E3.bio` (heart, eye, knee, neuron, cell, tooth, skin, plus implicit surfaces, muscle, vesselTree, longBone; see references/bio3d.md), `Fx` (fire, smoke, dust, water, wind, shimmer), `Sound`, `Optics`, `Sim`, `Geo`, `g.graph`. The template is current; rebuild it with `node tools/build-template.mjs` only if `skills/safis/assets/template.html` is older than `src/`.
+
+Checks: `node skills/safis/scripts/verify.mjs <page>` must PASS. Then run `node skills/safis/scripts/explore.mjs <page>` and READ every contact sheet. Confirm each figure teaches what its paragraph claims, at the values it claims, and fix any figure that doesn't. Look at the screenshots in light and dark, and at phone width. Run verify and explore with the Bash tool's `run_in_background: true` and wait for the notification; don't block on them.
+
+Rules:
+- Edit ONLY files under your page's folder. Other agents are writing other pages at the same time.
+- Do not run `site.mjs`, do not touch `src/`, `website/`, `web/`, `skills/`, `tools/`, or other pages, and do not commit, push, deploy, or publish.
+- If you hit a runtime or engine bug, work around it in your page if you can, and report it with a minimal repro.
+
+Reply with: the file path, the sections with one line per figure, the verify result line and words-per-figure, what exploring showed and what you fixed, the simplifications a reader should know, any citation you could not confirm, and any kit bug with a repro.

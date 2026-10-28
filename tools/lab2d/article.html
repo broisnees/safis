@@ -1,0 +1,308 @@
+<script>window.LAB = { handles: {} };</script>
+<h1>2D lab</h1>
+<p class="dek">Proof figures for the effects, optics, and sound kits. <code>tools/check-2d.mjs</code> renders every figure here still and mid-animation, light and dark, and times its frames.</p>
+
+<h2>Fire</h2>
+<p>A layered flame: blue where it is premixed, black-body yellow where soot glows, embers lofted from the base, smoke from the tip:</p>
+<figure class="demo" id="fire" aria-label="A wood fire on a hearth with embers rising and smoke leaving the tip."></figure>
+<script>
+LAB.handles.fire = demo("fire", {
+  aspect: 1.3,
+  state: () => ({ t: 2.3 }),
+  controls: [
+    { key: "power", label: "Heat release", min: 0.1, max: 1, step: 0.01, value: 0.8, color: "orange" },
+    { key: "soot", label: "Soot", min: 0, max: 1, step: 0.01, value: 1, color: "muted" },
+    { key: "wind", label: "Draft", min: -1, max: 1, step: 0.01, value: 0.1, color: "blue" },
+  ],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    const base = [g.w / 2, g.h * 0.86];
+    g.fx.fire(null, { t: s.t, power: v.power, soot: v.soot, wind: v.wind, base, width: g.w * 0.2, height: g.h * 0.62, size: 0.5, embers: 1, smoke: 0.8 });
+    g.rect(g.w * 0.3, g.h * 0.86, g.w * 0.4, 10, { fill: "muted", alpha: 0.5 });
+  },
+});
+</script>
+
+<h2>Smoke, steam, and dust</h2>
+<p>Smoke from a chimney in a breeze, lit from the upper left; the puffs shade themselves:</p>
+<figure class="demo" id="smoke" aria-label="A chimney with smoke rising and bending in the wind."></figure>
+<script>
+LAB.handles.smoke = demo("smoke", {
+  aspect: 1.5,
+  state: () => ({ t: 4 }),
+  controls: [
+    { key: "wind", label: "Wind", min: -1.2, max: 1.2, step: 0.01, value: 0.45, color: "blue" },
+    { key: "density", label: "Density", min: 0.1, max: 1, step: 0.01, value: 0.8, color: "muted" },
+    { key: "light", label: "Light from", min: -3.14, max: 0, step: 0.01, value: -2.16, color: "orange" },
+  ],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    const at = [g.w * 0.3, g.h * 0.8];
+    g.fx.smoke(null, { t: s.t, at, width: g.w * 0.06, wind: v.wind, density: v.density, light: v.light, rise: 0.3 });
+    g.rect(at[0] - g.w * 0.035, at[1], g.w * 0.07, g.h - at[1], { fill: "panel", stroke: "ink", width: 1.5 });
+  },
+});
+</script>
+
+<p>Steam from a kettle spout fades within a short rise:</p>
+<figure class="demo" id="steam" aria-label="Steam rising from a kettle spout and evaporating."></figure>
+<script>
+LAB.handles.steam = demo("steam", {
+  aspect: 1.6,
+  state: () => ({ t: 3 }),
+  step(dt, s) { s.t += dt; },
+  draw(g, s) {
+    g.fx.steam(null, { t: s.t, at: [g.w * 0.45, g.h * 0.72], width: g.w * 0.05, wind: 0.25, density: 0.85 });
+    g.path([[g.w * 0.3, g.h * 0.95], [g.w * 0.33, g.h * 0.78], [g.w * 0.44, g.h * 0.76], [g.w * 0.47, g.h * 0.8], [g.w * 0.42, g.h * 0.95]], { fill: "panel", stroke: "ink", width: 1.5, close: true });
+  },
+});
+</script>
+
+<p>Dust: a footstep throws a burst that rolls outward and settles, and a jet blowing down raises a layer that runs both ways. Press the button for another step:</p>
+<figure class="demo" id="dust" aria-label="Dust thrown up from the ground by a footstep on the left and by a downward jet on the right."></figure>
+<script>
+LAB.handles.dust = demo("dust", {
+  aspect: 1.7,
+  state: () => ({ t: 1.2, step0: 0 }),
+  controls: [
+    { key: "jet", label: "Jet", min: 0, max: 2, step: 0.01, value: 1, color: "orange" },
+    { type: "button", label: "Step", action: (s) => { s.step0 = s.t; } },
+  ],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    const ground = g.h * 0.85;
+    g.line([0, ground], [g.w, ground], { stroke: "ink", width: 1.5 });
+    g.fx.dust(null, { t: s.t, ground, scale: g.h * 0.26, sources: [{ at: [g.w * 0.28, ground], kind: "burst", start: s.step0 }, ...(v.jet > 0 ? [{ at: [g.w * 0.72, ground], kind: "jet", strength: v.jet }] : [])] });
+    if (v.jet > 0) g.line([g.w * 0.72, 10], [g.w * 0.72, ground - 40], { stroke: "muted", width: 2, dash: [5, 4] });
+  },
+});
+</script>
+
+<h2>Water</h2>
+<p>A pool from above: the tiled floor bends through the surface, the caustics move with the waves, deep water turns blue-green, and the surface reflects the sky. Drop a pebble:</p>
+<figure class="demo" id="pool" aria-label="A swimming pool seen from above with moving caustics on its tiled floor."></figure>
+<script>
+LAB.handles.pool = demo("pool", {
+  aspect: 1.5,
+  state: () => ({ t: 3, drop: 1.8 }),
+  controls: [
+    { key: "depth", label: "Depth", min: 20, max: 400, step: 1, value: 140, unit: " px", color: "blue" },
+    { key: "wind", label: "Wind waves", min: 0, max: 2, step: 0.01, value: 1, color: "muted" },
+    { key: "tilt", label: "View tilt", min: 0, max: 1.2, step: 0.01, value: 0.4, color: "orange" },
+    { type: "button", label: "Drop a pebble", action: (s) => { s.drop = s.t; } },
+  ],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    g.fx.water(null, { t: s.t, depth: v.depth, amp: v.wind, calm: v.wind === 0, tilt: v.tilt, sources: [{ at: [g.w * 0.5, g.h * 0.5], start: s.drop, dur: 0.7, amp: 3 }], wavelength: 26, speed: 70, damping: 0.003 });
+  },
+});
+</script>
+
+<p>Water in section: light shafts focused by the waves, a sandy floor lit by the same focusing, and drifting specks:</p>
+<figure class="demo" id="sea" aria-label="A cross-section of shallow sea water with light shafts, waves on the surface, and a sandy floor."></figure>
+<script>
+LAB.handles.sea = demo("sea", {
+  aspect: 1.6,
+  state: () => ({ t: 2 }),
+  controls: [
+    { key: "amp", label: "Waves", min: 0, max: 2.5, step: 0.01, value: 1.2, color: "blue" },
+    { key: "clarity", label: "Clarity", min: 40, max: 600, step: 1, value: 260, unit: " px", color: "muted" },
+    { key: "foam", label: "Foam", min: 0, max: 1, step: 0.01, value: 0.5, color: "muted" },
+  ],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    g.fx.water(null, { view: "side", t: s.t, amp: v.amp, clarity: v.clarity, foam: v.foam, level: g.h * 0.25, bottom: g.h * 0.86 });
+  },
+});
+</script>
+
+<p>Ripples from two sources interfere; crests are colored by height:</p>
+<figure class="demo" id="ripples" aria-label="Interference of ripples from two point sources."></figure>
+<script>
+LAB.handles.ripples = demo("ripples", {
+  aspect: 1.6,
+  state: () => ({ t: 2 }),
+  controls: [{ key: "gap", label: "Gap", min: 20, max: 200, step: 1, value: 90, unit: " px", color: "blue" }],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) { g.fx.ripples(null, { t: s.t, style: "height", sources: [[g.w / 2 - v.gap / 2, g.h * 0.3], [g.w / 2 + v.gap / 2, g.h * 0.3]], wavelength: 30 }); },
+});
+</script>
+
+<h2>Air</h2>
+<p>Wind past a cylinder: the streaks curl round it, and it sheds a street of vortices. Spin it and the flow above speeds up:</p>
+<figure class="demo" id="wind" aria-label="Air streaks flowing past a round body and curling into a vortex street behind it."></figure>
+<script>
+LAB.handles.wind = demo("wind", {
+  aspect: 1.8,
+  state: () => ({ t: 5 }),
+  controls: [
+    { key: "spin", label: "Spin", min: -1, max: 1, step: 0.01, value: 0, color: "orange" },
+    { key: "shed", label: "Shedding", min: 0, max: 1.5, step: 0.01, value: 1, color: "blue" },
+  ],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    const c = [g.w * 0.3, g.h * 0.5], r = g.h * 0.12;
+    g.fx.wind(null, { t: s.t, bodies: [{ at: c, r, spin: v.spin }], shedding: v.shed, speed: g.w * 0.2 });
+    g.circle(c, r, { fill: "panel", stroke: "ink", width: 1.5 });
+  },
+});
+</script>
+
+<p>Heat shimmer over a hot plate bends the grid behind it:</p>
+<figure class="demo" id="shimmer" aria-label="A grid seen through rising hot air above a plate, wavering."></figure>
+<script>
+LAB.handles.shimmer = demo("shimmer", {
+  aspect: 1.8,
+  state: () => ({ t: 1 }),
+  controls: [{ key: "str", label: "Heat", min: 0, max: 8, step: 0.1, value: 3, color: "red" }],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    for (let x = 20; x < g.w; x += 24) g.line([x, 0], [x, g.h], { stroke: "grid", width: 1 });
+    for (let y = 20; y < g.h; y += 24) g.line([0, y], [g.w, y], { stroke: "grid", width: 1 });
+    g.text("SAFIS", [g.w / 2, g.h * 0.45], { size: 56, weight: 700, color: "ink" });
+    g.fx.shimmer([g.w * 0.2, g.h * 0.1, g.w * 0.6, g.h * 0.75], { t: s.t, strength: v.str });
+    g.rect(g.w * 0.2, g.h * 0.85, g.w * 0.6, 12, { fill: "red", alpha: 0.6 });
+  },
+});
+</script>
+
+<p>Air through a duct (the existing flow effect, now with tapered streaks):</p>
+<figure class="demo" id="duct" aria-label="Intake streaks entering a duct and exhaust streaks leaving it."></figure>
+<script>
+LAB.handles.duct = demo("duct", {
+  aspect: 1.8,
+  state: () => ({ t: 3 }),
+  controls: [{ key: "throttle", label: "Throttle", min: 0, max: 1, step: 0.01, value: 0.8, color: "orange" }],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    const P = g.view3d({ yaw: -0.62, pitch: 0.32, scale: g.w * 0.06, center: [g.w * 0.5, g.h * 0.45] });
+    const inlet = Fx.ellipse(P, [-2.5, 0, 0], [1, 0, 0], 1), nozzle = Fx.ellipse(P, [2.5, 0, 0], [1, 0, 0], 0.72);
+    const ring = (x, r) => Array.from({ length: 41 }, (_, i) => P([x, r * Math.cos(i / 40 * TAU), r * Math.sin(i / 40 * TAU)]));
+    g.path(ring(-2.5, 1).concat(ring(2.5, 0.72).reverse()), { fill: "panel", stroke: "ink", width: 1.5, close: true });
+    g.fx.flow(null, { inlet, nozzle, throttle: v.throttle, temperature: 850, t: s.t, seed: 5 });
+  },
+});
+</script>
+
+<h2>Light</h2>
+<p>A rocket plume, a glowing filament, sparks, and an arc:</p>
+<figure class="demo" id="glow" aria-label="A rocket plume, a glowing coil, a spray of sparks, and an electric arc."></figure>
+<script>
+LAB.handles.glow = demo("glow", {
+  aspect: 1.8,
+  state: () => ({ t: 2 }),
+  controls: [{ key: "temp", label: "Coil", min: 700, max: 3000, step: 10, value: 1500, unit: " K", color: "red" }],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    const w = g.w / 4;
+    g.fx.plume([0, 0, w, g.h], { t: s.t, at: [w / 2, 16], width: w * 0.3, throttle: 0.9 });
+    const coil = Array.from({ length: 60 }, (_, i) => [w + w * 0.2 + w * 0.6 * i / 59, g.h / 2 + 18 * Math.sin(i / 59 * TAU * 4)]);
+    g.fx.glow([w, 0, w, g.h], { path: coil, width: 3, temp: v.temp });
+    g.fx.sparks([2 * w, 0, w, g.h], { t: s.t, at: [2.5 * w, g.h * 0.8] });
+    g.fx.arc([3 * w, 0, w, g.h], { t: s.t, from: [3.2 * w, g.h * 0.3], to: [3.8 * w, g.h * 0.7] });
+  },
+});
+</script>
+
+<h2>Optics</h2>
+<p>White light through a flint prism spreads into a continuous spectrum; the glass shades by thickness and catches the light at its edges:</p>
+<figure class="demo" id="prism" aria-label="White light entering a glass prism and leaving as a continuous fan of color onto a screen."></figure>
+<script>
+LAB.handles.prism = demo("prism", {
+  aspect: 1.6,
+  controls: [
+    { key: "aim", label: "Aim", min: 10, max: 40, step: 0.5, value: 24, unit: "°", color: "orange" },
+    { key: "mat", label: "Prism", type: "choice", options: [{ value: "bk7", label: "Crown" }, { value: "flint", label: "Flint" }, { value: "denseFlint", label: "Dense flint" }], value: "flint" },
+  ],
+  draw(g, s, v) {
+    const P = g.fit(-7.4, 7.4, -5.6, 3.3, { box: [0, 0, g.w, g.h - 40] });
+    const t = Math.tan(v.aim * Math.PI / 180), M = [-0.85, 0.49];
+    g.optics([
+      Optics.prism([0, 0], 3.4, { n: v.mat, label: "prism" }),
+      Optics.wall([-5.8, M[1] - 4.95 * t + 0.14], [-5.8, 3.4]), Optics.wall([-5.8, M[1] - 4.95 * t - 0.14], [-5.8, -5.8]),
+      Optics.screen([6.4, -5.7], [6.4, 3.2], { name: "screen" }),
+      Optics.ray([-7.4, M[1] - 6.55 * t], v.aim, { wl: "white" }),
+    ], { P, minI: 0.05 });
+    g.visibleSpectrum([(g.w - 420) / 2, g.h - 34, 420, 10]);
+  },
+});
+</script>
+
+<p>Wavefronts from a point source, through a lens, converging on its image. They travel as time runs:</p>
+<figure class="demo" id="wavefronts" aria-label="Circular wavefronts from a point source flatten and then converge after passing through a lens."></figure>
+<script>
+LAB.handles.wavefronts = demo("wavefronts", {
+  aspect: 2,
+  state: () => ({ t: 0.4 }),
+  controls: [{ key: "f", label: "Focal length", min: 2, max: 6, step: 0.1, value: 3.5, color: "blue" }],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) {
+    const P = g.fit(-9, 11, -4, 4);
+    g.optics([
+      Optics.lens([0, 0], { f: v.f, aperture: 3.4, n: "bk7", label: "lens" }),
+      Optics.fanTo([-7, 0], [0, -1.6], [0, 1.6], { n: 21, color: "orange" }),
+    ], { P, wavefronts: { spacing: 0.9, phase: (s.t * 1.2) % 0.9 }, alpha: 0.5, minI: 0.06, focal: true });
+  },
+});
+</script>
+
+<p>A light pipe: total internal reflection keeps the light in, marked at each bounce:</p>
+<figure class="demo" id="pipe" aria-label="Rays bouncing along the inside of a curved acrylic light pipe by total internal reflection."></figure>
+<script>
+LAB.handles.pipe = demo("pipe", {
+  aspect: 2,
+  controls: [{ key: "spread", label: "Spread", min: 0, max: 30, step: 1, value: 14, unit: "°", color: "orange" }],
+  draw(g, s, v) {
+    const P = g.fit(-1.5, 13, -2.2, 6.2);
+    const c = [8, 2.1];   // the bend's center: inner wall radius 1.5, outer 2.7
+    const pipe = Optics.body([Optics.segment([0, -0.6], [8, -0.6]), Optics.arc(c, 2.7, -90, 0), Optics.segment([10.7, 2.1], [10.7, 5.6]), Optics.segment([10.7, 5.6], [9.5, 5.6]),
+      Optics.segment([9.5, 5.6], [9.5, 2.1]), Optics.arc(c, 1.5, -90, 0), Optics.segment([8, 0.6], [0, 0.6]), Optics.segment([0, 0.6], [0, -0.6])], { n: "acrylic", label: "acrylic" });
+    g.optics([pipe, Optics.fan([-0.6, 0], 0, v.spread, { n: 9, color: "orange" })], { P, minI: 0.08 });
+  },
+});
+</script>
+
+<h2>Sound</h2>
+<p>A plucked string: its waveform, loudness, and spectrum, with harmonics numbered:</p>
+<figure class="demo" id="pluck" aria-label="The waveform of a plucked string above its spectrum with numbered harmonics."></figure>
+<script>
+{
+  const SR = 16000, wave = Sound.karplus({ freq: 110, pick: 0.2, decay: 1.6, brightness: 0.3, sampleRate: SR, duration: 1.5 }), spec = Sound.spectrum(wave, { size: 16384 });
+  LAB.handles.pluck = demo("pluck", {
+    aspect: 1.7,
+    draw(g) {
+      g.waveform(wave, [0, 0, g.w, g.h * 0.36], { color: "blue" });
+      g.waveform(wave, [g.w * 0.62, g.h * 0.02, g.w * 0.36, g.h * 0.3], { to: Math.round(SR * 0.03), color: "purple", fill: true });
+      g.spectrum(spec, [0, g.h * 0.42, g.w, g.h * 0.58], { sampleRate: SR, maxFreq: 110 * 12.5, db: true, floor: -80, range: [-80, -10], harmonics: 110, color: "orange", xLabel: "Hz" });
+    },
+  });
+}
+</script>
+
+<p>Sound in air: parcels of air slosh back and forth; where they bunch up the pressure is high. The plot below stays in step:</p>
+<figure class="demo" id="air" aria-label="Dots representing air moving back and forth in a sound wave, over red compressions and blue rarefactions, with a pressure plot."></figure>
+<script>
+LAB.handles.air = demo("air", {
+  aspect: 1.7,
+  state: () => ({ t: 0.6 }),
+  controls: [{ key: "src", label: "Source", type: "choice", options: [{ value: "plane", label: "Plane" }, { value: "point", label: "Point" }], value: "plane" }],
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) { g.airWave(null ?? [0, 0, g.w, g.h], { t: s.t, source: v.src }); },
+});
+</script>
+
+<p>Standing waves on a string and in pipes, with nodes and antinodes:</p>
+<figure class="demo" id="standing" aria-label="A standing wave on a string, or in an open or closed pipe, with nodes and antinodes labeled."></figure>
+<script>
+LAB.handles.standing = demo("standing", {
+  aspect: 2.2,
+  state: () => ({ t: 0.3 }),
+  controls: [
+    { key: "kind", label: "On", type: "choice", options: [{ value: "string", label: "String" }, { value: "open", label: "Open pipe" }, { value: "closed", label: "Closed pipe" }], value: "string" },
+    { key: "n", label: "Harmonic", min: 1, max: 6, step: 1, value: 3, color: "blue" },
+  ],
+  status: (s, v) => { const m = Sound.mode({ kind: v.kind, n: v.n, length: 0.65, speed: v.kind === "string" ? 260 : 343 }); return `harmonic ${m.n}: ${m.freq.toFixed(0)} Hz for a 65 cm ${v.kind === "string" ? "string" : "pipe"}`; },
+  step(dt, s) { s.t += dt; },
+  draw(g, s, v) { g.standingWave([24, 10, g.w - 48, g.h - 20], { kind: v.kind, n: v.n, t: s.t }); },
+});
+</script>
