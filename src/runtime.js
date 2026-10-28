@@ -430,7 +430,7 @@
       // Simple 3D to 2D projection for line drawings (no WebGL). Larger depth is closer.
       view3d(o = {}) {
         const yaw = o.yaw ?? 0.6, pitch = o.pitch ?? 0.3;
-        const s = o.scale ?? Math.min(g.w, g.h) * 0.35;
+        const s = (o.scale ?? Math.min(g.w, g.h) * 0.35) * (o.zoom ?? 1);
         const c = o.center ?? [g.w / 2, g.h / 2];
         const dist = o.dist ?? Infinity;
         const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
@@ -459,7 +459,9 @@
         const out = g.dpr, budget = 1.05e7;
         let ss = out >= 1.5 && g.interacting ? 1 : 2;
         if (bw * bh * (out * ss) ** 2 > budget) ss = 1;
-        const view = E3.render(scene, cam, bw, bh, out, ss);
+        // The figure's `quality` ("low" | "medium" | "high") forces a tier; `still` tells the
+        // engine this frame isn't part of a drag or animation, so it renders at full quality.
+        const view = E3.render(scene, { quality: g.quality, still: !g.interacting, ...cam }, bw, bh, out, ss);
         const s = view.source;
         ctx.save();
         ctx.imageSmoothingEnabled = false;
@@ -599,13 +601,14 @@
         for (const k of Object.keys(d.s)) delete d.s[k];
         Object.assign(d.s, initialState(spec));
         if (view) d.s.view = view;
+        if (view && d.view0) setZoom(d, d.view0.zoom);
         d.dirty = true;
         if (typeof spec.reset === "function") guard(d, "reset", () => spec.reset(d.s, d.v, d.handle));
         el.dispatchEvent(new CustomEvent("safis:reset", { detail: d.handle }));
       },
       get visible() { return d.visible; },
       redraw() { d.dirty = true; },
-      play(on = true) { d.playing = !!on && !!spec.step; syncPlay(d); },
+      play(on = true) { d.playing = !!on && !!spec.step; syncPlay(d); if (!d.playing) d.dirty = true; },
       get playing() { return d.playing; },
       get highlight() { return d.highlight; },
       set highlight(name) { setHighlight(d, name); },
@@ -613,8 +616,9 @@
     };
     d.s = initialState(spec);
     if (spec.orbit) {
-      d.s.view = { yaw: spec.orbit.yaw ?? -0.6, pitch: spec.orbit.pitch ?? 0.35 };
+      d.s.view = { yaw: spec.orbit.yaw ?? -0.6, pitch: spec.orbit.pitch ?? 0.35, zoom: clampZoom(d, spec.orbit.zoom ?? 1) };
       d.view0 = { ...d.s.view };
+      d.zoomTo = d.s.view.zoom;
     }
 
     el.classList.add("is-live");
@@ -628,6 +632,7 @@
     stage.append(d.canvas);
     plate.append(stage);
     Object.assign(d, { plate, stage, ctx: d.canvas.getContext("2d") });
+    if (spec.orbit && spec.orbit.zoomButtons !== false) addZoomButtons(d);
     d.g = makeG(d.ctx);
 
     const panel = node("div", "panel");
@@ -1019,7 +1024,7 @@
       return b;
     };
     if (spec.step && spec.playButton !== false && t !== false) {
-      d.playBtn = iconBtn(ICONS.pause + ICONS.play, "Pause animation", () => { d.playing = !d.playing; d.touched = true; syncPlay(d); });
+      d.playBtn = iconBtn(ICONS.pause + ICONS.play, "Pause animation", () => { d.playing = !d.playing; d.touched = true; syncPlay(d); if (!d.playing) d.dirty = true; });
       d.playing = spec.autoplay !== false && !motionQuery.matches;
       syncPlay(d);
       if (t.step !== false) {
@@ -1114,6 +1119,7 @@
       const nums = numericControls(d);
       if (spec.orbit && spec.drag) hints.push(["Drag", "move or turn"]);
       else if (spec.orbit) hints.push(["Drag", "turn"]);
+      if (spec.orbit && spec.orbit.zoomButtons !== false) hints.push([/Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘ scroll" : "Ctrl scroll", "zoom"]);
       else if (spec.drag) hints.push(["Drag", "move"]);
       if (nums[0]) hints.push(["← →", String(nums[0].label ?? nums[0].key).toLowerCase()]);
       if (nums[1]) hints.push(["↑ ↓", String(nums[1].label ?? nums[1].key).toLowerCase()]);
@@ -1147,6 +1153,9 @@
       if (e.key === " " && d.spec.step && d.spec.playButton !== false) { d.playing = !d.playing; syncPlay(d); }
       else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && nums[0]) nudge(nums[0], e.key === "ArrowRight" ? 1 : -1);
       else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && nums[1]) nudge(nums[1], e.key === "ArrowUp" ? 1 : -1);
+      else if (d.spec.orbit && !e.ctrlKey && !e.metaKey && (e.key === "+" || e.key === "=")) setZoom(d, d.zoomTo * 1.25);
+      else if (d.spec.orbit && !e.ctrlKey && !e.metaKey && (e.key === "-" || e.key === "_")) setZoom(d, d.zoomTo / 1.25);
+      else if (d.spec.orbit && !e.ctrlKey && !e.metaKey && e.key === "0") setZoom(d, d.view0.zoom);
       else if (e.key.startsWith("Arrow") && d.spec.orbit) {
         const v = d.s.view;
         if (e.key === "ArrowLeft") v.yaw -= 0.08; else if (e.key === "ArrowRight") v.yaw += 0.08;
@@ -1159,6 +1168,42 @@
 
   const clampPitch = (d, p) => clamp(p, d.spec.orbit?.minPitch ?? -1.45, d.spec.orbit?.maxPitch ?? 1.45);
   const clampYaw = (d, y) => clamp(y, d.spec.orbit?.minYaw ?? -Infinity, d.spec.orbit?.maxYaw ?? Infinity);
+  // Zoom: s.view.zoom multiplies the fitted framing (E3 and Iso both read it from the view).
+  // Input sets a target and the frame loop eases toward it in log space; reduced motion and
+  // the page checker jump straight there.
+  const clampZoom = (d, z) => clamp(z, d.spec.orbit?.minZoom ?? 0.5, d.spec.orbit?.maxZoom ?? 4);
+  function setZoom(d, z, now = false) {
+    if (!d.s.view) return;
+    d.zoomTo = clampZoom(d, Number.isFinite(z) ? z : 1);
+    if (now || motionQuery.matches || root.classList.contains("safis-checking")) { d.s.view.zoom = d.zoomTo; d.zoomEase = false; }
+    else d.zoomEase = true;
+    d.touched = true;
+    d.dirty = true;
+    syncZoom(d);
+  }
+  function syncZoom(d) {
+    if (!d.zoomIn) return;
+    const lo = d.spec.orbit?.minZoom ?? 0.5, hi = d.spec.orbit?.maxZoom ?? 4;
+    d.zoomIn.disabled = d.zoomTo >= hi - 1e-6;
+    d.zoomOut.disabled = d.zoomTo <= lo + 1e-6;
+  }
+  function addZoomButtons(d) {
+    const box = node("div", "zoom");
+    const mk = (cls, label, path, f) => {
+      const b = node("button", cls);
+      b.type = "button";
+      b.setAttribute("aria-label", label);
+      b.title = label;
+      b.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="${path}" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>`;
+      b.addEventListener("click", e => { e.stopPropagation(); if (!d.broken) setZoom(d, d.zoomTo * f); }, { signal: d.abort.signal });
+      box.append(b);
+      return b;
+    };
+    d.zoomIn = mk("zoom-in", "Zoom in", "M8 3.5v9M3.5 8h9", 1.35);
+    d.zoomOut = mk("zoom-out", "Zoom out", "M3.5 8h9", 1 / 1.35);
+    d.stage.append(box);
+    syncZoom(d);
+  }
 
   function addPointer(d) {
     const { canvas, spec } = d;
@@ -1166,6 +1211,22 @@
     if (spec.drag || spec.orbit) canvas.classList.add("draggable");
     let mode = null, last = null, lastT = 0, vel = [0, 0];
     const pos = e => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    // Zoom with Ctrl or Cmd and the wheel (a trackpad pinch arrives that way too); a plain
+    // wheel keeps scrolling the page. Safari's trackpad pinch comes as gesture events.
+    const touches = new Map();
+    let pinch = null, gesture0 = 1;
+    if (spec.orbit) {
+      const opt = { passive: false, signal: d.abort.signal };
+      canvas.addEventListener("wheel", e => {
+        if (d.broken || !(e.ctrlKey || e.metaKey)) return;
+        e.preventDefault();
+        const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+        setZoom(d, d.zoomTo * Math.exp(-clamp(dy, -80, 80) * 0.006));
+      }, opt);
+      canvas.addEventListener("gesturestart", e => { e.preventDefault(); gesture0 = d.zoomTo; }, opt);
+      canvas.addEventListener("gesturechange", e => { e.preventDefault(); if (!d.broken) setZoom(d, gesture0 * e.scale, true); }, opt);
+    }
+    const spread = () => { const [a, b] = [...touches.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]) || 1; };
     const hits = p => {
       if (!spec.drag) return false;
       if (!spec.drag.hit) return true;
@@ -1177,6 +1238,17 @@
       if (d.broken || e.button > 0) return;
       d.touched = true;
       const p = pos(e);
+      if (e.pointerType === "touch") touches.set(e.pointerId, p);
+      // A second finger turns a turn into a pinch.
+      if (spec.orbit && touches.size === 2 && mode !== "drag") {
+        mode = "pinch";
+        d.orbiting = false;
+        d.spin = null;
+        pinch = { dist: spread(), zoom: d.zoomTo };
+        try { canvas.setPointerCapture(e.pointerId); } catch {}
+        e.preventDefault();
+        return;
+      }
       if (hits(p)) mode = "drag";
       else if (spec.orbit) mode = "orbit";
       else return;
@@ -1193,6 +1265,11 @@
     });
     on("pointermove", e => {
       const p = pos(e);
+      if (touches.has(e.pointerId)) touches.set(e.pointerId, p);
+      if (mode === "pinch") {
+        if (touches.size === 2) setZoom(d, pinch.zoom * spread() / pinch.dist, true);
+        return;
+      }
       if (!mode) {
         if (e.pointerType === "mouse") canvas.style.cursor = hits(p) ? "grab" : spec.orbit ? "grab" : "";
         if (spec.hover) {
@@ -1216,7 +1293,11 @@
       }
       d.dirty = true;
     });
-    const end = () => {
+    const end = e => {
+      if (e && touches.delete(e.pointerId) && mode === "pinch") {
+        if (touches.size < 2) { mode = null; pinch = null; d.dirty = true; }
+        return;
+      }
       if (!mode) return;
       if (mode === "drag") guard(d, "drag.end", () => spec.drag.end?.(d.s, d.v, d.handle));
       if (mode === "orbit" && !motionQuery.matches && performance.now() - lastT < 80 && Math.hypot(vel[0], vel[1]) > 0.08) d.spin = vel.slice();
@@ -1364,8 +1445,8 @@
     ctx.fillRect(0, 0, d.canvas.width, d.canvas.height);
     ctx.globalCompositeOperation = "source-over";
     ctx.setTransform(d.dpr, 0, 0, d.dpr, 0, 0);
-    const interacting = !!(d.orbiting || d.dragging || d.spin || d.tweens.size || (d.playing && d.spec.step));
-    Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, wantsFrame: false });
+    const interacting = !!(d.orbiting || d.dragging || d.spin || d.zoomEase || d.tweens.size || (d.playing && d.spec.step));
+    Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, quality: d.spec.quality, wantsFrame: false });
     guard(d, "draw", () => d.spec.draw(d.g, d.s, d.v, d.handle));
     d.pulse = d.g.wantsFrame;
     if (d.statusEl && !d.broken) guard(d, "status", () => { d.statusEl.textContent = d.spec.status(d.s, d.v, d.handle) ?? ""; });
@@ -1404,6 +1485,12 @@
         view.pitch = clampPitch(d, view.pitch + d.spin[1] * dt * 1000 * turn);
         d.spin = [d.spin[0] * k, d.spin[1] * k];
         if (Math.hypot(d.spin[0], d.spin[1]) < 0.004) d.spin = null;
+        d.dirty = true;
+      }
+      if (d.zoomEase && d.s.view && !d.broken) {
+        const z = d.s.view.zoom ?? 1, k = 1 - Math.exp(-dt / 0.09);
+        const next = Math.exp(lerp(Math.log(z), Math.log(d.zoomTo), k));
+        if (Math.abs(next - d.zoomTo) < d.zoomTo * 2e-3) { d.s.view.zoom = d.zoomTo; d.zoomEase = false; } else d.s.view.zoom = next;
         d.dirty = true;
       }
       if (d.spec.step && d.playing && d.visible && !d.dragging && !d.broken) {
@@ -1472,32 +1559,60 @@
   // applied before the page paints) and opens it as a drawer on narrow ones.
   const TOC_KEY = "safis-toc";
   try { if (!window.__safisHost && localStorage.getItem(TOC_KEY) === "hidden") root.classList.add("safis-toc-hidden"); } catch {}
+  // A page may carry its own index button (a site header does); otherwise one floats in the
+  // corner. Ctrl+B (Cmd+B on a Mac) toggles it too, the way an editor's sidebar does.
   function addIndexToggle() {
-    if (window.__safisHost || !document.querySelector(".page.has-toc .toc") || document.querySelector(".toc-toggle")) return;
+    if (window.__safisHost || !document.querySelector(".page.has-toc .toc")) return;
+    let b = document.querySelector(".toc-toggle");
+    if (b && b.dataset.bound) return;
+    if (!b) {
+      b = node("button", "toc-toggle");
+      b.type = "button";
+      b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.25 3v10" stroke="currentColor" stroke-width="1.5"/></svg>';
+      document.body.append(b);
+    }
+    b.dataset.bound = "1";
+    const toc = document.querySelector(".page.has-toc .toc");
+    if (!toc.id) toc.id = "safis-index";
+    b.setAttribute("aria-controls", toc.id);
     const wide = matchMedia("(min-width: 1240px)");
-    const b = node("button", "toc-toggle");
-    b.type = "button";
-    b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.25 3v10" stroke="currentColor" stroke-width="1.5"/></svg>';
+    const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+    const keys = mac ? "⌘B" : "Ctrl+B";
     const open = () => (wide.matches ? !root.classList.contains("safis-toc-hidden") : root.classList.contains("safis-toc-open"));
     const sync = () => {
       const label = open() ? "Hide the index" : "Show the index";
-      b.title = label;
+      b.title = `${label} (${keys})`;
       b.setAttribute("aria-label", label);
+      b.setAttribute("aria-keyshortcuts", mac ? "Meta+B" : "Control+B");
       b.setAttribute("aria-expanded", String(open()));
     };
     const close = () => { root.classList.remove("safis-toc-open"); sync(); };
-    b.addEventListener("click", () => {
+    const toggle = () => {
       if (wide.matches) {
         const hidden = root.classList.toggle("safis-toc-hidden");
         try { if (hidden) localStorage.setItem(TOC_KEY, "hidden"); else localStorage.removeItem(TOC_KEY); } catch {}
-      } else root.classList.toggle("safis-toc-open");
+      } else {
+        root.classList.toggle("safis-toc-open");
+        if (open()) toc.querySelector('[aria-current="page"], a')?.focus({ preventScroll: true });
+      }
       sync();
-    });
+    };
+    b.addEventListener("click", toggle);
     document.addEventListener("click", e => { if (root.classList.contains("safis-toc-open") && !e.target.closest(".toc, .toc-toggle")) close(); });
-    document.addEventListener("keydown", e => { if (e.key === "Escape" && root.classList.contains("safis-toc-open")) { close(); b.focus(); } });
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape" && root.classList.contains("safis-toc-open")) { close(); b.focus(); return; }
+      if ((e.key === "b" || e.key === "B") && (mac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        const t = e.target;
+        if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+        e.preventDefault();
+        toggle();
+      }
+    });
     wide.addEventListener("change", close);
+    // The current page's link scrolls into view inside the index.
+    const cur = toc.querySelector('[aria-current="page"]');
+    if (cur && cur.offsetTop > toc.clientHeight * 0.6) toc.scrollTop = cur.offsetTop - toc.clientHeight * 0.35;
     sync();
-    document.body.append(b);
   }
   // ---------- Article furniture (styles in src/article.css, reference in references/article.md) ----------
   const slug = t => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 60) || "section";
@@ -1564,6 +1679,7 @@
     for (const h of article.querySelectorAll("h2, h3")) {
       if (!h.id) { let id = slug(h.textContent), k = 2; while (used.has(id) || document.getElementById(id)) id = `${slug(h.textContent)}-${k++}`; h.id = id; }
       used.add(h.id);
+      if (h.querySelector(":scope > a.anchor")) continue; // built ahead of time
       const a = node("a", "anchor", "#");
       a.href = `#${h.id}`;
       a.setAttribute("aria-label", `Link to “${h.textContent.trim()}”`);
@@ -1587,13 +1703,17 @@
       const numbered = sn.classList.contains("sidenote");
       sn.id ||= `note-${numbered ? ++n : `m${n}-${Math.random().toString(36).slice(2, 6)}`}`;
       if (numbered) sn.dataset.n = n;
-      const b = node("button", "sn-ref", numbered ? String(n) : "⊕");
-      b.type = "button";
-      b.setAttribute("aria-expanded", "false");
-      b.setAttribute("aria-controls", sn.id);
-      b.setAttribute("aria-label", numbered ? `Note ${n}` : "Margin note");
+      // A page built ahead of time already has the button; only wire it up.
+      let b = sn.previousElementSibling;
+      if (!b || !b.classList.contains("sn-ref")) {
+        b = node("button", "sn-ref", numbered ? String(n) : "⊕");
+        b.type = "button";
+        b.setAttribute("aria-expanded", "false");
+        b.setAttribute("aria-controls", sn.id);
+        b.setAttribute("aria-label", numbered ? `Note ${n}` : "Margin note");
+        sn.before(b);
+      }
       b.addEventListener("click", () => { const open = sn.classList.toggle("open"); b.setAttribute("aria-expanded", String(open)); });
-      sn.before(b);
     }
     // Numbered citations with a preview of the reference
     const refs = [...article.querySelectorAll(".references > li[id]")];
@@ -1645,18 +1765,6 @@
         setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1400);
       });
       b.append(btn);
-    }
-    // Reading progress for long pieces
-    if (sections.length >= 4) {
-      const bar = node("div", "progress");
-      bar.setAttribute("aria-hidden", "true");
-      document.body.append(bar);
-      const update = () => {
-        const r = article.getBoundingClientRect();
-        root.style.setProperty("--read", clamp(-r.top / Math.max(1, r.height - innerHeight), 0, 1).toFixed(4));
-      };
-      addEventListener("scroll", update, { passive: true });
-      update();
     }
   }
 
@@ -1750,6 +1858,12 @@
         const before = snapshot(d).hash;
         d.s.view.yaw += 0.5;
         if (!d.broken && snapshot(d).hash === before) r.warnings.push("turning the view doesn't change the figure (is draw() using s.view?)");
+        if (spec.orbit.zoomButtons !== false && !d.broken) {
+          restoreState(d, saved);
+          const z0 = snapshot(d).hash;
+          d.s.view.zoom = clampZoom(d, (d.s.view.zoom ?? 1) * 1.5);
+          if (!d.broken && snapshot(d).hash === z0) r.warnings.push("zooming the view doesn't change the figure (spread ...s.view into the camera, or set orbit.zoomButtons: false)");
+        }
       }
       restoreState(d, saved);
       render(d);
@@ -1810,12 +1924,13 @@
     d.touched = true;
     if (action.reset) {
       if (typeof d.spec.state === "function") d.handle.reset();
-      if (d.s.view && d.view0) Object.assign(d.s.view, d.view0);
+      if (d.s.view && d.view0) { Object.assign(d.s.view, d.view0); d.zoomTo = d.view0.zoom; d.zoomEase = false; syncZoom(d); }
       d.spin = null;
       d.tweens.clear();
     }
     if (action.set) for (const [k, v] of Object.entries(action.set)) setControl(d, k, v);
-    if (action.view && d.s.view) Object.assign(d.s.view, action.view);
+    if (action.view && d.s.view) { Object.assign(d.s.view, action.view); d.zoomTo = d.s.view.zoom; d.zoomEase = false; syncZoom(d); }
+    if (action.zoom != null && d.s.view) setZoom(d, action.zoom, true);
     if (action.viewDelta && d.s.view && d.view0) {
       d.s.view.yaw = clampYaw(d, d.view0.yaw + action.viewDelta[0]);
       d.s.view.pitch = clampPitch(d, d.view0.pitch + action.viewDelta[1]);

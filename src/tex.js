@@ -1006,7 +1006,7 @@
   }
 
   (W.__safisG ||= []).push(install);
-  W.SafisTeX = { toMathML, typeset, errors, parse: src => { const r = parsed(String(src)); if (r.error) throw new Error(r.error); return r.node; } };
+  W.SafisTeX = { toMathML, typeset, errors, convert, parse: src => { const r = parsed(String(src)); if (r.error) throw new Error(r.error); return r.node; } };
 
   const doc = W.document;
   if (doc) {

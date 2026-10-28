@@ -560,18 +560,20 @@
   function camera(scene, A, E, box, lo, hi, o, recs) {
     const sA = sin(A), cA = cos(A), sE = sin(E), cE = cos(E);
     const R = [sA, -cA, 0], D = [cA * sE, sA * sE, -cE], V = [cA * cE, sA * cE, sE];
-    const zoom = o.zoom ?? 1, bw = box[2], bh = box[3];
+    // o.zoom scales the fitted framing; the reader's zoom (o.view.zoom, from the figure's orbit)
+    // multiplies that, so zooming never refits.
+    const zoom = (o.zoom ?? 1) * (o.view?.zoom ?? 1), bw = box[2], bh = box[3];
     let fit = scene._fit;
-    if (!fit || o.fit === "always" || fit.w !== bw || fit.h !== bh || fit.zoom !== zoom) {
+    if (!fit || o.fit === "always" || fit.w !== bw || fit.h !== bh) {
       // Fit every vertex (or o.bounds) into the box.
       let x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
       const see = (x, y, z) => { const a = x * R[0] + y * R[1], b = x * D[0] + y * D[1] + z * D[2]; if (a < x0) x0 = a; if (a > x1) x1 = a; if (b < y0) y0 = b; if (b > y1) y1 = b; };
       if (o.bounds) for (let i = 0; i < 8; i++) see(o.bounds[i & 1][0], o.bounds[(i >> 1) & 1][1], o.bounds[i >> 2][2]);
       else for (const r of recs) { const W = r.G.W; for (let i = 0; i < W.length; i += 3) see(W[i], W[i + 1], W[i + 2]); }
-      const mg = o.margin ?? 0.92, k = min(bw * mg / (x1 - x0 || 1), bh * mg / (y1 - y0 || 1)) * zoom, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-      fit = scene._fit = { w: bw, h: bh, zoom, k, c: add(add(scl(R, cx), scl(D, cy)), scl(V, dot(scl(add(lo, hi), 0.5), V))) };
+      const mg = o.margin ?? 0.92, k = min(bw * mg / (x1 - x0 || 1), bh * mg / (y1 - y0 || 1)), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      fit = scene._fit = { w: bw, h: bh, k, c: add(add(scl(R, cx), scl(D, cy)), scl(V, dot(scl(add(lo, hi), 0.5), V))) };
     }
-    const k = o.scale ? o.scale * sqrt(1.6) : fit.k, c = o.center || fit.c;
+    const k = (o.scale ? o.scale * sqrt(1.6) : fit.k) * zoom, c = o.center || fit.c;
     const ox = box[0] + bw / 2 - k * dot(c, R), oy = box[1] + bh / 2 - k * dot(c, D);
     const L = nrm(add(add(scl(R, -0.52), scl(D, -0.62)), scl(V, 0.58))), H = nrm(add(add(scl(R, -0.45), scl(D, -0.3)), V));
     return { A, E, R, D, V, L, H, k, ox, oy, T: a => nrm(sub(H, scl(a, dot(H, a)))), key: [A, E, k, ox, oy].map(x => x.toFixed(6)).join(","),

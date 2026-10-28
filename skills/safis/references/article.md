@@ -17,7 +17,7 @@ Use each where it helps the reader, not as decoration. A good long page has a ha
 ```
 
 - **`.abstract`** ("In brief", or `data-label="..."`): three to five plain sentences of what the reader will understand. Put it right after the article starts, before the opening paragraph.
-- **Contents** are built automatically when the article has five or more numbered sections (after the abstract if there is one). A reading-progress rule appears at the top for pages with four or more sections.
+- **Contents** are built automatically when the article has five or more numbered sections (after the abstract if there is one).
 - **`<p class="lede">`** on the first paragraph gives it a drop cap.
 - **`<p class="byline">`** only when the request supplies an author or date. Never invent one.
 

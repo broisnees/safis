@@ -94,62 +94,70 @@ body {
 }
 ::selection { background: color-mix(in srgb, var(--ink) 18%, transparent); }
 
-/* Layout: optional site index on the left, article in the middle. */
+/* Layout: optional site index on the left, article in the middle. A site that puts a bar
+   above the page sets --safis-bar to its height, and the index sits below it. */
 .page { position: relative; padding: 0 20px; }
 main { max-width: var(--measure); margin: 0 auto; padding: 88px 0 128px; }
 .toc { display: none; }
 @media (min-width: 1240px) {
-  .page.has-toc { display: grid; grid-template-columns: 248px 1fr; }
-  .page.has-toc main { margin: 0 auto; transform: translateX(-62px); }
+  .page.has-toc { display: grid; grid-template-columns: 264px 1fr; }
+  .page.has-toc main { margin: 0 auto; transform: translateX(-70px); }
   .toc {
     display: block;
-    position: sticky; top: 0; align-self: start;
-    max-height: 100vh; overflow-y: auto;
-    padding: 64px 12px 40px 8px;
-    font: 15px/1.45 var(--font-serif);
+    position: sticky; top: var(--safis-bar, 0px); align-self: start;
+    max-height: calc(100vh - var(--safis-bar, 0px)); overflow-y: auto;
+    padding: 56px 16px 48px 4px;
+    font: 14.5px/1.4 var(--font-text);
   }
 }
 /* The index scrolls on its own with a slim bar that shows while the pointer is over it. */
-.toc { scrollbar-width: thin; scrollbar-color: transparent transparent; scrollbar-gutter: stable; }
+.toc { scrollbar-width: thin; scrollbar-color: transparent transparent; scrollbar-gutter: stable; overscroll-behavior: contain; }
 .toc:hover, .toc:focus-within { scrollbar-color: var(--faint) transparent; }
-/* A button in the top-left corner hides the index on wide screens and opens it as a drawer on narrow ones. */
+/* A button in the top-left corner hides the index on wide screens and opens it as a drawer on
+   narrow ones; Ctrl+B / Cmd+B does the same. A site header can carry the button instead. */
 .toc-toggle {
   position: fixed; top: 14px; inset-inline-start: 14px; z-index: 16;
   width: 36px; height: 36px; display: grid; place-items: center; padding: 0;
   border: 1px solid var(--rule); border-radius: 50%; background: color-mix(in srgb, var(--panel) 92%, transparent);
   color: var(--muted); cursor: pointer; box-shadow: var(--shadow);
-  transition: scale 0.15s, color 0.15s;
+  transition: scale 0.15s, color 0.15s, background-color 0.15s;
 }
 .toc-toggle svg { width: 16px; height: 16px; }
 .toc-toggle:active { scale: 0.96; }
 .toc-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: hover) { .toc-toggle:hover { color: var(--ink); } }
 @media (min-width: 1240px) {
-  .page.has-toc { transition: grid-template-columns 0.35s var(--ease-out); }
-  .page.has-toc main { transition: transform 0.35s var(--ease-out); }
-  .page.has-toc .toc { transition: opacity 0.25s var(--ease-out), translate 0.35s var(--ease-out), visibility 0.35s; }
+  .page.has-toc { transition: grid-template-columns 0.4s var(--ease-out); }
+  .page.has-toc main { transition: transform 0.4s var(--ease-out); }
+  .page.has-toc .toc { transition: opacity 0.22s var(--ease-out), translate 0.4s var(--ease-out), visibility 0.4s; }
   .safis-toc-hidden .page.has-toc { grid-template-columns: 0 1fr; }
   .safis-toc-hidden .page.has-toc main { transform: none; }
-  .safis-toc-hidden .page.has-toc .toc { opacity: 0; visibility: hidden; translate: -24px 0; overflow: hidden; }
+  .safis-toc-hidden .page.has-toc .toc { opacity: 0; visibility: hidden; translate: -28px 0; overflow: hidden; }
 }
 @media (max-width: 1239.98px) {
   .safis-toc-open .page.has-toc .toc {
-    display: block; position: fixed; inset: 0 auto 0 0; z-index: 15; width: min(300px, 86vw); overflow-y: auto;
-    padding: 64px 14px 40px 20px; font: 15px/1.45 var(--font-serif);
+    display: block; position: fixed; inset: 0 auto 0 0; z-index: 30; width: min(320px, 86vw); overflow-y: auto;
+    padding: 64px 16px 40px 18px; font: 15px/1.45 var(--font-text);
     background: var(--bg); box-shadow: 0 0 0 1px var(--rule), 0 24px 60px -12px rgb(0 0 0 / 0.45);
-    animation: toc-in 0.3s var(--ease-out);
+    animation: toc-in 0.32s var(--ease-out);
   }
-  .safis-toc-open .page.has-toc::after { content: ""; position: fixed; inset: 0; z-index: 14; background: rgb(0 0 0 / 0.28); animation: toc-fade 0.3s ease; }
+  .safis-toc-open .page.has-toc::after { content: ""; position: fixed; inset: 0; z-index: 29; background: rgb(0 0 0 / 0.32); backdrop-filter: blur(2px); animation: toc-fade 0.3s ease; }
 }
 @keyframes toc-in { from { translate: -100% 0; } }
 @keyframes toc-fade { from { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .safis-toc-open .page.has-toc .toc, .safis-toc-open .page.has-toc::after { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .safis-toc-open .page.has-toc .toc, .safis-toc-open .page.has-toc::after { animation: none; }
+  .page.has-toc, .page.has-toc main, .page.has-toc .toc { transition: none !important; }
+}
 @media print { .toc-toggle { display: none !important; } }
-.toc a { color: var(--muted); text-decoration: none; display: block; padding-block: 4px; padding-inline: 14px 0; border-inline-start: 1px solid var(--rule); }
-.toc a:hover { color: var(--ink); }
-.toc a[aria-current="page"] { color: var(--ink); border-inline-start: 2px solid var(--accent); padding-inline-start: 13px; }
-.toc .site { display: block; border: 0; padding: 0; margin-bottom: 30px; color: var(--ink); font: 560 20px/1.2 var(--font-display); letter-spacing: -0.005em; }
-.toc h2 { font: 600 13px/1.2 var(--font-serif); font-variant-caps: all-small-caps; letter-spacing: 0.06em; color: var(--muted); margin: 24px 0 6px; }
+.toc a { display: block; padding: 5px 10px; margin: 1px 0; border-radius: 7px; color: var(--muted); text-decoration: none; text-wrap: pretty; transition: background-color 0.15s, color 0.15s; }
+.toc a:hover { color: var(--ink); background: var(--chip); }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.toc a[aria-current="page"] { position: relative; color: var(--ink); font-weight: 600; background: var(--chip); }
+.toc a[aria-current="page"]::before { content: ""; position: absolute; inset-block: 7px; inset-inline-start: -4px; width: 2px; border-radius: 2px; background: var(--orange); }
+.toc .site { display: block; padding: 0 10px; margin-bottom: 26px; background: none; color: var(--ink); font: 560 21px/1.2 var(--font-display); letter-spacing: -0.005em; }
+.toc .site:hover { background: none; }
+.toc h2 { font: 600 11.5px/1.2 var(--font-text); text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); margin: 22px 0 6px; padding: 0 10px; opacity: 0.85; }
 .toc ul { list-style: none; margin: 0; padding: 0; }
 .backlink { display: inline-block; margin-bottom: 36px; font: 15px/1.4 var(--font-serif); font-style: italic; color: var(--muted); text-decoration: none; }
 .backlink:hover { color: var(--ink); }
@@ -280,6 +288,19 @@ figure.demo.wide { width: min(calc(100vw - 40px), var(--wide)); margin-left: 50%
 .stage canvas { display: block; width: 100%; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .stage canvas.draggable { touch-action: none; }
 .stage canvas.grabbing { cursor: grabbing !important; }
+/* Zoom buttons on 3D figures: in the stage's corner, shown on hover or focus (always on touch). */
+.stage .zoom { position: absolute; top: 8px; inset-inline-end: 8px; z-index: 2; display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: opacity 0.2s var(--ease-out); }
+.stage:hover .zoom, .stage:focus-within .zoom { opacity: 1; }
+@media (hover: none) { .stage .zoom { opacity: 0.92; } }
+.zoom button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border: 1px solid var(--rule); border-radius: 9px; cursor: pointer;
+  background: color-mix(in srgb, var(--panel) 84%, transparent); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); color: var(--muted); box-shadow: var(--shadow); transition: color 0.15s, scale 0.15s; }
+.zoom button svg { width: 14px; height: 14px; }
+.zoom button:active { scale: 0.94; }
+.zoom button:disabled { opacity: 0.35; cursor: default; }
+.zoom button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) { .zoom button:not(:disabled):hover { color: var(--ink); } }
+.safis-checking .stage .zoom { display: none; }
+@media print { .stage .zoom { display: none; } }
 
 figure.demo figcaption, figure.demo > .caption {
   font: 15.5px/1.5 var(--font-serif); color: var(--muted); margin: 12px 2px 0; text-wrap: pretty;

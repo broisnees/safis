@@ -1,7 +1,7 @@
 /* Long-form article furniture: the parts that make a page read like a careful
    piece of science writing. Sidenotes, numbered citations with previews, defined
    terms, callouts, "going deeper" sections, predictions, tables, code, figure
-   references, an in-page contents list, and a reading-progress rule. The runtime
+   references, and an in-page contents list. The runtime
    numbers and wires them up (see references/article.md). */
 
 /* Section anchors */
@@ -33,9 +33,7 @@ article :is(h2, h3):hover .anchor, .anchor:focus-visible { opacity: 1; }
 .contents a { text-decoration: none; color: var(--ink); }
 @media (hover: hover) { .contents a:hover { text-decoration: underline; text-decoration-color: var(--accent); } }
 
-/* Reading progress */
-.progress { position: fixed; inset: 0 0 auto 0; height: 2px; z-index: 14; pointer-events: none; background: var(--accent); transform-origin: 0 50%; transform: scaleX(var(--read, 0)); }
-@media print { .progress, .theme-toggle, .skip { display: none; } }
+@media print { .theme-toggle, .skip { display: none; } }
 
 /* Sidenotes: numbered notes in the right margin on wide screens, tap-to-open below. */
 .sn-ref {
@@ -157,4 +155,4 @@ a.figref { white-space: nowrap; }
 /* Byline and date, when the request supplies them */
 .byline { font: 15px/1.4 var(--font-serif); color: var(--muted); margin: 18px 0 0; }
 
-@media (prefers-reduced-motion: reduce) { .tip { transition: none; } .progress { display: none; } }
+@media (prefers-reduced-motion: reduce) { .tip { transition: none; } }

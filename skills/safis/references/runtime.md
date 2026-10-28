@@ -30,10 +30,11 @@ Each figure is drawn straight onto the page, with its controls beneath it (slide
 | `transport` | Animated figures get play/pause, step-forward, and speed (¼×–2×) buttons. `{ step: false, speed: false }` hides parts; `false` hides all. `stepFrames` [6] sets how far one step goes (in 1/60 s frames). |
 | `autoplay` | `false` starts paused, and tells the self-check that stillness is fine (motion starts from a button). |
 | `playButton` | `false` hides the transport and the Space key, for one-shot animations started by a button via `fig.play()`. |
+| `quality` | `"low"`, `"medium"`, or `"high"` forces the 3D engine's quality tier for this figure (render scale, shadow map size, particle count, plume steps). Leave it unset to let the engine adapt to the device; the page checker always renders at `high`. |
 | `reset` | `true` adds a reset button (needs `state` as a function). A function `(s, v, fig)` runs after every reset (the button, `fig.reset()`, the checker), so a figure can stop what it started. |
 | `destroy` | `(s, v, fig)` runs when the figure is removed: stop sounds, timers, and anything outside the canvas. |
 | `drag` | `{ hit(p, s, v, fig), start(p, s, v, fig), move(p, s, v, delta, fig), end(s, v, fig) }`. `hit` returns truthy when `p` is on something draggable (omit to drag anywhere). Points are `[x, y]` CSS pixels, origin top-left. Draw what can be dragged with `g.handle`. |
-| `orbit` | `{ yaw, pitch, minPitch, maxPitch, minYaw, maxYaw, speed }` in radians; `speed` is radians per pixel of drag [0.01], lower for big globes so the surface keeps up with the pointer. Dragging (where `drag.hit` doesn't claim it) turns `s.view = { yaw, pitch }`, with momentum after release. Arrow keys turn it too when there are no number controls. |
+| `orbit` | `{ yaw, pitch, minPitch, maxPitch, minYaw, maxYaw, speed, zoom, minZoom, maxZoom, zoomButtons }`, angles in radians; `speed` is radians per pixel of drag [0.01], lower for big globes so the surface keeps up with the pointer. Dragging (where `drag.hit` doesn't claim it) turns `s.view = { yaw, pitch, zoom }`, with momentum after release. Arrow keys turn it too when there are no number controls. **Zoom**: `s.view.zoom` [1] multiplies the fitted framing, between `minZoom` [0.5] and `maxZoom` [4]. The reader zooms with Ctrl or Cmd and the wheel or a trackpad pinch (a plain wheel still scrolls the page), a two-finger pinch on touch, `+` / `-` / `0` with the figure focused, or the buttons in the figure's corner; it eases, and the figure's reset brings it back. `g.render3d(scene, { ...s.view })`, `g.iso(scene, { view: s.view })`, and `g.view3d({ ...s.view })` all honor it, so spread the view into the camera. `zoomButtons: false` turns zoom off for a figure whose framing must stay fixed. The self-check warns when zooming changes nothing. |
 | `hover(p, s, v, fig)` | Called on pointer moves while not dragging, with `null` when the pointer leaves. Return `true` when something changed and the figure should redraw. |
 | `highlight(name, s, v, fig)` | Called when a linked term in the prose lights a part (or `null` when it goes out). Usually you don't need it: read `g.lit("part")` in `draw`. |
 | `status(s, v, fig)` | Returns a short readout shown at the right of the panel, updated after every draw ("period 2.01 s", "slid 4.2 mm"). |
@@ -157,7 +158,7 @@ Callbacks get it as their last argument (`fig`); `demo()` returns it.
 
 `g.axes(P, o)`: `o.x`, `o.y` ranges (required), `xTicks`, `yTicks`, `xLabel`, `yLabel`, `grid`, `format(t)`.
 
-`g.view3d(o)` is a WebGL-free projector for simple line drawings in 3D: `{ yaw, pitch, scale, center, dist }` returns `P([x, y, z]) -> [px, py, depth]` (larger depth is closer) and `P.rotate`. Use E3 for solid objects.
+`g.view3d(o)` is a WebGL-free projector for simple line drawings in 3D: `{ yaw, pitch, zoom, scale, center, dist }` returns `P([x, y, z]) -> [px, py, depth]` (larger depth is closer) and `P.rotate`. Use E3 for solid objects.
 
 ## 3D in a figure
 
