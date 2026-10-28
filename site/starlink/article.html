@@ -1,0 +1,1629 @@
+<div class="abstract"><ul>
+<li>A signal to a satellite and back is limited by the speed of light. Through a geostationary satellite 35,786 km up, the shortest possible round trip is about half a second; through one 550 km up, it's about 7 milliseconds.</li>
+<li>Low satellites cross the sky in minutes and each sees only a patch of Earth about 1,900 km across, so a network built from them needs thousands, arranged in shells of orbits at a few chosen tilts.</li>
+<li>The dish on the roof never moves. It is a flat grid of hundreds of small antennas that steer one beam electronically by delaying each antenna's signal a little, and it hands over to a new satellite every few minutes.</li>
+<li>Satellites relay to ground stations near the user, or pass the data along laser links between satellites, which over long distances can beat light in glass fiber.</li>
+<li>Measured round trips are 25 to 50 ms, several times the light-speed minimum, because scheduling, ground routing, and sharing a beam with neighbors all add time.</li>
+</ul></div>
+
+<p class="lede">A cabin at the end of a dirt road in the mountains of western Montana has no cable and no cell tower in sight. It has a flat white rectangle on the roof, tilted at the sky, and a video call from it to a friend in London is clear enough to catch every smile, with a delay too small to notice. The data goes up, to one of thousands of satellites the size of a car, racing around the Earth a few hundred kilometers overhead.</p>
+
+<p>This page builds that system one idea at a time: why the satellites fly so low, why that takes so many, how a dish that never moves follows them, and how the data reaches London. Every dot on the globe below is one satellite of the first generation the US Federal Communications Commission approved in 2021, 4,408 of them in five shells <a class="cite" href="#ref-fcc2148"></a>. Turn it, speed time up, and watch them sweep past the <span class="c-orange">cabin</span>:</p>
+
+<script>
+// Shared by every figure: the Earth, the speed of light, orbits, the first-generation shells
+// from the FCC's 2021 order, positions and visibility, the sun, the phased array, and the
+// laser grid. Every number a figure shows is computed here.
+window.SL = (() => {
+  const { sin, cos, tan, asin, acos, atan2, sqrt, PI, abs, min, max, hypot, log10, floor, round } = Math;
+  const rad = d => (d * PI) / 180, deg = r => (r * 180) / PI;
+
+  // ---------- constants ----------
+  const R = 6371;                  // mean Earth radius, km
+  const MU = 398600.4418;          // Earth's gravitational parameter, km³/s²
+  const C = 299792.458;            // speed of light in vacuum, km/s
+  const WE = 7.2921159e-5;         // Earth's rotation, rad/s (sidereal)
+  const N_FIBER = 1.468;           // refractive index of the glass core of an optical fiber
+  const C_FIBER = C / N_FIBER;     // about 204,000 km/s
+  const GEO = 35786;               // geostationary altitude, km
+  const EMIN = 25;                 // minimum elevation the 2021 order allows for user beams, degrees
+
+  // ---------- orbits and geometry ----------
+  const speed = h => sqrt(MU / (R + h));                         // circular orbital speed, km/s
+  const period = h => 2 * PI * sqrt((R + h) ** 3 / MU);          // seconds
+  const groundSpeed = h => (speed(h) * R) / (R + h);             // speed of the point below it, km/s
+  // Distance from a user to a satellite at altitude h seen at elevation e (radians).
+  const slant = (h, e) => sqrt((R + h) ** 2 - (R * cos(e)) ** 2) - R * sin(e);
+  // Angle at the Earth's center from the point under the satellite to the edge of its coverage.
+  const reach = (h, e) => acos((R * cos(e)) / (R + h)) - e;
+  const footprintKm = (h, eDeg) => R * reach(h, rad(eDeg));
+  // Free-space path loss in dB for a distance in km at a frequency in GHz.
+  const fspl = (km, ghz) => 20 * log10((4 * PI * km * 1e3 * ghz * 1e9) / 299792458);
+  const ms = km => (km / C) * 1000;                              // light travel time in vacuum, ms
+
+  // ---------- the first-generation shells (FCC 21-48, April 2021) ----------
+  // Altitude, inclination, planes, satellites per plane. The order fixes these numbers; the
+  // phasing between planes is not public, so a Walker pattern with F = 1 stands in for it.
+  const SHELLS = [
+    { key: "a", h: 550, inc: 53, planes: 72, per: 22, color: "blue", raan0: 0 },
+    { key: "b", h: 540, inc: 53.2, planes: 72, per: 22, color: "green", raan0: 2.5 },
+    { key: "c", h: 570, inc: 70, planes: 36, per: 20, color: "orange", raan0: 1 },
+    { key: "d", h: 560, inc: 97.6, planes: 6, per: 58, color: "purple", raan0: 15 },
+    { key: "e", h: 560, inc: 97.6, planes: 4, per: 43, color: "purple", raan0: 45 },
+  ];
+  const label = s => `${s.h} km at ${s.inc}°`;
+
+  // A constellation: per satellite, its shell and orbit constants, packed for speed.
+  function constellation(shells = SHELLS, o = {}) {
+    const list = [];
+    shells.forEach((sh, si) => {
+      const P = o.planes?.[sh.key] ?? sh.planes;
+      for (let p = 0; p < P; p++) for (let s = 0; s < sh.per; s++) list.push({ si, p, s, P, S: sh.per });
+    });
+    const n = list.length;
+    const K = {
+      n, shell: new Uint8Array(n), plane: new Uint16Array(n), slot: new Uint16Array(n),
+      r: new Float64Array(n), cO: new Float64Array(n), sO: new Float64Array(n), ci: new Float64Array(n), sn: new Float64Array(n),
+      u0: new Float64Array(n), nn: new Float64Array(n),
+      x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n), shells,
+    };
+    list.forEach((e, i) => {
+      const sh = shells[e.si];
+      const O = rad(sh.raan0 + (360 * e.p) / e.P), inc = rad(sh.inc);
+      K.shell[i] = e.si; K.plane[i] = e.p; K.slot[i] = e.s;
+      K.r[i] = R + sh.h; K.cO[i] = cos(O); K.sO[i] = sin(O); K.ci[i] = cos(inc); K.sn[i] = sin(inc);
+      K.u0[i] = (2 * PI * e.s) / e.S + (2 * PI * e.p) / (e.P * e.S);
+      K.nn[i] = (2 * PI) / period(sh.h);
+    });
+    return K;
+  }
+  // Positions at time t (seconds), in an Earth-fixed frame (x toward lon 0, z north).
+  function place(K, t) {
+    const th = -WE * t, ct = cos(th), st = sin(th);
+    for (let i = 0; i < K.n; i++) {
+      const u = K.u0[i] + K.nn[i] * t, cu = cos(u), su = sin(u), r = K.r[i];
+      const xi = r * (K.cO[i] * cu - K.sO[i] * su * K.ci[i]);
+      const yi = r * (K.sO[i] * cu + K.cO[i] * su * K.ci[i]);
+      K.x[i] = xi * ct - yi * st; K.y[i] = xi * st + yi * ct; K.z[i] = r * su * K.sn[i];
+    }
+    return K;
+  }
+  // The same position in the inertial frame (the stars' frame), for sunlight and shadow.
+  function inertial(K, i, t) {
+    const th = WE * t, ct = cos(th), st = sin(th);
+    return [K.x[i] * ct - K.y[i] * st, K.x[i] * st + K.y[i] * ct, K.z[i]];
+  }
+  const lonlat = (x, y, z) => [deg(atan2(y, x)), deg(asin(z / hypot(x, y, z)))];
+  const ecef = ([lon, lat], r = R) => [r * cos(rad(lat)) * cos(rad(lon)), r * cos(rad(lat)) * sin(rad(lon)), r * sin(rad(lat))];
+
+  // Elevation and azimuth (degrees) of an Earth-fixed point q seen from place g = [lon, lat].
+  function look(g, q) {
+    const lo = rad(g[0]), la = rad(g[1]);
+    const up = [cos(la) * cos(lo), cos(la) * sin(lo), sin(la)];
+    const east = [-sin(lo), cos(lo), 0];
+    const north = [-sin(la) * cos(lo), -sin(la) * sin(lo), cos(la)];
+    const d = [q[0] - R * up[0], q[1] - R * up[1], q[2] - R * up[2]];
+    const L = hypot(...d);
+    const u = (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / L;
+    const e = (d[0] * east[0] + d[1] * east[1]) / L, nth = (d[0] * north[0] + d[1] * north[1] + d[2] * north[2]) / L;
+    return { el: deg(asin(u)), az: (deg(atan2(e, nth)) + 360) % 360, range: L };
+  }
+  // Satellites at or above emin degrees from g: [{ i, el, az, range }], highest first.
+  function inView(K, g, emin = EMIN) {
+    const out = [];
+    const G = ecef(g);
+    const gl = hypot(...G);
+    for (let i = 0; i < K.n; i++) {
+      // a cheap test first: anything below the horizon is skipped before the trigonometry
+      if ((K.x[i] * G[0] + K.y[i] * G[1] + K.z[i] * G[2]) / gl < R) continue;
+      const v = look(g, [K.x[i], K.y[i], K.z[i]]);
+      if (v.el >= emin) out.push({ i, ...v });
+    }
+    return out.sort((a, b) => b.el - a.el);
+  }
+
+  // ---------- drawing satellites over a kit globe ----------
+  // A point at altitude h over [lon, lat], projected on an orthographic g.map M: [px, py] or
+  // null when the Earth hides it. Points above the surface still show a little past the rim.
+  function onGlobe(M, lon, lat, h = 0) {
+    const [l0, p0] = M.center, k = (R + h) / R;
+    const dl = rad(lon - l0), f = rad(lat), f0 = rad(p0);
+    const x = cos(f) * sin(dl), y = cos(f0) * sin(f) - sin(f0) * cos(f) * cos(dl);
+    const zc = sin(f0) * sin(f) + cos(f0) * cos(f) * cos(dl);
+    if (zc < 0 && (x * x + y * y) * k * k < 1) return null;
+    return [M.origin[0] + M.radius * k * x, M.origin[1] - M.radius * k * y, zc];
+  }
+
+  // ---------- the sun ----------
+  // Unit vector to the sun in the inertial frame at declination dec (degrees), right ascension 0.
+  const sunDir = dec => [cos(rad(dec)), 0, sin(rad(dec))];
+  // Is an inertial position in the Earth's shadow (a cylinder behind the Earth)?
+  function shadowed(p, s) {
+    const d = p[0] * s[0] + p[1] * s[1] + p[2] * s[2];
+    if (d > 0) return false;
+    return hypot(p[0] - d * s[0], p[1] - d * s[1], p[2] - d * s[2]) < R;
+  }
+  // Share of each orbit spent in shadow, for an orbit whose plane makes angle beta with the sun.
+  function eclipseShare(h, betaDeg) {
+    const b = rad(abs(betaDeg)), r = R + h;
+    const lim = asin(R / r);
+    if (b >= lim) return 0;
+    return acos(sqrt(h * h + 2 * R * h) / (r * cos(b))) / PI;
+  }
+
+  // ---------- the phased array ----------
+  // Relative power (0..1) of a line of n elements spaced d wavelengths apart, each fed with a
+  // phase step dphi (radians) more than its neighbor, toward angle th from the array's normal.
+  function arrayFactor(n, d, dphi, th) {
+    const psi = 2 * PI * d * sin(th) - dphi;
+    const s = sin(psi / 2);
+    if (abs(s) < 1e-9) return 1;
+    const a = sin((n * psi) / 2) / (n * s);
+    return a * a;
+  }
+  // Where the main beam points for that phase step (radians from the normal), or NaN.
+  const steer = (d, dphi) => { const s = dphi / (2 * PI * d); return abs(s) <= 1 ? asin(s) : NaN; };
+
+  // ---------- the laser grid ----------
+  // Shell a: each satellite links to the one ahead and behind in its plane and to the
+  // satellites in the same slot of the planes either side (a "+Grid"). Shortest path by
+  // Dijkstra over the current positions; returns { path: [indices], km } or null.
+  function route(K, from, to) {
+    const sh = K.shells[0], P = sh.planes, S = sh.per, N = P * S;
+    const idx = (p, s) => ((p + P) % P) * S + ((s + S) % S);
+    const dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+    dist[from] = 0;
+    const heap = [[0, from]];
+    const push = e => { heap.push(e); let i = heap.length - 1; while (i > 0) { const j = (i - 1) >> 1; if (heap[j][0] <= heap[i][0]) break; [heap[i], heap[j]] = [heap[j], heap[i]]; i = j; } };
+    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+    while (heap.length) {
+      const [d, a] = pop();
+      if (done[a]) continue;
+      done[a] = 1;
+      if (a === to) break;
+      const p = floor(a / S), s = a % S;
+      for (const b of [idx(p, s + 1), idx(p, s - 1), idx(p + 1, s), idx(p - 1, s)]) {
+        const w = hypot(K.x[a] - K.x[b], K.y[a] - K.y[b], K.z[a] - K.z[b]);
+        if (d + w < dist[b]) { dist[b] = d + w; prev[b] = a; push([d + w, b]); }
+      }
+    }
+    if (!isFinite(dist[to])) return null;
+    const path = [];
+    for (let v = to; v !== -1; v = prev[v]) path.unshift(v);
+    return { path, km: dist[to] };
+  }
+
+  // ---------- places ----------
+  // The quickest path between two places through the first shell's laser grid: up to any of the
+  // n highest satellites over the first place, along the links, and down from any of the n highest
+  // over the second. One Dijkstra search that starts from every candidate at once, each already
+  // carrying the length of its radio leg, and stops when no shorter finish is possible.
+  function bestRoute(K, ga, gb, n = 8) {
+    const A = inView(K, ga).slice(0, n), B = inView(K, gb).slice(0, n);
+    if (!A.length || !B.length) return null;
+    const sh = K.shells[0], P = sh.planes, S = sh.per, N = P * S;
+    const idx = (p, s) => ((p + P) % P) * S + ((s + S) % S);
+    const dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+    const down = new Map(B.map(b => [b.i, b.range]));
+    const heap = [];
+    const push = e => { heap.push(e); let i = heap.length - 1; while (i > 0) { const j = (i - 1) >> 1; if (heap[j][0] <= heap[i][0]) break; [heap[i], heap[j]] = [heap[j], heap[i]]; i = j; } };
+    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+    for (const a of A) if (a.range < dist[a.i]) { dist[a.i] = a.range; push([a.range, a.i]); }
+    let best = Infinity, end = -1;
+    while (heap.length) {
+      const [d, x] = pop();
+      if (done[x]) continue;
+      done[x] = 1;
+      if (d >= best) break;
+      if (down.has(x) && d + down.get(x) < best) { best = d + down.get(x); end = x; }
+      const p = floor(x / S), s = x % S;
+      for (const y of [idx(p, s + 1), idx(p, s - 1), idx(p + 1, s), idx(p - 1, s)]) {
+        const w = hypot(K.x[x] - K.x[y], K.y[x] - K.y[y], K.z[x] - K.z[y]);
+        if (d + w < dist[y]) { dist[y] = d + w; prev[y] = x; push([d + w, y]); }
+      }
+    }
+    const path = [];
+    for (let v = end; v !== -1; v = prev[v]) path.unshift(v);
+    const up = A.find(a => a.i === path[0]).range, dn = down.get(end);
+    return { path, km: best, up, down: dn, laser: best - up - dn, hops: path.length - 1 };
+  }
+  const CABIN = [-113.4, 47.6];       // a cabin in the mountains of western Montana
+  const LONDON = [-0.13, 51.51];
+  const km = (a, b) => {
+    const dLat = rad(b[1] - a[1]), dLon = rad(b[0] - a[0]);
+    const q = sin(dLat / 2) ** 2 + cos(rad(a[1])) * cos(rad(b[1])) * sin(dLon / 2) ** 2;
+    return 2 * R * asin(min(1, sqrt(q)));
+  };
+
+  const fmt = (x, d = 0) => x.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+  return {
+    rad, deg, R, MU, C, WE, N_FIBER, C_FIBER, GEO, EMIN, speed, period, groundSpeed, slant, reach, footprintKm, fspl, ms,
+    SHELLS, label, constellation, place, inertial, lonlat, ecef, look, inView, onGlobe, sunDir, shadowed, eclipseShare,
+    arrayFactor, steer, route, bestRoute, CABIN, LONDON, km, fmt,
+  };
+})();
+</script>
+
+<figure class="demo wide" id="hero" aria-label="A globe covered in thousands of moving dots, the satellites of five orbital shells, with one orbital plane traced as a ring and the cabin in Montana marked in orange."></figure>
+<script>
+{
+  const K = SL.constellation();
+  const clock = t => { const m = Math.floor(t / 60), h = Math.floor(m / 60); return `${h} h ${String(m % 60).padStart(2, "0")} min`; };
+  // One orbital plane of the 550 km shell as a ring, at time t, in the Earth-fixed frame.
+  function ring(t, plane) {
+    const sh = SL.SHELLS[0], O = SL.rad(sh.raan0 + (360 * plane) / sh.planes), inc = SL.rad(sh.inc), r = SL.R + sh.h;
+    const th = -SL.WE * t, ct = Math.cos(th), st = Math.sin(th), pts = [];
+    for (let k = 0; k <= 160; k++) {
+      const u = (2 * Math.PI * k) / 160, cu = Math.cos(u), su = Math.sin(u);
+      const xi = r * (Math.cos(O) * cu - Math.sin(O) * su * Math.cos(inc)), yi = r * (Math.sin(O) * cu + Math.cos(O) * su * Math.cos(inc));
+      pts.push(SL.lonlat(xi * ct - yi * st, xi * st + yi * ct, r * su * Math.sin(inc)));
+    }
+    return pts;
+  }
+  // The plane to trace: the one carrying the 550 km satellite highest over the cabin at the start.
+  const TRACE = (() => { SL.place(K, 1200); const best = SL.inView(K, SL.CABIN).find(e => K.shell[e.i] === 0); return best ? K.plane[best.i] : 0; })();
+  demo("hero", {
+    aspect: w => (w < 560 ? 1 : 1.55),
+    orbit: { yaw: 0, pitch: 0, minPitch: -1.2, maxPitch: 1.2, speed: 0.006 },
+    state: () => ({ t: 1200 }),
+    controls: [
+      { key: "speed", label: "Time", min: 1, max: 600, step: 1, value: 60, format: x => `${x}× faster`, color: "blue" },
+      { key: "plane", label: "Trace one orbital plane", type: "toggle", value: true, color: "blue" },
+    ],
+    caption: "The first-generation shells as the 2021 order lists them: 1,584 satellites at 550 km, 1,584 at 540 km, 720 at 570 km, and 520 in polar orbits at 560 km. Positions are computed from those orbits; how the planes are staggered against each other isn't public, so that part is a guess.",
+    step(dt, s, v) { s.t += dt * v.speed; },
+    status: s => `${SL.fmt(K.n)} satellites · ${clock(s.t)} after the start`,
+    draw(g, s, v) {
+      SL.place(K, s.t);
+      const M = g.map({ projection: "globe", center: [-100, 32], view: s.view, zoom: s.view?.zoom ?? 1, graticule: { step: 30, alpha: 0.45 }, borders: { alpha: 0.3, width: 0.5 } });
+      const ctx = g.ctx, back = [], front = [];
+      SL.SHELLS.forEach((sh, si) => { back[si] = []; front[si] = []; });
+      for (let i = 0; i < K.n; i++) {
+        const [lon, lat] = SL.lonlat(K.x[i], K.y[i], K.z[i]);
+        const p = SL.onGlobe(M, lon, lat, SL.SHELLS[K.shell[i]].h);
+        if (!p) continue;
+        (p[2] >= 0 ? front : back)[K.shell[i]].push(p);
+      }
+      const dots = (lists, r, a) => SL.SHELLS.forEach((sh, si) => {
+        ctx.save();
+        ctx.globalAlpha = a;
+        ctx.fillStyle = g.color(sh.color);
+        ctx.beginPath();
+        for (const p of lists[si]) { ctx.moveTo(p[0] + r, p[1]); ctx.arc(p[0], p[1], r, 0, 2 * Math.PI); }
+        ctx.fill();
+        ctx.restore();
+      });
+      dots(back, 1.3, 0.35);
+      if (v.plane) {
+        const seg = [];
+        for (const q of ring(s.t, TRACE)) { const p = SL.onGlobe(M, q[0], q[1], 550); if (p && p[2] > -0.05) seg.push(p); else { if (seg.length > 1) g.path(seg.slice(), { stroke: "ink", width: 2, alpha: 0.85 }); seg.length = 0; } }
+        if (seg.length > 1) g.path(seg, { stroke: "ink", width: 2, alpha: 0.85 });
+      }
+      dots(front, g.w < 560 ? 1.5 : 1.8, 0.95);
+      const cab = SL.onGlobe(M, ...SL.CABIN, 0);
+      if (cab && cab[2] > 0) { g.circle(cab, 5, { fill: "orange", stroke: "panel", width: 1.5 }); g.label("cabin", [cab[0] + 9, cab[1] - 8]); }
+    },
+  });
+}
+</script>
+
+<p>The dark ring is one <dfn data-def="A set of satellites that share one circular orbit, evenly spaced around it.">orbital plane</dfn>: 22 satellites spaced around one circle, all moving the same way. The Earth turns slowly under the planes, once a day, while each satellite goes around in about an hour and a half. At 60 times real speed a satellite crosses the whole of North America in a few seconds.</p>
+
+<h2>Light takes time</h2>
+
+<p>A video call needs two things from a network: enough bandwidth for the picture, and a short delay. Delay is the harder one. A data packet can't travel faster than light, and light covers 300,000 km in a second, which sounds instant until the path runs to space and back.</p>
+
+<p>Before satellites like these, most satellite internet went through <dfn data-def="An orbit 35,786 km above the equator, where a satellite goes around once a day and so seems to hang still in the sky.">geostationary</dfn> satellites, 35,786 km above the equator, where one lap takes exactly a day and the satellite seems to hang still in the sky. A dish can stay pointed at it forever. Before you send a message through one, make a guess:</p>
+
+<div class="quiz">
+  <p>Your laptop sends a message to a geostationary satellite, which sends it down to a ground station, and the reply comes back the same way. What is the shortest that round trip can take?</p>
+  <div class="choices"><button>About 50 milliseconds</button><button>About a quarter of a second</button><button data-correct>About half a second</button></div>
+  <p class="why">The message climbs 35,786 km and comes back down, and the reply does it again: four trips of at least 35,786 km, more than 143,000 km, which light needs about 477 milliseconds to cover.</p>
+</div>
+
+<p>Choose a satellite and watch a message make the trip. The Earth, the orbits, and the path are drawn to the same scale, and the magnifier shows the region around the cabin enlarged:</p>
+
+<figure class="demo" id="far" aria-label="The Earth to scale with a geostationary orbit far out and a low orbit hugging the surface; an orange pulse travels from the cabin up to the chosen satellite and down to a ground station."></figure>
+<script>
+{
+  const SATS = { leo: { h: 550, color: "blue", name: "550 km" }, meo: { h: 8062, color: "green", name: "8,062 km" }, geo: { h: SL.GEO, color: "purple", name: "35,786 km" } };
+  const OFF = 900;   // the ground station is 900 km from the cabin, along the surface
+  // The path in km in a plane through the Earth's center: cabin at the top of the Earth.
+  function path(h) {
+    const a = OFF / SL.R;
+    const cabin = [0, SL.R], sat = [0, SL.R + h], gate = [SL.R * Math.sin(a), SL.R * Math.cos(a)];
+    return { cabin, sat, gate, km: Math.hypot(sat[0] - cabin[0], sat[1] - cabin[1]) + Math.hypot(sat[0] - gate[0], sat[1] - gate[1]) };
+  }
+  let P;
+  demo("far", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    state: () => ({ t: 0 }),
+    controls: [{ key: "sat", label: "Satellite", type: "choice", options: [{ value: "leo", label: "low, 550 km" }, { value: "meo", label: "medium, 8,062 km" }, { value: "geo", label: "geostationary" }], value: "geo" }],
+    caption: "Earth and three orbits to one scale. The orange pulse is a message going up to the satellite and down to a ground station 900 km from the cabin, slowed down 9 times; the counter shows real milliseconds.",
+    change(key, s) { s.t = 0; },
+    step(dt, s) { s.t += dt; },
+    status: (s, v) => { const p = path(SATS[v.sat].h); const one = SL.ms(p.km); return `up and down ${SL.fmt(p.km)} km: ${one.toFixed(1)} ms · round trip ${(2 * one).toFixed(0)} ms`; },
+    draw(g, s, v) {
+      const sat = SATS[v.sat], p = path(sat.h);
+      const span = SL.R + SL.GEO;
+      P = g.fit(-span * 1.05, span * 1.05, -span * 1.05, span * 1.05);
+      const C = P([0, 0]), rE = SL.R * P.sx;
+      // The pulse moves at the speed of light slowed 9 times, so every path keeps the same proportion.
+      const VK = SL.C / 9, L = p.km, cyc = L / VK + 0.8, d = Math.min(L, (s.t % cyc) * VK);
+      const up = Math.hypot(p.sat[0] - p.cabin[0], p.sat[1] - p.cabin[1]);
+      const at = d <= up ? [0, p.cabin[1] + d] : (() => { const f = (d - up) / (L - up); return [p.sat[0] + (p.gate[0] - p.sat[0]) * f, p.sat[1] + (p.gate[1] - p.sat[1]) * f]; })();
+      // Everything, drawn so that line widths and dots keep their size inside the magnifier (k = its zoom).
+      const scene = k => {
+        for (const key of ["geo", "meo", "leo"]) {
+          const on = key === v.sat;
+          g.circle(C, (SL.R + SATS[key].h) * P.sx, { stroke: SATS[key].color, width: (on ? 1.6 : 1) / k, dash: on ? null : [4 / k, 4 / k], alpha: on ? 0.9 : 0.45 });
+        }
+        g.circle(C, rE, { fill: g.rgba("blue", 0.12), stroke: "ink", width: 1.2 / k });
+        g.line(P(p.cabin), P(p.sat), { stroke: "orange", width: 1.2 / k, alpha: 0.5 });
+        g.line(P(p.sat), P(p.gate), { stroke: "orange", width: 1.2 / k, alpha: 0.5 });
+        g.circle(P(p.sat), 4 / k, { fill: sat.color, stroke: "panel", width: 1.2 / k });
+        g.circle(P(p.cabin), 3 / k, { fill: "orange" });
+        const q = P(p.gate);
+        g.rect(q[0] - 3 / k, q[1] - 3 / k, 6 / k, 6 / k, { fill: "ink" });
+        g.circle(P(at), 4.5 / k, { fill: "orange", stroke: "panel", width: 1.5 / k });
+      };
+      scene(1);
+      g.text(`${SL.ms(d).toFixed(1)} ms`, [16, 26], { size: 18, weight: 600, align: "left", color: "orange", font: "mono" });
+      g.text(`${SL.fmt(d)} km travelled`, [16, 46], { size: 12, align: "left", color: "muted" });
+      // A magnifier on the cabin, where the low orbit is.
+      const narrow = g.w < 560, rad = narrow ? 56 : 74, zoom = narrow ? 12 : 14;
+      g.inset({ from: P([0, SL.R + 300]), to: [g.w - rad - 12, g.h - rad - 12], radius: rad, zoom }, () => scene(zoom));
+      g.label("near the cabin", [g.w - rad - 12, g.h - 2 * rad - 22]);
+    },
+  });
+}
+</script>
+
+<p>Through the <span class="c-purple">geostationary</span> satellite the message travels about 72,000 km and needs a quarter of a second only to reach the ground station. The reply makes the same trip, so nothing faster than about half a second is possible, before any computer has done any work. Through the <span class="c-blue">low satellite</span> the trip is so short that it barely registers in the drawing, and the magnifier is needed to see it at all: about 1,500 km, 5 milliseconds.</p>
+
+<p>Half a second matters. The International Telecommunication Union advises keeping the one-way delay of a voice call below 150 ms, beyond which people start talking over each other <a class="cite" href="#ref-g114"></a>. Slide the <span class="c-blue">altitude</span> <span class="scrub" data-key="la" data-figure="delay"></span> and read the shortest possible round trip off the curve:</p>
+
+<figure class="demo" id="delay" aria-label="A graph of the shortest possible round-trip time against the satellite's altitude on a logarithmic axis, with markers for low, medium, and geostationary orbits and a line at 300 ms."></figure>
+<script>
+{
+  demo("delay", {
+    aspect: w => (w < 560 ? 1 : 1.9),
+    controls: [{ key: "la", label: "Altitude", min: 2.3, max: 4.6, step: 0.01, value: Math.log10(550), format: x => `${SL.fmt(10 ** x)} km`, color: "blue",
+      marks: [{ value: Math.log10(550), label: "550" }, { value: Math.log10(8062), label: "8,062" }, { value: Math.log10(SL.GEO), label: "GEO" }] }],
+    caption: "The light-speed minimum for a round trip through one satellite (up, down, and the same back), with the satellite straight overhead and with it low in the sky at 25° elevation. Real connections add processing and routing on top.",
+    status: (s, v) => { const h = 10 ** v.la; return `${SL.fmt(h)} km: at least ${(4 * h / SL.C * 1000).toFixed(1)} ms overhead, ${(4 * SL.slant(h, SL.rad(25)) / SL.C * 1000).toFixed(1)} ms at 25°`; },
+    draw(g, s, v) {
+      const P = g.graph({ x: [200, 50000], y: [0, 600], xScale: "log", axes: "frame", xLabel: "Altitude (km)", yLabel: "Round trip (ms)", xFormat: x => SL.fmt(x) });
+      P.hline(300, { label: "150 ms each way", color: "muted" });
+      P.fn(h => (4 * h) / SL.C * 1000, { color: "blue", label: "overhead" });
+      P.fn(h => (4 * SL.slant(h, SL.rad(25))) / SL.C * 1000, { color: "blue", dash: [5, 4], label: "at 25°", labelAt: 3000 });
+      for (const [h, c, n] of [[550, "blue", "low"], [8062, "green", "medium"], [SL.GEO, "purple", "geostationary"]]) P.marker(h, (4 * h) / SL.C * 1000, { color: c, label: n, pos: h > 20000 ? "nw" : "se" });
+      const h = 10 ** v.la;
+      P.vline(h, { color: "blue" });
+      P.marker(h, (4 * h) / SL.C * 1000, { color: "blue", drop: true });
+    },
+  });
+}
+</script>
+
+<p>Delay grows in proportion to height. A satellite 550 km up allows a round trip of 7.3 ms when it's overhead and 15 ms when it's low in the sky and so farther away. A medium orbit like the 8,062 km used by another commercial system sits in between, and geostationary orbits sit far past the line where conversation gets awkward. To make the delay disappear, the satellites have to come down, and that has a price.</p>
+
+<h2>Fast, and too fast</h2>
+
+<p>A satellite stays up by falling around the Earth: it moves sideways fast enough that the ground curves away beneath it as quickly as it falls. The lower the orbit, the stronger gravity is, and the faster it has to go. Slide the <span class="c-purple">purple satellite</span>'s altitude <span class="scrub" data-key="la" data-figure="orbit"></span> and compare it with the <span class="c-blue">blue one</span> at 550 km, while the <span class="c-orange">cabin</span> turns with the Earth:</p>
+
+<figure class="demo" id="orbit" aria-label="The Earth seen from above the North Pole, turning, with the cabin marked; a blue satellite circles low and fast, a purple one at an adjustable altitude circles slower."></figure>
+<script>
+{
+  const SPEED = 600;   // time runs 600 times faster than life
+  demo("orbit", {
+    aspect: w => (w < 560 ? 1 : 1.6),
+    state: () => ({ t: 0 }),
+    controls: [{ key: "la", label: "Altitude", min: 2.3, max: 4.6, step: 0.01, value: Math.log10(SL.GEO), format: x => `${SL.fmt(10 ** x)} km`, color: "purple",
+      marks: [{ value: Math.log10(550), label: "550" }, { value: Math.log10(SL.GEO), label: "GEO" }] }],
+    caption: "Circular orbits seen from above the North Pole, 600 times faster than life. At 35,786 km the purple satellite goes around once a day, keeping pace with the turning Earth.",
+    step(dt, s) { s.t += dt * SPEED; },
+    status: (s, v) => { const h = 10 ** v.la; return `550 km: ${SL.speed(550).toFixed(2)} km/s, a lap every ${(SL.period(550) / 60).toFixed(0)} min · ${SL.fmt(h)} km: ${SL.speed(h).toFixed(2)} km/s, a lap every ${h > 20000 ? (SL.period(h) / 3600).toFixed(1) + " h" : (SL.period(h) / 60).toFixed(0) + " min"}`; },
+    draw(g, s, v) {
+      const h = 10 ** v.la, span = (SL.R + Math.max(h, 900)) * 1.12;
+      const P = g.fit(-span, span, -span, span), C = P([0, 0]);
+      const earthTurn = SL.WE * s.t;
+      g.circle(C, SL.R * P.sx, { fill: g.rgba("blue", 0.1), stroke: "ink", width: 1.2 });
+      // meridians on the Earth so its turning shows
+      for (let k = 0; k < 12; k++) { const a = earthTurn + (k * Math.PI) / 6; g.line(C, [C[0] + Math.cos(a) * SL.R * P.sx, C[1] - Math.sin(a) * SL.R * P.sx], { stroke: "faint", width: 0.8 }); }
+      const ca = earthTurn + Math.PI / 2, cab = [C[0] + Math.cos(ca) * SL.R * P.sx, C[1] - Math.sin(ca) * SL.R * P.sx];
+      g.circle(cab, 4.5, { fill: "orange", stroke: "panel", width: 1.4 });
+      const sat = (alt, color) => {
+        const r = (SL.R + alt) * P.sx, a = Math.PI / 2 + (2 * Math.PI * s.t) / SL.period(alt);
+        g.circle(C, r, { stroke: color, width: 1, alpha: 0.45, dash: [3, 4] });
+        const p = [C[0] + Math.cos(a) * r, C[1] - Math.sin(a) * r];
+        g.circle(p, 5, { fill: color, stroke: "panel", width: 1.4 });
+        return p;
+      };
+      sat(550, "blue");
+      sat(h, "purple");
+      const hrs = s.t / 3600;
+      g.text(`${hrs.toFixed(1)} h`, [16, 26], { size: 16, weight: 600, align: "left", font: "mono" });
+    },
+  });
+}
+</script>
+
+<p>At 550 km a satellite moves at 7.6 km/s, about 27,000 km/h, and goes around in 96 minutes, 15 laps a day. At 35,786 km the purple satellite needs exactly as long for a lap as the Earth needs to turn, so it stays over the <span class="c-orange">cabin</span>; that is what geostationary means. The low satellite gives no such favor. Seen from the cabin, it rises over one horizon and sets over the other a few minutes later.</p>
+
+<p>One low satellite can serve only part of the Earth. A dish can't use a satellite too close to the horizon, where the signal grazes through trees, hills, and a long slant of air. The 2021 approval lets user dishes work down to 25° above the horizon <a class="cite" href="#ref-fcc2148"></a>. Change the <span class="c-orange">minimum elevation</span> <span class="scrub" data-key="e" data-figure="cone"></span> and the altitude, and watch the <span class="c-green">footprint</span>:</p>
+
+<figure class="demo" id="cone" aria-label="A cross-section through the curved Earth with a satellite above it; green lines show the cone of ground where the satellite is at least a minimum angle above the horizon."></figure>
+<script>
+{
+  demo("cone", {
+    aspect: w => (w < 560 ? 1 : 1.9),
+    controls: [
+      { key: "e", label: "Minimum elevation", min: 5, max: 70, step: 1, value: 25, unit: "°", color: "orange", marks: [{ value: 25, label: "25°" }] },
+      { key: "h", label: "Altitude", min: 300, max: 2000, step: 10, value: 550, unit: " km", color: "blue" },
+    ],
+    caption: "A slice through the Earth under one satellite. A dish anywhere on the green arc sees the satellite at least the minimum elevation above its horizon.",
+    status: (s, v) => { const r = SL.footprintKm(v.h, v.e), pass = (2 * SL.reach(v.h, SL.rad(v.e))) / (2 * Math.PI / SL.period(v.h)) / 60; return `footprint ${SL.fmt(2 * r)} km across · edge ${SL.fmt(SL.slant(v.h, SL.rad(v.e)))} km away · overhead pass lasts at most ${pass.toFixed(1)} min`; },
+    draw(g, s, v) {
+      const rho = SL.reach(v.h, SL.rad(v.e)), span = SL.R * Math.sin(Math.max(rho * 1.35, 0.06));
+      const top = v.h * 1.15, bottom = SL.R * Math.cos(Math.max(rho * 1.35, 0.06)) - SL.R - 80;
+      const P = g.fit(-span, span, bottom, top);
+      const pt = a => [SL.R * Math.sin(a), SL.R * Math.cos(a) - SL.R];
+      const arc = (a0, a1, n = 80) => Array.from({ length: n + 1 }, (_, i) => P(pt(a0 + ((a1 - a0) * i) / n)));
+      const edge = Math.max(rho * 1.35, 0.06);
+      g.path([...arc(-edge, edge), P([span, bottom]), P([-span, bottom])], { fill: g.rgba("blue", 0.08), stroke: false, close: true });
+      g.path(arc(-edge, edge), { stroke: "ink", width: 1.4 });
+      g.path(arc(-rho, rho), { stroke: "green", width: 5, alpha: 0.75 });
+      const sat = P([0, v.h]);
+      for (const sg of [-1, 1]) g.line(sat, P(pt(sg * rho)), { stroke: "green", width: 1.3, dash: [5, 4] });
+      // At the right edge: the local horizon, and the elevation angle up to the satellite.
+      const E = pt(rho), Ep = P(E), L = span * 0.22;
+      const tdir = [-Math.cos(rho), Math.sin(rho)];          // along the ground, back toward the satellite's side
+      g.line(P([E[0] - tdir[0] * L * 0.4, E[1] - tdir[1] * L * 0.4]), P([E[0] + tdir[0] * L, E[1] + tdir[1] * L]), { stroke: "muted", width: 1 });
+      const horA = Math.atan2(-tdir[1], tdir[0]), toSat = Math.atan2(sat[1] - Ep[1], sat[0] - Ep[0]);
+      g.angleMark(Ep, horA, toSat, 34, { color: "orange", label: `${v.e}°` });
+      g.circle(Ep, 4, { fill: "orange" });
+      g.circle(sat, 6, { fill: "blue", stroke: "panel", width: 1.5 });
+      g.label(`${SL.fmt(v.h)} km up`, [sat[0] + 12, sat[1] - 4]);
+      g.dimension(P(pt(0)), P(pt(rho)), `${SL.fmt(SL.footprintKm(v.h, v.e))} km`, { offset: 18, color: "green" });
+    },
+  });
+}
+</script>
+
+<p>At 550 km and 25°, one satellite covers a circle about 1,900 km across. That sounds like a lot until you divide the Earth's surface by it: about 180 such circles would tile the planet, if they could stand still. They can't. The <span class="c-green">footprint</span> slides along with the satellite, so a dish keeps a given satellite for at most four or five minutes. Raising the minimum elevation shrinks the circle fast, which is why the 25° in the approval matters.</p>
+
+<p>To keep every spot covered all the time, the footprints have to overlap as they slide. This map shows the first shell, 550 km up and tilted 53° to the equator, with some of its 72 planes filled in. Add <span class="c-blue">planes</span> <span class="scrub" data-key="planes" data-figure="count"></span> and scrub through one orbit to see where the <span class="c-green">coverage</span> has gaps:</p>
+
+<figure class="demo" id="count" aria-label="A flat world map shaded green where at least one satellite of a 53-degree shell is 25 degrees or more above the horizon, with the satellites as blue dots."></figure>
+<script>
+{
+  const STEP = 2, NX = 360 / STEP, NY = 180 / STEP;
+  let K = null, kp = 0;
+  const cos = Math.cos, rad = SL.rad;
+  // Mark the cells that see at least one satellite at 25° or more.
+  function cover(planes, t) {
+    if (!K || kp !== planes) { K = SL.constellation([SL.SHELLS[0]], { planes: { a: planes } }); kp = planes; }
+    SL.place(K, t);
+    const rho = SL.deg(SL.reach(550, rad(SL.EMIN)));
+    const cell = new Uint8Array(NX * NY), cr = cos(rad(rho));
+    for (let i = 0; i < K.n; i++) {
+      const [lon, lat] = SL.lonlat(K.x[i], K.y[i], K.z[i]);
+      const j0 = Math.max(0, Math.floor((lat - rho + 90) / STEP)), j1 = Math.min(NY - 1, Math.floor((lat + rho + 90) / STEP));
+      const sx = [cos(rad(lat)) * cos(rad(lon)), cos(rad(lat)) * Math.sin(rad(lon)), Math.sin(rad(lat))];
+      for (let j = j0; j <= j1; j++) {
+        const la = -90 + (j + 0.5) * STEP, w = rho / Math.max(0.05, cos(rad(la)));
+        const i0 = Math.floor((lon - w + 180) / STEP), i1 = Math.floor((lon + w + 180) / STEP);
+        for (let ii = i0; ii <= i1; ii++) {
+          const k = ((ii % NX) + NX) % NX, lo = -180 + (k + 0.5) * STEP;
+          const d = cos(rad(la)) * cos(rad(lo)) * sx[0] + cos(rad(la)) * Math.sin(rad(lo)) * sx[1] + Math.sin(rad(la)) * sx[2];
+          if (d >= cr) cell[j * NX + k] = 1;
+        }
+      }
+    }
+    let all = 0, cov = 0, band = 0, bcov = 0;
+    for (let j = 0; j < NY; j++) {
+      const la = -90 + (j + 0.5) * STEP, w = cos(rad(la));
+      for (let k = 0; k < NX; k++) { all += w; if (cell[j * NX + k]) cov += w; if (Math.abs(la) <= 53) { band += w; if (cell[j * NX + k]) bcov += w; } }
+    }
+    return { cell, share: cov / all, band: bcov / band };
+  }
+  let last = null;
+  demo("count", {
+    aspect: w => (w < 560 ? 1.2 : 2),
+    controls: [
+      { key: "planes", label: "Planes", type: "stepper", min: 6, max: 72, step: 6, value: 12, format: n => `${n} planes, ${n * 22} satellites`, color: "blue" },
+      { key: "t", label: "Time", min: 0, max: 95, step: 0.5, value: 0, unit: " min" },
+    ],
+    caption: "Where at least one satellite of a 550 km, 53° shell is 25° or more above the horizon (green), on a flat map. The full shell has 72 planes of 22.",
+    status: () => (last ? `${(100 * last.share).toFixed(0)}% of the Earth covered · ${(100 * last.band).toFixed(0)}% between 53° south and 53° north` : ""),
+    draw(g, s, v) {
+      last = cover(v.planes, v.t * 60);
+      const M = g.map({ projection: "equirectangular", graticule: { step: 30, alpha: 0.4 }, borders: { alpha: 0.3, width: 0.5 } });
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = g.rgba("green", 0.35);
+      for (let j = 0; j < NY; j++) {
+        let start = -1;
+        for (let k = 0; k <= NX; k++) {
+          const on = k < NX && last.cell[j * NX + k];
+          if (on && start < 0) start = k;
+          if (!on && start >= 0) {
+            const lat0 = -90 + j * STEP, p0 = M.project([-180 + start * STEP, lat0 + STEP]), p1 = M.project([Math.min(179.999, -180 + k * STEP), lat0]);
+            if (p0 && p1) ctx.fillRect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1]);
+            start = -1;
+          }
+        }
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.fillStyle = g.color("blue");
+      ctx.beginPath();
+      for (let i = 0; i < K.n; i++) { const q = M.project(SL.lonlat(K.x[i], K.y[i], K.z[i])); if (q) { ctx.moveTo(q[0] + 1.6, q[1]); ctx.arc(q[0], q[1], 1.6, 0, 2 * Math.PI); } }
+      ctx.fill();
+      ctx.restore();
+      M.parallel(53, { color: "blue", label: "53°" });
+      M.parallel(-53, { color: "blue" });
+    },
+  });
+}
+</script>
+
+<p>With 12 planes, a sixth of the shell, the <span class="c-green">coverage</span> has holes that drift as the satellites move. With <button class="set" data-set="planes=18">18 planes</button>, about 400 satellites, the band between 53° south and 53° north is covered almost everywhere; above about 62° there is nothing, because a satellite in a 53° orbit never flies further north or south than 53°, and its footprint reaches only 8.5° beyond. This shell alone has 1,584 because coverage is only the start. Each satellite carries a limited amount of data, shared by everyone below it, and a dish is much better off with a satellite high in its sky than one barely above 25°. More satellites buy capacity and closer, higher satellites, as the rest of this page shows.</p>
+
+<h2>Shells</h2>
+
+<p>That is why there are several shells. Each is a set of planes at one altitude and one <dfn data-def="The angle between an orbit's plane and the Earth's equator. A satellite never flies over latitudes higher than its inclination.">inclination</dfn>, the tilt of its orbits against the equator. Choose a <span class="c-blue">shell</span> and compare it with the graph of how much time its satellites spend over each latitude:</p>
+
+<figure class="demo" id="shells" aria-label="A globe showing the satellites of one chosen shell, next to a graph of how much time satellites in that shell spend over each latitude."></figure>
+<script>
+{
+  const K = SL.constellation();
+  const SH = { all: [0, 1, 2, 3, 4], a: [0], b: [1], c: [2], d: [3, 4] };
+  // Share of the time a satellite in an orbit of inclination inc spends near latitude lat, per degree.
+  const density = (inc, lat) => {
+    const i = SL.rad(inc > 90 ? 180 - inc : inc), f = SL.rad(lat);
+    const q = Math.sin(i) ** 2 - Math.sin(f) ** 2;
+    return q <= 0 ? NaN : (Math.cos(f) / Math.sqrt(q)) / 180;
+  };
+  demo("shells", {
+    aspect: w => (w < 560 ? 0.75 : 2),
+    orbit: { yaw: 0, pitch: 0.3, minPitch: -1.3, maxPitch: 1.3, speed: 0.006 },
+    state: () => ({ t: 600 }),
+    controls: [{ key: "shell", label: "Shell", type: "choice", options: [{ value: "all", label: "all" }, { value: "a", label: "550 km, 53°" }, { value: "b", label: "540 km, 53.2°" }, { value: "c", label: "570 km, 70°" }, { value: "d", label: "560 km, 97.6°" }], value: "c" }],
+    caption: "Each shell's satellites on a globe (left), and the share of their time spent over each latitude (right). An orbit lingers near its highest latitude, where it turns around.",
+    step(dt, s) { s.t += dt * 60; },
+    status: (s, v) => { const ids = SH[v.shell]; const n = ids.reduce((a, i) => a + SL.SHELLS[i].planes * SL.SHELLS[i].per, 0); return `${SL.fmt(n)} satellites in ${ids.reduce((a, i) => a + SL.SHELLS[i].planes, 0)} planes`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, gb = narrow ? [0, 0, g.w, g.h * 0.55] : [0, 0, g.w * 0.45, g.h], pb = narrow ? [0, g.h * 0.57, g.w, g.h * 0.43] : [g.w * 0.48, 0, g.w * 0.52, g.h];
+      SL.place(K, s.t);
+      const ids = SH[v.shell];
+      g.clip(gb, () => {
+        const M = g.map({ box: gb, projection: "globe", center: [-30, 20], view: s.view, zoom: s.view?.zoom ?? 1, graticule: { step: 30, alpha: 0.45 }, borders: { alpha: 0.3, width: 0.5 } });
+        const ctx = g.ctx;
+        for (const si of ids) {
+          ctx.save();
+          ctx.fillStyle = g.color(SL.SHELLS[si].color);
+          ctx.beginPath();
+          for (let i = 0; i < K.n; i++) {
+            if (K.shell[i] !== si) continue;
+            const [lon, lat] = SL.lonlat(K.x[i], K.y[i], K.z[i]);
+            const p = SL.onGlobe(M, lon, lat, SL.SHELLS[si].h);
+            if (p && p[2] > 0) { ctx.moveTo(p[0] + 1.8, p[1]); ctx.arc(p[0], p[1], 1.8, 0, 2 * Math.PI); }
+          }
+          ctx.fill();
+          ctx.restore();
+        }
+      });
+      const P = g.graph({ box: pb, x: [-90, 90], y: [0, 0.03], axes: "frame", xLabel: "Latitude (°)", yLabel: "Share of time per degree", xTicks: 30, yFormat: y => `${(100 * y).toFixed(1)}%` });
+      const incs = [...new Set(ids.map(i => SL.SHELLS[i].inc))];
+      for (const inc of incs) {
+        const sh = SL.SHELLS.find(x => x.inc === inc);
+        P.fn(lat => Math.min(0.03, density(inc, lat)), { color: sh.color, width: 2 });
+      }
+      P.vline(SL.CABIN[1], { color: "orange", label: "cabin" });
+    },
+  });
+}
+</script>
+
+<p>The time piles up at the edges. A satellite in a 53° orbit swings between 53° north and 53° south like a pendulum, fastest across the equator and lingering near the turnaround. So the 53° shells serve best the latitudes where most people live, and the <span class="c-orange">70°</span> and <span class="c-purple">97.6°</span> shells cover what they can't reach: Alaska, Scandinavia, the poles, and the ship and air routes between. Polar orbits spend much of their time over empty ocean and ice, which is why there are fewer of them.</p>
+
+<p>What a dish sees depends on where it is. Pick a <span class="c-orange">latitude</span> <span class="scrub" data-key="lat" data-figure="lat"></span> and read how many satellites of the whole first generation are at least 25° above the horizon there, on average:</p>
+
+<figure class="demo" id="lat" aria-label="A graph of the average number of satellites at least 25 degrees above the horizon against latitude, for each shell and in total, with a marker at the chosen latitude."></figure>
+<script>
+{
+  let table = null;
+  // Average count of satellites at 25° or more, by latitude, over longitudes and moments.
+  function build() {
+    const K = SL.constellation(), lats = [], rows = [];
+    for (let lat = -88; lat <= 88; lat += 4) lats.push(lat);
+    const counts = lats.map(() => [0, 0, 0, 0, 0]);
+    const lons = 12, times = 3;
+    for (let k = 0; k < times; k++) {
+      SL.place(K, 1000 + k * 1900);
+      lats.forEach((lat, j) => {
+        for (let q = 0; q < lons; q++) {
+          for (const sv of SL.inView(K, [-180 + (360 * q) / lons + 7 * k, lat])) counts[j][K.shell[sv.i]] += 1 / (lons * times);
+        }
+      });
+    }
+    lats.forEach((lat, j) => rows.push([lat, ...counts[j]]));
+    return rows;
+  }
+  demo("lat", {
+    aspect: w => (w < 560 ? 1 : 2),
+    controls: [{ key: "lat", label: "Latitude", min: -85, max: 85, step: 1, value: Math.round(SL.CABIN[1]), unit: "°", color: "orange", marks: [{ value: 0, label: "equator" }, { value: 48, label: "cabin" }] }],
+    caption: "Satellites of the first generation at least 25° above the horizon, averaged over longitudes and moments, computed from the five shells. The total is the black curve.",
+    status: (s, v) => { if (!table) return ""; const r = table.reduce((b, x) => (Math.abs(x[0] - v.lat) < Math.abs(b[0] - v.lat) ? x : b)); const tot = r.slice(1).reduce((a, b) => a + b, 0); return `${v.lat}°: about ${tot.toFixed(0)} satellites in view on average`; },
+    draw(g, s, v) {
+      table = table || build();
+      const tot = table.map(r => [r[0], r.slice(1).reduce((a, b) => a + b, 0)]);
+      const P = g.graph({ x: [-90, 90], y: [0, 50], axes: "frame", xLabel: "Latitude (°)", yLabel: "Satellites in view", xTicks: 30 });
+      const colors = ["blue", "green", "orange", "purple", "purple"];
+      [0, 1, 2].forEach(k => P.series(table.map(r => [r[0], r[k + 1]]), { color: colors[k], width: 1.6 }));
+      P.series(table.map(r => [r[0], r[4] + r[5]]), { color: "purple", width: 1.6 });
+      P.series(tot, { color: "ink", width: 2.4, label: "total" });
+      P.vline(v.lat, { color: "orange" });
+      const y = P.interp(tot, v.lat);
+      if (isFinite(y)) P.marker(v.lat, y, { color: "orange", label: y.toFixed(0), pos: "ne" });
+    },
+  });
+}
+</script>
+
+<p>At the <span class="c-orange">cabin</span>, at 48° north, about 45 satellites are usable at any moment, more than at the equator, because the 53° shells crowd the latitudes near their turning point. At 70° the count drops to around 15, carried by the 70° and polar shells. Nowhere is a dish short of choices, and choosing among them is the next problem.</p>
+
+<h2>A satellite crossing your sky</h2>
+
+<p>Here is the sky over the cabin as the dish sees it, flattened into a circle: the edge is the horizon, the center straight up, and the <span class="c-green">dashed ring</span> the 25° limit. Every few seconds the network assigns the dish one satellite to talk to; studies of the system found these assignments change on a fixed 15-second rhythm, everywhere in the world at once <a class="cite" href="#ref-mohan"></a><a class="cite" href="#ref-tanveer"></a>. Let time run and follow the <span class="c-orange">ring</span> around the serving satellite:</p>
+
+<figure class="demo" id="sky" aria-label="A circular map of the sky over the cabin: horizon at the edge, zenith in the middle, a dashed ring at 25 degrees, satellites as dots with short trails, and an orange ring marking the satellite the dish is using."></figure>
+<script>
+{
+  const K = SL.constellation();
+  const T0 = 4200;
+  const serving = new Map();
+  // The satellite the dish uses during the 15-second slot that contains t: the highest at its start.
+  function serve(t) {
+    const k = Math.floor(t / 15);
+    if (!serving.has(k)) { SL.place(K, T0 + k * 15); const v = SL.inView(K, SL.CABIN); serving.set(k, v.length ? v[0].i : -1); }
+    return serving.get(k);
+  }
+  const at = (t, i) => { SL.place(K, T0 + t); return SL.look(SL.CABIN, [K.x[i], K.y[i], K.z[i]]); };
+  demo("sky", {
+    aspect: w => (w < 560 ? 0.95 : 1.45),
+    state: () => ({ t: 20 }),
+    controls: [{ key: "speed", label: "Time", min: 1, max: 20, step: 1, value: 4, format: x => `${x}× faster`, color: "blue" }],
+    caption: "The sky over the cabin, computed from the five shells. The dish is given the highest satellite at the start of each 15-second slot. Satellites below 25° are drawn faint.",
+    step(dt, s, v) { s.t += dt * v.speed; },
+    status: s => { const i = serve(s.t); if (i < 0) return ""; const q = at(s.t, i); return `serving satellite ${q.el.toFixed(0)}° up, ${SL.fmt(q.range)} km away: ${SL.ms(q.range).toFixed(1)} ms each way · next change in ${(15 - (s.t % 15)).toFixed(0)} s`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, c = [g.w / 2, g.h / 2], R0 = Math.min(g.w, g.h) * 0.44;
+      const pos = (el, az) => { const r = R0 * (1 - el / 90), a = SL.rad(az); return [c[0] + r * Math.sin(a), c[1] - r * Math.cos(a)]; };
+      g.circle(c, R0, { fill: g.rgba("blue", 0.05), stroke: "ink", width: 1.2 });
+      g.circle(c, R0 * (1 - 25 / 90), { stroke: "green", width: 1.2, dash: [5, 4] });
+      for (const el of [30, 60]) g.circle(c, R0 * (1 - el / 90), { stroke: "faint", width: 0.8 });
+      for (const [az, n] of [[0, "N"], [90, "E"], [180, "S"], [270, "W"]]) g.text(n, pos(-6, az), { size: 12, color: "muted" });
+      // trails: the last 40 seconds
+      SL.place(K, T0 + s.t);
+      const vis = [];
+      for (let i = 0; i < K.n; i++) { const q = SL.look(SL.CABIN, [K.x[i], K.y[i], K.z[i]]); if (q.el > 0) vis.push([i, q]); }
+      const trail = new Map(vis.map(([i]) => [i, []]));
+      for (let k = 8; k >= 0; k--) {
+        SL.place(K, T0 + s.t - k * 5);
+        for (const [i] of vis) { const q = SL.look(SL.CABIN, [K.x[i], K.y[i], K.z[i]]); if (q.el > 0) trail.get(i).push(pos(q.el, q.az)); }
+      }
+      for (const [i, q] of vis) {
+        const tr = trail.get(i), low = q.el < 25;
+        if (tr.length > 1) g.path(tr, { stroke: SL.SHELLS[K.shell[i]].color, width: 1, alpha: low ? 0.2 : 0.45 });
+        g.circle(pos(q.el, q.az), low ? 2 : 3, { fill: SL.SHELLS[K.shell[i]].color, alpha: low ? 0.35 : 0.95 });
+      }
+      const si = serve(s.t);
+      if (si >= 0) {
+        const q = vis.find(x => x[0] === si)?.[1];
+        if (q) { const p = pos(q.el, q.az); g.circle(p, 9, { stroke: "orange", width: 2.4 }); g.line(c, p, { stroke: "orange", width: 1.2, dash: [3, 3] }); }
+      }
+      g.circle(c, 3, { fill: "orange" });
+      g.text(`${(s.t % 60).toFixed(0).padStart(2, "0")} s`, [narrow ? 30 : 40, 30], { size: 15, weight: 600, font: "mono" });
+      void v;
+    },
+  });
+}
+</script>
+
+<p>Dozens of satellites cross the sky at once, most of them low. The serving satellite usually starts high and sinks as it moves away, then the network jumps to a fresh one near the top of the sky. Even a satellite passing straight overhead is usable for only about four minutes, so the distance to it, and the time the signal takes, changes all the time. Compare the 15-second rule with keeping one satellite until it sinks to 25°:</p>
+
+<figure class="demo" id="handoff" aria-label="A graph of the distance to the serving satellite over three minutes, a sawtooth that jumps down at each 15-second handoff, with a second curve for keeping one satellite until it sets."></figure>
+<script>
+{
+  const K = SL.constellation(), T0 = 4200, N = 181;
+  let data = null;
+  function build() {
+    const fast = [], stick = [];
+    let cur = -1;
+    for (let t = 0; t < N; t++) {
+      SL.place(K, T0 + t);
+      const v = SL.inView(K, SL.CABIN);
+      if (t % 15 === 0) fast.cur = v[0].i;
+      const f = SL.look(SL.CABIN, [K.x[fast.cur], K.y[fast.cur], K.z[fast.cur]]);
+      fast.push([t, f.range]);
+      let c = cur >= 0 ? SL.look(SL.CABIN, [K.x[cur], K.y[cur], K.z[cur]]) : null;
+      if (!c || c.el < SL.EMIN) { cur = v[0].i; c = v[0]; }
+      stick.push([t, c.range]);
+    }
+    return { fast, stick };
+  }
+  demo("handoff", {
+    aspect: w => (w < 560 ? 1 : 2.2),
+    controls: [{ key: "stick", label: "Compare: keep one satellite until it sinks to 25°", type: "toggle", value: false, color: "purple" }],
+    caption: "Distance from the cabin to the satellite it is using, over three minutes, in the same model as the sky map. The gray labels on the right give the one-way travel time of light at that distance.",
+    status: (s, v) => { if (!data) return ""; const m = a => a.reduce((x, p) => x + p[1], 0) / a.length; return `average distance: ${SL.fmt(m(data.fast))} km with 15 s slots${v.stick ? `, ${SL.fmt(m(data.stick))} km keeping one` : ""}`; },
+    draw(g, s, v) {
+      data = data || build();
+      const P = g.graph({ x: [0, 180], y: [400, 1300], axes: "frame", xLabel: "Time (s)", yLabel: "Distance (km)", xTicks: 15 });
+      for (let t = 0; t <= 180; t += 15) P.vline(t, { color: "faint" });
+      if (v.stick) P.series(data.stick, { color: "purple", width: 1.8 });
+      P.series(data.fast, { color: "orange", width: 2.2 });
+      const b = P.box, x = b[0] + b[2] - 6;
+      for (const km of [500, 800, 1100]) { const y = P([0, km])[1]; g.text(`${SL.ms(km).toFixed(1)} ms`, [x, y - 8], { size: 11, color: "muted", align: "right", halo: true }); }
+    },
+  });
+}
+</script>
+
+<p>With 15-second slots the dish stays close to the best satellite, between about 550 and 700 km away, about 2 ms each way. The cost is a jump every 15 seconds, when dish and satellite start talking to new partners. Measurements show exactly that: small spikes in delay and dips in speed at the same seconds of every minute, in every country <a class="cite" href="#ref-mohan"></a>. Keeping one satellite avoids some jumps but lets the distance double before the switch. Either way, the dish must swing its aim across the sky every few seconds, and it has no motor that could do that.</p>
+
+<h2>A dish with no moving parts</h2>
+
+<p>The flat rectangle on the roof is not a dish in the old sense. A satellite TV dish is a curved mirror that gathers waves from one direction, and to follow a moving satellite it would need motors swinging it across the sky every few seconds for years. The terminal instead holds a flat grid of hundreds of tiny antennas, called a <dfn data-def="An antenna made of many small elements whose signals are delayed by different amounts, so the combined beam points in a chosen direction without anything moving.">phased array</dfn>, and points its beam by timing alone. The trick rests on what happens when two waves meet.</p>
+
+<p>Two small antennas a short distance apart send out the same wave. Where a crest from one meets a crest from the other, they add into a bigger crest; where a crest meets a trough, they cancel. Delay the right antenna by a fraction of a cycle, the <span class="c-orange">phase difference</span> <span class="scrub" data-key="dphi" data-figure="two"></span>, and watch the direction where the waves add up:</p>
+
+<figure class="demo" id="two" aria-label="Two antennas at the bottom send circular ripples; red crests and blue troughs interfere, and an orange line marks the direction where they add up."></figure>
+<script>
+{
+  demo("two", {
+    aspect: w => (w < 560 ? 1 : 1.7),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "dphi", label: "Delay of the right antenna", min: -180, max: 180, step: 1, value: 0, unit: "°", color: "orange", marks: [{ value: 0, label: "in step" }] },
+      { key: "d", label: "Spacing", min: 0.25, max: 3, step: 0.05, value: 1, format: x => `${x.toFixed(2)} wavelengths`, color: "blue" },
+    ],
+    caption: "Two antennas sending the same wave, seen from above. Red is a crest and blue a trough. The orange line is a direction where the two waves arrive in step and add; the dashed ones are other such directions.",
+    step(dt, s) { s.t += dt; },
+    status: (s, v) => { const th = SL.steer(v.d, SL.rad(v.dphi)); return isNaN(th) ? "the waves never fully add straight ahead" : `strongest at ${SL.deg(th).toFixed(0)}° from straight up`; },
+    draw(g, s, v) {
+      const lam = Math.min(g.w, g.h) / 8, k = (2 * Math.PI) / lam, w = 2 * Math.PI * 0.7;
+      const base = [g.w / 2, g.h - 16];
+      const src = [[base[0] - (v.d * lam) / 2, base[1], 0], [base[0] + (v.d * lam) / 2, base[1], SL.rad(v.dphi)]];
+      g.field((x, y) => {
+        let f = 0;
+        for (const [sx, sy, ph] of src) { const r = Math.hypot(x - sx, y - sy); f += Math.cos(k * r - w * s.t + ph) / Math.sqrt(r / lam + 0.4); }
+        return f;
+      }, { res: g.w < 560 ? 3 : 4, range: [-1.5, 1.5], map: "diverging" });
+      // Directions where the two waves arrive in step: sin θ = (Δφ + 2πm) / (2π d).
+      const L = g.h * 0.92;
+      for (let m = -6; m <= 6; m++) {
+        const sn = (SL.rad(v.dphi) + 2 * Math.PI * m) / (2 * Math.PI * v.d);
+        if (Math.abs(sn) > 1) continue;
+        const c = Math.sqrt(1 - sn * sn), main = m === 0;
+        g.line(base, [base[0] + sn * L, base[1] - c * L], { stroke: "orange", width: main ? 2.6 : 1.6, dash: main ? null : [6, 5], alpha: main ? 1 : 0.8 });
+      }
+      for (const [sx, sy] of src) g.circle([sx, sy], 5, { fill: "ink", stroke: "panel", width: 1.5 });
+      g.label(v.dphi ? `delayed ${Math.abs(v.dphi)}°` : "in step", [src[1][0] + 10, base[1] - 12], { align: "left" });
+    },
+  });
+}
+</script>
+
+<p>With both antennas <button class="set" data-set="dphi=0 d=1">in step</button>, the waves add straight up, because every point on the center line is the same distance from both. Delay the right antenna and its crests leave a moment late, so the place where the crests line up tilts toward the late side. A delay of a quarter cycle, 90°, at <button class="set" data-set="dphi=90 d=0.5">half a wavelength apart</button> tilts it 30°. Nothing moved; only the timing changed. Spread the antennas <button class="set" data-set="dphi=0 d=2.5">more than a wavelength apart</button> and extra directions appear where the waves also arrive in step, a full cycle apart, which is a problem we will come back to.</p>
+
+<p>Two antennas make a broad, leaky pattern. A real array uses many in a row, each delayed a little more than its neighbor, and the more there are, the more the waves cancel everywhere except in one direction. Add <span class="c-blue">antennas</span> <span class="scrub" data-key="n" data-figure="array"></span> and change the <span class="c-orange">delay per antenna</span> <span class="scrub" data-key="dphi" data-figure="array"></span>:</p>
+
+<figure class="demo" id="array" aria-label="A row of antennas at the bottom, each with a small dial showing its delay, sending waves that add into a single beam marked by an orange arrow."></figure>
+<script>
+{
+  demo("array", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "n", label: "Antennas", type: "stepper", min: 1, max: 16, step: 1, value: 8, color: "blue" },
+      { key: "dphi", label: "Delay per antenna", min: -180, max: 180, step: 1, value: 60, unit: "°", color: "orange", marks: [{ value: 0, label: "in step" }] },
+    ],
+    caption: "A row of antennas half a wavelength apart. Each dial shows how far that antenna's wave is delayed; each is delayed a little more than its neighbor to the left. The waves add in one direction, the orange arrow, and largely cancel elsewhere.",
+    step(dt, s) { s.t += dt; },
+    status: (s, v) => {
+      if (v.n < 2) return "one antenna sends equally in every direction";
+      const th = SL.steer(0.5, SL.rad(v.dphi)), bw = SL.deg(1.772 / (v.n * Math.cos(th)));
+      return `beam ${SL.deg(th).toFixed(0)}° from straight up · about ${bw.toFixed(0)}° wide`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, lam = g.w / (narrow ? 15 : 22), k = (2 * Math.PI) / lam, w = 2 * Math.PI * 0.7;
+      const H = g.h - 34, base = [g.w / 2, H];
+      const xs = Array.from({ length: v.n }, (_, i) => base[0] + (i - (v.n - 1) / 2) * 0.5 * lam);
+      const ph = xs.map((_, i) => i * SL.rad(v.dphi)), amp = 1 / Math.sqrt(v.n);
+      g.clip([0, 0, g.w, H], () => g.field((x, y) => {
+        let f = 0;
+        for (let i = 0; i < xs.length; i++) { const r = Math.hypot(x - xs[i], y - H); f += Math.cos(k * r - w * s.t + ph[i]) / Math.sqrt(r / lam + 0.5); }
+        return f * amp;
+      }, { box: [0, 0, g.w, H], res: narrow ? 4 : 5, range: [-1.6, 1.6], map: "diverging" }));
+      if (v.n > 1) {
+        const th = SL.steer(0.5, SL.rad(v.dphi)), L = H * 0.8;
+        g.arrow(base, [base[0] + Math.sin(th) * L, base[1] - Math.cos(th) * L], { stroke: "orange", width: 3 });
+      }
+      const r = Math.min(7, 0.2 * lam);
+      xs.forEach((x, i) => {
+        g.circle([x, H], 3, { fill: "ink" });
+        const c = [x, g.h - 14], a = -Math.PI / 2 + ph[i];
+        g.circle(c, r, { fill: "panel", stroke: "blue", width: 1.2 });
+        g.line(c, [c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r], { stroke: "orange", width: 1.6 });
+      });
+    },
+  });
+}
+</script>
+
+<p>With 16 antennas the beam is about 6° wide, and almost no energy goes elsewhere. The dials show the rule: each delay is the previous one plus a fixed step, so the delays grow in a straight line across the row, and the step sets the direction. A step of 0° sends the beam straight up; <button class="set" data-set="dphi=90 n=16">90°</button> tilts it 30°; <button class="set" data-set="dphi=-150 n=16">−150°</button> swings it far to the left. Changing the step takes far less than a millisecond, so a flat panel can follow a satellite at 7 km/s, or jump to a new one, without moving. The beam widens as it tilts, because seen from the side the row looks shorter.</p>
+
+<p>The spacing between the antennas matters as much as their number. Before trying it, make a guess:</p>
+
+<div class="quiz">
+  <p>An array keeps its antennas and its delay step but spreads them four times further apart, two wavelengths instead of half a wavelength. What happens to the beam?</p>
+  <div class="choices"><button>It gets four times narrower and stays single</button><button data-correct>Extra beams appear in other directions</button><button>It stops forming a beam at all</button></div>
+  <p class="why">The main beam does get narrower, but now there are several directions in which neighboring waves arrive a whole number of cycles apart, and each gets a full-strength copy of the beam.</p>
+</div>
+
+<p>This polar graph shows how strongly the array sends in every direction above it, on a logarithmic scale where each ring is a factor of 10 weaker. Change the <span class="c-blue">spacing</span> <span class="scrub" data-key="d" data-figure="pattern"></span> and look for the <span class="c-red">grating lobes</span>:</p>
+
+<figure class="demo" id="pattern" aria-label="A polar graph of the array's strength in every direction above it, with the main beam in orange and unwanted grating lobes marked red."></figure>
+<script>
+{
+  demo("pattern", {
+    aspect: w => (w < 560 ? 1.2 : 2),
+    controls: [
+      { key: "n", label: "Antennas", type: "stepper", min: 2, max: 24, step: 1, value: 12, color: "blue" },
+      { key: "d", label: "Spacing", min: 0.25, max: 2, step: 0.05, value: 0.5, format: x => `${x.toFixed(2)} λ`, color: "blue", marks: [{ value: 0.5, label: "λ/2" }, { value: 1, label: "λ" }] },
+      { key: "dphi", label: "Delay per antenna", min: -180, max: 180, step: 1, value: 90, unit: "°", color: "orange" },
+    ],
+    caption: "Strength of the beam in each direction, from the left horizon to the right, for a row of antennas. Rings are 10 and 20 decibels down, a tenth and a hundredth of the power. Red marks grating lobes: copies of the beam the reader didn't ask for.",
+    status: (s, v) => {
+      const th = SL.steer(v.d, SL.rad(v.dphi));
+      const lobes = [];
+      for (let m = -8; m <= 8; m++) { if (!m) continue; const sn = (SL.rad(v.dphi) + 2 * Math.PI * m) / (2 * Math.PI * v.d); if (Math.abs(sn) <= 1) lobes.push(sn); }
+      return `${isNaN(th) ? "no main beam" : `main beam at ${SL.deg(th).toFixed(0)}°`} · ${lobes.length ? `${lobes.length} grating lobe${lobes.length > 1 ? "s" : ""}` : "no grating lobes"}`;
+    },
+    draw(g, s, v) {
+      const c = [g.w / 2, g.h - 26], R0 = Math.min(g.w / 2 - 20, g.h - 46);
+      const rad = db => (Math.max(-30, db) + 30) / 30 * R0;
+      for (const db of [0, -10, -20]) {
+        const pts = []; for (let a = -90; a <= 90; a += 2) pts.push([c[0] + Math.sin(SL.rad(a)) * rad(db), c[1] - Math.cos(SL.rad(a)) * rad(db)]);
+        g.path(pts, { stroke: "faint", width: 1 });
+        g.text(db ? `${db} dB` : "0 dB", [c[0] + 4, c[1] - rad(db) - 6], { size: 10.5, color: "muted", align: "left" });
+      }
+      for (let a = -90; a <= 90; a += 30) g.line(c, [c[0] + Math.sin(SL.rad(a)) * R0, c[1] - Math.cos(SL.rad(a)) * R0], { stroke: "faint", width: 1 });
+      g.line([c[0] - R0 - 8, c[1]], [c[0] + R0 + 8, c[1]], { stroke: "ink", width: 1.2 });
+      const pts = [c];
+      for (let a = -90; a <= 90; a += 0.25) {
+        const af = SL.arrayFactor(v.n, v.d, SL.rad(v.dphi), SL.rad(a)), r = rad(10 * Math.log10(Math.max(af, 1e-6)));
+        pts.push([c[0] + Math.sin(SL.rad(a)) * r, c[1] - Math.cos(SL.rad(a)) * r]);
+      }
+      pts.push(c);
+      g.path(pts, { fill: g.rgba("orange", 0.18), stroke: "orange", width: 1.8, close: true });
+      for (let m = -8; m <= 8; m++) {
+        const sn = (SL.rad(v.dphi) + 2 * Math.PI * m) / (2 * Math.PI * v.d);
+        if (Math.abs(sn) > 1) continue;
+        const tip = [c[0] + sn * R0, c[1] - Math.sqrt(1 - sn * sn) * R0];
+        if (m) { g.circle(tip, 6, { stroke: "red", width: 2.2 }); g.label("grating lobe", [tip[0], tip[1] - 14], { color: "red" }); }
+        else g.circle(tip, 4, { fill: "orange" });
+      }
+      g.rect(c[0] - (v.n - 1) * 3, c[1] - 2, (v.n - 1) * 6, 4, { fill: "blue" });
+      g.text("horizon", [c[0] - R0, c[1] + 16], { size: 11, color: "muted" });
+      g.text("horizon", [c[0] + R0, c[1] + 16], { size: 11, color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="d=0.5 dphi=90">half a wavelength</button> there is one beam however far it is steered. At <button class="set" data-set="d=1 dphi=90">one wavelength</button>, a <span class="c-red">grating lobe</span> appears on the far side as soon as the beam tilts, and at <button class="set" data-set="d=2 dphi=0">two wavelengths</button> there are several even with no tilt. A grating lobe wastes power and listens where another satellite may be. So the elements of a steerable array sit about half a wavelength apart: at 12 GHz, about 1.2 cm, which leaves room for hundreds of them on a panel half a meter across<span class="sidenote">The number of elements in the consumer terminals isn't published, so the figures on this page use round, illustrative counts.</span>. More elements make a narrower beam and a stronger signal.</p>
+
+<details class="deeper">
+  <summary>The steering rule and the array factor <span class="hint">4 min</span></summary>
+  <p>Take a row of <span class="tex">N</span> elements a distance <span class="tex">d</span> apart. Seen from far away in a direction <span class="tex">\theta</span> from straight up, the wave from each element travels <span class="tex">d\sin\theta</span> less than the wave from its neighbor on the other side, which is a head start of <span class="tex">2\pi d\sin\theta/\lambda</span> in phase. If each element is also delayed by <span class="tex">\Delta\varphi</span> more than its neighbor, the two effects cancel, and all the waves arrive in step, when</p>
+  <div class="tex">\sin\theta_0 = \frac{\lambda\,\Delta\varphi}{2\pi d}.</div>
+  <p>That is the steering rule. With <span class="tex">d = \lambda/2</span> it reads <span class="tex">\sin\theta_0 = \Delta\varphi/\pi</span>, so a step of 90° gives 30°, and 180° would aim at the horizon.</p>
+  <p>In any other direction the waves arrive with a phase step <span class="tex">\psi = 2\pi d\sin\theta/\lambda - \Delta\varphi</span> between neighbors. Adding <span class="tex">N</span> unit waves whose phases grow by <span class="tex">\psi</span> is a geometric series, and its power, divided by the most it can be, is the array factor that <a class="figref" href="#pattern"></a> draws:</p>
+  <div class="tex">AF(\theta) = \left[\frac{\sin(N\psi/2)}{N\sin(\psi/2)}\right]^2.</div>
+  <p>It equals 1 wherever <span class="tex">\psi</span> is a whole multiple of <span class="tex">2\pi</span>. The main beam is the multiple zero; the others are grating lobes, and they stay out of the visible directions only while <span class="tex">d\,(1 + |\sin\theta_0|) &lt; \lambda</span>, which for steering all the way to the horizon means <span class="tex">d &lt; \lambda/2</span>. The first zero beside the main beam sits where <span class="tex">N\psi/2 = \pi</span>, so the beam's width shrinks as <span class="tex">\lambda/(N d\cos\theta_0)</span>: more elements, a narrower beam, and a wider beam when steered away from straight up. The terminal is a two-dimensional grid, so the same rule applies along both of its sides, and the delays form a tilted plane across the panel.</p>
+  <p>Real terminals don't delay the signal by a time; they shift its phase, which is the same thing for one frequency and nearly the same across a band 240 MHz wide at 12 GHz. Each element also sends weakly toward the horizon, so steering costs gain: a panel aimed 50° off its face loses several decibels compared with one aimed straight out, one reason the terminal is tilted toward where most satellites are.</p>
+</details>
+
+<p>Here is the whole panel. Each square is one antenna element, colored by its delay at this instant. Let the <span class="c-blue">satellite</span> cross the sky and watch the stripes of equal delay follow it while the <span class="c-orange">beam</span> swings, with nothing moving:</p>
+
+<figure class="demo wide" id="dish" aria-label="A 3D view of a flat antenna panel made of a grid of small squares, colored in stripes by their delay, with an orange beam reaching up to a satellite that moves across the sky."></figure>
+<script>
+{
+  const NX = 20, NY = 14, PITCH = 0.08;   // elements half a wavelength apart, in scene units
+  const scene = E3.scene({ shadow: true });
+  scene.add(E3.mesh.box(NX * PITCH + 0.12, 0.05, NY * PITCH + 0.12, { round: 0.02 }), { name: "panel", material: "porcelain", position: [0, -0.035, 0] });
+  const els = [];
+  for (let i = 0; i < NX; i++) for (let j = 0; j < NY; j++) {
+    const x = (i - (NX - 1) / 2) * PITCH, z = (j - (NY - 1) / 2) * PITCH;
+    els.push({ x, z, node: scene.add(E3.mesh.box(PITCH * 0.78, 0.014, PITCH * 0.78), { name: "elements", position: [x, 0.004, z] }) });
+  }
+  const lobe = E3.mesh.lathe([[0.001, 0], [0.36, 0.03], [0.38, 0.5], [0.41, 1.1], [0.44, 1.6], [0.001, 1.67]]);
+  const beam = scene.add(lobe, { name: "beam", color: "orange", opacity: 0.22, pickable: false });
+  const sat = scene.add(E3.mesh.box(0.32, 0.06, 0.18), { name: "satellite", material: "aluminum" });
+  const wing = sat.add(E3.mesh.box(0.9, 0.01, 0.2), { material: { color: "#20304a", metal: 0.3, roughness: 0.4 }, position: [0, 0.04, 0] });
+  void wing;
+  const DIST = 1.9, TILT = SL.rad(12);
+  const dirOf = a => { const r = SL.rad(a); return [Math.sin(r) * Math.cos(TILT), Math.cos(r) * Math.cos(TILT), Math.sin(TILT)]; };
+  demo("dish", {
+    aspect: w => (w < 560 ? 0.95 : 1.7),
+    orbit: { yaw: -0.55, pitch: 0.32, minPitch: -0.1, maxPitch: 1.3 },
+    state: () => ({ a: -40 }),
+    controls: [{ key: "showBeam", label: "Show the beam", type: "toggle", value: true, color: "orange" }],
+    caption: "A phased-array panel with 280 elements, each colored by its delay at this moment: orange and blue are opposite halves of a cycle. Not to scale: the real satellite is 550 km or more away, and the real element count isn't published.",
+    step(dt, s) { s.a += dt * 9; if (s.a > 55) s.a = -55; },
+    status: s => { const d = dirOf(s.a); const th = Math.acos(d[1]); return `satellite ${SL.deg(th).toFixed(0)}° from straight up · neighbors differ by ${SL.deg(Math.PI * Math.abs(d[0])).toFixed(0)}° along the panel, ${SL.deg(Math.PI * Math.abs(d[2])).toFixed(0)}° across`; },
+    draw(g, s, v) {
+      const d = dirOf(s.a), lam = 2 * PITCH, k = (2 * Math.PI) / lam;
+      for (const e of els) { const ph = k * (e.x * d[0] + e.z * d[2]); e.node.color = E3.ramp((1 + Math.cos(ph)) / 2, ["blue", "porcelain", "orange"]); }
+      beam.visible = v.showBeam;
+      beam.matrix = E3.m4.alignY(d);
+      sat.position = d.map(c => c * DIST);
+      sat.rotation = [0, 0, -SL.rad(s.a)];
+      const view = g.render3d(scene, { ...s.view, target: [0, 0.55, 0], fit: "once" });
+      g.callouts([
+        { at: view.project(sat.position), text: "satellite", color: "blue" },
+        { at: view.project([(NX / 2) * PITCH, 0.01, (NY / 2) * PITCH]), text: "antenna elements", color: "ink" },
+        ...(v.showBeam ? [{ at: view.project(d.map(c => c * 1.0)), text: "beam", color: "orange" }] : []),
+      ]);
+    },
+  });
+}
+</script>
+
+<p>When the satellite is nearly overhead, the delay barely changes across the panel and the stripes are broad; straight overhead the panel would be one color. As the satellite moves toward the horizon, the stripes sweep across the panel and crowd together: the further the beam tilts, the bigger the step from one element to the next. A computer in the terminal recalculates the delays continuously from the satellite's known orbit, and the same panel works in reverse to listen.</p>
+
+<aside class="callout mistake"><p>The terminal's beam isn't Wi-Fi from space. The satellite link runs on its own frequencies between the panel and the satellite; inside the cabin, a separate ordinary Wi-Fi router turns that connection into the network the laptop sees.</p></aside>
+
+<h2>Sharing the sky</h2>
+
+<p>The beam carries radio waves at about 12 GHz, in the band engineers call <dfn data-def="Radio frequencies from about 12 to 18 GHz; satellite television and internet downlinks use 10.7 to 12.7 GHz.">Ku band</dfn>. The 2022 approval for the second generation lists 10.7 to 12.75 GHz for signals coming down to users and 14.0 to 14.5 GHz for signals going up, with higher Ka-band frequencies for the big ground stations <a class="cite" href="#ref-fcc2291"></a>. Researchers at the University of Texas recorded the downlink and decoded its structure: eight channels, each 240 MHz wide, laid side by side across 10.7 to 12.7 GHz <a class="cite" href="#ref-humphreys"></a>. Pick a <span class="c-blue">channel</span> and look inside it:</p>
+
+<figure class="demo" id="channels" aria-label="A frequency axis with eight blue blocks for the downlink channels and an orange block for the uplink band; below, the middle of the chosen channel drawn as a row of overlapping humps, one per subcarrier, with a gap in the center."></figure>
+<script>
+{
+  const F0 = 10.7, FS = 0.24, FD = 0.25;   // GHz: start of the band, channel width, channel spacing (Humphreys et al.)
+  const center = i => F0 + FD / 2 + FD * (i - 1);
+  demo("channels", {
+    aspect: w => (w < 560 ? 0.95 : 2),
+    controls: [{ key: "ch", label: "Channel", type: "stepper", min: 1, max: 8, step: 1, value: 4, color: "blue" }],
+    caption: "Top: the band from space to users with the eight 240 MHz channels that researchers measured (the lowest two were unused), and the band from users up to space. Bottom: the middle of the chosen channel, where each hump is one subcarrier, drawn in idealized form.",
+    status: (s, v) => `channel ${v.ch}: ${(center(v.ch) - FS / 2).toFixed(3)} to ${(center(v.ch) + FS / 2).toFixed(3)} GHz · 1,024 subcarriers ${((FS * 1e6) / 1024).toFixed(1)} kHz apart`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, top = [0, 0, g.w, g.h * 0.44], bot = [0, g.h * 0.5, g.w, g.h * 0.5];
+      const A = g.graph({ box: top, x: [10.5, 14.7], y: [0, 1.35], axes: "frame", xLabel: "Frequency (GHz)", yTicks: false, grid: false, xTicks: 0.5 });
+      for (let i = 1; i <= 8; i++) {
+        const a = A.xpx(center(i) - FS / 2), b = A.xpx(center(i) + FS / 2), y0 = A.ypx(0), y1 = A.ypx(1);
+        g.rect(a, y1, b - a, y0 - y1, { fill: g.rgba("blue", i === v.ch ? 0.75 : i <= 2 ? 0.1 : 0.32), stroke: i === v.ch ? "blue" : false, width: 1.5 });
+        if (!narrow || i === v.ch) g.text(String(i), [(a + b) / 2, y1 - 9], { size: 11, color: i === v.ch ? "blue" : "muted" });
+      }
+      g.rect(A.xpx(14.0), A.ypx(1), A.xpx(14.5) - A.xpx(14.0), A.ypx(0) - A.ypx(1), { fill: g.rgba("orange", 0.4) });
+      A.label("down to users", [11.7, 1.3], { color: "blue", align: "center" });
+      A.label("up", [14.25, 1.25], { color: "orange", align: "center" });
+      // Inside the channel: subcarriers near the middle as sinc² humps; the middle four are left empty.
+      const K = 24;
+      const B = g.graph({ box: bot, x: [-K / 2 - 1.5, K / 2 + 0.5], y: [0, 1.2], axes: "frame", xLabel: "Subcarriers, counted from the middle of the channel", yTicks: false, grid: false, xTicks: 4 });
+      for (let k = -K / 2; k < K / 2; k++) {
+        if (k >= -2 && k <= 1) continue;
+        B.fn(x => { const u = Math.PI * (x - k); return Math.abs(u) < 1e-6 ? 1 : (Math.sin(u) / u) ** 2; }, { color: "blue", width: 1.2, domain: [k - 1.5, k + 1.5] });
+      }
+      B.label("empty middle", [-0.5, 1.1], { color: "muted", align: "center" });
+    },
+  });
+}
+</script>
+
+<p>Each channel is itself split into 1,024 narrow <dfn data-def="One of many closely spaced carrier waves inside a channel, each carrying its own slow stream of data; together they fill the channel.">subcarriers</dfn>, 234 kHz apart, and each carries its own slow stream of data. Their humps overlap, but each peaks exactly where all its neighbors pass through zero, so they don't disturb each other; the middle four are left empty. The two lowest channels were silent when the researchers listened, probably to protect radio astronomers who observe a little below 10.7 GHz <a class="cite" href="#ref-humphreys"></a>. How many bits a channel carries each second depends on its width and on how clean the signal is when it arrives.</p>
+
+<p>The signal arrives weak. A wave spreading from the satellite covers a sphere that grows with the square of the distance, so doubling the distance leaves a quarter of the power, a loss of 6 <dfn data-def="A tenth of a bel: a ratio of powers on a logarithmic scale. 10 dB is 10 times, 20 dB is 100 times, 3 dB is about twice.">decibels</dfn>. Rain absorbs more, about 1 dB for every kilometer of a heavy downpour at these frequencies <a class="cite" href="#ref-p838"></a>, and a low satellite's signal crosses more rain. Slide the <span class="c-blue">elevation</span> and the <span class="c-orange">rain</span> <span class="scrub" data-key="rain" data-figure="link"></span> and read the most one channel could carry:</p>
+
+<figure class="demo" id="link" aria-label="A graph of the most data one 240 MHz channel could carry against the satellite's elevation, in dry weather and in rain."></figure>
+<script>
+{
+  const BW = 240e6, S0 = 13;   // signal to noise with the satellite overhead in dry air, dB: an illustrative value
+  const snr = (e, rain) => S0 - (SL.fspl(SL.slant(550, SL.rad(e)), 12) - SL.fspl(550, 12)) - rain / Math.sin(SL.rad(e));
+  const cap = db => (BW * Math.log2(1 + 10 ** (db / 10))) / 1e6;
+  demo("link", {
+    aspect: w => (w < 560 ? 1 : 2),
+    controls: [
+      { key: "e", label: "Satellite elevation", min: 25, max: 90, step: 1, value: 40, unit: "°", color: "blue" },
+      { key: "rain", label: "Rain loss straight up", min: 0, max: 6, step: 0.1, value: 0, unit: " dB", color: "orange", marks: [{ value: 0, label: "dry" }, { value: 4, label: "downpour" }] },
+    ],
+    caption: "The Shannon limit for one 240 MHz channel from a satellite 550 km up, starting from an assumed signal-to-noise ratio of 13 dB straight overhead in dry air. Real links carry less than this limit; the shape, not the exact height, is the point.",
+    status: (s, v) => { const km = SL.slant(550, SL.rad(v.e)); return `${SL.fmt(km)} km away: spreading loss ${SL.fspl(km, 12).toFixed(1)} dB · signal to noise ${snr(v.e, v.rain).toFixed(1)} dB · at most ${SL.fmt(cap(snr(v.e, v.rain)))} Mbit/s`; },
+    draw(g, s, v) {
+      const P = g.graph({ x: [25, 90], y: [0, 1200], axes: "frame", xLabel: "Elevation of the satellite (°)", yLabel: "Most one channel carries (Mbit/s)", xTicks: 15 });
+      P.fn(e => cap(snr(e, 0)), { color: "blue", label: "dry", labelAt: 80 });
+      if (v.rain > 0) P.fn(e => cap(snr(e, v.rain)), { color: "orange", label: "rain", labelAt: 80 });
+      P.vline(v.e, { color: "blue" });
+      P.marker(v.e, cap(snr(v.e, v.rain)), { color: v.rain > 0 ? "orange" : "blue", drop: true });
+    },
+  });
+}
+</script>
+
+<p>In dry air, a satellite low in the sky at 25° is twice as far as one overhead, and the channel carries about half as much. A <button class="set" data-set="rain=4 e=30">downpour</button> costs far more near the horizon, where the signal crosses several kilometers of rain, than <button class="set" data-set="rain=4 e=85">straight up</button>. One more reason to prefer a high satellite. The modem adapts: on a clean signal it packs more bits into each wave, and on a noisy one it falls back to a sturdier, slower code.</p>
+
+<details class="deeper">
+  <summary>Decibels, spreading loss, and the Shannon limit <span class="hint">3 min</span></summary>
+  <p>Engineers add up a radio link in decibels because the losses multiply, and logarithms turn products into sums. The loss from spreading alone, between two antennas that would send and catch equally in all directions, is the free-space path loss</p>
+  <div class="tex">L = 20\log_{10}\!\left(\frac{4\pi d}{\lambda}\right)\ \text{dB}.</div>
+  <p>At 12 GHz that is 168.8 dB at 550 km, 175.0 dB at 1,123 km (the satellite at 25° elevation), and 205.1 dB at the 39,000 km to a geostationary satellite low in the sky. The 36 dB between the low and the geostationary satellite is a factor of about 4,000 in power, which geostationary systems make up with bigger dishes and more powerful transmitters.</p>
+  <p>Antennas win most of it back. A beam that sends power into a small patch of sky instead of everywhere has gain: a 3° beam is about 30 dB stronger than an antenna that spreads evenly. What's left is a signal-to-noise ratio <span class="tex">S/N</span>, and Claude Shannon showed in 1948 that a channel of width <span class="tex">B</span> can carry at most</p>
+  <div class="tex">C = B\log_2\!\left(1 + \frac{S}{N}\right)</div>
+  <p>bits per second. At 13 dB, a ratio of 20, a 240 MHz channel can carry at most about 1.05 Gbit/s; losing 6 dB brings the ratio to 5 and the limit to about 620 Mbit/s. The actual power, antenna gains, and noise of the system aren't published in detail, which is why the figure starts from an assumed value.</p>
+</details>
+
+<p>One satellite serves an area 1,900 km across with a handful of beams, and each beam covers only a small patch, a <dfn data-def="A patch of ground, drawn here as a hexagon, that one beam serves at a time; the satellite shares its beams among the cells below it.">cell</dfn>. The satellite hops its beams from cell to cell many times a second, and everyone in a cell shares the beam's capacity while it's there. Here is a patch of country with a quiet <span class="c-orange">cabin</span> cell and a busy <span class="c-purple">town</span>. Change the number of <span class="c-blue">beams</span> <span class="scrub" data-key="beams" data-figure="cells"></span> and let the satellite share them by demand:</p>
+
+<figure class="demo" id="cells" aria-label="A grid of hexagonal cells shaded by how many people are online in each, with the cells a satellite's beams are serving at this moment outlined in orange."></figure>
+<script>
+{
+  const COLS = 11, ROWS = 7, BEAM = 700;   // Mbit/s one beam carries: an illustrative value, near the previous figure
+  const hash = (i, j) => { const x = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return x - Math.floor(x); };
+  const cells = [];
+  for (let j = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++) cells.push({ i, j, base: 2 + Math.floor(hash(i, j) * 12) });
+  const axial = c => [c.i - (c.j - (c.j & 1)) / 2, c.j];
+  const hexDist = (a, b) => { const [q1, r1] = axial(a), [q2, r2] = axial(b); return (Math.abs(q1 - q2) + Math.abs(r1 - r2) + Math.abs(q1 + r1 - q2 - r2)) / 2; };
+  const TOWN = cells.findIndex(c => c.i === 7 && c.j === 3), CABIN = cells.findIndex(c => c.i === 2 && c.j === 4);
+  const users = (k, town) => k === CABIN ? 3 : k === TOWN ? town : hexDist(cells[k], cells[TOWN]) === 1 ? Math.round(town / 6) : cells[k].base;
+  function shares(v) {
+    const u = cells.map((_, k) => users(k, v.town)), tot = u.reduce((a, b) => a + b, 0);
+    return { u, share: u.map(x => Math.min(1, v.demand ? (v.beams * x) / tot : v.beams / cells.length)) };
+  }
+  demo("cells", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    state: () => ({ t: 0, slot: -1, credit: new Array(cells.length).fill(0), lit: [] }),
+    controls: [
+      { key: "beams", label: "Beams", type: "stepper", min: 1, max: 16, step: 1, value: 8, color: "blue" },
+      { key: "town", label: "People online in the town", min: 10, max: 600, step: 10, value: 300, color: "purple" },
+      { key: "demand", label: "Share the beams by demand", type: "toggle", value: false, color: "orange" },
+    ],
+    caption: "An illustrative patch of cells under one satellite, each shaded by how many people are online in it. Orange outlines show the cells the beams serve during this slot; the beams hop to new cells every slot. The real cell sizes and beam counts aren't published.",
+    change(key, s) { s.credit.fill(0); },
+    step(dt, s, v) {
+      s.t += dt;
+      const slot = Math.floor(s.t / 0.25);
+      if (slot === s.slot) return;
+      s.slot = slot;
+      const { share } = shares(v);
+      share.forEach((x, k) => (s.credit[k] += x));
+      const order = cells.map((_, k) => k).sort((a, b) => s.credit[b] - s.credit[a]).slice(0, v.beams);
+      for (const k of order) s.credit[k] -= 1;
+      s.lit = order;
+    },
+    status: (s, v) => { const { u, share } = shares(v); const r = k => (BEAM * share[k]) / u[k]; return `cabin: ${r(CABIN).toFixed(r(CABIN) < 10 ? 1 : 0)} Mbit/s each for ${u[CABIN]} people · town: ${r(TOWN).toFixed(r(TOWN) < 10 ? 1 : 0)} Mbit/s each for ${u[TOWN]}`; },
+    draw(g, s, v) {
+      const { u } = shares(v);
+      const size = Math.min(g.w / ((COLS + 0.5) * Math.sqrt(3)), (g.h - 10) / (ROWS * 1.5 + 0.5));
+      const ox = (g.w - (COLS + 0.5) * Math.sqrt(3) * size) / 2 + (Math.sqrt(3) * size) / 2, oy = (g.h - (ROWS * 1.5 + 0.5) * size) / 2 + size;
+      const center = c => [ox + Math.sqrt(3) * size * (c.i + 0.5 * (c.j & 1)), oy + 1.5 * size * c.j];
+      const hex = (c, r) => Array.from({ length: 6 }, (_, k) => { const a = SL.rad(60 * k - 30); return [c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]; });
+      const maxU = Math.log(1 + Math.max(...u));
+      cells.forEach((c, k) => {
+        const p = center(c), col = k === TOWN || hexDist(c, cells[TOWN]) === 1 ? "purple" : k === CABIN ? "orange" : "green";
+        g.path(hex(p, size * 0.97), { fill: g.rgba(col, 0.08 + 0.42 * (Math.log(1 + u[k]) / maxU)), stroke: "faint", width: 1, close: true });
+        if (size > 22) g.text(String(u[k]), p, { size: 11, color: "muted" });
+      });
+      for (const k of s.lit) g.path(hex(center(cells[k]), size * 0.86), { stroke: "orange", width: 3, close: true });
+      const cp = center(cells[CABIN]), tp = center(cells[TOWN]);
+      g.label("cabin", [cp[0], cp[1] + size * 0.55], { color: "orange" });
+      g.label("town", [tp[0], tp[1] + size * 0.55], { color: "purple" });
+    },
+  });
+}
+</script>
+
+<p>Shared equally, every cell gets the same slice of beam time, so the 3 people in the cabin cell get a fast connection and the hundreds in the town crawl along. Shared <button class="set" data-set="demand=1">by demand</button>, the beams visit the town far more often, and everyone gets about the same rate. Either way, the total is fixed by the number of beams and what each carries. That is why an operator may stop selling terminals in a crowded area, and why speeds tend to drop in the evening. More satellites add capacity everywhere, one reason the constellation keeps growing.</p>
+
+<h2>Down to the ground</h2>
+
+<p>The satellite isn't the end of the trip. The video call has to reach the internet, and the internet is on the ground. In the simplest arrangement, the <dfn data-def="A satellite that relays what it receives straight back down, like a mirror in the sky, without routing it anywhere else.">bent pipe</dfn>, the satellite takes the signal from the dish and sends it straight down to a <dfn data-def="A site with several large tracking antennas that links satellites to the fiber networks on the ground; also called a gateway.">ground station</dfn>, a fenced field of large antennas wired into fiber. Both ends have to see the same satellite at the same time. Drag the <span class="c-orange">cabin</span> around the map and find where that stops working:</p>
+
+<figure class="demo" id="gateway" aria-label="A map of North America, the Atlantic, and Europe with example ground stations as black squares, a draggable cabin, a green circle of the satellites it can use, and an orange path down to the nearest ground station in reach."></figure>
+<script>
+{
+  // Example ground stations: plausible places, not the real sites.
+  const GW = [[-116.2, 43.6], [-122.3, 47.3], [-104.8, 39.6], [-97.4, 32.8], [-94.7, 39.0], [-88.0, 41.8], [-84.4, 33.6], [-74.4, 40.6], [-79.6, 43.7], [-71.3, 46.8], [-106.5, 52.1], [-114.1, 51.0], [-149.9, 61.2], [-21.9, 64.1], [-1.2, 51.4], [-3.7, 40.4], [8.6, 50.0], [17.0, 51.1], [10.7, 59.9], [-8.6, 41.1]];
+  const FOOT = SL.footprintKm(550, 25), REACH = 2 * FOOT;
+  const mid = (a, b) => { const p = SL.ecef(a), q = SL.ecef(b); return SL.lonlat(p[0] + q[0], p[1] + q[1], p[2] + q[2]); };
+  // Slant distance from a place to a satellite 550 km above a point `km` away along the ground.
+  const leg = km => { const g = km / SL.R, r = SL.R + 550; return Math.sqrt(SL.R * SL.R + r * r - 2 * SL.R * r * Math.cos(g)); };
+  let M;
+  const nearest = c => GW.map(q => ({ q, km: SL.km(c, q) })).sort((a, b) => a.km - b.km)[0];
+  demo("gateway", {
+    aspect: w => (w < 560 ? 1 : 1.9),
+    state: () => ({ cabin: [...SL.CABIN] }),
+    drag: {
+      hit: (p, s) => M && M.near(p, s.cabin, 22),
+      move(p, s) { const q = M.invert(p); if (q) s.cabin = q; },
+    },
+    hints: [["Drag", "the cabin"]],
+    caption: "Example ground stations (black squares, made up for illustration). The green circle is where a satellite 550 km up is at least 25° above the cabin's horizon; a ground station can share a satellite with the cabin when it is less than twice that radius away.",
+    status: s => { const n = nearest(s.cabin); return n.km <= REACH ? `nearest ground station ${SL.fmt(n.km)} km away · bent pipe ${SL.ms(2 * leg(n.km / 2)).toFixed(1)} ms one way` : `nearest ground station ${SL.fmt(n.km)} km away: out of reach of one satellite`; },
+    draw(g, s) {
+      M = g.map({ projection: "equirectangular", fit: [[-150, 5], [30, 80]], graticule: { step: 15, alpha: 0.4 }, borders: { alpha: 0.3, width: 0.5 } });
+      M.circle(s.cabin, REACH, { color: "green", dash: [5, 4], width: 1.2 });
+      M.circle(s.cabin, FOOT, { color: "green", fill: true, fillAlpha: 0.16, width: 1.4 });
+      for (const q of GW) { const p = M.project(q); if (p) g.rect(p[0] - 3.5, p[1] - 3.5, 7, 7, { fill: "ink" }); }
+      const n = nearest(s.cabin);
+      if (n.km <= REACH) {
+        const m = M.project(mid(s.cabin, n.q));
+        M.arc(s.cabin, n.q, { color: "orange", width: 2.2 });
+        if (m) g.circle(m, 5, { fill: "blue", stroke: "panel", width: 1.5 });
+      }
+      const c = M.project(s.cabin);
+      if (c) { g.handle(c, { color: "orange" }); g.label("cabin", [c[0], c[1] - 16], { color: "orange" }); }
+    },
+  });
+}
+</script>
+
+<p>Across most of the land on this map, the cabin has a ground station within reach, and the bent pipe adds only 4 or 5 ms. With the satellite roughly halfway between, the dish and the ground station can be up to about 1,900 km apart. Drag the cabin into the middle of the Atlantic, though, and nothing is in reach. That's where ships, airliners, and remote islands are, and ground stations can't be built on open ocean.</p>
+
+<h2>Lasers between satellites</h2>
+
+<p>Most satellites launched in recent years carry lasers that link them to their neighbors, so a satellite with no ground station below can pass the data along to one that has. A SpaceX engineer said in early 2024 that the constellation had more than 9,000 such lasers, moving about 42 petabytes a day, with single links up to 200 Gbit/s and some spanning 5,400 km <a class="cite" href="#ref-brashears"></a>. The simplest wiring, and the most studied, gives each satellite four links: ahead and behind in its own plane, and to its neighbors in the planes on either side <a class="cite" href="#ref-handley"></a>. Scrub <span class="c-blue">time</span> <span class="scrub" data-key="t" data-figure="grid"></span> and follow the <span class="c-red">route</span> from the cabin to London through this moving mesh:</p>
+
+<figure class="demo wide" id="grid" aria-label="A globe with the 550 km shell's satellites as blue dots joined by faint red laser links in a mesh; a thick red route runs from a satellite above Montana to one above London."></figure>
+<script>
+{
+  const K = SL.constellation([SL.SHELLS[0]]), S = SL.SHELLS[0].per, NP = SL.SHELLS[0].planes;
+  demo("grid", {
+    aspect: w => (w < 560 ? 1 : 1.5),
+    orbit: { yaw: 0, pitch: 0, minPitch: -1, maxPitch: 1, speed: 0.006 },
+    controls: [
+      { key: "t", label: "Time", min: 0, max: 95, step: 0.5, value: 20, unit: " min", color: "blue" },
+      { key: "links", label: "Show every laser link", type: "toggle", value: true, color: "red" },
+    ],
+    caption: "The 550 km shell with four laser links per satellite (ahead, behind, left, right), computed from the shell's orbits. The thick red line is the quickest path: up to one of the satellites high over the cabin, through the mesh, and down from one high over London. Orange lines are the radio legs.",
+    status: (s, v) => { SL.place(K, v.t * 60); const r = SL.bestRoute(K, SL.CABIN, SL.LONDON); return `${r.hops} laser hops · ${SL.fmt(r.km)} km in all: ${SL.ms(r.km).toFixed(1)} ms one way`; },
+    draw(g, s, v) {
+      SL.place(K, v.t * 60);
+      const M = g.map({ projection: "globe", center: [-55, 50], view: s.view, zoom: s.view?.zoom ?? 1, graticule: { step: 30, alpha: 0.4 }, borders: { alpha: 0.3, width: 0.5 } });
+      const P = new Array(K.n);
+      for (let i = 0; i < K.n; i++) { const [lon, lat] = SL.lonlat(K.x[i], K.y[i], K.z[i]); P[i] = SL.onGlobe(M, lon, lat, 550); }
+      const ok = p => p && p[2] > 0;
+      const ctx = g.ctx;
+      if (v.links) {
+        ctx.save();
+        ctx.strokeStyle = g.rgba("red", 0.35);
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        for (let i = 0; i < K.n; i++) {
+          if (!ok(P[i])) continue;
+          const p = Math.floor(i / S), sl = i % S;
+          for (const j of [p * S + ((sl + 1) % S), ((p + 1) % NP) * S + sl]) if (ok(P[j])) { ctx.moveTo(P[i][0], P[i][1]); ctx.lineTo(P[j][0], P[j][1]); }
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+      ctx.save();
+      ctx.fillStyle = g.color("blue");
+      ctx.beginPath();
+      for (let i = 0; i < K.n; i++) if (ok(P[i])) { ctx.moveTo(P[i][0] + 2, P[i][1]); ctx.arc(P[i][0], P[i][1], 2, 0, 2 * Math.PI); }
+      ctx.fill();
+      ctx.restore();
+      const r = SL.bestRoute(K, SL.CABIN, SL.LONDON), first = r.path[0], last = r.path[r.path.length - 1];
+      const cab = SL.onGlobe(M, ...SL.CABIN, 0), lon = SL.onGlobe(M, ...SL.LONDON, 0);
+      const pts = r.path.map(i => P[i]).filter(Boolean);
+      if (pts.length > 1) g.path(pts.map(p => [p[0], p[1]]), { stroke: "red", width: 3 });
+      if (cab && P[first]) g.line(cab, P[first], { stroke: "orange", width: 2 });
+      if (lon && P[last]) g.line(lon, P[last], { stroke: "orange", width: 2 });
+      for (const [p, name] of [[cab, "cabin"], [lon, "London"]]) if (p && p[2] > 0) { g.circle(p, 5, { fill: "orange", stroke: "panel", width: 1.5 }); g.label(name, [p[0], p[1] + 15]); }
+    },
+  });
+}
+</script>
+
+<p>The route runs along the northern edge of the shell, where the orbits turn and run nearly east to west, so a path along them heads almost straight for London. It changes from minute to minute as the mesh slides over the Earth, but the whole trip, up, across, and down, stays near 9,100 km, a quarter more than the 7,300 km great circle on the ground. A longer path can still beat a cable, because light in glass fiber moves at only about two thirds of its speed in vacuum: glass has a refractive index of about 1.47. Between satellites, the beam travels through vacuum. Before the next figure, a prediction:</p>
+
+<div class="quiz">
+  <p>London and Singapore are about 10,900 km apart. Which could carry a message between them faster?</p>
+  <div class="choices"><button>A fiber cable, because it doesn't climb 550 km and come back down</button><button data-correct>Lasers between satellites, even against a perfectly straight cable</button><button>They take the same time</button></div>
+  <p class="why">Over that distance the straight cable takes about 53 ms. The trip through space is a few thousand kilometers longer, but at full light speed it takes about 43 ms.</p>
+</div>
+
+<p>Here is the race over any distance. The laser route uses the same detour and climb as the route in the previous figure. Real cables follow coasts and roads, so stretch the <span class="c-brass">fiber</span> route <span class="scrub" data-key="stretch" data-figure="race"></span> to see how a detour changes the crossover:</p>
+
+<figure class="demo" id="race" aria-label="A graph of one-way delay against distance for a fiber cable and for lasers between satellites, with the distance where the satellites win marked."></figure>
+<script>
+{
+  // The climb and the detour of the laser route, measured from the route in the previous figure.
+  const K = SL.constellation([SL.SHELLS[0]]);
+  SL.place(K, 20 * 60);
+  const r = SL.bestRoute(K, SL.CABIN, SL.LONDON);
+  const UPDOWN = r.up + r.down, ZIG = r.laser / (SL.km(SL.CABIN, SL.LONDON) * (SL.R + 550) / SL.R);
+  const fiber = (D, k) => (D * k * SL.N_FIBER) / SL.C * 1000;
+  const laser = D => (UPDOWN + (D * (SL.R + 550) / SL.R) * ZIG) / SL.C * 1000;
+  const PAIRS = [["London–New York", 5570], ["Montana–London", SL.km(SL.CABIN, SL.LONDON)], ["London–Singapore", 10880], ["New York–Sydney", 15990]];
+  demo("race", {
+    aspect: w => (w < 560 ? 1 : 2),
+    controls: [{ key: "stretch", label: "Fiber route length", min: 1, max: 2, step: 0.01, value: 1, format: x => `${x.toFixed(2)} × straight`, color: "brass", marks: [{ value: 1, label: "straight" }, { value: 1.5, label: "1.5×" }] }],
+    caption: "One-way time for light in a fiber cable, and through the laser mesh at 550 km with the climb and the zigzag of the route in the previous figure, scaled to each distance. Neither counts the time spent in routers.",
+    status: (s, v) => { const den = v.stretch * SL.N_FIBER - ((SL.R + 550) / SL.R) * ZIG; return den > 0 ? `lasers win beyond ${SL.fmt(UPDOWN / den)} km` : "lasers always win"; },
+    draw(g, s, v) {
+      const P = g.graph({ x: [0, 18000], y: [0, 130], axes: "frame", xLabel: "Distance on the ground (km)", yLabel: "One way (ms)", xFormat: x => SL.fmt(x) });
+      P.fn(D => fiber(D, v.stretch), { color: "brass", label: "fiber", labelAt: 13000, labelOffset: [-14, -14] });
+      P.fn(laser, { color: "red", label: "lasers in space", labelAt: 16500, labelOffset: [0, 16] });
+      const den = v.stretch * SL.N_FIBER - ((SL.R + 550) / SL.R) * ZIG;
+      if (den > 0) { const X = UPDOWN / den; if (X < 18000) { P.vline(X, { color: "red" }); P.marker(X, laser(X), { color: "red" }); } }
+      PAIRS.forEach(([name, D], i) => P.marker(D, laser(D), { color: "ink", label: name, pos: i === 3 ? "nw" : i % 2 ? "se" : "nw" }));
+    },
+  });
+}
+</script>
+
+<p>With a <button class="set" data-set="stretch=1">perfectly straight cable</button> the satellites win beyond about 3,300 km; with a cable route <button class="set" data-set="stretch=1.5">half again as long</button> as the great circle, they win beyond about 1,100 km. Mark Handley at University College London made this case in 2018, before any lasers flew: over long distances, a mesh of low satellites can beat the fastest possible fiber <a class="cite" href="#ref-handley"></a>. For the cabin, the lasers matter for another reason: the nearest ground station may be far away, and the mesh carries the data there either way. How the network chooses between coming down nearby and staying in space isn't public.</p>
+
+<p>Light has a second advantage over radio between satellites: its beam barely spreads. Every beam fans out at an angle of about its wavelength divided by the width of the antenna or telescope that sends it. Radio at 12 GHz has a wavelength of 2.5 cm; infrared light used in fiber networks has one of 1.55 µm, 16,000 times shorter<span class="sidenote">The satellites' laser wavelength isn't published. Telecom infrared near 1.55 µm is assumed here; any near-infrared choice gives a similar result.</span>. Compare how wide the <span class="c-blue">radio</span> and <span class="c-red">laser</span> beams have grown by the time they reach a satellite <span class="scrub" data-key="km" data-figure="spread"></span> away:</p>
+
+<figure class="demo" id="spread" aria-label="A log-log graph of beam width against distance for radio from a half-meter antenna and for infrared light from a small telescope, with the size of the receiving telescope marked."></figure>
+<script>
+{
+  const RADIO = 0.025, LASER = 1.55e-6, DISH = 0.5;   // wavelengths and the radio antenna's width, in meters
+  const spot = (lam, D, km) => Math.max(D, (2.44 * lam * km * 1e3) / D);   // diameter of the central spot, m
+  const caught = (lam, D, km, rx) => Math.min(1, (rx / spot(lam, D, km)) ** 2);
+  const fmtM = m => (m >= 1000 ? `${SL.fmt(m / 1000)} km` : m >= 1 ? `${SL.fmt(m)} m` : `${SL.fmt(m * 100)} cm`);
+  demo("spread", {
+    aspect: w => (w < 560 ? 1 : 2),
+    controls: [
+      { key: "km", label: "Distance", min: 100, max: 5400, step: 50, value: 2000, unit: " km", color: "ink", marks: [{ value: 5400, label: "longest reported" }] },
+      { key: "ap", label: "Telescope width", min: 2, max: 20, step: 1, value: 10, unit: " cm", color: "red" },
+    ],
+    caption: "Width of the central spot of a beam (2.44 wavelengths times distance over the sender's width): radio at 12 GHz from a half-meter antenna, and infrared light at 1.55 µm from a small telescope. The dashed line is the receiving telescope, as wide as the sending one.",
+    status: (s, v) => { const D = v.ap / 100, r = caught(LASER, D, v.km, D) / caught(RADIO, DISH, v.km, D); return `radio spot ${fmtM(spot(RADIO, DISH, v.km))} · laser spot ${fmtM(spot(LASER, D, v.km))} · the receiver catches about ${SL.fmt(r / 1e6)} million times more of the laser`; },
+    draw(g, s, v) {
+      const D = v.ap / 100;
+      const P = g.graph({ x: [100, 6000], y: [0.01, 1e6], xScale: "log", yScale: "log", axes: "frame", xLabel: "Distance (km)", yLabel: "Beam width", xFormat: x => SL.fmt(x), yFormat: y => fmtM(y) });
+      P.fn(km => spot(RADIO, DISH, km), { color: "blue", label: "radio", labelAt: 300 });
+      P.fn(km => spot(LASER, D, km), { color: "red", label: "laser", labelAt: 300 });
+      P.hline(D, { color: "muted", label: "receiver" });
+      P.vline(v.km, { color: "ink" });
+      P.marker(v.km, spot(RADIO, DISH, v.km), { color: "blue" });
+      P.marker(v.km, spot(LASER, D, v.km), { color: "red" });
+    },
+  });
+}
+</script>
+
+<p>Across 2,000 km a radio beam from a half-meter antenna has spread over about 240 km, and a satellite catches a vanishing sliver of it. The laser beam from a 10 cm telescope is about 75 m wide, so the receiving telescope catches millions of times more of what was sent. That concentration is what lets one link carry 200 Gbit/s. The price is aim: a spot tens of meters wide must stay on a telescope 10 cm across, thousands of kilometers away, while both satellites move at 7.6 km/s and shake from their own machinery.</p>
+
+<h2>What measurements show</h2>
+
+<p>The light-speed minimum through a satellite overhead is under 8 ms for a round trip, but measured round trips are several times longer. A team from UCLouvain and Politecnico di Torino measured a median of about 50 ms to servers in Europe in early 2022, with the fastest near 20 ms <a class="cite" href="#ref-michel"></a>. A worldwide study found typical round trips of 25 to 50 ms <a class="cite" href="#ref-mohan"></a>. The difference is everything apart from the flight of light: waiting for a turn to transmit, the cable to the server, processing at each step, and queues. Stack the pieces of one round trip against the <span class="c-green">measured range</span>:</p>
+
+<figure class="demo" id="budget" aria-label="A stacked bar of the parts of one round trip's delay: light, waiting for a slot, processing, the cable to the server, and queues, over a shaded band of measured round-trip times."></figure>
+<script>
+{
+  const LIGHT = (4 * SL.slant(550, SL.rad(45))) / SL.C * 1000;   // dish to ground station and back, the satellite at 45°
+  const PROC = 3;                                                 // dish, satellite, and ground station together: an estimate
+  demo("budget", {
+    aspect: w => (w < 560 ? 0.95 : 2.1),
+    controls: [
+      { key: "slot", label: "Waiting for a slot to send", min: 0, max: 15, step: 0.5, value: 4, unit: " ms", color: "blue" },
+      { key: "cable", label: "Cable to the server", min: 0, max: 3000, step: 50, value: 800, unit: " km", color: "brass" },
+      { key: "queue", label: "Queues when busy", min: 0, max: 60, step: 1, value: 8, unit: " ms", color: "red" },
+    ],
+    caption: "A model of one round trip, with the satellite 45° up. The light time and the cable come from distances; the waiting, processing, and queueing times are estimates, since they aren't published. The green band is the range of round trips measured in studies.",
+    status: (s, v) => { const tot = LIGHT + v.slot + PROC + (2 * v.cable) / SL.C_FIBER * 1000 + v.queue; return `round trip about ${tot.toFixed(0)} ms, of which light in space ${LIGHT.toFixed(1)} ms`; },
+    draw(g, s, v) {
+      const parts = [
+        { name: "light in space", ms: LIGHT, color: "orange" },
+        { name: "waiting for a slot", ms: v.slot, color: "blue" },
+        { name: "processing", ms: PROC, color: "purple" },
+        { name: "cable to the server", ms: (2 * v.cable) / SL.C_FIBER * 1000, color: "brass" },
+        { name: "queues", ms: v.queue, color: "red" },
+      ];
+      const narrow = g.w < 560;
+      const P = g.graph({ box: [0, 0, g.w, narrow ? g.h * 0.5 : g.h * 0.62], x: [0, 100], y: [0, 1], axes: "frame", xLabel: "Round trip (ms)", yTicks: false, grid: false });
+      P.clip(() => g.rect(P.xpx(25), P.ypx(1), P.xpx(50) - P.xpx(25), P.ypx(0) - P.ypx(1), { fill: g.rgba("green", 0.14) }));
+      P.label("measured", [37.5, 0.92], { color: "green", align: "center" });
+      let x0 = 0;
+      const y0 = P.ypx(0.62), h = P.ypx(0.28) - P.ypx(0.62);
+      for (const p of parts) {
+        if (p.ms <= 0) continue;
+        const a = P.xpx(Math.min(100, x0)), b = P.xpx(Math.min(100, x0 + p.ms));
+        if (b > a) g.rect(a, y0, b - a, h, { fill: g.rgba(p.color, 0.75), stroke: "panel", width: 1 });
+        x0 += p.ms;
+      }
+      if (x0 > 100) g.text("→ off the scale", [P.xpx(100) - 4, y0 - 10], { size: 11.5, color: "red", align: "right" });
+      g.text(`${x0.toFixed(0)} ms`, [Math.min(P.xpx(Math.min(100, x0)) + 8, g.w - 40), y0 + h / 2], { size: 13, weight: 600, align: "left", font: "mono" });
+      // A legend with each part's time, under the graph.
+      const top = (narrow ? g.h * 0.5 : g.h * 0.62) + 14, cols = narrow ? 1 : 3, cw = (g.w - 32) / cols;
+      parts.forEach((p, i) => {
+        const x = 16 + (i % cols) * cw, y = top + Math.floor(i / cols) * 22;
+        g.rect(x, y - 6, 12, 12, { fill: g.rgba(p.color, 0.75) });
+        g.text(`${p.name}: ${p.ms.toFixed(1)} ms`, [x + 18, y], { size: 12.5, align: "left" });
+      });
+      g.text("a geostationary link: 480 ms or more of light alone", [16, g.h - 12], { size: 12, color: "purple", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>Light in space is about a third of a typical round trip. With a <button class="set" data-set="queue=0 cable=200">nearby server and a quiet network</button>, the model lands near 20 ms, about the fastest that studies measure; with a server 2,000 km away on a <button class="set" data-set="queue=30 cable=2000">busy evening</button>, it passes 60. Two pieces are specific to satellites. The terminal can't send whenever it likes: the network hands out slots, and the downlink runs in frames of 1/750 of a second <a class="cite" href="#ref-humphreys"></a>. And every 15 seconds the dish changes satellites, which adds a brief rise in delay <a class="cite" href="#ref-tanveer"></a>. Even so, the whole stack stays far below the half second of a geostationary link.</p>
+
+<aside class="callout key"><p>Low orbits make the light-speed part of the delay small. What's left is mostly the same as on the ground: queues, processing, and the distance to the server.</p></aside>
+
+<h2>Sunlight and shadow</h2>
+
+<p>Each satellite runs on solar panels, and once an orbit it may fly through the Earth's shadow and run on batteries. How long it stays dark depends on the <dfn data-def="The angle between the direction of the Sun and the plane of an orbit. At 0° the Sun lies in the orbit's plane; at 90° it shines straight onto the plane.">beta angle</dfn>, the angle between the Sun's direction and the orbit's plane, which drifts through the year as the plane slowly turns. This view looks at the orbit from the Sun itself, so anything behind the Earth's disc is in shadow. Change the <span class="c-orange">beta angle</span> <span class="scrub" data-key="beta" data-figure="eclipse"></span>:</p>
+
+<figure class="demo" id="eclipse" aria-label="The Earth's disc seen from the Sun with a satellite's orbit drawn as an ellipse around it; the part of the orbit hidden behind the disc is in shadow. Beside it, a graph of sunlight on the satellite over one orbit."></figure>
+<script>
+{
+  const h = 550, r = SL.R + h, T = SL.period(h) / 60;
+  // Position on the orbit at argument u, seen from the Sun: x and y on screen, z away from the Sun.
+  const pos = (u, b) => [r * Math.cos(u), r * Math.sin(u) * Math.sin(b), r * Math.sin(u) * Math.cos(b)];
+  const dark = ([x, y, z]) => z > 0 && x * x + y * y < SL.R * SL.R;
+  demo("eclipse", {
+    aspect: w => (w < 560 ? 0.75 : 2),
+    state: () => ({ u: 0.4 }),
+    controls: [{ key: "beta", label: "Beta angle", min: 0, max: 90, step: 1, value: 20, unit: "°", color: "orange", marks: [{ value: 67, label: "no shadow" }] }],
+    caption: "Left: a 550 km orbit as the Sun sees it. The satellite is in shadow while it is behind the Earth's disc (the dark dotted part of the path). Right: sunlight on the satellite over one 96-minute orbit.",
+    step(dt, s) { s.u = (s.u + dt * 0.5) % (2 * Math.PI); },
+    status: (s, v) => { const f = SL.eclipseShare(h, v.beta); return f > 0 ? `in shadow ${(f * T).toFixed(0)} of every ${T.toFixed(0)} minutes (${(100 * f).toFixed(0)}%)` : "in sunlight all the way round"; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, b = SL.rad(v.beta);
+      const left = narrow ? [0, 0, g.w, g.h * 0.6] : [0, 0, g.w * 0.5, g.h], right = narrow ? [0, g.h * 0.62, g.w, g.h * 0.38] : [g.w * 0.52, 0, g.w * 0.48, g.h];
+      const P = g.fit(-r * 1.08, r * 1.08, -r * 1.08, r * 1.08, { box: left });
+      const C = P([0, 0]);
+      // The orbit in runs of one kind: near side, far side in sunlight, far side in shadow.
+      const kind = q => (q[2] <= 0 ? "near" : dark(q) ? "dark" : "far");
+      const runs = [];
+      for (let k = 0; k <= 240; k++) {
+        const q = pos((2 * Math.PI * k) / 240, b), kd = kind(q), p = P([q[0], q[1]]);
+        const last = runs[runs.length - 1];
+        if (last && last.kind === kd) last.pts.push(p);
+        else { if (last) last.pts.push(p); runs.push({ kind: kd, pts: last ? [last.pts[last.pts.length - 2], p] : [p] }); }
+      }
+      const draw = (kd, o) => { for (const r of runs) if (r.kind === kd && r.pts.length > 1) g.path(r.pts, o); };
+      draw("far", { stroke: "orange", width: 1.6, dash: [5, 4] });
+      g.circle(C, SL.R * P.sx, { fill: g.mix("panel", "orange", 0.12), stroke: "ink", width: 1.2 });
+      draw("dark", { stroke: "ink", width: 2, dash: [2, 4], alpha: 0.6 });
+      draw("near", { stroke: "orange", width: 2 });
+      const q = pos(s.u, b), p = P([q[0], q[1]]), d = dark(q);
+      g.circle(p, 6, d ? { fill: "panel", stroke: "ink", width: 1.8 } : { fill: "orange", stroke: "panel", width: 1.5 });
+      g.label(d ? "in shadow" : "in sunlight", [p[0], p[1] - 14], { color: d ? "muted" : "orange" });
+      // Sunlight over one orbit, starting at u = 0.
+      const G = g.graph({ box: right, x: [0, T], y: [0, 1.2], axes: "frame", xLabel: "Minutes into the orbit", yTicks: false, grid: false, xTicks: 15 });
+      const data = [];
+      for (let k = 0; k <= 480; k++) { const u = (2 * Math.PI * k) / 480; data.push([(T * k) / 480, dark(pos(u, b)) ? 0 : 1]); }
+      G.series(data, { color: "orange", fill: true, width: 1.6 });
+      G.vline((T * s.u) / (2 * Math.PI), { color: "ink" });
+      G.label("sunlight", [4, 1.1], { color: "orange", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>At a beta angle of <button class="set" data-set="beta=0">0°</button> the Sun lies in the orbit's plane, the orbit passes straight behind the Earth, and the satellite spends 35 of its 96 minutes in shadow, 37% of the time. As the angle grows, the orbit's outline widens until, past about <button class="set" data-set="beta=70">67°</button>, the satellite skims around the edge of the shadow and stays in sunlight all the way round. The power system is sized for the worst case: the panels have to collect enough during the sunlit part of the orbit to run the radios and recharge the batteries for the dark part, which at low beta is more than half an hour, 15 times a day.</p>
+
+<h2>Falling back</h2>
+
+<p>The thin air at 550 km is a near vacuum, but at 7.6 km/s a satellite sweeps through enough of it to slow down. Each orbit it loses a little height, the air gets thicker, and it loses height faster. Working satellites fire thrusters to hold their orbits; a dead one comes down and burns up. How long that takes depends on the starting altitude, on how much area the satellite turns into the airflow for its mass, and on the Sun, whose activity heats and puffs up the upper atmosphere. Using a textbook model of the air's density at each height <a class="cite" href="#ref-vallado"></a>, slide the <span class="c-blue">altitude</span> <span class="scrub" data-key="h" data-figure="decay"></span>:</p>
+
+<figure class="demo" id="decay" aria-label="A graph of the years an unpowered satellite takes to fall from each starting altitude, on a logarithmic scale, with marks at 210, 480, 550, and 1,150 km."></figure>
+<script>
+{
+  // Mean density of the upper atmosphere, an exponential fit by altitude band (Vallado's table).
+  const RHO = [[150, 2.070e-9, 22.523], [180, 5.464e-10, 29.74], [200, 2.789e-10, 37.105], [250, 7.248e-11, 45.546], [300, 2.418e-11, 53.628], [350, 9.518e-12, 53.298], [400, 3.725e-12, 58.515], [450, 1.585e-12, 60.828], [500, 6.967e-13, 63.822], [600, 1.454e-13, 71.835], [700, 3.614e-14, 88.667], [800, 1.17e-14, 124.64], [900, 5.245e-15, 181.05], [1000, 3.019e-15, 268]];
+  const rho = h => { let r = RHO[0]; for (const x of RHO) if (h >= x[0]) r = x; return r[1] * Math.exp(-(h - r[0]) / r[2]); };
+  const YEAR = 365.25 * 86400;
+  // Years to fall from each altitude down to 200 km, where reentry follows within days: dt = dh / |dh/dt|,
+  // with dh/dt = -rho * sqrt(mu * a) * B for a near-circular orbit.
+  function curve(B, f) {
+    const out = [[200, 0]];
+    let t = 0;
+    for (let h = 200; h < 1200; h += 2) {
+      const a = (SL.R + h + 1) * 1e3, rate = rho(h + 1) * f * Math.sqrt(SL.MU * 1e9 * a) * B / 1e3;   // km/s
+      t += 2 / rate / YEAR;
+      out.push([h + 2, t]);
+    }
+    return out;
+  }
+  let cache = { key: "" };
+  const get = v => { const key = `${v.B}|${v.sun}`; if (cache.key !== key) cache = { key, data: curve(v.B, v.sun) }; return cache.data; };
+  const fmtT = y => (y < 1 / 52 ? `${(y * 365).toFixed(0)} days` : y < 0.25 ? `${(y * 52).toFixed(0)} weeks` : y < 2 ? `${(y * 12).toFixed(0)} months` : y > 100 ? "more than a century" : `${y.toFixed(0)} years`);
+  demo("decay", {
+    aspect: w => (w < 560 ? 1 : 2),
+    controls: [
+      { key: "h", label: "Starting altitude", min: 210, max: 1150, step: 5, value: 550, unit: " km", color: "blue", marks: [{ value: 480, label: "480" }, { value: 550, label: "550" }] },
+      { key: "sun", label: "Sun", type: "choice", options: [{ value: 0.5, label: "quiet" }, { value: 1, label: "average" }, { value: 3, label: "active" }], value: 1 },
+      { key: "B", label: "Drag area per mass", min: 0.005, max: 0.08, step: 0.001, value: 0.02, format: x => `${x.toFixed(3)} m²/kg`, color: "purple", marks: [{ value: 0.01, label: "edge on" }, { value: 0.06, label: "broadside" }] },
+    ],
+    caption: "A simple model: a mean atmosphere whose density is scaled up for an active Sun, and a satellite that stops steering. Real decay also depends on solar storms and on how the satellite is oriented. Times are to 200 km, below which reentry takes days.",
+    status: (s, v) => `from ${SL.fmt(v.h)} km: ${fmtT(Num.interp(get(v).map(p => p[0]), get(v).map(p => p[1]), v.h))}`,
+    draw(g, s, v) {
+      const data = get(v);
+      const P = g.graph({ x: [200, 1250], y: [0.005, 300], yScale: "log", axes: "frame", xLabel: "Starting altitude (km)", yLabel: "Time to fall", yTicks: { values: [0.01, 0.1, 1, 10, 100], format: y => (y < 0.05 ? "4 days" : y < 0.5 ? "5 weeks" : y < 5 ? "1 year" : y < 50 ? "10 years" : "100 years") } });
+      P.series(data.filter(p => p[1] > 0.004), { color: "blue", width: 2.2 });
+      for (const x of [210, 480, 550, 1150]) P.vline(x, { color: "muted" });
+      P.label("release", [210, 150], { dx: 4, align: "left", color: "muted" });
+      P.label("480", [480, 0.008], { dx: -4, align: "right", color: "muted" });
+      P.label("550", [550, 0.008], { dx: 4, align: "left", color: "muted" });
+      P.label("original plan", [1150, 150], { dx: -4, align: "right", color: "muted" });
+      const y = Num.interp(data.map(p => p[0]), data.map(p => p[1]), v.h);
+      P.marker(v.h, Math.min(300, Math.max(0.005, y)), { color: "blue", drop: true, label: fmtT(y), pos: "nw" });
+    },
+  });
+}
+</script>
+
+<p>In this model an average Sun brings a dead satellite down from 550 km in about six years, and an active Sun in two; from <button class="set" data-set="h=480 sun=3">480 km</button> under an active Sun it takes months. At <button class="set" data-set="h=1150">1,150 km</button>, within the 1,100 to 1,300 km of SpaceX's original plan, it takes more than a century, one reason the first shells moved down to around 550 km <a class="cite" href="#ref-fcc2148"></a>. In January 2026 the company announced it would lower about 4,400 satellites to around 480 km, so that failed ones fall back faster <a class="cite" href="#ref-lower"></a>. New satellites start lower still, a little above 200 km, and climb on their own thrusters. In February 2022 a geomagnetic storm thickened the air there, and 38 of 49 new satellites never made it up <a class="cite" href="#ref-dang"></a>.</p>
+
+<h2>The night sky</h2>
+
+<p>Satellites shine by reflected sunlight. Just after sunset the ground is dark, but a satellite a few hundred kilometers up is still in the sun and appears as a moving point of light. A long exposure records each one as a streak, and Rubin Observatory in Chile, which photographs the whole southern sky every few nights, studied the effect on its survey <a class="cite" href="#ref-tyson"></a>. This is the sky over that site; the <span class="c-orange">bright</span> satellites are in sunlight. Move the <span class="c-blue">time</span> <span class="scrub" data-key="m" data-figure="twilight"></span> after sunset:</p>
+
+<figure class="demo" id="twilight" aria-label="A circular map of the night sky over Rubin Observatory in Chile, with satellites as dots: orange where sunlit, faint where in the Earth's shadow, and a count of the sunlit ones."></figure>
+<script>
+{
+  const SITE = [-70.74, -30.24];   // Cerro Pachón, the site of the Rubin Observatory
+  const K = SL.constellation();
+  const DEC = { jun: 23.44, eq: 0, dec: -23.44 };
+  const sky = (v) => {
+    const d = SL.rad(DEC[v.season]), f = SL.rad(SITE[1]);
+    const H0 = Math.acos(-Math.tan(f) * Math.tan(d)), H = H0 + SL.rad(v.m / 4);
+    const sunEl = SL.deg(Math.asin(Math.sin(f) * Math.sin(d) + Math.cos(f) * Math.cos(d) * Math.cos(H)));
+    const ls = SL.rad(SITE[0]) - H, sun = [Math.cos(d) * Math.cos(ls), Math.cos(d) * Math.sin(ls), Math.sin(d)];
+    SL.place(K, 3000 + v.m * 60);
+    const list = [];
+    for (let i = 0; i < K.n; i++) {
+      const q = [K.x[i], K.y[i], K.z[i]], l = SL.look(SITE, q);
+      if (l.el > 0) list.push({ i, el: l.el, az: l.az, lit: !SL.shadowed(q, sun) });
+    }
+    return { sunEl, list, night: (2 * Math.PI - 2 * H0) / (2 * Math.PI) * 24 * 60 };
+  };
+  let last;
+  demo("twilight", {
+    aspect: w => (w < 560 ? 0.95 : 1.5),
+    controls: [
+      { key: "m", label: "After sunset", min: 0, max: 600, step: 5, value: 60, format: m => `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`, color: "blue" },
+      { key: "season", label: "Month", type: "choice", options: [{ value: "jun", label: "June" }, { value: "eq", label: "March" }, { value: "dec", label: "December" }], value: "eq" },
+    ],
+    caption: "The sky over Cerro Pachón, Chile (30° south), computed from the five first-generation shells and the Sun's position; the edge is the horizon. Orange satellites are in sunlight, faint ones in the Earth's shadow. How bright each looks also depends on its angle to the Sun, which this ignores.",
+    status: (s, v) => { const r = last; if (!r) return ""; if (r.sunEl > -0.5) return "the Sun is up again"; const n = r.list.filter(e => e.lit && e.el >= 30).length; return `Sun ${(-r.sunEl).toFixed(0)}° below the horizon · ${n} sunlit satellites more than 30° up`; },
+    draw(g, s, v) {
+      last = sky(v);
+      const c = [g.w / 2, g.h / 2], R0 = Math.min(g.w, g.h) * 0.44;
+      const pos = (el, az) => { const r = R0 * (1 - el / 90), a = SL.rad(az); return [c[0] + r * Math.sin(a), c[1] - r * Math.cos(a)]; };
+      const dusk = clamp((-last.sunEl - 0) / 18, 0, 1);
+      g.circle(c, R0, { fill: g.mix("panel", "blue", 0.08 + 0.22 * dusk), stroke: "ink", width: 1.2 });
+      g.circle(c, R0 * (1 - 30 / 90), { stroke: "faint", width: 1, dash: [4, 4] });
+      for (const [az, n] of [[0, "N"], [90, "E"], [180, "S"], [270, "W"]]) g.text(n, pos(-6, az), { size: 12, color: "muted" });
+      const ctx = g.ctx;
+      for (const lit of [false, true]) {
+        ctx.save();
+        ctx.fillStyle = lit ? g.color("orange") : g.rgba("muted", 0.35);
+        ctx.beginPath();
+        for (const e of last.list) if (e.lit === lit) { const p = pos(e.el, e.az), r = lit ? 2.6 : 1.4; ctx.moveTo(p[0] + r, p[1]); ctx.arc(p[0], p[1], r, 0, 2 * Math.PI); }
+        ctx.fill();
+        ctx.restore();
+      }
+      g.text(last.sunEl > -0.5 ? "the Sun is up" : last.sunEl > -6 ? "dusk" : last.sunEl > -18 ? "twilight" : "night", [16, 22], { size: 13, weight: 600, color: "muted", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>In the first hour after sunset nearly every satellite above the horizon is still in sunlight, close to 200 of them, though fewer than 20 are more than 30° up. As the night deepens the Earth's shadow climbs the sky and swallows them: three hours after sunset in March only a dozen remain lit, all low, and by <button class="set" data-set="season=jun m=300">midnight in June</button>, the southern winter, none are. In <button class="set" data-set="season=dec m=300">December</button>, with short summer nights, dozens stay lit near the horizon all night. The first test satellites shone at about magnitude 4.5, visible to the eye from a dark site, and a darkened test version at about 6.1 <a class="cite" href="#ref-tyson"></a>; later satellites added sunshades and coatings. For a survey telescope the count matters as much as the brightness, since every streak has to be found and masked.</p>
+
+<h2>The whole call</h2>
+
+<p>Now everything can be put together. The video call leaves the cabin as radio waves, steered by a flat array to a satellite 550 km up, and from there it can take two kinds of path to London: straight down to a ground station near the cabin and then across the continent and the Atlantic by cable, or along the laser mesh to a satellite above England and down to a ground station there. Compare the <span class="c-brass">cable</span> route and the <span class="c-red">laser</span> route:</p>
+
+<figure class="demo wide" id="call" aria-label="A map from Montana to London with two routes: down to an example ground station in Idaho then fiber across America and the Atlantic, or up through laser links between satellites; a table compares the round trips."></figure>
+<script>
+{
+  const GROUND = [-116.2, 43.6];   // an example ground station in Idaho
+  const CABLE = [GROUND, [-87.6, 41.9], [-74.0, 40.7], [-4.5, 50.8], SL.LONDON];   // Chicago, New York, an undersea cable landing in Cornwall
+  const K = SL.constellation([SL.SHELLS[0]]);
+  const cableKm = CABLE.slice(1).reduce((a, q, i) => a + SL.km(CABLE[i], q), 0);
+  const leg = km => { const g = km / SL.R, r = SL.R + 550; return Math.sqrt(SL.R * SL.R + r * r - 2 * SL.R * r * Math.cos(g)); };
+  const WAIT = 4 + 3;   // the slot and processing estimates from the round-trip model above
+  const ledgerOf = (v) => {
+    SL.place(K, 20 * 60);
+    const r = SL.bestRoute(K, SL.CABIN, SL.LONDON);
+    const pipe = 2 * leg(SL.km(SL.CABIN, GROUND) / 2);
+    return {
+      cable: [["up and down", SL.ms(pipe)], ["cable, " + SL.fmt(cableKm) + " km", (cableKm / SL.C_FIBER) * 1000]],
+      laser: [["up and down", SL.ms(r.up + r.down)], [`${r.hops} laser hops, ${SL.fmt(r.laser)} km`, SL.ms(r.laser)]],
+      r,
+    };
+  };
+  demo("call", {
+    aspect: w => (w < 560 ? 0.7 : 1.9),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "route", label: "Route", type: "choice", options: [{ value: "cable", label: "down nearby, then cable" }, { value: "laser", label: "lasers in space" }, { value: "both", label: "both" }], value: "both" },
+    ],
+    caption: "Two ways from the cabin to London, with distances computed from the model on this page. The cable route goes through an example ground station and example cable landings. Round trips add an estimated 7 ms for waiting and processing; neither counts routers on the ground or queues.",
+    step(dt, s) { s.t = (s.t + dt * 0.35) % 1; },
+    status: (s, v) => { const L = ledgerOf(v), tot = k => 2 * L[k].reduce((a, x) => a + x[1], 0) + WAIT; return `round trip: about ${tot("cable").toFixed(0)} ms by cable, ${tot("laser").toFixed(0)} ms by lasers`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, L = ledgerOf(v);
+      const mapBox = narrow ? [0, 0, g.w, g.h * 0.58] : [0, 0, g.w * 0.66, g.h];
+      const M = g.map({ box: mapBox, projection: "globe", center: [-58, 47], fit: [[-125, 34], [4, 57]], graticule: { step: 15, alpha: 0.4 }, borders: { alpha: 0.3, width: 0.5 } });
+      const show = k => v.route === k || v.route === "both";
+      const moving = (pieces, color) => {
+        const pts = pieces.flat(), n = pts.length;
+        if (n < 2) return;
+        const p = pts[Math.min(n - 1, Math.floor(s.t * n))];
+        g.circle(p, 5, { fill: color, stroke: "panel", width: 1.5 });
+      };
+      if (show("cable")) {
+        const mid = M.project(SL.lonlat(...SL.ecef(SL.CABIN).map((x, i) => x + SL.ecef(GROUND)[i])));
+        const up = M.line([SL.CABIN, GROUND], { color: "orange", width: 2 });
+        const pieces = M.line(CABLE, { color: "brass", width: 2.6 });
+        if (mid) g.circle(mid, 4, { fill: "blue" });
+        g.rect(M.project(GROUND)[0] - 3.5, M.project(GROUND)[1] - 3.5, 7, 7, { fill: "ink" });
+        moving([...up, ...pieces], "brass");
+      }
+      if (show("laser")) {
+        const sats = L.r.path.map(i => SL.lonlat(K.x[i], K.y[i], K.z[i]));
+        const pieces = M.line(sats, { color: "red", width: 2.6 });
+        M.line([SL.CABIN, sats[0]], { color: "orange", width: 2 });
+        M.line([sats[sats.length - 1], SL.LONDON], { color: "orange", width: 2 });
+        moving(pieces, "red");
+      }
+      M.marker(SL.CABIN, { color: "orange", label: "cabin", side: "w" });
+      M.marker(SL.LONDON, { color: "orange", label: "London", side: "e" });
+      // The ledger.
+      const x0 = narrow ? 16 : g.w * 0.68, y0 = narrow ? g.h * 0.6 + 10 : 34, colW = narrow ? g.w - 32 : g.w * 0.3;
+      let y = y0;
+      for (const k of ["cable", "laser"]) {
+        if (!show(k)) continue;
+        g.text(k === "cable" ? "down nearby, then cable" : "lasers in space", [x0, y], { size: 13, weight: 600, align: "left", color: k === "cable" ? "brass" : "red" });
+        y += 20;
+        let one = 0;
+        for (const [name, ms] of L[k]) { g.text(name, [x0, y], { size: 12, align: "left" }); g.text(`${ms.toFixed(1)} ms`, [x0 + colW, y], { size: 12, align: "right", font: "mono" }); one += ms; y += 18; }
+        g.line([x0, y - 8], [x0 + colW, y - 8], { stroke: "faint", width: 1 });
+        g.text("round trip, with waiting", [x0, y + 4], { size: 12, align: "left", weight: 600 });
+        g.text(`${(2 * one + WAIT).toFixed(0)} ms`, [x0 + colW, y + 4], { size: 12.5, align: "right", weight: 600, font: "mono" });
+        y += 34;
+      }
+    },
+  });
+}
+</script>
+
+<p>Through the nearby ground station, the call spends about 4 ms going up and down and more than 40 ms crossing America and the Atlantic in glass, each way. Through the lasers, the climb is similar but the long stretch runs at full light speed, and the round trip comes out about a third shorter. Both are well inside the 150 ms one-way budget for a natural conversation <a class="cite" href="#ref-g114"></a>, and both are far below the half second of a geostationary link. Real calls add routers, queues, and the video software's own buffering, so the numbers here are floors, not predictions.</p>
+
+<p>That is the whole chain: satellites low enough that light makes the trip in milliseconds, so many that one is always high over the cabin, a flat panel that aims by timing alone, beams shared among cells and reshuffled every 15 seconds, and a choice between ground stations and lasers for the rest of the way. Flying low costs something everywhere else: more satellites, shorter lives, more handoffs, more streaks across the night sky. The constellation passed 10,000 satellites in orbit in early 2026 <a class="cite" href="#ref-mcdowell"></a>, with a second generation approved for 7,500 more at 525 to 535 km <a class="cite" href="#ref-fcc2291"></a>. Other operators build on the same principles with different trade-offs <a class="cite" href="#ref-portillo"></a>.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-fcc2148">Federal Communications Commission, “Space Exploration Holdings, LLC, Request for Modification of the Authorization for the SpaceX NGSO Satellite System”, Order and Authorization and Order on Reconsideration, FCC 21-48, adopted April 23, 2021.</li>
+  <li id="ref-g114">ITU-T Recommendation G.114, “One-way transmission time”, International Telecommunication Union, 2003.</li>
+  <li id="ref-mohan">N. Mohan et al., “A Multifaceted Look at Starlink Performance”, <em>Proceedings of the ACM Web Conference 2024</em> (WWW ’24); arXiv:2310.09242.</li>
+  <li id="ref-tanveer">H. B. Tanveer, M. Puchol, R. Singh, A. Bianchi, and R. Nithyanand, “Making Sense of Constellations: Methodologies for Understanding Starlink’s Scheduling Algorithms”, arXiv:2307.00402, 2023.</li>
+  <li id="ref-fcc2291">Federal Communications Commission, “Space Exploration Holdings, LLC, Request for Orbital Deployment and Operating Authority for the SpaceX Gen2 NGSO Satellite System”, Order and Authorization, FCC 22-91, adopted November 29, 2022.</li>
+  <li id="ref-humphreys">T. E. Humphreys, P. A. Iannucci, Z. M. Komodromos, and A. M. Graff, “Signal Structure of the Starlink Ku-Band Downlink”, <em>IEEE Transactions on Aerospace and Electronic Systems</em> (2023); arXiv:2210.11578.</li>
+  <li id="ref-p838">ITU-R Recommendation P.838-3, “Specific attenuation model for rain for use in prediction methods”, International Telecommunication Union, 2005.</li>
+  <li id="ref-brashears">Remarks by SpaceX engineer Travis Brashears at SPIE Photonics West, January 2024, as reported in TechSpot, January 2024, https://www.techspot.com/news/101723-starlink-satellites-exchange-petabytes-data-day-through-space.html</li>
+  <li id="ref-handley">M. Handley, “Delay is Not an Option: Low Latency Routing in Space”, <em>Proceedings of the 17th ACM Workshop on Hot Topics in Networks</em> (HotNets ’18), 2018, 85–91, doi:10.1145/3286062.3286075.</li>
+  <li id="ref-michel">F. Michel, M. Trevisan, D. Giordano, and O. Bonaventure, “A First Look at Starlink Performance”, <em>Proceedings of the ACM Internet Measurement Conference</em> (IMC ’22), 2022, doi:10.1145/3517745.3561416.</li>
+  <li id="ref-vallado">D. A. Vallado, <em>Fundamentals of Astrodynamics and Applications</em>, 4th ed., Microcosm Press, 2013 (the exponential atmosphere model).</li>
+  <li id="ref-lower">Announcement by Starlink engineering vice president Michael Nicolls, January 2026, as reported in TechSpot, January 2026, https://www.techspot.com/news/110773-starlink-lowering-thousands-satellites-orbits-reduce-risk-collisions.html</li>
+  <li id="ref-dang">T. Dang et al., “Unveiling the Space Weather During the Starlink Satellites Destruction Event on 4 February 2022”, <em>Space Weather</em> 20 (2022), e2022SW003152, doi:10.1029/2022SW003152.</li>
+  <li id="ref-tyson">J. A. Tyson, Ž. Ivezić, A. Bradshaw, et al., “Mitigation of LEO Satellite Brightness and Trail Effects on the Rubin Observatory LSST”, <em>The Astronomical Journal</em> 160 (2020), 226.</li>
+  <li id="ref-mcdowell">J. McDowell, “Starlink Statistics”, Jonathan’s Space Pages, planet4589.org, accessed 2026.</li>
+  <li id="ref-portillo">I. del Portillo, B. G. Cameron, and E. F. Crawley, “A technical comparison of three low earth orbit satellite constellation systems to provide global broadband”, <em>Acta Astronautica</em> 159 (2019), 123–135, doi:10.1016/j.actaastro.2019.03.040.</li>
+</ol>
