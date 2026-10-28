@@ -1,0 +1,163 @@
+
+<h2>Echoes and moving sources</h2>
+
+<p>Sound that meets a hard wall bounces off it, as light does off a mirror. Clap in front of a cliff or a big building and the clap comes back. Drag the <span class="c-ink" data-part="wall">wall</span> nearer or further, and clap:</p>
+
+<figure class="demo" id="echo" aria-label="Seen from above, a clap spreads from a person, reflects off a draggable wall, and returns. A timeline below marks the clap and the echo's arrival."></figure>
+<script>
+{
+  const C = 343, SR = 22050, SLOW = 8, CV = C / SLOW, XMAX = 64;
+  let pb = null, WL = null;
+  const clap = d => {
+    const at = Math.round(((2 * d) / C) * SR), n = at + Math.round(SR * 0.3), x = new Float32Array(n), rnd = Sound.rng(5), m = Math.round(SR * 0.05);
+    let lp = 0;
+    for (let i = 0; i < m; i++) {
+      const b = (rnd() * 2 - 1) * Math.exp(-i / (SR * 0.006));
+      x[i] += 0.9 * b;
+      lp += 0.45 * (b - lp);   // the wall and the air take some of the highs
+      if (at + i < n) x[at + i] += 0.4 * lp;
+    }
+    return x;
+  };
+  const cycle = d => (2 * d) / CV + 0.5;
+  demo("echo", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    state: () => ({ t: 0.3 }),
+    controls: [
+      { key: "d", label: "Wall distance", min: 2, max: 60, step: 0.5, value: 25, unit: " m", color: "purple" },
+      { key: "img", label: "Show the mirror image", type: "toggle", value: false, color: "purple" },
+      Sound.button((s, v) => { s.t = 0; return (pb = Sound.play(clap(v.d), { sampleRate: SR })); }, { label: "Clap" }),
+    ],
+    presets: [{ label: "Small room", set: { d: 3 } }, { label: "Concert hall", set: { d: 12 } }, { label: "17 m", set: { d: 17 } }, { label: "Cliff", set: { d: 55 } }],
+    caption: "A clap and its echo seen from above, slowed down eight times. The reflected sound spreads as if from a mirror image of the clapper behind the wall. Below: when the echo arrives. For speech, reflections within about 50 ms merge with the sound; the played echo is louder than a real one so you can hear it.",
+    status: (s, v) => `wall ${v.d} m away · echo ${Math.round(((2 * v.d) / C) * 1000)} ms after the clap`,
+    step(dt, s, v) { s.t += dt; if (s.t > cycle(v.d)) s.t = 0; },
+    drag: {
+      hit: p => !!WL && Math.abs(p[0] - WL.x) < 16 && p[1] < WL.bottom,
+      move(p, s, v, d, fig) { fig.set("d", Math.round(Math.max(2, Math.min(60, (p[0] - WL.x0) / WL.k)) * 2) / 2); },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, top = g.h * (narrow ? 0.6 : 0.64), cy = top * 0.52;
+      const x0 = 26, k = (g.w - x0 - 14) / XMAX, X = m => x0 + m * k, wx = X(v.d);
+      WL = { x: wx, x0, k, bottom: top };
+      const r = CV * s.t, ctx = g.ctx;
+      // Direct sound and its reflection, both kept on this side of the wall.
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, wx - 3, top); ctx.clip();
+      for (const [dr, a] of [[0, 1], [-1.2, 0.45]]) {
+        if (r + dr > 0) g.circle([x0, cy], (r + dr) * k, { stroke: "red", width: 2.5, alpha: a });
+        if (r + dr > v.d) g.circle([X(2 * v.d), cy], (r + dr) * k, { stroke: "purple", width: 2.5, alpha: a });
+      }
+      ctx.restore();
+      if (r < v.d) { ctx.save(); ctx.beginPath(); ctx.rect(wx + 4, 0, g.w, top); ctx.clip(); ctx.restore(); }
+      // The wall.
+      const lit = g.lit("wall");
+      g.rect(wx - 3, 12, 7, top - 24, { fill: lit ? "ink" : "muted", r: 2 });
+      g.handle([wx, cy + top * 0.3], { color: "purple" });
+      // The mirror image.
+      if (v.img) {
+        const ix = X(2 * v.d);
+        if (ix < g.w - 10) { g.circle([ix, cy], 6, { stroke: "purple", width: 1.5, dash: [3, 3] }); g.text("mirror image", [ix, cy - 16], { size: 11, color: "purple" }); }
+        else g.text(`mirror image ${2 * v.d} m away →`, [wx + 10, cy - 16], { size: 11, color: "purple", align: "left" });
+        g.line([x0, cy + 22], [Math.min(ix, g.w - 6), cy + 22], { stroke: "purple", width: 1, dash: [4, 4], alpha: 0.6 });
+      }
+      // The clapper; a ring when the echo arrives.
+      const back = r >= 2 * v.d && r < 2 * v.d + CV * 0.35;
+      g.circle([x0, cy], back ? 10 : 7, { fill: "ink" });
+      if (back) g.circle([x0, cy], 18, { stroke: "purple", width: 2.5 });
+      g.text("you", [x0, cy + 22], { size: 11.5, color: "muted" });
+      // The timeline.
+      const ms = ((2 * v.d) / C) * 1000;
+      const P = g.graph({ box: [0, top + 8, g.w, g.h - top - 8], x: [0, 300], y: [0, 1.2], axes: "frame", grid: false, yTicks: false, xLabel: "Time after the clap (ms)", xTicks: narrow ? [0, 100, 200, 300] : 50 });
+      g.rect(P.xpx(0), P.ypx(1.2), P.xpx(50) - P.xpx(0), P.ypx(0) - P.ypx(1.2), { fill: g.rgba("muted", 0.15) });
+      g.text("merges", [P.xpx(27), P.ypx(0.45)], { size: 10.5, color: "muted" });
+      g.line(P([0, 0]), P([0, 1]), { stroke: "red", width: 3.5 });
+      g.text("clap", [P.xpx(0) + 6, P.ypx(1.05)], { size: 11, color: "red", align: "left" });
+      if (ms <= 300) { g.line(P([ms, 0]), P([ms, 0.6]), { stroke: "purple", width: 3.5 }); g.text("echo", P([ms, 0.72]), { size: 11, color: "purple" }); }
+      else g.text(`echo at ${Math.round(ms)} ms →`, [P.xpx(300) - 4, P.ypx(0.6)], { size: 11, color: "purple", align: "right" });
+      if (pb?.playing) g.wantsFrame = true;
+    },
+  });
+}
+</script>
+
+<p>The echo takes as long as the sound needs to reach the wall and come back: twice the distance divided by 343 m/s. The reflection spreads as if from a <button class="set" data-set="img=true">mirror image</button> of you behind the wall. An echo that returns within a few tens of milliseconds fuses with the original into one sound. For speech, reflections up to about 50 ms late make a voice fuller rather than doubled <a class="cite" href="#ref-haas"></a>. Past about <button class="set" data-set="d=17">17 m</button> the echo is a tenth of a second late: a separate clap. Bats time their echoes this way to hunt in the dark.</p>
+
+<p>A siren rushing past drops in pitch the instant it passes: a high note coming, a low note going. The siren never changes its note. It moves while it makes it, and each wavefront spreads from the spot where the source was when it sent that front out. Speed the <span class="c-red" data-part="source">source</span> up:</p>
+
+<figure class="demo" id="doppler" aria-label="Wavefronts from a moving source, seen from above. Ahead they bunch together and behind they spread apart; faster than sound they fall behind inside a cone."></figure>
+<script>
+{
+  const C = 343, F0 = 440, SR = 22050, TE = 0.5, AGES = 20;
+  let pb = null;
+  const passBy = M => {
+    // A horn driving along a road 15 m from you, passing at t = 2 s: what reaches you.
+    const v = M * C, H = 15, T = 4, n = Math.round(SR * T), x = new Float32Array(n);
+    let te = -1, peak = 0;
+    for (let i = 0; i < n; i++) {
+      const tr = i / SR;
+      for (let it = 0; it < (i ? 3 : 30); it++) {
+        const xs = v * (te - T / 2), r = Math.hypot(xs, H);
+        te -= (te + r / C - tr) / (1 + (xs * v) / (r * C));
+      }
+      const xs = v * (te - T / 2), ph = TAU * F0 * te;
+      x[i] = (Math.sin(ph) + 0.35 * Math.sin(2 * ph) + 0.15 * Math.sin(3 * ph)) * (H / Math.hypot(xs, H));
+      peak = Math.max(peak, Math.abs(x[i]));
+    }
+    for (let i = 0; i < n; i++) x[i] *= 0.9 / peak;
+    return x;
+  };
+  const boom = () => {
+    // An N-wave: a sudden rise, a steady fall, a sudden return, then the rumble of the ground.
+    const n = Math.round(SR * 1.2), x = new Float32Array(n), Tn = Math.round(SR * 0.12), rnd = Sound.rng(9);
+    let lp = 0;
+    for (let i = 0; i < n; i++) {
+      const nw = i < Tn ? 1 - (2 * i) / Tn : 0;
+      lp += 0.08 * ((rnd() * 2 - 1) * Math.exp(-i / (SR * 0.25)) - lp);
+      x[i] = 0.75 * nw + 1.6 * lp;
+    }
+    return x;
+  };
+  demo("doppler", {
+    aspect: w => (w < 560 ? 1.0 : 2.1),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "M", label: "Speed", min: 0, max: 1.6, step: 0.01, value: 0.3, color: "red", format: M => `Mach ${M.toFixed(2)}` },
+      Sound.button((s, v) => (pb = Sound.play(v.M < 0.95 ? passBy(v.M) : boom(), { sampleRate: SR })), { label: "Hear it pass" }),
+    ],
+    presets: [{ label: "Car at 110 km/h", set: { M: 0.09 } }, { label: "Race car", set: { M: 0.25 } }, { label: "Speed of sound", set: { M: 1 } }, { label: "Jet at Mach 1.5", set: { M: 1.5 } }],
+    caption: "Wavefronts sent out every half second (slowed down) by a moving source, seen from above, following the source. The road marks show how fast it moves. The sound is a 440 Hz horn driving past 15 m away; at Mach 0.95 and above you hear a sonic boom instead.",
+    status: (s, v) => {
+      const M = v.M, sp = `${Math.round(M * C)} m/s`;
+      if (M < 0.995) return `${sp} · a 440 Hz horn sounds ${Math.round(F0 / (1 - M))} Hz ahead, ${Math.round(F0 / (1 + M))} Hz behind`;
+      if (M < 1.005) return `${sp}: the fronts pile into one shock at the nose`;
+      return `${sp} · cone half-angle ${Math.round((Math.asin(1 / M) * 180) / Math.PI)}° · silent until the cone reaches you`;
+    },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const M = v.M, cy = g.h * 0.46, cpx = g.w * 0.085, xs = g.w * (0.5 + 0.3 * Math.min(1, M));
+      const lit = g.lit("source");
+      for (let k = 0; k < AGES; k++) {
+        const a = (s.t % TE) + k * TE, cx = xs - M * cpx * a, r = cpx * a;
+        g.circle([cx, cy], r, { stroke: "red", width: 1.6, alpha: Math.max(0.12, 0.85 - k * 0.04) });
+      }
+      if (M > 1.005) {
+        const th = Math.asin(1 / M), L = g.w * 1.2;
+        for (const sg of [1, -1]) g.line([xs, cy], [xs - L * Math.cos(th), cy + sg * L * Math.sin(th)], { stroke: "red", width: 3 });
+      }
+      // Road marks drift backward at the source's speed.
+      const ry = g.h - 14, sp = 46;
+      for (let i = -1; i < g.w / sp + 1; i++) { const x = ((i * sp - M * cpx * s.t) % (g.w + sp) + g.w + sp) % (g.w + sp) - sp / 2; g.line([x, ry], [x + 18, ry], { stroke: "muted", width: 2 }); }
+      g.circle([xs, cy], lit ? 9 : 7, { fill: "red", stroke: "panel", width: 1.5 });
+      if (M < 0.995) {
+        g.text(`ahead: ${Math.round(F0 / (1 - M))} Hz`, [g.w - 10, 16], { size: 12, weight: 600, color: "ink", align: "right" });
+        g.text(`behind: ${Math.round(F0 / (1 + M))} Hz`, [10, 16], { size: 12, weight: 600, color: "ink", align: "left" });
+      }
+      if (pb?.playing) g.wantsFrame = true;
+    },
+  });
+}
+</script>
+
+<p>Ahead of the source the fronts crowd together, so more of them reach you each second and the pitch is higher. Behind, they spread out and the pitch drops. This is the <dfn data-def="The change in pitch heard when a source of sound moves toward or away from the listener.">Doppler effect</dfn>: a source approaching at speed v is heard at f·c/(c − v), and receding at f·c/(c + v). A horn at highway speed, <button class="set" data-set="M=0.09">Mach 0.09</button>, falls about three semitones as it passes. At <button class="set" data-set="M=1">the speed of sound</button> the fronts pile into one shock at the nose; faster still they trail inside a cone with sin θ = 1/M. When that cone sweeps over the ground, people hear a <dfn data-def="The double crack heard when the shock cone of a supersonic object sweeps past.">sonic boom</dfn>: a double crack from the shocks at the nose and the tail.</p>
+
+<aside class="callout history"><p>Christian Doppler predicted the effect in 1842, thinking of the colors of double stars. In 1845 the Dutch meteorologist C. H. D. Buys Ballot tested it with sound: horn players rode an open railway car near Utrecht holding a steady note, while musicians beside the track judged the pitch as they went by.</p></aside>

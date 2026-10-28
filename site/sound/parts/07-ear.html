@@ -1,0 +1,298 @@
+
+<h2>The ear</h2>
+
+<p>All of this ends at the ear. The outer ear funnels sound into the <span class="c-ink" data-part="canal">ear canal</span>, a tube about 2.5 cm long sealed at its far end by the <span class="c-blue" data-part="eardrum">eardrum</span>. Behind the eardrum, in a small air-filled cavity, three tiny bones, the <span class="c-purple" data-part="ossicles">ossicles</span>, carry the vibration to the <span class="c-red" data-part="cochlea">cochlea</span>, a coiled tube of fluid buried in the skull, where it becomes nerve signals. Point at the parts to name them, and play a tone to set them moving:</p>
+
+<figure class="demo" id="ear" aria-label="A schematic cross-section of the ear: the outer ear and ear canal, the eardrum, the three middle-ear bones, the cochlea and balance canals, and the auditory nerve. Pressure bands travel down the canal and the eardrum and bones rock with them."></figure>
+<script>
+{
+  const voice = Sound.voice({ type: "sine", freq: 500, gain: 0.5 });
+  const PIV = [476, 182];
+  const INFO = {
+    canal: "ear canal: about 2.5 cm long, closed at the eardrum; its quarter-wave resonance boosts sounds near 3 kHz",
+    eardrum: "eardrum: a cone of skin and fiber about 9 mm across and a tenth of a millimeter thick",
+    ossicles: "ossicles: the hammer, anvil, and stirrup; the stirrup is about 3 mm long, the smallest bone in the body",
+    cochlea: "cochlea: a fluid-filled tube about 35 mm long, coiled two and a half turns into the size of a pea",
+    nerve: "auditory nerve: about 30,000 fibers carry what the cochlea hears to the brain",
+    balance: "semicircular canals: organs of balance that share the inner ear's fluid but not its job",
+    tube: "Eustachian tube: lets air into the middle ear so its pressure matches the outside; it is what pops on a plane",
+  };
+  const spiral = (cx, cy) => { const pts = []; for (let i = 0; i <= 160; i++) { const th = (i / 160) * 5 * Math.PI, r = 92 * Math.exp(-(th / (5 * Math.PI)) * Math.log(92 / 14)); pts.push([cx + r * Math.cos(th + Math.PI), cy + r * Math.sin(th + Math.PI)]); } return pts; };
+  const COIL = spiral(712, 330);
+  const rot = (p, a) => { const dx = p[0] - PIV[0], dy = p[1] - PIV[1], c = Math.cos(a), s = Math.sin(a); return [PIV[0] + c * dx - s * dy, PIV[1] + s * dx + c * dy]; };
+  // Hit-testing polylines in design units.
+  const HIT = {
+    canal: [[120, 288], [420, 296]], eardrum: [[420, 240], [446, 300], [432, 352]], ossicles: [[446, 300], [458, 196], [490, 186], [512, 286], [556, 296]],
+    cochlea: COIL.filter((_, i) => i % 8 === 0), nerve: [[712, 330], [850, 312], [985, 300]], balance: [[600, 140], [640, 110], [680, 150]], tube: [[470, 440], [560, 540]],
+  };
+  let M = null;
+  const segDist = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L)); return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy); };
+  const partAt = p => {
+    if (!M) return null;
+    const q = [(p[0] - M.ox) / M.k, (p[1] - M.oy) / M.k];
+    let best = null, bd = 30 / M.k;
+    for (const [name, pts] of Object.entries(HIT)) for (let i = 0; i < pts.length - 1; i++) { const d = segDist(q, pts[i], pts[i + 1]); if (d < bd) { bd = d; best = name; } }
+    return best;
+  };
+  demo("ear", {
+    aspect: w => (w < 560 ? 1.3 : 1.75),
+    state: () => ({ t: 0, hover: null }),
+    controls: [
+      { key: "L", label: "Loudness", min: 0, max: 100, step: 1, value: 70, unit: " dB", color: "blue" },
+      Sound.button(voice, { label: "Play a tone" }),
+    ],
+    caption: "A schematic cross-section of the right ear, seen from the front, not to scale. Pressure bands travel down the canal; the eardrum and ossicles rock with them, slowed down and with the motion enlarged billions of times. Point at a part to name it.",
+    status: s => (s.hover ? INFO[s.hover] : "Point at a part to name it."),
+    hover(p, s) { const h = p ? partAt(p) : null; if (h === s.hover) return false; s.hover = h; return true; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      voice.set({ gain: 0.5 * Math.pow(10, (v.L - 70) / 40) });
+      const k = Math.min(g.w / 1000, g.h / 560), ox = (g.w - 1000 * k) / 2, oy = (g.h - 560 * k) / 2;
+      M = { k, ox, oy };
+      const P = ([x, y]) => [ox + x * k, oy + y * k], W = w => Math.max(1, w * k);
+      const on = n => s.hover === n || g.lit(n);
+      const ph = Math.sin(TAU * 0.8 * s.t), amp = v.L <= 0 ? 0 : Math.min(0.12, 0.07 * Math.pow(10, (v.L - 70) / 60)), ang = -amp * ph;
+      // The temporal bone and the middle ear's air space.
+      g.path([[380, 60], [1000, 40], [1000, 560], [380, 560]].map(P), { fill: g.rgba("muted", 0.1), close: true });
+      { const e = []; for (let i = 0; i <= 48; i++) { const a = (i / 48) * TAU; e.push(P([482 + 70 * Math.cos(a), 300 + 150 * Math.sin(a)])); } g.path(e, { fill: "bg", close: true }); }
+      g.text("bone", P([975, 530]), { size: 11, color: "muted", align: "right" });
+      // Pressure bands in the canal.
+      for (let x = 112; x < 420; x += 4) {
+        const pv = Math.cos(TAU * ((x - 112) / 140 - 0.8 * s.t));
+        g.rect(...P([x, 258 + ((x - 112) / 308) * 8]), W(4.2), W(66), { fill: g.rgba(pv > 0 ? "red" : "blue", Math.min(0.3, Math.abs(pv) * 0.3 * (amp / 0.07))) });
+      }
+      // Outer ear and canal walls.
+      const cw = on("canal") ? 3.5 : 2;
+      g.path([[112, 250], [420, 258]].map(P), { stroke: "ink", width: W(cw * 1.6) });
+      g.path([[112, 324], [420, 334]].map(P), { stroke: "ink", width: W(cw * 1.6) });
+      { const arc = []; for (let i = 0; i <= 40; i++) { const a = Math.PI * (0.62 + 0.86 * (i / 40)); arc.push(P([128 + 78 * Math.cos(a), 292 + 205 * Math.sin(a)])); }
+        g.path(arc, { stroke: "muted", width: W(30), alpha: 0.35 }); g.path(arc, { stroke: "ink", width: W(2.5) }); }
+      // Eustachian tube.
+      g.path([[452, 430], [540, 548]].map(P), { stroke: on("tube") ? "ink" : "muted", width: W(on("tube") ? 5 : 3) });
+      g.path([[492, 420], [580, 540]].map(P), { stroke: on("tube") ? "ink" : "muted", width: W(on("tube") ? 5 : 3) });
+      // Balance canals.
+      for (const [cx, cy, rx, ry] of [[612, 140, 34, 48], [662, 120, 46, 28], [650, 170, 40, 22]]) {
+        const pts = []; for (let i = 0; i <= 48; i++) { const a = (i / 48) * TAU; pts.push(P([cx + rx * Math.cos(a), cy + ry * Math.sin(a)])); }
+        g.path(pts, { stroke: on("balance") ? "ink" : "muted", width: W(on("balance") ? 9 : 7), alpha: 0.8 });
+      }
+      // Cochlea and nerve.
+      g.path([[562, 296], [600, 300], [620, 330]].map(P), { stroke: "red", width: W(16), alpha: 0.55 });
+      g.path(COIL.map(P), { stroke: "red", width: W(on("cochlea") ? 18 : 14), alpha: on("cochlea") ? 0.85 : 0.6 });
+      g.path([[712, 330], [850, 312], [985, 300]].map(P), { stroke: "green", width: W(on("nerve") ? 16 : 12), alpha: 0.65 });
+      // Eardrum (a shallow cone pulled in at its center by the hammer).
+      const umbo = rot([446, 300], ang);
+      g.path([P([420, 240]), P(umbo), P([432, 352])], { stroke: "blue", width: W(on("eardrum") ? 7 : 5) });
+      // Ossicles: hammer and anvil rock about their axis, the stirrup pistons in the oval window.
+      const oc = "purple", ow = on("ossicles") ? 1.3 : 1;
+      g.path([umbo, rot([452, 230], ang), rot([458, 196], ang)].map(P), { stroke: oc, width: W(9 * ow) });
+      g.circle(P(rot([463, 182], ang)), 17 * k * ow, { fill: oc });
+      g.circle(P(rot([494, 184], ang)), 16 * k * ow, { fill: oc });
+      const tip = rot([512, 286], ang);
+      g.path([rot([496, 196], ang), rot([508, 240], ang), tip].map(P), { stroke: oc, width: W(8 * ow) });
+      const dx = tip[0] - 512;
+      g.path([[tip[0], 286], [548 + dx, 278], [556 + dx, 278]].map(P), { stroke: oc, width: W(5 * ow) });
+      g.path([[tip[0], 290], [548 + dx, 312], [556 + dx, 312]].map(P), { stroke: oc, width: W(5 * ow) });
+      g.path([[557 + dx, 272], [557 + dx, 318]].map(P), { stroke: oc, width: W(7 * ow) });
+      // Labels.
+      if (g.w >= 560) {
+        g.callouts([
+          { at: P([260, 254]), text: "ear canal", side: "left" }, { at: P([52, 300]), text: "outer ear", side: "left" },
+          { at: P([428, 352]), text: "eardrum", color: "blue", side: "left" }, { at: P([500, 516]), text: "Eustachian tube", side: "left" },
+          { at: P([463, 168]), text: "hammer", color: "purple", side: "left" }, { at: P([500, 172]), text: "anvil", color: "purple", side: "right" },
+          { at: P([548, 316]), text: "stirrup", color: "purple", side: "right" }, { at: P([660, 98]), text: "balance canals", side: "right" },
+          { at: P([760, 380]), text: "cochlea", color: "red", side: "right" }, { at: P([900, 308]), text: "auditory nerve", color: "green", side: "right" },
+        ]);
+      } else if (s.hover) {
+        const n = { canal: "ear canal", eardrum: "eardrum", ossicles: "ossicles", cochlea: "cochlea", nerve: "auditory nerve", balance: "balance canals", tube: "Eustachian tube" }[s.hover];
+        g.text(n, [g.w / 2, 14], { size: 13, weight: 600, color: "ink" });
+      }
+    },
+  });
+}
+</script>
+
+<p>The motion is enlarged enormously here. At the loudness of conversation the eardrum moves by a few billionths of a meter. Why the bones at all? Because the cochlea is full of fluid, and sound in air bounces off water almost completely. Air is light and gives way easily; water is dense and stiff, so a pressure that sets air moving barely moves water. Of the energy in a sound wave striking a water surface, only about a tenth of a percent gets in. The middle ear has two tricks to do better. Change them:</p>
+
+<figure class="demo" id="lever" aria-label="Sound energy arriving from air splits at the middle ear into a part reflected back and a part that enters the fluid of the inner ear. Below, a curve of the fraction transmitted against the middle ear's pressure gain, with the human ear marked."></figure>
+<script>
+{
+  const ZA = 1.2 * 343, ZW = 1000 * 1480, RATIO = ZW / ZA;
+  const trans = G => { const m = RATIO / (G * G); return (4 * m) / ((1 + m) * (1 + m)); };
+  const pct = T => (T < 0.01 ? `${(T * 100).toFixed(2)}%` : `${Math.round(T * 100)}%`);
+  demo("lever", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    controls: [
+      { key: "A", label: "Area ratio", min: 1, max: 50, step: 0.5, value: 17, color: "blue", format: x => `${x}×` },
+      { key: "L", label: "Lever ratio", min: 1, max: 2, step: 0.05, value: 1.3, color: "purple", format: x => `${x.toFixed(2)}×` },
+    ],
+    presets: [{ label: "No middle ear", set: { A: 1, L: 1 } }, { label: "Human", set: { A: 17, L: 1.3 } }, { label: "Perfect match", set: { A: 46, L: 1.3 } }],
+    caption: "How much sound energy gets from air into the fluid of the inner ear, treating the fluid as water and the middle ear as a lossless lever. Top: the incoming energy splits into a reflected part and a transmitted part (arrow widths to scale); the funnel's mouth grows with the area ratio. Bottom: the transmitted fraction against the total pressure gain.",
+    status: (s, v) => { const G = v.A * v.L; return `pressure gain ${G.toFixed(1)}× (${(20 * Math.log10(G)).toFixed(0)} dB) · ${pct(trans(G))} of the energy enters the fluid`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, G = v.A * v.L, T = trans(G), top = g.h * 0.47, cy = top * 0.5, W0 = Math.min(30, top * 0.2);
+      const fx0 = g.w * 0.4, fx1 = g.w * 0.6, hl = Math.min(top * 0.45, 8 * Math.sqrt(v.A)), hr = 8;
+      g.rect(fx1, 4, g.w - fx1 - 4, top - 8, { fill: g.rgba("blue", 0.1), r: 4 });
+      g.text("air", [14, 14], { size: 12, color: "muted", align: "left" });
+      g.text("inner-ear fluid", [g.w - 12, 14], { size: 12, color: "blue", align: "right" });
+      g.path([[fx0, cy - hl], [fx1, cy - hr], [fx1, cy + hr], [fx0, cy + hl]], { fill: g.rgba("blue", 0.18), stroke: "blue", width: 1.5, close: true });
+      const pv = fx0 + (fx1 - fx0) / (1 + v.L);
+      g.line([pv, cy - hl - 10], [pv, cy + hl + 10], { stroke: "purple", width: 2, dash: [4, 3] });
+      g.circle([pv, cy - hl - 12], 4, { fill: "purple" });
+      g.text("middle ear", [(fx0 + fx1) / 2, cy + Math.max(hl, 20) + 22], { size: 11.5, color: "muted" });
+      g.arrow([10, cy], [fx0 - 6, cy], { stroke: "ink", width: W0 * 0.55, head: W0 * 0.9 });
+      g.text("sound arrives", [14, cy - W0 * 0.5 - 10], { size: 11.5, color: "ink", align: "left" });
+      const wr = Math.max(1.2, W0 * 0.55 * (1 - T)), wt = Math.max(1.2, W0 * 0.55 * T);
+      g.arrow([fx0 - 10, cy + 18], [44, top - 28], { stroke: "red", width: wr, head: Math.max(10, wr * 1.8) });
+      g.text(`reflected ${pct(1 - T)}`, [12, top - 8], { size: 11.5, color: "red", align: "left" });
+      g.arrow([fx1 + 4, cy], [g.w - 12, cy], { stroke: "blue", width: wt, head: Math.max(10, wt * 1.8) });
+      g.text(`enters ${pct(T)}`, [g.w - 12, cy + 22], { size: 11.5, color: "blue", align: "right" });
+      const P = g.graph({ box: [0, top + 8, g.w, g.h - top - 8], x: [0, 2], y: [0, 105], axes: "frame", grid: false, xLabel: "Pressure gain of the middle ear", yLabel: "energy in (%)", yTicks: [0, 50, 100],
+        xTicks: { values: [0, Math.log10(2), Math.log10(5), 1, Math.log10(20), Math.log10(50), 2], format: x => `${Math.round(Math.pow(10, x))}×` } });
+      P.fn(x => 100 * trans(Math.pow(10, x)), { color: "blue", width: 2.5, samples: 300 });
+      P.marker(Math.log10(22.1), 100 * trans(22.1), { color: "muted", label: narrow ? "" : "human" });
+      P.marker(Math.log10(G), 100 * T, { color: "purple", drop: true });
+    },
+  });
+}
+</script>
+
+<p>The eardrum has about 17 times the area of the stirrup's footplate, so the force it collects is concentrated on a patch 17 times smaller, and the pressure rises 17-fold. The hammer and anvil add a lever of about 1.3. Together they raise the pressure about 22 times, some 27 dB <a class="cite" href="#ref-pickles"></a>, which in this simple model lets around 40% of the energy into the fluid instead of 0.1%. A <button class="set" data-set="A=46 L=1.3">perfect match</button> would need about 60 times. When the middle ear fails, from fluid behind the eardrum in a child's ear infection or bones fused by disease, hearing drops by tens of decibels.</p>
+
+<p>Inside the cochlea, running its whole length, is the <span class="c-red" data-part="membrane">basilar membrane</span>, a strip of tissue that carries about 3,500 rows of hair cells. Unroll the cochlea and pick a frequency:</p>
+
+<figure class="demo" id="cochlea3d" aria-label="A three-dimensional cochlea, a tapering tube coiled two and a half turns, which a slider unrolls into a straight tube. A red marker shows where along it a chosen frequency peaks."></figure>
+<script>
+{
+  const LEN = 35, N = 140, ELL = 27, R0 = 4.2, HEIGHT = 4.5;
+  const scene = E3.scene({ shadow: true });
+  scene.look = "diagram";
+  // The duct's centerline: curvature 1/R(s), R shrinking from 4.2 mm at the base to 1.2 mm at the apex
+  // (two and a half turns over 35 mm), rising 4.5 mm. Unrolling scales the curvature and the rise down.
+  const centerline = u => {
+    const pts = [], ds = LEN / N;
+    let phi = 0, x = 0, z = 0;
+    for (let i = 0; i <= N; i++) {
+      const s = i * ds;
+      pts.push([x, (1 - u) * HEIGHT * (s / LEN), z]);
+      phi += ((1 - u) * Math.exp(s / ELL) * ds) / R0;
+      x += Math.cos(phi) * ds; z += Math.sin(phi) * ds;
+    }
+    const c = [0, 1, 2].map(j => pts.reduce((t, p) => t + p[j], 0) / pts.length);
+    return pts.map(p => [p[0] - c[0], p[1] - c[1] + 3, p[2] - c[2]]);
+  };
+  const cache = new Map();
+  const shape = q => {
+    if (!cache.has(q)) { const line = centerline(q / 20); cache.set(q, { line, mesh: E3.mesh.tube(line, t => 0.95 - 0.5 * t, { segments: 18 }) }); }
+    return cache.get(q);
+  };
+  const duct = scene.add(shape(0).mesh, { name: "cochlea", material: "bone", opacity: 0.55 });
+  const peak = scene.add(E3.mesh.sphere(1), { name: "peak", color: "red" });
+  const voice = Sound.voice({ type: "sine", freq: 1000, gain: 0.5 });
+  const fmt = f => (f >= 1000 ? `${(f / 1000).toFixed(f >= 9950 ? 0 : 1)} kHz` : `${Math.round(f)} Hz`);
+  demo("cochlea3d", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    orbit: { yaw: 0.5, pitch: 0.6 },
+    controls: [
+      { key: "u", label: "Unroll", min: 0, max: 1, step: 0.05, value: 0, color: "ink" },
+      { key: "lf", label: "Frequency", min: 1.301, max: 4.301, step: 0.01, value: 3, color: "red", format: x => fmt(Math.pow(10, x)) },
+      Sound.button(voice),
+    ],
+    presets: [{ label: "Coiled", set: { u: 0 } }, { label: "Unrolled", set: { u: 1 } }, { label: "100 Hz", set: { lf: 2 } }, { label: "1 kHz", set: { lf: 3 } }, { label: "10 kHz", set: { lf: 4 } }],
+    caption: "The cochlea's duct, about 35 mm long, coiled two and a half turns and drawn a little simplified. The red bead marks where a tone of the chosen frequency moves the basilar membrane most, by Greenwood's map: high frequencies near the base, by the stirrup, and low ones at the apex.",
+    status: (s, v) => { const f = Math.pow(10, v.lf); return `${fmt(f)} peaks ${((1 - SND.place(f)) * LEN).toFixed(1)} mm from the base`; },
+    draw(g, s, v) {
+      const f = Math.pow(10, v.lf);
+      voice.set({ freq: f });
+      const S = shape(Math.round(v.u * 20));
+      duct.mesh = S.mesh;
+      const d = (1 - SND.place(f)) * LEN, i = Math.min(N, Math.max(0, Math.round((d / LEN) * N)));
+      const lit = g.lit("membrane");
+      peak.position = S.line[i];
+      peak.scale = (0.95 - 0.5 * (i / N)) * (lit ? 1.6 : 1.3);
+      const view = g.render3d(scene, { ...s.view, zoom: (s.view?.zoom ?? 1) * 1.3, fit: "always", fov: 28 });
+      g.callouts([
+        { at: view.project(S.line[0]), text: "base: high pitches" },
+        { at: view.project(S.line[N]), text: "apex: low pitches" },
+        { at: view.project(S.line[i]), text: fmt(f), color: "red" },
+      ]);
+    },
+  });
+}
+</script>
+
+<p>The membrane is narrow and stiff at the base, by the stirrup, and about five times wider and far floppier at the apex. So every stretch of it is tuned to a different frequency, from 20 kHz at the base to 20 Hz at the apex. Georg von Békésy watched the result in cochleas from cadavers <a class="cite" href="#ref-bekesy"></a>: a tone sends a ripple along the membrane that grows until it reaches the place tuned to it, then dies out abruptly.<span class="sidenote">In a living ear the outer hair cells push on the membrane in time with the sound, making the peaks far taller and sharper than in Békésy's cadavers. The figures here show the passive version.</span> Donald Greenwood fitted the map from place to frequency <a class="cite" href="#ref-greenwood"></a>. Here is the membrane unrolled, with two tones:</p>
+
+<figure class="demo" id="basilar" aria-label="The basilar membrane unrolled, base at the left and apex at the right, with a frequency scale beneath. Each tone sends a traveling wave from the base that peaks at its own place and stops."></figure>
+<script>
+{
+  const LEN = 35, a = Sound.voice({ freq: 1000, gain: 0.5 }), b = Sound.voice({ freq: 4000, gain: 0.5 });
+  const fmt = f => (f >= 1000 ? `${(f / 1000).toFixed(f >= 9950 ? 0 : 1)} kHz` : `${Math.round(f)} Hz`);
+  const xPeak = f => (1 - SND.place(f)) * LEN;
+  const env = (x, f) => { const xp = xPeak(f); return x <= xp ? Math.exp(-(xp - x) / 7) : Math.exp(-(((x - xp) / 1.3) ** 2)); };
+  const wave = (x, f, t) => { const xp = Math.max(1.2, xPeak(f)), cyc = Math.min(2.5, 0.6 + xp / 6); return env(x, f) * Math.cos(TAU * 0.6 * t - TAU * cyc * Math.pow(Math.min(x, xp * 1.3) / xp, 1.5)); };
+  demo("basilar", {
+    aspect: w => (w < 560 ? 1.05 : 2.1),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "lf1", label: "First tone", min: 1.5, max: 4.25, step: 0.01, value: 3, color: "red", format: x => fmt(Math.pow(10, x)) },
+      { key: "two", label: "Second tone", type: "toggle", value: true, color: "purple" },
+      { key: "lf2", label: "Second tone", min: 1.5, max: 4.25, step: 0.01, value: 3.6, color: "purple", format: x => fmt(Math.pow(10, x)) },
+      Sound.button([a, b]),
+    ],
+    presets: [{ label: "Far apart", set: { lf1: 3, lf2: 3.6, two: true } }, { label: "Close together", set: { lf1: 3, lf2: 3.06, two: true } }, { label: "Low and high", set: { lf1: 2.3, lf2: 4, two: true } }, { label: "One tone", set: { two: false } }],
+    caption: "The basilar membrane unrolled, base at the left, slowed down so both tones ripple at the same visible rate. Each tone's wave travels from the base, grows, peaks at its place on Greenwood's map, and dies out; the dashed lines are each wave's envelope. The scale below gives the frequency each place is tuned to.",
+    status: (s, v) => { const f1 = Math.pow(10, v.lf1), f2 = Math.pow(10, v.lf2); return `${fmt(f1)} peaks ${xPeak(f1).toFixed(1)} mm from the base` + (v.two ? ` · ${fmt(f2)} at ${xPeak(f2).toFixed(1)} mm` : ""); },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, f1 = Math.pow(10, v.lf1), f2 = Math.pow(10, v.lf2);
+      a.set({ freq: f1 });
+      b.set({ freq: f2, gain: v.two ? 0.5 : 0 });
+      const x0 = 16, x1 = g.w - 16, X = mm => x0 + (mm / LEN) * (x1 - x0), cy = g.h * 0.4, amp = g.h * (narrow ? 0.13 : 0.16);
+      const lit = g.lit("membrane");
+      // The membrane, widening toward the apex.
+      const up = [], dn = [];
+      for (let i = 0; i <= 60; i++) { const mm = (i / 60) * LEN, hw = 3 + (mm / LEN) * 13; up.push([X(mm), cy - hw]); dn.push([X(mm), cy + hw]); }
+      g.path(up.concat(dn.reverse()), { fill: g.rgba("red", lit ? 0.2 : 0.1), close: true });
+      g.text("base", [x0, cy - amp * 1.9], { size: 11.5, color: "muted", align: "left" });
+      g.text("apex", [x1, cy - amp * 1.9], { size: 11.5, color: "muted", align: "right" });
+      const tones = [[f1, "red"]].concat(v.two ? [[f2, "purple"]] : []);
+      for (const [f, col] of tones) {
+        const e1 = [], e2 = [];
+        for (let i = 0; i <= 300; i++) { const mm = (i / 300) * LEN; e1.push([X(mm), cy - amp * env(mm, f)]); e2.push([X(mm), cy + amp * env(mm, f)]); }
+        g.path(e1, { stroke: col, width: 1, dash: [4, 4], alpha: 0.7 });
+        g.path(e2, { stroke: col, width: 1, dash: [4, 4], alpha: 0.7 });
+        g.circle([X(xPeak(f)), cy - amp - 9], 3.5, { fill: col });
+      }
+      g.labels(tones.map(([f, col]) => ({ at: [X(xPeak(f)), cy - amp - 9], text: fmt(f), color: col, r: 3.5, prefer: [0, -1] })), { size: 12 });
+      const pts = [];
+      for (let i = 0; i <= 700; i++) { const mm = (i / 700) * LEN; let y = 0; for (const [f] of tones) y += wave(mm, f, s.t); pts.push([X(mm), cy - amp * y * (tones.length > 1 ? 0.8 : 1)]); }
+      g.path(pts, { stroke: "ink", width: 2.25 });
+      // Greenwood's map as a ruler.
+      const ry = g.h * 0.8;
+      g.line([x0, ry], [x1, ry], { stroke: "muted", width: 1 });
+      const ticks = narrow ? [20000, 5000, 1000, 200, 50] : [20000, 10000, 5000, 2000, 1000, 500, 200, 100, 50, 20];
+      for (const f of ticks) { const x = X(xPeak(f)); g.line([x, ry - 4], [x, ry + 4], { stroke: "muted", width: 1 }); g.text(f >= 1000 ? `${f / 1000}k` : `${f}`, [x, ry + 15], { size: 10.5, color: "muted" }); }
+      g.text("frequency each place is tuned to (Hz)", [g.w / 2, ry + 32], { size: 11.5, color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Each tone sets its own stretch of membrane moving, and the hair cells there fire. The cochlea does in fluid and tissue what the spectrum did on paper: it splits a sound into its frequencies, which is why you hear the harmonics and not the shape of the wave. Tones <button class="set" data-set="lf1=3 lf2=3.06 two=true">close in pitch</button> stir overlapping stretches and blur into beats or roughness; tones far apart are heard as two. And because every sound passes the base on its way in, the hair cells there take the most wear: hearing loss from age and noise begins with the highest pitches.</p>
+
+<aside class="callout key"><p>The cochlea is a spectrum analyzer: each place along it answers to one frequency.</p></aside>
+
+<p>Clap your hands once more. The squeeze leaves your palms at 343 m/s, handed from molecule to molecule while each one only rocks in place. It spreads and fades by 6 dB for every doubling of distance, bounces off the walls, and reaches your ear a few milliseconds later as a pressure wiggle of a fraction of a pascal. The eardrum follows it, three bones turn it into a push on fluid, and a ripple runs along the cochlea. A clap holds every frequency at once, so the whole membrane stirs, base first, and within a few milliseconds your brain knows what made the sound and where.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-kinsler">L. E. Kinsler, A. R. Frey, A. B. Coppens, and J. V. Sanders, <em>Fundamentals of Acoustics</em>, 4th ed. (Wiley, 2000).</li>
+  <li id="ref-stevens">S. S. Stevens, “The measurement of loudness”, <em>Journal of the Acoustical Society of America</em> 27(5), 815–829 (1955).</li>
+  <li id="ref-helmholtz">H. von Helmholtz, <em>On the Sensations of Tone as a Physiological Basis for the Theory of Music</em>, translated by A. J. Ellis, 2nd English ed. (Longmans, Green, 1885); first German edition 1863.</li>
+  <li id="ref-fant">G. Fant, <em>Acoustic Theory of Speech Production</em> (Mouton, The Hague, 1960).</li>
+  <li id="ref-peterson">G. E. Peterson and H. L. Barney, “Control methods used in a study of the vowels”, <em>Journal of the Acoustical Society of America</em> 24(2), 175–184 (1952).</li>
+  <li id="ref-haas">H. Haas, “The influence of a single echo on the audibility of speech”, <em>Journal of the Audio Engineering Society</em> 20(2), 146–159 (1972); translated from <em>Acustica</em> 1, 49–58 (1951).</li>
+  <li id="ref-pickles">J. O. Pickles, <em>An Introduction to the Physiology of Hearing</em>, 4th ed. (Emerald, 2012).</li>
+  <li id="ref-bekesy">G. von Békésy, <em>Experiments in Hearing</em>, translated and edited by E. G. Wever (McGraw-Hill, 1960).</li>
+  <li id="ref-greenwood">D. D. Greenwood, “A cochlear frequency-position function for several species: 29 years later”, <em>Journal of the Acoustical Society of America</em> 87(6), 2592–2605 (1990).</li>
+</ol>

@@ -1,0 +1,163 @@
+
+<h2>Pipes, resonance, and the voice</h2>
+
+<p>Wind instruments use the same trick with air. In a pipe the air itself sloshes back and forth, and the ends set the rules. At an open end the air moves freely, but its pressure is held at the room's, so the pressure cannot swing there. At a closed end the air cannot move at all. Compare the two kinds of pipe, both 60 cm long:</p>
+
+<figure class="demo" id="pipe" aria-label="A pipe full of air parcels sloshing in one of its natural patterns, with pressure shading and the motion's envelope drawn above. A choice switches between a pipe open at both ends and one closed at the left end; below, the frequencies each pipe can play."></figure>
+<script>
+{
+  const LEN = 0.6, C = 343, NH = 12;
+  const series = kind => Array.from({ length: NH }, (_, i) => (kind === "closed" && i % 2 === 1 ? 0 : 1 / Math.pow(i + 1, 1.3)));
+  const voice = Sound.voice({ freq: 286, harmonics: series("open"), gain: 0.6 });
+  const nOf = v => (v.kind === "closed" ? 2 * v.m - 1 : v.m);
+  const mode = (v, n) => Sound.mode({ kind: v.kind, n, length: LEN, speed: C });
+  demo("pipe", {
+    aspect: w => (w < 560 ? 0.95 : 2.1),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "kind", label: "Pipe", type: "choice", options: [{ value: "open", label: "open both ends" }, { value: "closed", label: "closed at one end" }], value: "open", color: "blue" },
+      { key: "m", label: "Pattern", type: "stepper", min: 1, max: 5, step: 1, value: 1, color: "blue" },
+      Sound.button(voice, { label: "Play the pipe" }),
+    ],
+    caption: "Air in a 60 cm pipe sloshing in one of its natural patterns, slowed down. Shading shows pressure (red high, blue low); the curve above the pipe shows how far the air moves; N marks where it never moves. Below: the frequencies each pipe can sound, with the current one in blue. The button plays the pipe's lowest note with its harmonics.",
+    status: (s, v) => { const n = nOf(v), f = mode(v, n).freq, f1 = mode(v, 1).freq; return `harmonic ${n}: ${f.toFixed(0)} Hz · lowest note ${f1.toFixed(0)} Hz (${SND.noteName(f1)})`; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, n = nOf(v), f1 = mode(v, 1).freq;
+      voice.set({ freq: f1, harmonics: series(v.kind) });
+      const top = narrow ? g.h * 0.56 : g.h * 0.62;
+      g.standingWave([20, 26, g.w - 40, top - 26], { kind: v.kind, n, t: s.t, color: "blue", rate: 0.5, spacing: narrow ? 7 : 8 });
+      if (v.kind === "closed") g.text("closed", [24, 14], { size: 11, color: "muted", align: "left" });
+      const P = g.graph({ box: [0, top + 6, g.w, g.h - top - 6], x: [0, 3000], y: [0, 1.15], axes: "frame", grid: false, yTicks: false, xLabel: "Frequency (Hz)", xTicks: narrow ? [0, 1000, 2000, 3000] : 500 });
+      for (let k = 1; k * 143 <= 3000; k++) {
+        const allowed = v.kind === "open" ? k % 2 === 0 : k % 2 === 1, f = k * 143;
+        if (!allowed) continue;
+        const nn = v.kind === "open" ? k / 2 : k, cur = nn === n;
+        g.line(P([f, 0]), P([f, cur ? 1 : 0.6]), { stroke: cur ? "blue" : "muted", width: cur ? 4 : 2 });
+        if (!narrow || nn <= 5) g.text(`${nn}`, P([f, cur ? 1.07 : 0.68]), { size: 11, color: cur ? "blue" : "muted", weight: cur ? 700 : 500 });
+      }
+    },
+  });
+}
+</script>
+
+<p>In the <button class="set" data-set="kind=open">open pipe</button>, like a flute, every harmonic fits, as on a string. <button class="set" data-set="kind=closed">Close one end</button>, as a clarinet's reed does, and only patterns with still air at the closed end and free air at the open end fit: a quarter wavelength, three quarters, five quarters. The even harmonics vanish and the lowest note drops an octave. That is why a clarinet, about as long as a flute, plays almost an octave lower, and why its low notes sound hollow, like the square wave.</p>
+
+<p>Strings, pipes, and solid objects all have frequencies they prefer. Tap a wine glass and it rings at its own. Now push it with sound instead: a tone whose pressure pushes the rim back and forth. Sweep the frequency of the <span class="c-orange" data-part="push">push</span> past the glass's own, here 660 Hz, and watch how the <span class="c-blue" data-part="rim">rim</span> responds:</p>
+
+<figure class="demo" id="resonance" aria-label="Top: the push on a wine glass and the glass's motion over a few cycles. Bottom: how strongly the glass responds at each pushing frequency, a curve with a peak at its natural frequency of 660 hertz."></figure>
+<script>
+{
+  const F0 = 660, tone = Sound.voice({ type: "sine", freq: 600, gain: 0.3 });
+  const amp = (f, Q) => { const r = f / F0; return 1 / Math.sqrt((1 - r * r) ** 2 + (r / Q) ** 2); };
+  const lag = (f, Q) => { const r = f / F0; return Math.atan2(r / Q, 1 - r * r); };
+  const dB = x => 20 * Math.log10(x);
+  demo("resonance", {
+    aspect: w => (w < 560 ? 0.9 : 1.7),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "f", label: "Push frequency", min: 330, max: 990, step: 1, value: 600, unit: " Hz", color: "orange" },
+      { key: "Q", label: "Sharpness, Q", min: 2, max: 60, step: 1, value: 20, color: "purple" },
+      Sound.button(tone),
+    ],
+    presets: [{ label: "Well below", set: { f: 420 } }, { label: "On resonance", set: { f: 660 } }, { label: "Well above", set: { f: 920 } }],
+    caption: "A wine glass modeled as a damped oscillator with a natural frequency of 660 Hz, after it has settled into a steady response. Top: the push (orange) and the rim's motion (blue), slowed down; the motion is scaled to its largest possible size. Bottom: the response at each pushing frequency in decibels; the dot is the current push. The tone's loudness follows the response.",
+    status: (s, v) => `moves ${amp(v.f, v.Q).toFixed(1)}× as far as a slow push would · ${Math.round((lag(v.f, v.Q) * 180) / Math.PI)}° behind the push`,
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, A = amp(v.f, v.Q), Amax = amp(F0 * Math.sqrt(Math.max(0, 1 - 1 / (2 * v.Q * v.Q))), v.Q), ph = lag(v.f, v.Q);
+      tone.set({ freq: v.f, gain: 0.04 + 0.66 * (A / Amax) });
+      const split = g.h * 0.4;
+      const T = g.graph({ box: [0, 0, g.w, split], x: [0, 3], y: [-1.15, 1.15], axes: "frame", grid: false, yTicks: false, xTicks: false, xLabel: "Time (three cycles, slowed down)" });
+      T.hline(0, { color: "muted", width: 1 });
+      const w0 = s.t * 0.5;
+      T.fn(x => 0.45 * Math.cos(TAU * (x - w0)), { color: "orange", width: g.lit("push") ? 3 : 2, dash: [6, 4] });
+      T.fn(x => 0.98 * (A / Amax) * Math.cos(TAU * (x - w0) - ph), { color: "blue", width: g.lit("rim") ? 4 : 3 });
+      g.text("push", [T.box[0] + 6, T.box[1] + 8], { size: 11.5, weight: 600, color: "orange", align: "left" });
+      g.text("rim", [T.box[0] + 46, T.box[1] + 8], { size: 11.5, weight: 600, color: "blue", align: "left" });
+      const P = g.graph({ box: [0, split + 12, g.w, g.h - split - 12], x: [330, 990], y: [-12, 40], axes: "frame", xLabel: "Push frequency (Hz)", yLabel: "response (dB)", yTicks: [-10, 0, 10, 20, 30, 40], xTicks: narrow ? [400, 660, 900] : 100 });
+      P.hline(0, { color: "muted", width: 1, dash: [3, 4] });
+      P.fn(f => dB(amp(f, v.Q)), { color: "purple", width: 2.5, samples: 400 });
+      P.marker(v.f, dB(A), { color: "orange", drop: true });
+    },
+  });
+}
+</script>
+
+<p><button class="set" data-set="f=420">Well below</button> its own frequency the glass follows the push, in step and only a little. <button class="set" data-set="f=920">Well above</button>, it cannot keep up and barely moves, half a cycle behind. <button class="set" data-set="f=660">At 660 Hz</button> each push arrives just as the rim is already moving that way, and the swings grow until friction drains energy as fast as the pushes add it. This is <dfn data-def="The large response of an object pushed at one of its own natural frequencies.">resonance</dfn>. The <span class="c-purple">sharpness</span> Q sets how tall and narrow the peak is: something that loses little energy each cycle rings long after a tap, and responds hugely, but only near its own frequency.</p>
+
+<p>Your voice uses resonance too. The vocal folds in your larynx snap open and shut about 100 to 250 times a second, making a buzz rich in harmonics. Above them sits the vocal tract, a tube about 17 cm long, closed at the folds and open at the lips. Like the clarinet it resonates at a quarter wavelength and its odd multiples, about 500, 1,500, and 2,500 Hz for a relaxed "uh", boosting the harmonics near them <a class="cite" href="#ref-fant"></a>. Your tongue and lips move these resonances. Drag the point on the <span class="c-purple" data-part="chart">vowel chart</span>, or change the <span class="c-orange">pitch</span> of the voice:</p>
+
+<figure class="demo" id="vowel" aria-label="The spectrum of a sung vowel: harmonics of the voice as stems, under a purple curve with peaks at the vocal tract's resonances. Beside it, a vowel chart with ee, eh, ah, and oo, and a draggable point that moves the first two resonances."></figure>
+<script>
+{
+  const VOWELS = [
+    { name: "ee", word: "heed", F1: 270, F2: 2290 },
+    { name: "eh", word: "head", F1: 530, F2: 1840 },
+    { name: "ah", word: "hod", F1: 730, F2: 1090 },
+    { name: "oo", word: "who'd", F1: 300, F2: 870 },
+    { name: "uh", word: "a relaxed tube", F1: 500, F2: 1500 },
+  ];
+  const B = [70, 100, 130], FMAX = 4000;
+  const env = (f, F1, F2) => {
+    const F = [F1, F2, Math.max(2450, F2 + 700)];
+    let h = 1 / (1 + f / 300);   // the buzz's own slope, fixed in hertz
+    F.forEach((Fi, i) => { h *= (Fi * Fi) / Math.sqrt((Fi * Fi - f * f) ** 2 + (B[i] * f) ** 2); });
+    return h;
+  };
+  const voice = Sound.voice({ freq: 120, harmonics: [1], gain: 0.7 });
+  let CH = null, norm = 1, normKey = "";
+  const chartAt = p => [700 + (2500 - 700) * (1 - (p[0] - CH.x) / CH.w), 200 + (900 - 200) * ((p[1] - CH.y) / CH.h)];
+  const setFrom = (p, fig) => {
+    const [F2, F1] = chartAt(p);
+    fig.set("F1", Math.round(Math.max(200, Math.min(900, F1)) / 10) * 10);
+    fig.set("F2", Math.round(Math.max(700, Math.min(2500, F2)) / 10) * 10);
+  };
+  demo("vowel", {
+    aspect: w => (w < 560 ? 0.72 : 1.85),
+    controls: [
+      { key: "f0", label: "Pitch of the voice", min: 80, max: 300, step: 1, value: 120, unit: " Hz", color: "orange" },
+      { key: "F1", label: "First resonance", min: 200, max: 900, step: 10, value: 730, unit: " Hz", hidden: true },
+      { key: "F2", label: "Second resonance", min: 700, max: 2500, step: 10, value: 1090, unit: " Hz", hidden: true },
+      Sound.button(voice),
+    ],
+    presets: VOWELS.slice(0, 4).map(o => ({ label: `"${o.name}"`, set: { F1: o.F1, F2: o.F2 } })),
+    caption: "A voice as a buzz filtered by a tube. Stems are the harmonics of the vocal folds' buzz; the purple curve is the vocal tract's response, with its resonances (formants) at the peaks. Vowel positions are average men's values from Peterson and Barney; the third resonance follows a simple rule, and the sound is synthesized from exactly these stems.",
+    status: (s, v) => {
+      const near = VOWELS.reduce((b, o) => (Math.hypot((o.F1 - v.F1) / 300, (o.F2 - v.F2) / 1000) < Math.hypot((b.F1 - v.F1) / 300, (b.F2 - v.F2) / 1000) ? o : b));
+      return `F1 ${v.F1} Hz · F2 ${v.F2} Hz · closest to "${near.name}" as in ${near.word}`;
+    },
+    drag: {
+      hit: p => !!CH && p[0] > CH.x - 10 && p[0] < CH.x + CH.w + 10 && p[1] > CH.y - 10 && p[1] < CH.y + CH.h + 10,
+      start(p, s, v, fig) { setFrom(p, fig); },
+      move(p, s, v, d, fig) { setFrom(p, fig); },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560;
+      const nk = `${v.F1},${v.F2}`;
+      if (nk !== normKey) { normKey = nk; norm = 0; for (let f = 60; f <= FMAX; f += 5) norm = Math.max(norm, env(f, v.F1, v.F2)); }
+      const L = f => 20 * Math.log10(env(f, v.F1, v.F2) / norm);
+      const N = Math.min(64, Math.floor(FMAX / v.f0));
+      voice.set({ freq: v.f0, harmonics: Array.from({ length: N }, (_, i) => env((i + 1) * v.f0, v.F1, v.F2) / norm) });
+      const sb = narrow ? [0, 0, g.w, g.h * 0.54] : [0, 0, g.w * 0.62, g.h];
+      const P = g.graph({ box: sb, x: [0, FMAX], y: [-50, 4], axes: "frame", xLabel: "Frequency (Hz)", yLabel: "level (dB)", yTicks: [-40, -20, 0], xTicks: narrow ? [0, 1000, 2000, 3000, 4000] : 500, grid: false });
+      for (let n = 1; n * v.f0 <= FMAX; n++) { const f = n * v.f0, y = Math.max(-50, L(f)); g.line(P([f, -50]), P([f, y]), { stroke: "orange", width: 2 }); }
+      P.fn(f => Math.max(-50, L(Math.max(f, 1))), { color: "purple", width: 2.5, samples: 500 });
+      g.labels([v.F1, v.F2].map((F, i) => ({ at: P([F, Math.min(1.5, L(F))]), text: `F${i + 1}`, color: "purple", prefer: [0, -1] })), { size: 12 });
+      // The vowel chart: F2 runs right to left and F1 downward, like the tongue's position in the mouth.
+      CH = narrow ? { x: g.w * 0.14, y: g.h * 0.63, w: g.w * 0.76, h: g.h * 0.3 } : { x: g.w * 0.7, y: g.h * 0.1, w: g.w * 0.26, h: g.h * 0.72 };
+      const lit = g.lit("chart");
+      const X = F2 => CH.x + CH.w * (1 - (F2 - 700) / 1800), Y = F1 => CH.y + CH.h * ((F1 - 200) / 700);
+      g.rect(CH.x, CH.y, CH.w, CH.h, { stroke: lit ? "purple" : "muted", width: lit ? 2 : 1, r: 6 });
+      g.text("tongue front ← → back", [CH.x + CH.w / 2, CH.y - 9], { size: 10.5, color: "muted" });
+      g.text("F2 high", [CH.x + 4, CH.y + CH.h + 12], { size: 10.5, color: "muted", align: "left" });
+      g.text("F2 low", [CH.x + CH.w - 4, CH.y + CH.h + 12], { size: 10.5, color: "muted", align: "right" });
+      g.labels(VOWELS.map(o => ({ at: [X(o.F2), Y(o.F1)], text: `"${o.name}"`, color: "ink" })), { size: 11.5 });
+      for (const o of VOWELS) g.circle([X(o.F2), Y(o.F1)], 3, { fill: "ink" });
+      g.handle([X(v.F2), Y(v.F1)], { color: "purple" });
+    },
+  });
+}
+</script>
+
+<p>The peaks of the purple curve are the <dfn data-def="A resonance of the vocal tract, seen as a peak in the spectrum of a vowel.">formants</dfn>, and the first two decide the vowel. In Peterson and Barney's measurements of 76 speakers <a class="cite" href="#ref-peterson"></a>, "ee" has a low first formant and a high second, <button class="set" data-set="F1=730 F2=1090">"ah"</button> a high first, and <button class="set" data-set="F1=300 F2=870">"oo"</button> both low. Now slide the <span class="c-orange">pitch</span> from <span class="scrub" data-key="f0" data-figure="vowel"></span>. The harmonics move, the formants stay put, and the vowel stays the same. That is how you understand a child and a bass saying the same word.</p>

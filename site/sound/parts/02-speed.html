@@ -1,0 +1,238 @@
+
+<h2>What sets the speed</h2>
+
+<p>If the push is passed along by molecules hitting molecules, it cannot outrun them. Heat a gas and its molecules move faster, so the push should travel faster too. A light gas, whose molecules move faster at the same temperature, should carry sound faster than a heavy one. Drag the <span class="c-orange">temperature</span> <span class="scrub" data-key="tc"></span> and switch gases:</p>
+
+<figure class="demo" id="speed" aria-label="A graph of the speed of sound against temperature for air, helium, and carbon dioxide, with a marker on the chosen gas. Two bars below compare the speed of sound with the molecules' average speed."></figure>
+<script>
+{
+  const COLORS = { air: "blue", helium: "purple", co2: "green" };
+  demo("speed", {
+    aspect: w => (w < 560 ? 1.05 : 1.9),
+    controls: [
+      { key: "tc", label: "Temperature", min: -100, max: 300, step: 1, value: 20, unit: " °C", color: "orange", marks: [{ value: 0, label: "freezing" }, { value: 100, label: "boiling" }] },
+      { key: "gas", label: "Gas", type: "choice", options: [{ value: "air", label: "air" }, { value: "helium", label: "helium" }, { value: "co2", label: "CO₂" }], value: "air" },
+    ],
+    caption: "The speed of sound in three gases, computed from c = √(γRT/M). Sound always travels a little slower than the molecules' typical speed, and both grow with the square root of the absolute temperature.",
+    status: (s, v) => `${SND.GASES[v.gas].label} at ${v.tc} °C: sound ${SND.speed(v.tc, v.gas).toFixed(0)} m/s, molecules ${SND.vrms(v.tc, v.gas).toFixed(0)} m/s`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, ph = Math.round(g.h - 76);
+      const P = g.graph({ box: [0, 0, g.w, ph], x: [-100, 300], y: [0, 1400], axes: "frame", xLabel: "Temperature (°C)", yLabel: "Speed of sound (m/s)", xTicks: 100, yTicks: 200 });
+      for (const k of ["co2", "air", "helium"]) {
+        const on = k === v.gas;
+        P.fn(t => SND.speed(t, k), { color: COLORS[k], width: on ? 3 : 1.5, label: SND.GASES[k].label, labelAt: narrow ? 160 : 220, labelOffset: [0, k === "co2" ? 14 : -12] });
+      }
+      const c = SND.speed(v.tc, v.gas);
+      P.marker(v.tc, c, { color: COLORS[v.gas], drop: true, label: `${c.toFixed(0)} m/s`, pos: v.tc < -40 ? "ne" : "nw" });
+      // Sound against the molecules' own rms speed.
+      const vm = SND.vrms(v.tc, v.gas), top = ph + 26, bw = g.w - 130, scale = bw / 2200;
+      g.text("sound", [0, top + 7], { size: 12.5, color: COLORS[v.gas], align: "left", baseline: "middle" });
+      g.rect(80, top, c * scale, 14, { fill: COLORS[v.gas], r: 3 });
+      g.text(`${c.toFixed(0)} m/s`, [86 + c * scale, top + 7], { size: 12, align: "left", baseline: "middle", color: "muted" });
+      g.text("molecules", [0, top + 34], { size: 12.5, color: "ink", align: "left", baseline: "middle" });
+      g.rect(80, top + 27, vm * scale, 14, { fill: g.rgba("ink", 0.55), r: 3 });
+      g.text(`${vm.toFixed(0)} m/s`, [86 + vm * scale, top + 34], { size: 12, align: "left", baseline: "middle", color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Air at room temperature carries sound at <b>343 m/s</b>, about a kilometer in three seconds, which is why you can count the seconds between lightning and thunder and divide by three for the distance in kilometers. Its molecules average about 500 m/s, so sound runs at roughly two thirds of their speed in every gas, at every temperature. Helium, whose atoms are seven times lighter than an air molecule, carries sound almost three times faster; heavy carbon dioxide carries it slower.</p>
+
+<p>The formula behind the curves reads the same story in symbols:</p>
+
+<div class="tex">c = \sqrt{\frac{\gamma\, R\, \orange{T}}{M}}</div>
+
+<p>Here <span class="tex">\orange{T}</span> is the absolute temperature, <span class="tex">M</span> the molar mass, <span class="tex">R</span> the gas constant, and <span class="tex">\gamma</span> a number near 1.4 for air that accounts for the gas heating up a little as each squeeze passes <a class="cite" href="#ref-kinsler"></a>. Pressure appears nowhere. That should be surprising, since the squeezing force in our bead model was the pressure.</p>
+
+<div class="quiz">
+  <p>An airliner cruises at 11 km, where the air pressure is less than a quarter of what it is on the ground. How fast does sound travel up there?</p>
+  <div class="choices"><button>Faster: thin air is easier to push</button><button>Slower: there are fewer molecules to pass the push along</button><button data-correct>Slower, but only because the air is colder</button></div>
+  <p class="why">Thin air pushes back with less pressure, but it is lighter by exactly the same factor, so stiffness over density does not change. Only temperature is left, and at 11 km it is −56 °C.</p>
+</div>
+
+<p>Climb through the standard atmosphere and watch the three curves. Drag the <span class="c-orange" data-part="plane">altitude</span> <span class="scrub" data-key="h" data-figure="atmos"></span>:</p>
+
+<figure class="demo" id="atmos" aria-label="A column of atmosphere with an altitude marker, next to three graphs against altitude: pressure falling smoothly, temperature falling to 11 km and then constant, and the speed of sound following the temperature."></figure>
+<script>
+{
+  demo("atmos", {
+    aspect: w => (w < 560 ? 0.9 : 1.75),
+    controls: [{ key: "h", label: "Altitude", min: 0, max: 20, step: 0.1, value: 11, unit: " km", color: "orange", marks: [{ value: 11, label: "airliners" }] }],
+    presets: [{ label: "Sea level", set: { h: 0 } }, { label: "Everest", set: { h: 8.85 } }, { label: "Airliner", set: { h: 11 } }, { label: "Above the weather", set: { h: 18 } }],
+    caption: "The International Standard Atmosphere. Pressure keeps falling with height, but the speed of sound follows only the temperature: it drops to 295 m/s at 11 km and stays there in the cold, still layer above, even though the pressure keeps halving.",
+    status: (s, v) => { const a = SND.atmosphere(v.h); return `${v.h.toFixed(1)} km: ${(a.P / 100).toFixed(0)} hPa, ${a.tc.toFixed(1)} °C, sound ${a.c.toFixed(0)} m/s`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, colW = narrow ? 70 : 96, a = SND.atmosphere(v.h);
+      // The column of air, darker where it is denser.
+      const top = 10, bot = g.h - 34, Y = h => bot - (h / 20) * (bot - top);
+      for (let h = 0; h < 20; h += 0.25) { const d = SND.atmosphere(h).rho / 1.225; g.rect(8, Y(h + 0.25), colW, Y(h) - Y(h + 0.25) + 0.5, { fill: g.rgba("blue", 0.05 + 0.32 * d) }); }
+      g.rect(8, top, colW, bot - top, { stroke: "muted", width: 1 });
+      for (const h of [0, 5, 10, 15, 20]) g.text(`${h} km`, [colW + 14, Y(h)], { size: 11.5, color: "muted", align: "left", baseline: "middle" });
+      const py = Y(v.h);
+      g.line([8, py], [colW + 8, py], { stroke: "orange", width: 2 });
+      g.path([[colW * 0.5 - 12, py + 4], [colW * 0.5 + 14, py], [colW * 0.5 - 12, py - 4], [colW * 0.5 - 6, py]], { fill: "orange", close: true });
+      // Three graphs against altitude.
+      const x0 = colW + 60, gw = (g.w - x0 - 6) / 3, gh = bot - top;
+      const plots = [
+        { f: h => SND.atmosphere(h).P / 1000, x: [0, 105], label: "Pressure (kPa)", color: "blue", val: a.P / 1000 },
+        { f: h => SND.atmosphere(h).tc, x: [-70, 20], label: "Temperature (°C)", color: "orange", val: a.tc },
+        { f: h => SND.atmosphere(h).c, x: [280, 350], label: "Sound (m/s)", color: "red", val: a.c },
+      ];
+      plots.forEach((pl, i) => {
+        const P = g.graph({ box: [x0 + i * gw, top, gw - 8, gh + 24], x: pl.x, y: [0, 20], axes: "frame", xLabel: pl.label, yTicks: i === 0 ? 5 : false, yFormat: h => `${h}`, xTicks: { values: [pl.x[0], pl.x[1]] }, grid: false, labelSize: narrow ? 11 : 12 });
+        P.parametric(h => [pl.f(h), h], [0, 20], { color: pl.color, width: 2.25 });
+        P.hline(v.h, { color: "orange" });
+        P.marker(pl.val, v.h, { color: pl.color });
+      });
+    },
+  });
+}
+</script>
+
+<p>From the ground to 11 km the pressure falls to a fifth, the temperature falls by 71 degrees, and the speed of sound drops from 340 to 295 m/s, tracking the temperature. Above 11 km the temperature stops falling. The pressure keeps dropping, by half again at 16 km, yet <button class="set" data-set="h=18">the speed of sound stays flat</button>. That flat stretch is the clean experiment: pressure changes by a factor of three, the speed of sound by nothing.</p>
+
+<p>The reason is the one in the quiz. Thinner air pushes back more weakly when squeezed, but there is proportionally less of it to set moving, so the ratio of stiffness to density, and with it the speed, does not change. What the molecules carry the push with is their own speed, and that depends only on temperature.</p>
+
+<aside class="callout mistake"><p>Sound is not faster in a material because the material is denser. Density slows sound down and stiffness speeds it up. Water and steel carry sound quickly because they are vastly stiffer than air, not because they are heavier.</p></aside>
+
+<details class="deeper">
+  <summary>Why γ is in the formula <span class="hint">2 min</span></summary>
+  <p>Newton worked out the speed of sound in 1687 by treating air as a spring whose stiffness is its pressure. He got about 290 m/s and could not explain why measurements gave over 340. The gap is the factor <span class="tex">\sqrt{\gamma} \approx 1.18</span>, found by Laplace in 1816.</p>
+  <p>Each squeeze in a sound wave happens too fast for heat to leak away, so the compressed air warms slightly and pushes back harder than it would at constant temperature; each stretch cools it. A squeeze without heat exchange is called <dfn data-def="A change in a gas that is too fast for heat to flow in or out.">adiabatic</dfn>, and its stiffness is <span class="tex">\gamma P</span> instead of <span class="tex">P</span>, with <span class="tex">\gamma</span> = 1.4 for air (a gas of two-atom molecules) and 1.67 for helium (single atoms). Dividing by the density <span class="tex">\rho = PM/RT</span> gives the formula above, with the pressure cancelling.</p>
+</details>
+
+<h2>A wave of pressure</h2>
+
+<p>Back to a steady tone. In the first figure, the <span class="c-red">pressure</span> curve and the <span class="c-blue">displacement</span> curve were shifted against each other by a quarter of a wavelength. That shift is the most confusing thing about sound waves, so it is worth a figure of its own. Drag the <span class="c-purple" data-part="probe">probe</span> along the air and compare what the parcels are doing with the pressure there:</p>
+
+<figure class="demo" id="probe" aria-label="Air parcels in a sound wave with a draggable vertical probe. Below, the pressure and displacement curves with dots at the probe, and arrows showing which way the parcels around the probe are moving."></figure>
+<script>
+{
+  let box = null, at = { p: 0, d: 0 };
+  demo("probe", {
+    aspect: w => (w < 560 ? 0.95 : 1.8),
+    state: () => ({ t: 0, px: 0.42 }),
+    controls: [{ key: "speed", label: "Animation", min: 0, max: 1, step: 0.05, value: 0.35, format: x => (x === 0 ? "frozen" : `${x.toFixed(2)}×`) }],
+    caption: "A plane sound wave, slowed and magnified. Pressure is highest where the parcels on either side are moving toward each other, which is a quarter of a wavelength away from where they are pushed farthest.",
+    step(dt, s, v) { s.t += dt * v.speed; },
+    status: () => `at the probe: pressure ${at.p > 0.25 ? "above" : at.p < -0.25 ? "below" : "near"} normal, parcels pushed ${at.d > 0.25 ? "forward" : at.d < -0.25 ? "back" : "hardly at all"}`,
+    drag: {
+      hit: (p) => box && Math.abs(p[0] - (box[0] + 0)) >= 0 && p[1] > box[1] - 4,
+      move(p, s) { if (box) s.px = clamp((p[0] - box[0]) / box[2], 0.02, 0.98); },
+    },
+    draw(g, s, v) {
+      box = [0, 0, g.w, g.h];
+      const lam = g.w / 1.6;
+      const R = g.airWave([0, 0, g.w, g.h], { t: s.t, wavelength: lam, speed: lam * 0.5, amplitude: lam * 0.08, marks: 0, spacing: g.w < 560 ? 8 : 9 });
+      const x = s.px * g.w, fh = R.plot.box[1] - 12;
+      g.line([x, 0], [x, g.h], { stroke: "purple", width: g.lit("probe") ? 3 : 2, dash: [6, 4] });
+      g.handle([x, fh * 0.12], { color: "purple" });
+      // Arrows for the parcels just left and right of the probe, scaled by their velocity.
+      const W = R.field, vl = W.velocity(x - lam * 0.06, s.t), vr = W.velocity(x + lam * 0.06, s.t);
+      at = { p: R.pressure([x, fh / 2]), d: R.displacement([x, fh / 2]) };
+      const ay = fh * 0.55, sc = lam * 0.09;
+      g.arrow([x - 14, ay], [x - 14 + vl * sc, ay], { stroke: "ink", width: 2.5 });
+      g.arrow([x + 14, ay + 14], [x + 14 + vr * sc, ay + 14], { stroke: "ink", width: 2.5 });
+      const pl = R.plot;
+      g.circle([x, pl.y(R.pressure([x, fh / 2]))], 5, { fill: "red" });
+      g.circle([x, pl.y(R.displacement([x, fh / 2]))], 5, { fill: "blue" });
+    },
+  });
+}
+</script>
+
+<p>Put the probe where the <button class="set" data-set="speed=0">frozen</button> pressure curve peaks. The parcels on the left of the probe are moving right and the parcels on its right are moving left: they are closing in, so the air between them is being squeezed. Where the displacement is largest the parcels on both sides are pushed the same way by the same amount, so nothing is squeezed and the pressure is normal. Pressure tracks how quickly displacement changes from one parcel to the next, not how big the displacement is.</p>
+
+<p>Because the air moves along the same line the wave travels, this is called a <dfn data-def="A wave in which the medium moves back and forth along the direction the wave travels, like sound in air.">longitudinal wave</dfn>, unlike a wave on a rope, where the rope moves sideways. A microphone, and your eardrum, respond to the pressure, so from now on the <span class="c-red">red pressure curve</span> is the one we will plot.</p>
+
+<h2>Pitch is how often</h2>
+
+<p>The loudspeaker's cone moved back and forth 220 times a second, and the air delivered 220 squeezes a second to anything in its path. That rate is the <dfn data-def="How many times per second something repeats, measured in hertz (Hz).">frequency</dfn>, and our ears hear it as pitch. Because every squeeze travels at the same 343 m/s, a higher frequency packs them closer together in space. Sweep the <span class="c-orange">frequency</span> <span class="scrub" data-key="lf" data-figure="pitch"></span> from the lowest note of a pipe organ to the edge of human hearing, and press play to hear it:</p>
+
+<figure class="demo" id="pitch" aria-label="Ten milliseconds of a sine wave above a ruler showing one wavelength of the same sound in air against a person, a hand, and a coin for scale."></figure>
+<script>
+{
+  const tone = Sound.voice({ type: "sine", freq: 440, gain: 0.45 });
+  demo("pitch", {
+    aspect: w => (w < 560 ? 1 : 1.9),
+    controls: [
+      // The slider runs over log10 of the frequency, so each octave gets the same length.
+      { key: "lf", label: "Frequency", min: 1.301, max: 4.204, step: 0.001, value: 2.6435, color: "orange", format: x => { const f = Math.pow(10, x); return f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${f.toFixed(0)} Hz`; },
+        marks: [{ value: 2.6435, label: "A4" }, { value: 3.6218, label: "top of a piano" }] },
+      Sound.button(tone),
+    ],
+    presets: [{ label: "Organ pedal", set: { lf: 1.5145 } }, { label: "A4", set: { lf: 2.6435 } }, { label: "Whistle", set: { lf: 3.301 } }, { label: "Mosquito", set: { lf: 3.9031 } }],
+    caption: "A tone's pressure over time (top) and the length of one of its waves in air (bottom), with a 1.7 m person, a 10 cm hand, and a 2 cm coin for scale. Wavelength is 343 m/s divided by the frequency.",
+    status: (s, v) => { const f = Math.pow(10, v.lf), lam = 343 / f; return `${f.toFixed(0)} Hz (${SND.noteName(f)}) · period ${(1000 / f).toFixed(2)} ms · wavelength ${lam >= 1 ? lam.toFixed(2) + " m" : (lam * 100).toFixed(1) + " cm"}`; },
+    draw(g, s, vv) {
+      const v = { ...vv, f: Math.pow(10, vv.lf) };
+      tone.set({ freq: v.f });
+      const narrow = g.w < 560, top = g.h * 0.46;
+      const P = g.graph({ box: [0, 0, g.w, top], x: [0, 10], y: [-1.25, 1.25], axes: "frame", xLabel: "Time (ms)", yTicks: false, yLabel: "pressure", grid: false });
+      const n = Math.max(400, Math.min(4000, Math.round(v.f * 0.01 * 24)));
+      const pts = []; for (let i = 0; i <= n; i++) { const tm = (i / n) * 10; pts.push([tm, Math.sin(TAU * v.f * tm / 1000)]); }
+      P.series(pts, { color: "red", width: v.f > 3000 ? 1 : 2 });
+      // One wavelength on a log ruler from 1 cm to 20 m, with things for scale.
+      const ry = top + (g.h - top) * 0.62, x0 = 10, x1 = g.w - 10, L = m => x0 + ((Math.log10(m) + 2) / (Math.log10(20) + 2)) * (x1 - x0);
+      g.line([x0, ry], [x1, ry], { stroke: "muted", width: 1.5 });
+      for (const [m, lab] of [[0.01, "1 cm"], [0.1, "10 cm"], [1, "1 m"], [10, "10 m"]]) { g.line([L(m), ry - 5], [L(m), ry + 5], { stroke: "muted", width: 1 }); g.text(lab, [L(m), ry + 17], { size: 11.5, color: "muted" }); }
+      for (const [m, lab] of [[0.02, "coin"], [0.1, "hand"], [1.7, "person"]]) { g.circle([L(m), ry], 3, { fill: "ink" }); if (!narrow || m !== 0.1) g.text(lab, [L(m), ry - 13], { size: 11.5, color: "ink" }); }
+      const lam = 343 / v.f;
+      g.path([[x0, ry - 3], [L(Math.min(20, lam)), ry - 3], [L(Math.min(20, lam)), ry + 3], [x0, ry + 3]], { fill: "orange", alpha: 0.85, close: true });
+      g.text(`one wavelength: ${lam >= 1 ? lam.toFixed(2) + " m" : (lam * 100).toFixed(1) + " cm"}`, [L(Math.min(20, lam)), ry - 30], { size: 13, color: "orange", weight: 600, align: lam > 3 ? "right" : "left" });
+    },
+  });
+}
+</script>
+
+<p>At 440 Hz, the A above middle C, the squeezes arrive every 2.3 ms and sit 78 cm apart in the air. The lowest organ pipes make waves over 10 m long, longer than most rooms; the highest sounds a young adult can hear, around 17 000 Hz, make waves 2 cm long, shorter than a fingertip. That thousandfold range in size is why low notes bend around corners and through walls while high notes cast sound shadows: an obstacle only blocks a wave that is small compared with the obstacle.</p>
+
+<p>Sweeping the slider also shows something about the ear. The step from 110 to 220 Hz and the step from 1760 to 3520 Hz sound like the same jump in pitch, although one is 110 Hz and the other sixteen times larger. We hear ratios of frequency, not differences. Play two notes on a keyboard and compare:</p>
+
+<figure class="demo" id="keys" aria-label="Four octaves of a piano keyboard over a frequency axis. Pressing a key plays it and marks its frequency; matching C keys line up at doubling frequencies."></figure>
+<script>
+{
+  let geo = null;
+  const white = [0, 2, 4, 5, 7, 9, 11];
+  const play = m => Sound.play({ type: "triangle", freq: SND.freqOf(m), gain: 0.55, env: { a: 0.01, d: 0.5, s: 0.25, r: 0.25 } }, { duration: 0.9 });
+  demo("keys", {
+    aspect: w => (w < 560 ? 1.2 : 2.6),
+    state: () => ({ last: 60, prev: 48 }),
+    controls: [Sound.button((s) => play(s.last), { label: "Play the marked key" })],
+    caption: "Four octaves from C2 to C6. Each octave doubles the frequency, so equal steps along the keyboard are equal ratios: a key's frequency is 2^(1/12), about 1.059, times its neighbor's.",
+    status: s => `${SND.noteName(SND.freqOf(s.last))}: ${SND.freqOf(s.last).toFixed(1)} Hz · ${SND.noteName(SND.freqOf(s.prev))}: ${SND.freqOf(s.prev).toFixed(1)} Hz · ratio ${(SND.freqOf(s.last) / SND.freqOf(s.prev)).toFixed(3)}`,
+    drag: {
+      hit: p => !!(geo && geo.keyAt(p)),
+      start(p, s) { const m = geo.keyAt(p); if (m != null) { s.prev = s.last; s.last = m; play(m); } },
+    },
+    draw(g, s, v) {
+      const lo = 36, hi = 84, nW = 29, kw = (g.w - 4) / nW, kh = Math.min(g.h * 0.5, kw * 5.2), x0 = 2, y0 = 4;
+      const whites = [], blacks = [];
+      let wi = 0;
+      for (let m = lo; m <= hi; m++) {
+        const pc = m % 12;
+        if (white.includes(pc)) { whites.push({ m, x: x0 + wi * kw }); wi++; }
+        else blacks.push({ m, x: x0 + wi * kw - kw * 0.3 });
+      }
+      for (const k of whites) { const on = k.m === s.last || k.m === s.prev; g.rect(k.x, y0, kw - 1, kh, { fill: k.m === s.last ? g.rgba("orange", 0.5) : k.m === s.prev ? g.rgba("purple", 0.35) : "panel", stroke: "ink", width: 1, r: 2 }); if (k.m % 12 === 0) g.text(`C${k.m / 12 - 1}`, [k.x + kw / 2, y0 + kh - 10], { size: 10.5, color: "muted" }); void on; }
+      for (const k of blacks) g.rect(k.x, y0, kw * 0.6, kh * 0.6, { fill: k.m === s.last ? "orange" : k.m === s.prev ? "purple" : "ink", r: 2 });
+      geo = { keyAt: p => {
+        if (p[1] < y0 || p[1] > y0 + kh) return null;
+        if (p[1] < y0 + kh * 0.6) for (const k of blacks) if (p[0] >= k.x && p[0] <= k.x + kw * 0.6) return k.m;
+        for (const k of whites) if (p[0] >= k.x && p[0] < k.x + kw) return k.m;
+        return null;
+      } };
+      // A frequency axis below: linear, so octaves get wider and wider.
+      const ay = y0 + kh + 44, X = f => x0 + ((f - 0) / 1100) * (g.w - 8);
+      g.line([x0, ay], [g.w - 4, ay], { stroke: "muted", width: 1.5 });
+      for (const f of [0, 250, 500, 750, 1000]) { g.line([X(f), ay - 4], [X(f), ay + 4], { stroke: "muted", width: 1 }); g.text(`${f} Hz`, [X(f), ay + 16], { size: 11, color: "muted" }); }
+      for (let o = 2; o <= 6; o++) { const f = SND.freqOf(12 * (o + 1)); g.line([X(f), ay - 12], [X(f), ay], { stroke: "muted", width: 1 }); g.text(`C${o}`, [X(f), ay - 18], { size: 10.5, color: "muted" }); }
+      for (const [m, col] of [[s.prev, "purple"], [s.last, "orange"]]) { const f = SND.freqOf(m); g.circle([X(Math.min(1100, f)), ay], 6, { fill: col }); }
+      g.text("on a linear axis each octave is twice as wide as the one before", [x0, ay + 36], { size: 11.5, color: "muted", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>Every C on the keyboard has exactly twice the frequency of the C below it: C3 is 130.8 Hz, C4 261.6 Hz, C5 523.3 Hz. Two notes an <dfn data-def="A doubling of frequency; notes an octave apart share a name.">octave</dfn> apart sound like the same note, higher. Between the Cs, the twelve keys of an octave split the doubling into twelve equal ratios of about 1.059 each. On the frequency axis under the keys, those equal musical steps get wider and wider in hertz; to the ear they are all the same size. The ear works in ratios, and it will again.</p>

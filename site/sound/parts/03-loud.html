@@ -1,0 +1,189 @@
+
+<h2>Loudness is how hard</h2>
+
+<p>Frequency is how often the air is squeezed. How hard it is squeezed, the size of the pressure swing, is the <dfn data-def="How far the pressure rises above and falls below normal as a sound passes, in pascals.">amplitude</dfn>, and we hear it as loudness. The numbers here are startling. Normal air pressure is about 101 000 pascals. Drag the <span class="c-orange">sound level</span> <span class="scrub" data-key="L" data-figure="tiny"></span> and see how much a sound changes it, and how far it moves the air:</p>
+
+<figure class="demo" id="tiny" aria-label="Two logarithmic rulers. The top one shows pressure from a hundred-thousandth of a pascal to atmospheric pressure, with the sound's pressure swing marked. The bottom one shows how far air parcels move, from a trillionth of a meter to a millimeter, with an atom, a virus, and a hair for scale."></figure>
+<script>
+{
+  demo("tiny", {
+    aspect: w => (w < 560 ? 1.1 : 2.4),
+    controls: [{ key: "L", label: "Sound level", min: 0, max: 140, step: 1, value: 60, unit: " dB", color: "orange", marks: [{ value: 0, label: "faintest" }, { value: 60, label: "talking" }, { value: 120, label: "pain" }] }],
+    presets: [{ label: "Faintest", set: { L: 0 } }, { label: "Conversation", set: { L: 60 } }, { label: "Rock concert", set: { L: 110 } }, { label: "Jet at 30 m", set: { L: 140 } }],
+    caption: "The pressure swing of a sound (top) and how far it moves air parcels back and forth at 1 kHz (bottom), on logarithmic rulers where each tick is ten times the last. Even painfully loud sound changes air pressure by less than a tenth of a percent.",
+    status: (s, v) => {
+      const p = SND.pOf(v.L), x = p / (1.2 * 343 * TAU * 1000);
+      const fp = p < 1e-3 ? `${(p * 1e6).toFixed(0)} µPa` : p < 1 ? `${(p * 1e3).toFixed(1)} mPa` : `${p.toFixed(1)} Pa`;
+      const fx = x < 1e-9 ? `${(x * 1e12).toFixed(1)} pm` : x < 1e-6 ? `${(x * 1e9).toFixed(1)} nm` : `${(x * 1e6).toFixed(2)} µm`;
+      return `${v.L} dB: pressure swing ${fp} · air moves ±${fx}`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, x0 = 14, x1 = g.w - 14;
+      const ruler = (y, lo, hi, marks, value, title, fmt) => {
+        const X = q => x0 + ((Math.log10(q) - lo) / (hi - lo)) * (x1 - x0);
+        g.text(title, [x0, y - 34], { size: 13, weight: 600, color: "ink", align: "left" });
+        g.line([x0, y], [x1, y], { stroke: "muted", width: 1.5 });
+        for (let e = lo; e <= hi; e++) { g.line([X(10 ** e), y - 4], [X(10 ** e), y + 4], { stroke: "muted", width: 1 }); if ((e - lo) % (narrow ? 3 : 2) === 0) g.text(fmt(e), [X(10 ** e), y + 16], { size: 10.5, color: "muted" }); }
+        const items = marks.map(([q, lab]) => ({ at: [X(q), y], text: lab, color: "ink", prefer: [0, -1] }));
+        const xv = X(value);
+        g.line([xv, y - 12], [xv, y + 9], { stroke: "orange", width: 3 });
+        for (const [q] of marks) g.circle([X(q), y], 3, { fill: "ink" });
+        g.labels(items, { size: 11.5 });
+      };
+      const p = SND.pOf(v.L), disp = p / (1.2 * 343 * TAU * 1000);
+      ruler(g.h * 0.32, -5, 5, [[2e-5, "faintest sound"], [101325, "the atmosphere"], [63, "pain"]], p, "Pressure swing (pascals)", e => `10${Num.sup(String(e))}`);
+      ruler(g.h * 0.8, -12, -3, [[1e-10, "an atom"], [1e-7, "a virus"], [7e-5, "a hair's width"]], disp, "How far the air moves at 1 kHz (meters)", e => `10${Num.sup(String(e))}`);
+    },
+  });
+}
+</script>
+
+<p>The faintest sound a young ear can detect at 1 kHz swings the pressure by about <b>20 micropascals</b>, a five-billionth of an atmosphere, and moves the air back and forth by about ten trillionths of a meter, a tenth of the width of an atom. At the threshold of pain the swing is about 60 pascals, still less than a tenth of a percent of the air's pressure. Between the two lies a factor of three million in pressure, and the ear handles all of it.</p>
+
+<p>Numbers that span six orders of magnitude are awkward, so sound levels are quoted in <dfn data-def="A logarithmic unit: every 20 dB is ten times the pressure swing; 0 dB SPL is 20 micropascals.">decibels</dfn><span class="sidenote">Strictly, decibels of sound pressure level, dB SPL. A decibel is only a ratio, so every decibel scale names its reference; this one is 20 µPa.</span>: twenty times the base-ten logarithm of the pressure swing over 20 µPa. Every 20 dB is ten times the pressure; every 6 dB is roughly double. The scale happens to match hearing well, because the ear is logarithmic too. Compare the ladder of everyday sounds on a decibel scale with the same sounds on a plain pressure scale, and listen to a tone stepping down in 10 dB stairs:</p>
+
+<figure class="demo" id="ladder" aria-label="Everyday sounds placed on a scale: either decibels, where they spread evenly from a whisper to a jet engine, or plain pressure, where everything quieter than a rock concert piles up at zero."></figure>
+<script>
+{
+  const SOUNDS = [[0, "threshold of hearing"], [20, "rustling leaves"], [30, "whisper"], [45, "quiet office"], [60, "conversation at 1 m"], [70, "vacuum cleaner"], [85, "busy traffic"], [100, "motorbike"], [110, "rock concert"], [120, "thunderclap"], [130, "threshold of pain"], [140, "jet engine at 30 m"]];
+  const stairs = () => Sound.play(t => { const step = Math.min(3, Math.floor(t / 0.75)), gap = (t % 0.75) > 0.6 ? 0 : 1; return gap * Math.pow(10, -step / 2) * Math.sin(TAU * 1000 * t); }, { duration: 3, gain: 0.9 });
+  demo("ladder", {
+    aspect: w => (w < 560 ? 0.85 : 1.6),
+    controls: [
+      { key: "lin", label: "Scale", type: "choice", options: [{ value: 0, label: "decibels" }, { value: 1, label: "pressure" }], value: 0, color: "orange" },
+      Sound.button(() => stairs(), { label: "Play four 10 dB steps" }),
+    ],
+    caption: "Everyday sound levels, from published typical values. On a decibel scale they spread out evenly; on a plain pressure scale everything quieter than a rock concert crowds against zero. Each 10 dB step in the tone sounds about half as loud as the one before.",
+    status: (s, v) => (v.lin ? "plain pressure: 0 to 200 Pa" : "decibels: each 20 dB is ten times the pressure"),
+    draw(g, s, v) {
+      const narrow = g.w < 560, x0 = narrow ? 140 : 210, x1 = g.w - (narrow ? 44 : 52), y0 = 10, rowH = (g.h - 34) / SOUNDS.length;
+      const X = L => (v.lin ? x0 + (SND.pOf(L) / 200) * (x1 - x0) : x0 + (L / 140) * (x1 - x0));
+      SOUNDS.forEach(([L, lab], i) => {
+        const y = y0 + (i + 0.5) * rowH, x = Math.min(x1, X(L));
+        g.text(lab, [x0 - 10, y], { size: narrow ? 11 : 12.5, color: "ink", align: "right", baseline: "middle" });
+        g.rect(x0, y - rowH * 0.3, Math.max(1.5, x - x0), rowH * 0.6, { fill: g.rgba("orange", 0.25 + 0.6 * (L / 140)), r: 2 });
+        if (!v.lin || L >= 110) g.text(v.lin ? `${SND.pOf(L).toFixed(0)} Pa` : `${L} dB`, [x + 6, y], { size: 11, color: "muted", align: "left", baseline: "middle" });
+      });
+      const ay = g.h - 14;
+      g.line([x0, ay - 8], [x1, ay - 8], { stroke: "muted", width: 1 });
+      const ticks = v.lin ? [0, 50, 100, 150, 200] : [0, 20, 40, 60, 80, 100, 120, 140];
+      for (const t of ticks) { const x = v.lin ? x0 + (t / 200) * (x1 - x0) : x0 + (t / 140) * (x1 - x0); g.text(v.lin ? `${t} Pa` : `${t}`, [x, ay + 2], { size: 10.5, color: "muted" }); }
+    },
+  });
+}
+</script>
+
+<p>On the <button class="set" data-set="lin=1">pressure scale</button> a whisper, a conversation, and a vacuum cleaner are all indistinguishable from silence; only the loudest sounds register. Yet the ear tells a whisper from a conversation without effort. Experiments that asked listeners to judge "twice as loud" found that a sound must rise by about 10 dB, three times the pressure, to be heard as twice as loud <a class="cite" href="#ref-stevens"></a>. The stairs in the tone drop by 10 dB each; most people hear each step as roughly halving the loudness.</p>
+
+<div class="quiz">
+  <p>One loudspeaker plays a noise at 80 dB. A second, identical speaker playing a different noise is switched on beside it. What does a sound meter read?</p>
+  <div class="choices"><button>160 dB</button><button>86 dB, double the pressure</button><button data-correct>83 dB</button></div>
+  <p class="why">Two unrelated sounds add their power, not their pressure. Doubling the power is 3 dB. To sound twice as loud you would need about ten speakers.</p>
+</div>
+
+<p>Distance is the other thing that makes sounds quieter. A small source sends its sound out in every direction, so the same energy spreads over a growing sphere. Drag the <span class="c-purple" data-part="listener">listener</span> away from the source:</p>
+
+<figure class="demo" id="spread" aria-label="Seen from above, circular wavefronts spread from a small source. A draggable listener reads the sound level, and a graph below shows the level falling 6 dB for every doubling of distance."></figure>
+<script>
+{
+  let map = null;
+  demo("spread", {
+    aspect: w => (w < 560 ? 0.95 : 1.8),
+    state: () => ({ t: 0, r: 2 }),
+    caption: "Sound spreading from a small source in open air. The same energy covers a sphere whose area grows with the square of the distance, so the intensity falls as 1/r² and the level drops 6 dB for each doubling. The source makes 94 dB at 1 m; the wavefronts are slowed and spaced for clarity.",
+    status: s => `${s.r.toFixed(1)} m from the source: ${(94 - 20 * Math.log10(s.r)).toFixed(1)} dB, ${(1 / (s.r * s.r) * 100).toFixed(s.r > 3 ? 1 : 0)}% of the intensity at 1 m`,
+    step(dt, s) { s.t += dt; },
+    drag: {
+      hit: (p, s) => map && Math.hypot(p[0] - map.X(s.r), p[1] - map.cy) < 26,
+      move(p, s) { s.r = clamp(map.inv(p[0]), 0.5, 16); },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, fh = g.h * 0.58, cx = 26, cy = fh / 2, scale = (g.w - cx - 20) / 16;
+      const X = r => cx + r * scale;
+      map = { X, cy, inv: x => (x - cx) / scale };
+      g.clip([0, 0, g.w, fh], () => {
+        for (let k = 0; k < 12; k++) {
+          const r = ((s.t * 0.9 + k * 1.4) % 16.8);
+          g.circle([cx, cy], r * scale, { stroke: "red", width: 2.2, alpha: Math.max(0, 0.75 - (0.55 * r) / 16) });
+        }
+        // A cone of the same energy: twice the distance, four times the area (here, twice the arc).
+        const a = 0.28, r1 = s.r, r2 = s.r * 2;
+        for (const [r, lab] of [[r1, ""], [r2, "2×"]]) if (r < 16.5) g.path(Array.from({ length: 13 }, (_, i) => { const th = -a + (2 * a * i) / 12; return [cx + r * scale * Math.cos(th), cy + r * scale * Math.sin(th)]; }), { stroke: "purple", width: 3, alpha: lab ? 0.45 : 0.9 });
+      });
+      g.circle([cx, cy], 7, { fill: "ink" });
+      g.text("source", [cx + 10, cy - 14], { size: 11.5, color: "muted", align: "left" });
+      g.circle([X(s.r), cy], g.lit("listener") ? 9 : 7, { fill: "purple", stroke: "panel", width: 1.5 });
+      g.handle([X(s.r), cy], { color: "purple" });
+      const P = g.graph({ box: [0, fh + 10, g.w, g.h - fh - 10], x: [0, 16], y: [60, 100], axes: "frame", xLabel: "Distance (m)", yLabel: "Level (dB)", xTicks: 2, yTicks: 10 });
+      P.fn(r => 94 - 20 * Math.log10(r), { color: "purple", domain: [0.5, 16] });
+      for (const r of [1, 2, 4, 8, 16]) P.marker(r, 94 - 20 * Math.log10(r), { color: "muted" });
+      P.marker(s.r, 94 - 20 * Math.log10(s.r), { color: "purple", drop: true });
+    },
+  });
+}
+</script>
+
+<p>Each time the distance doubles, the same energy covers four times the area, so the <dfn data-def="The power a sound carries through each square meter, in watts per square meter.">intensity</dfn> drops to a quarter and the level by 6 dB: from 1 m to 2 m to 4 m to 8 m the meter reads 94, 88, 82, 76 dB. That is the inverse square law. Indoors, walls send the sound back and the law fails after a few meters. Outdoors it holds until the air itself begins to absorb the sound, which it does far more for high frequencies than low: distant thunder is a rumble because its crackle has been filtered out on the way.</p>
+
+<h2>Sounds add</h2>
+
+<p>When two sounds reach the same spot, the air there gets two sets of pushes at once and simply adds them. The pressure at each instant is the sum of the two pressures. That sounds trivial, but it has striking consequences. Shift the <span class="c-purple">second wave</span> against the <span class="c-blue">first</span> with the phase <span class="scrub" data-key="ph" data-figure="sum"></span>, and listen to the <b>sum</b>:</p>
+
+<figure class="demo" id="sum" aria-label="Two sine waves of the same frequency, one blue and one purple, and their sum in black. A phase control slides the purple wave; at half a cycle the two cancel and the sum is flat."></figure>
+<script>
+{
+  const F = 220;
+  demo("sum", {
+    aspect: w => (w < 560 ? 1 : 2),
+    controls: [
+      { key: "ph", label: "Phase of the second wave", type: "knob", min: 0, max: 360, step: 1, value: 60, unit: "°", wrap: true, color: "purple" },
+      { key: "b", label: "Its strength", min: 0, max: 1, step: 0.01, value: 1, color: "purple" },
+      Sound.button((s, v) => Sound.play(t => 0.5 * (Math.sin(TAU * F * t) + v.b * Math.sin(TAU * F * t + (v.ph * Math.PI) / 180)), { duration: 1.6 }), { label: "Play the sum" }),
+    ],
+    presets: [{ label: "In step", set: { ph: 0, b: 1 } }, { label: "Opposite", set: { ph: 180, b: 1 } }, { label: "Almost opposite", set: { ph: 180, b: 0.8 } }],
+    caption: "Two tones of the same frequency and their sum. In step they double; half a cycle apart and equally strong they cancel to silence. The sound played is exactly the black curve.",
+    status: (s, v) => { const ph = (v.ph * Math.PI) / 180, A = Math.sqrt(1 + v.b * v.b + 2 * v.b * Math.cos(ph)); return `sum's amplitude ${A.toFixed(2)}× one wave (${A < 0.01 ? "silence" : (20 * Math.log10(A)).toFixed(1) + " dB"})`; },
+    draw(g, s, v) {
+      const ph = (v.ph * Math.PI) / 180;
+      const P = g.graph({ x: [0, 12], y: [-2.2, 2.2], axes: "frame", xLabel: "Time (ms)", yTicks: false, yLabel: "pressure", grid: false });
+      P.fn(t => Math.sin(TAU * F * t / 1000), { color: "blue", width: 1.75, dash: [6, 4] });
+      P.fn(t => v.b * Math.sin(TAU * F * t / 1000 + ph), { color: "purple", width: 1.75, dash: [6, 4] });
+      P.fn(t => Math.sin(TAU * F * t / 1000) + v.b * Math.sin(TAU * F * t / 1000 + ph), { color: "ink", width: 3, label: "sum", labelAt: 11 });
+    },
+  });
+}
+</script>
+
+<p>In step, the waves reinforce and the sum is twice as tall. At <button class="set" data-set="ph=180 b=1">half a cycle apart</button> each squeeze of one wave lands on a stretch of the other, and the air does not move at all: two sounds make silence. This is <dfn data-def="Two waves adding so that they reinforce (in step) or cancel (out of step).">interference</dfn>, and noise-cancelling headphones run on it. A microphone outside hears the noise and the speaker inside plays it flipped upside down, so what reaches the eardrum is nearly flat. It works best for steady low drones like an engine's, whose waves are long and predictable.</p>
+
+<p>Two tones that are close in pitch but not equal are more interesting, because their phase difference drifts. Set the second tone a few hertz away from the first, 440 Hz, and listen:</p>
+
+<figure class="demo" id="beats" aria-label="One second of two tones added together. The sum swells and fades a few times a second; a dashed envelope traces the swelling. A slider sets the second tone's frequency."></figure>
+<script>
+{
+  const SR = 8000, a = Sound.voice({ freq: 440, gain: 0.5 }), b = Sound.voice({ freq: 444, gain: 0.5 });
+  let key = "", wave = null;
+  demo("beats", {
+    aspect: w => (w < 560 ? 1.1 : 2.2),
+    controls: [
+      { key: "f2", label: "Second tone", min: 440, max: 470, step: 0.5, value: 444, unit: " Hz", color: "purple" },
+      Sound.button([a, b]),
+    ],
+    presets: [{ label: "Unison", set: { f2: 440 } }, { label: "1 Hz apart", set: { f2: 441 } }, { label: "4 Hz apart", set: { f2: 444 } }, { label: "15 Hz apart", set: { f2: 455 } }],
+    caption: "Two tones a little apart in frequency drift in and out of step, so their sum swells and fades: beats. The number of beats per second is the difference of the two frequencies.",
+    status: (s, v) => (Math.abs(v.f2 - 440) < 0.01 ? "in unison: no beats" : `${Math.abs(v.f2 - 440).toFixed(1)} beats per second`),
+    draw(g, s, v) {
+      b.set({ freq: v.f2 });
+      const k = v.f2.toFixed(2);
+      if (k !== key) { key = k; wave = Sound.fromFunction(t => 0.5 * Math.sin(TAU * 440 * t) + 0.5 * Math.sin(TAU * v.f2 * t), { duration: 1, sampleRate: SR }); }
+      const P = g.graph({ x: [0, 1], y: [-1.15, 1.15], axes: "frame", xLabel: "Time (s)", yTicks: false, yLabel: "pressure", grid: false });
+      g.waveform(wave, P.box, { range: [-1.15, 1.15], color: "ink", rms: false });
+      const df = v.f2 - 440;
+      P.fn(t => Math.abs(Math.cos(Math.PI * df * t)), { color: "purple", width: 1.5, dash: [5, 4] });
+      P.fn(t => -Math.abs(Math.cos(Math.PI * df * t)), { color: "purple", width: 1.5, dash: [5, 4] });
+    },
+  });
+}
+</script>
+
+<p>The two tones slide into step, reinforce, slide out of step, cancel, and come back, so the sum throbs. These swells are <dfn data-def="The slow throbbing heard when two tones of nearly the same frequency are added.">beats</dfn>, and they come at the difference of the two frequencies: 444 and 440 Hz beat four times a second. Piano tuners and guitarists listen for them: when two strings that should match beat slowly, they are almost in tune, and the beating stops when they are exactly equal. Push the difference past about <button class="set" data-set="f2=455">15 Hz</button> and the beats are too fast to follow; the pair sounds rough, and further apart it separates into two notes.</p>

@@ -1,0 +1,321 @@
+<div class="abstract"><ul>
+<li>Sound is a traveling squeeze. A vibrating surface pushes on the air next to it, that air pushes on the air beyond, and the push runs outward while the air itself only rocks in place.</li>
+<li>In air at 20 °C the push travels at 343 m/s. That speed is set by how fast the molecules themselves are moving, so it rises with temperature and does not care about air pressure.</li>
+<li>Pitch is how many pushes arrive each second; loudness is how hard they push. The faintest sound we hear changes the air pressure by 20 millionths of a pascal, five billionths of an atmosphere.</li>
+<li>Real sounds are many pitches at once. The mix of harmonics, and the resonances that shape them, is why a violin, a flute, and a voice saying "ah" sound different on the same note.</li>
+<li>The ear converts a whisper of air pressure into motion of fluid, then sorts it by pitch along a coiled membrane 35 mm long: high notes near the entrance, low notes at the far end.</li>
+</ul></div>
+
+<p class="lede">Clap your hands and a person across the room hears it about a hundredth of a second later. Nothing crossed the room in that time but a disturbance: no air from your hands reached their ears. What did arrive was a pattern, a few millimeters of squeezed air followed by a few millimeters of stretched air, passed along by trillions of molecules that each moved less than the width of a hair.</p>
+
+<p>Everything about sound, from the pitch of a violin to the rumble of thunder and the way your ear tells them apart, comes from that one idea: a push handed from one bit of air to the next. Here is a loudspeaker doing it. Press play to hear the tone, and drag the <span class="c-orange" data-part="cone">cone's</span> frequency <span class="scrub" data-key="f"></span> to watch the pattern in the air squeeze closer together as the pitch rises:</p>
+
+<script>
+// Shared model for every figure on this page. SI units unless noted.
+window.SND = (() => {
+  const R = 8.314; // J/(mol K)
+  // Gases: ratio of heat capacities and molar mass (kg/mol).
+  const GASES = {
+    air: { label: "air", gamma: 1.4, M: 0.02897 },
+    helium: { label: "helium", gamma: 1.66, M: 0.004003 },
+    co2: { label: "carbon dioxide", gamma: 1.29, M: 0.04401 },
+  };
+  const K = c => c + 273.15;
+  // Speed of sound in an ideal gas, c = sqrt(gamma R T / M), and the molecules' rms speed sqrt(3 R T / M).
+  const speed = (tc, gas = "air") => Math.sqrt((GASES[gas].gamma * R * K(tc)) / GASES[gas].M);
+  const vrms = (tc, gas = "air") => Math.sqrt((3 * R * K(tc)) / GASES[gas].M);
+  // International Standard Atmosphere up to 20 km: temperature (C), pressure (Pa), density (kg/m3) at altitude h (km).
+  function atmosphere(h) {
+    const g0 = 9.80665, M = 0.0289644, L = 0.0065, T0 = 288.15, P0 = 101325;
+    let T, P;
+    if (h <= 11) { T = T0 - L * h * 1000; P = P0 * Math.pow(T / T0, (g0 * M) / (R * L)); }
+    else { const T11 = T0 - L * 11000, P11 = P0 * Math.pow(T11 / T0, (g0 * M) / (R * L)); T = T11; P = P11 * Math.exp((-g0 * M * (h - 11) * 1000) / (R * T11)); }
+    return { tc: T - 273.15, P, rho: (P * M) / (R * T), c: Math.sqrt((1.4 * R * T) / M) };
+  }
+  // Notes: equal temperament from A4 = 440 Hz.
+  const NAMES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+  const midiOf = f => 69 + 12 * Math.log2(f / 440);
+  const freqOf = m => 440 * Math.pow(2, (m - 69) / 12);
+  const noteName = f => { const m = Math.round(midiOf(f)); return NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1); };
+  // Greenwood's map for the human cochlea: x is the fraction of the way from the apex (0) to the base (1).
+  const greenwood = x => 165.4 * (Math.pow(10, 2.1 * x) - 0.88);
+  const place = f => Math.log10(f / 165.4 + 0.88) / 2.1;
+  // Decibels of sound pressure re 20 micropascals.
+  const P_REF = 20e-6;
+  const dB = p => 20 * Math.log10(p / P_REF), pOf = L => P_REF * Math.pow(10, L / 20);
+
+  // A small 2D gas of hard discs in a box, pushed by a piston at the left. Plain arrays, so it
+  // can live in a figure's state. Velocities are in box widths per second (shown slowed).
+  function gas(o = {}) {
+    const rng = Num.rng(o.seed ?? 7), N = o.n ?? 600, W = 1, H = o.h ?? 0.42, rad = o.r ?? 0.0052, sig = o.sigma ?? 0.45;
+    const cols = Math.round(Math.sqrt((N * W) / H)), rows = Math.ceil(N / cols);
+    const x = [], y = [], vx = [], vy = [];
+    for (let i = 0; i < N; i++) {
+      const c = i % cols, r = Math.floor(i / cols);
+      x.push(0.06 + ((c + 0.5 + (rng() - 0.5) * 0.5) / cols) * (W - 0.08));
+      y.push(((r + 0.5 + (rng() - 0.5) * 0.5) / rows) * H);
+      vx.push(rng.gauss(0, sig)); vy.push(rng.gauss(0, sig));
+    }
+    return { x, y, vx, vy, N, W, H, rad, sig, xp: 0.03, x0: 0.03, up: 0, t: 0, push: -10, dens: new Array(40).fill(1), mark: [Math.floor(N * 0.31), Math.floor(N * 0.52), Math.floor(N * 0.73)] };
+  }
+  // The piston goes in and back out once: depth D over Tp seconds.
+  const PUSH = { D: 0.045, Tp: 0.32 };
+  function stepGas(G, dt) {
+    const n = 5, h = dt / n, d2 = 4 * G.rad * G.rad, cs = 2 * G.rad, ncx = Math.ceil(G.W / cs) + 1, ncy = Math.ceil(G.H / cs) + 1;
+    const head = new Int32Array(ncx * ncy), next = new Int32Array(G.N);
+    for (let s = 0; s < n; s++) {
+      G.t += h;
+      const tau = G.t - G.push;
+      const was = G.xp;
+      G.xp = G.x0 + (tau > 0 && tau < PUSH.Tp ? PUSH.D * Math.pow(Math.sin((Math.PI * tau) / PUSH.Tp), 2) : 0);
+      G.up = (G.xp - was) / h;
+      for (let i = 0; i < G.N; i++) {
+        G.x[i] += G.vx[i] * h; G.y[i] += G.vy[i] * h;
+        if (G.y[i] < G.rad) { G.y[i] = 2 * G.rad - G.y[i]; G.vy[i] = Math.abs(G.vy[i]); }
+        if (G.y[i] > G.H - G.rad) { G.y[i] = 2 * (G.H - G.rad) - G.y[i]; G.vy[i] = -Math.abs(G.vy[i]); }
+        if (G.x[i] > G.W - G.rad) { G.x[i] = 2 * (G.W - G.rad) - G.x[i]; G.vx[i] = -Math.abs(G.vx[i]); }
+        const wall = G.xp + G.rad;
+        if (G.x[i] < wall) { G.x[i] = Math.min(G.W - G.rad, 2 * wall - G.x[i]); if (G.vx[i] < G.up) G.vx[i] = 2 * G.up - G.vx[i]; }
+      }
+      // Collisions between discs, found through a grid of cells one diameter wide.
+      head.fill(-1);
+      for (let i = 0; i < G.N; i++) { const c = Math.min(ncx - 1, Math.max(0, Math.floor(G.x[i] / cs))) + Math.min(ncy - 1, Math.max(0, Math.floor(G.y[i] / cs))) * ncx; next[i] = head[c]; head[c] = i; }
+      for (let i = 0; i < G.N; i++) {
+        const cx = Math.floor(G.x[i] / cs), cy = Math.floor(G.y[i] / cs);
+        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+          const qx = cx + ox, qy = cy + oy;
+          if (qx < 0 || qy < 0 || qx >= ncx || qy >= ncy) continue;
+          for (let j = head[qx + qy * ncx]; j >= 0; j = next[j]) {
+            if (j <= i) continue;
+            const dx = G.x[j] - G.x[i], dy = G.y[j] - G.y[i], dd = dx * dx + dy * dy;
+            if (dd >= d2 || dd < 1e-12) continue;
+            const d = Math.sqrt(dd), nx = dx / d, ny = dy / d;
+            const dvn = (G.vx[j] - G.vx[i]) * nx + (G.vy[j] - G.vy[i]) * ny;
+            if (dvn < 0) { G.vx[i] += dvn * nx; G.vy[i] += dvn * ny; G.vx[j] -= dvn * nx; G.vy[j] -= dvn * ny; }
+            const push = (2 * G.rad - d) / 2;
+            G.x[i] -= nx * push; G.y[i] -= ny * push; G.x[j] += nx * push; G.y[j] += ny * push;
+          }
+        }
+      }
+    }
+    // Density along the box (40 strips), smoothed over a few frames so the pulse reads through the noise.
+    const bins = G.dens.length, cnt = new Array(bins).fill(0), span = G.W - G.x0;
+    for (let i = 0; i < G.N; i++) { const b = Math.floor(((G.x[i] - G.x0) / span) * bins); if (b >= 0 && b < bins) cnt[b]++; }
+    const mean = G.N / bins;
+    for (let b = 0; b < bins; b++) G.dens[b] += (cnt[b] / mean - G.dens[b]) * 0.35;
+  }
+  // Rescale every velocity for a new temperature (kinetic energy is proportional to T).
+  function heat(G, sig) { const k = sig / G.sig; for (let i = 0; i < G.N; i++) { G.vx[i] *= k; G.vy[i] *= k; } G.sig = sig; }
+
+  // A loudspeaker seen from the side, facing right: magnet, frame, cone, dust cap, with the cone
+  // moved forward by dx px. Returns the x of the cone's front edge.
+  function speaker(g, x, cy, size, dx, o = {}) {
+    const s = size, lit = o.lit;
+    g.rect(x - s * 0.62, cy - s * 0.22, s * 0.3, s * 0.44, { fill: g.mix("panel", "ink", 0.55), r: 3 });
+    g.rect(x - s * 0.34, cy - s * 0.12, s * 0.12, s * 0.24, { fill: g.mix("panel", "ink", 0.3) });
+    const front = x + s * 0.18;
+    g.path([[x - s * 0.22, cy - s * 0.16], [front, cy - s * 0.62], [front, cy + s * 0.62], [x - s * 0.22, cy + s * 0.16]], { stroke: "muted", width: 1.5, close: true });
+    const cone = [[x - s * 0.2 + dx, cy - s * 0.15], [front - s * 0.03 + dx, cy - s * 0.56], [front - s * 0.03 + dx, cy + s * 0.56], [x - s * 0.2 + dx, cy + s * 0.15]];
+    g.path(cone, { fill: g.rgba("orange", lit ? 0.45 : 0.25), stroke: "orange", width: lit ? 3 : 2, close: true });
+    g.circle([x - s * 0.12 + dx, cy], s * 0.11, { fill: g.rgba("orange", 0.35), stroke: "orange", width: 1.5 });
+    return front + dx;
+  }
+  return { GASES, speed, vrms, atmosphere, noteName, midiOf, freqOf, greenwood, place, dB, pOf, P_REF, gas, stepGas, heat, PUSH, speaker };
+})();
+</script>
+
+<figure class="demo" id="hero" aria-label="A loudspeaker on the left pushes on a field of air parcels. Red bands of squeezed air and blue bands of stretched air travel to the right while each parcel only rocks back and forth. A plot below shows the pressure and the displacement along the air."></figure>
+<script>
+{
+  const tone = Sound.voice({ type: "sine", freq: 220, gain: 0.6 });
+  const SPAN = 4; // meters of air across the figure
+  demo("hero", {
+    aspect: w => (w < 560 ? 1.05 : 1.75),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "f", label: "Frequency", min: 110, max: 880, step: 1, value: 220, unit: " Hz", color: "orange" },
+      Sound.button(tone),
+    ],
+    caption: "A loudspeaker driving air. Red bands are squeezed air (higher pressure), blue bands stretched air; the orange parcels show that each bit of air only rocks in place while the pattern travels. Motion is slowed about 400 times; the drawing spans 4 m of air.",
+    status: (s, v) => `${v.f} Hz (${SND.noteName(v.f)}) · wavelength ${(343 / v.f).toFixed(2)} m`,
+    step(dt, s, v) { s.t += dt * (v.f / 400); },
+    draw(g, s, v) {
+      tone.set({ freq: v.f });
+      const narrow = g.w < 560, plotH = Math.round(g.h * 0.27), fh = g.h - plotH - 14, cy = fh / 2;
+      const size = Math.min(fh * 0.52, 90), sx = size * 0.75;
+      const ph = TAU * s.t, A = Math.min(9, size * 0.09);
+      const front0 = sx + size * 0.18, airW = g.w - front0 - 6, lamPx = ((343 / v.f) / SPAN) * airW, k = TAU / lamPx;
+      const disp = x => A * Math.cos(k * x - ph), pres = x => Math.sin(k * x - ph);
+      // Pressure shading and parcels.
+      g.clip([front0, 0, airW + 6, fh], () => {
+        for (let x = 0; x < airW + 6; x += 2) { const p = pres(x); g.rect(front0 + x, 0, 2.3, fh, { fill: g.rgba(p > 0 ? "red" : "blue", Math.abs(p) * 0.3) }); }
+        const sp = narrow ? 8 : 9, rng = Num.rng(5);
+        for (let y = sp / 2; y < fh; y += sp) for (let x = sp / 2; x < airW; x += sp) {
+          const x0 = x + (rng() - 0.5) * sp * 0.8, y0 = y + (rng() - 0.5) * sp * 0.8;
+          g.circle([front0 + x0 + disp(x0), y0], 1.45, { fill: "ink", alpha: 0.7 });
+        }
+        for (let m = 0; m < 3; m++) {
+          const x0 = lamPx * (0.35 + m * 1.05) + 10, y0 = fh * (0.25 + 0.25 * m);
+          if (x0 > airW - 8) break;
+          g.line([front0 + x0, y0 - 8], [front0 + x0, y0 + 8], { stroke: "muted", width: 1, dash: [2, 2] });
+          g.circle([front0 + x0 + disp(x0), y0], 4.5, { fill: "orange", stroke: "panel", width: 1.5 });
+        }
+      });
+      SND.speaker(g, sx, cy, size, A * Math.cos(-ph), { lit: g.lit("cone") });
+      // Wavelength bracket.
+      if (lamPx < airW - 20) {
+        const x1 = front0 + ((ph / k) % lamPx) + lamPx * 0.25, x2 = x1 + lamPx, yb = fh - 12;
+        if (x2 < front0 + airW) { g.dimension([x1, yb], [x2, yb], `one wavelength, ${(343 / v.f).toFixed(2)} m`, { offset: 0 }); }
+      }
+      // The plot below: pressure (red) and displacement (blue, dashed) along the air.
+      const pb = [front0, fh + 14, airW, plotH - 4], Y = val => pb[1] + pb[3] / 2 - (val * pb[3]) / 2.4;
+      g.line([pb[0], Y(0)], [pb[0] + pb[2], Y(0)], { stroke: "grid", width: 1 });
+      const pp = [], dd = [];
+      for (let x = 0; x <= airW; x += 2) { pp.push([pb[0] + x, Y(pres(x))]); dd.push([pb[0] + x, Y(disp(x) / A)]); }
+      g.path(dd, { stroke: "blue", width: 1.5, dash: [5, 4] });
+      g.path(pp, { stroke: "red", width: 2.25 });
+      g.text("pressure", [8, Y(0.75)], { size: 11.5, color: "red", align: "left" });
+      g.text("displacement", [8, Y(-0.75)], { size: 11.5, color: "blue", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>Two things are moving in that picture, and they are easy to confuse. The <span class="c-red">red</span> and <span class="c-blue">blue</span> bands race off to the right, one wavelength for every swing of the cone. The <span class="c-orange">orange</span> parcels of air go nowhere: each rocks forward and back about a fixed spot and ends where it started. The bands are the sound. The air only carries them, the way a crowd carries a stadium wave without anyone leaving their seat.</p>
+
+<p>This page builds up how that works, piece by piece. First what passes the push along and what sets its speed, then what pitch and loudness are in this picture, how sounds add up into music and voices, and finally how a few square centimeters of tissue in your head turn the bands back into the experience of hearing. Most figures make a sound when you press their play button; nothing plays until you do, and the volume is kept low.</p>
+
+<h2>A push that travels</h2>
+
+<p>Start with a simpler material than air: a row of beads joined by springs. Each bead stands for a slab of air, with mass, and each spring for the air's tendency to push back when squeezed. Press <b>Push</b> to shove the <span class="c-orange" data-part="piston">piston</span> in and back once, and keep an eye on the <span class="c-orange" data-part="bead">orange bead</span> in the middle:</p>
+
+<figure class="demo" id="chain" aria-label="A row of beads joined by springs with a piston at the left end. A push sends a squeeze along the row; a marked bead in the middle moves forward and back once as the squeeze passes."></figure>
+<script>
+{
+  const N = 22;
+  // Starts with a pulse already on its way, so the row is never idle.
+  const fresh = () => ({ x: new Array(N).fill(0), v: new Array(N).fill(0), t: 0, push: 0, trace: [] });
+  demo("chain", {
+    aspect: w => (w < 560 ? 1.15 : 2.1),
+    state: fresh,
+    controls: [
+      { label: "Push", type: "button", primary: true, action: s => { s.push = s.t; } },
+      { key: "k", label: "Stiffness", min: 0.25, max: 4, step: 0.05, value: 1, color: "red", format: k => `${k.toFixed(2)}×` },
+      { key: "m", label: "Mass", min: 0.25, max: 4, step: 0.05, value: 1, color: "blue", format: m => `${m.toFixed(2)}×` },
+    ],
+    presets: [{ label: "Stiff and light", set: { k: 4, m: 0.25 } }, { label: "Soft and heavy", set: { k: 0.25, m: 4 } }],
+    caption: "A bead-and-spring model of a column of air. The squeeze travels down the row at a speed set by the springs' stiffness and the beads' mass; each bead moves forward and back once and stops.",
+    status: (s, v) => `pulse speed ${Math.sqrt(v.k / v.m).toFixed(2)}× the starting speed`,
+    step(dt, s, v) {
+      const n = 24, h = (dt * 9) / n, w2 = v.k / v.m, T = 1.4;
+      for (let i = 0; i < n; i++) {
+        s.t += h;
+        const tau = s.t - s.push;
+        const x0 = tau > 0 && tau < T ? 0.9 * Math.pow(Math.sin((Math.PI * tau) / T), 2) : 0;
+        for (let j = 0; j < N; j++) {
+          const left = j === 0 ? x0 : s.x[j - 1];
+          // The last bead feels a damper that absorbs the pulse instead of bouncing it back.
+          const right = j === N - 1 ? s.x[j] : s.x[j + 1];
+          let a = w2 * (left - 2 * s.x[j] + right);
+          if (j === N - 1) a -= Math.sqrt(w2) * s.v[j];
+          s.v[j] += a * h;
+        }
+        for (let j = 0; j < N; j++) s.x[j] += s.v[j] * h;
+      }
+      s.trace.push([s.t, s.x[Math.floor(N / 2)]]);
+      if (s.trace.length > 240) s.trace.shift();
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, top = 16, rowY = narrow ? g.h * 0.34 : g.h * 0.38;
+      const left = 34, gap = (g.w - left - 18) / N, sc = gap * 0.9;
+      // The pulse's speed as an arrow above the row: longer for stiffer springs or lighter beads.
+      const c = Math.sqrt(v.k / v.m), aw = Math.min(g.w - 140, 70 * c);
+      g.arrow([left, top + 18], [left + aw, top + 18], { stroke: "red", width: 2.5 });
+      g.text(`pulse speed ${c.toFixed(2)}×`, [left + aw + 8, top + 18], { size: 12, color: "red", align: "left", baseline: "middle" });
+      const X = j => left + gap * (j + 0.5) + s.x[j] * sc;
+      const tau = s.t - s.push, x0 = tau > 0 && tau < 1.4 ? 0.9 * Math.pow(Math.sin((Math.PI * tau) / 1.4), 2) : 0;
+      const px = left - gap * 0.2 + x0 * sc;
+      // Springs, colored by squeeze.
+      for (let j = 0; j < N; j++) {
+        const a = j === 0 ? px : X(j - 1), b = X(j), strain = (b - a) / gap - 1;
+        const col = strain < -0.02 ? "red" : strain > 0.02 ? "blue" : "muted";
+        g.spring([a + 6, rowY], [b - 6, rowY], { coils: 3, radius: Math.min(6, gap * 0.2), lead: 2, style: "zigzag", stroke: col, width: 1.3 + Math.min(2, Math.abs(strain) * 8) });
+      }
+      g.rect(px - 14, rowY - 26, 12, 52, { fill: g.rgba("orange", g.lit("piston") ? 0.6 : 0.3), stroke: "orange", width: 2 });
+      for (let j = 0; j < N; j++) {
+        const mid = j === Math.floor(N / 2);
+        g.circle([X(j), rowY], mid ? 6.5 : 4.5, { fill: mid ? "orange" : "panel", stroke: mid ? "orange" : "ink", width: mid ? (g.lit("bead") ? 3 : 1.5) : 1.3 });
+      }
+      const mx = left + gap * (Math.floor(N / 2) + 0.5);
+      g.line([mx, rowY + 12], [mx, rowY + 22], { stroke: "orange", width: 1.5, dash: [2, 2] });
+      g.text("rest", [mx, rowY + 32], { size: 11.5, color: "muted" });
+
+      // A trace of the orange bead's position over time.
+      // A strip chart of the orange bead's position: up is forward.
+      const sx0 = left, sx1 = g.w - 18, sy0 = g.h * (narrow ? 0.6 : 0.62), sy1 = g.h - 22, base = sy0 + (sy1 - sy0) * 0.7;
+      const t1 = Math.max(26, s.t), t0 = t1 - 26, TX = t => sx0 + ((t - t0) / 26) * (sx1 - sx0), TY = x => base - x * (sy1 - sy0) * 0.6;
+      g.line([sx0, base], [sx1, base], { stroke: "muted", width: 1, dash: [3, 3] });
+      g.text("orange bead's position over time", [sx0, sy0 - 6], { size: 12, color: "muted", align: "left" });
+      g.text("rest", [sx1, base + 12], { size: 11, color: "muted", align: "right" });
+      const tr = s.trace.filter(([t]) => t >= t0).map(([t, x]) => [TX(t), TY(x)]);
+      if (tr.length > 1) g.path(tr, { stroke: "orange", width: 2.25 });
+    },
+  });
+}
+</script>
+
+<p>The squeeze, shown as <span class="c-red">red springs</span>, runs down the row at a steady speed, and behind it the springs relax. The orange bead lurches forward when the squeeze reaches it and settles back when the stretch behind follows; the trace below records that single wobble. Once the pulse has passed, every bead is back where it began.</p>
+
+<p>Now change the materials. With <button class="set" data-set="k=4 m=0.25">stiff springs and light beads</button>, push again: the pulse shoots down the row. With <button class="set" data-set="k=0.25 m=4">soft springs and heavy beads</button> it crawls. A bead can only start moving once its spring has been squeezed enough to overcome its inertia, so the speed depends on the ratio of the two:</p>
+
+<div class="tex">c = \sqrt{\frac{\red{\text{stiffness}}}{\blue{\text{mass per length}}}}</div>
+
+<p>For air the same formula holds with the air's resistance to squeezing, its <dfn data-def="How much pressure it takes to squeeze a material by a given fraction of its volume; for a gas squeezed quickly, the ratio of heat capacities times the pressure.">bulk modulus</dfn>, in place of the springs, and its density in place of the beads. But a row of beads hides the real question. Air has no springs. What pushes back when you squeeze it?</p>
+
+<h2>Molecules doing the pushing</h2>
+
+<p>Air is mostly empty space with molecules flying through it at the speed of a rifle bullet, about 500 m/s at room temperature, bouncing off each other several billion times a second. Here are a few hundred discs standing in for them, each moving at random. Press <b>Push now</b> to move the <span class="c-orange" data-part="piston">piston</span> in and out once, and watch the strip plot of how crowded each slice of the box is. The piston also pushes by itself every few seconds:</p>
+
+<figure class="demo" id="gas" aria-label="A box of moving discs with a piston at the left. After a push, a band of crowded discs moves across the box; a plot below shows the density along the box with a red bump traveling right. Three orange discs wander randomly and do not ride along with the bump."></figure>
+<script>
+{
+  const sigOf = tc => 0.45 * Math.sqrt((tc + 273.15) / 293.15);
+  demo("gas", {
+    aspect: w => (w < 560 ? 1 : 1.75),
+    state: () => { const G = SND.gas({ seed: 11, n: 620, sigma: sigOf(20) }); for (let i = 0; i < 40; i++) SND.stepGas(G, 1 / 40); G.push = G.t - 3.2; return { G, trail: [[], [], []] }; },
+    controls: [
+      { label: "Push now", type: "button", primary: true, action: s => { s.G.push = s.G.t; } },
+      { key: "tc", label: "Temperature", min: -60, max: 300, step: 1, value: 20, unit: " °C", color: "orange" },
+    ],
+    caption: "A two-dimensional gas of hard discs. The push is handed on by collisions, so a crowded band crosses the box faster than a typical disc wanders but no faster than the discs themselves move. The orange discs, with arrows showing their velocities, stay roughly where they were.",
+    change(key, s, v) { if (key === "tc") SND.heat(s.G, sigOf(v.tc)); },
+    status: (s, v) => `typical disc speed ${(sigOf(v.tc) * Math.SQRT2).toFixed(2)} box widths/s · ${(s.G.t - s.G.push).toFixed(1)} s since the push`,
+    step(dt, s) {
+      // A push every few seconds, so there is always a pulse to watch.
+      if (s.G.t - s.G.push > 3.6) s.G.push = s.G.t + 0.1;
+      SND.stepGas(s.G, Math.min(dt, 1 / 40));
+      s.G.mark.forEach((i, m) => { s.trail[m].push([s.G.x[i], s.G.y[i]]); if (s.trail[m].length > 90) s.trail[m].shift(); });
+    },
+    draw(g, s, v) {
+      const G = s.G, narrow = g.w < 560, pad = 8, bw = g.w - 2 * pad, bh = Math.min(g.h * 0.6, bw * G.H);
+      const bx = pad, by = 6, X = x => bx + x * bw, Y = y => by + y * (bh / G.H);
+      g.rect(bx, by, bw, bh, { stroke: "muted", width: 1.5 });
+      g.rect(bx, by, X(G.xp) - bx, bh, { fill: g.rgba("orange", g.lit("piston") ? 0.55 : 0.25), stroke: "orange", width: 2 });
+      const r = Math.max(1.6, G.rad * bw * 0.9);
+      for (let i = 0; i < G.N; i++) g.circle([X(G.x[i]), Y(G.y[i])], r, { fill: "ink", alpha: 0.55 });
+      s.trail.forEach(tr => { if (tr.length > 1) g.path(tr.map(([x, y]) => [X(x), Y(y)]), { stroke: "orange", width: 1.2, alpha: 0.6 }); });
+      G.mark.forEach(i => { const p = [X(G.x[i]), Y(G.y[i])]; g.arrow(p, [p[0] + G.vx[i] * bw * 0.1, p[1] + G.vy[i] * bw * 0.1], { stroke: "orange", width: 1.5, head: 6 }); g.circle(p, r + 2, { fill: "orange", stroke: "panel", width: 1 }); });
+      // Density along the box.
+      const pb = [bx, by + bh + 16, bw, g.h - bh - by - 22], bins = G.dens.length, span = G.W - G.x0;
+      const P = g.graph({ box: pb, x: [0, 1], y: [0.55, 1.75], axes: "frame", xTicks: false, yTicks: [1], yFormat: () => "average", xLabel: narrow ? "" : "position along the box", yLabel: "crowding", grid: false });
+      P.hline(1, { color: "muted" });
+      const pts = G.dens.map((d, b) => [G.x0 + ((b + 0.5) / bins) * span, Math.min(1.75, d)]);
+      P.series(pts, { color: "red", width: 2.25, fill: true, to: 1 });
+    },
+  });
+}
+</script>
+
+<p>A crowded band, a region where discs are packed a little more tightly, breaks away from the piston and crosses the box. The discs right in front of the piston get hit harder and rebound faster; they catch up with their neighbors and hit them a little harder; those hit the next layer. The push is handed forward one collision at a time, which is why the band moves at about the speed of the discs themselves, while each <span class="c-orange">orange disc</span> keeps wandering in its own random way and ends up nowhere in particular.</p>
+
+<p>That is what the springs in the bead model stood for. A gas pushes back when squeezed because squeezing it packs more molecules against each surface, so more of them bounce off it every second. Pressure is the rain of those impacts, and sound is a ripple in that rain.</p>

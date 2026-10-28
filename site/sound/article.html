@@ -1,0 +1,1575 @@
+<div class="abstract"><ul>
+<li>Sound is a traveling squeeze. A vibrating surface pushes on the air next to it, that air pushes on the air beyond, and the push runs outward while the air itself only rocks in place.</li>
+<li>In air at 20 °C the push travels at 343 m/s. That speed is set by how fast the molecules themselves are moving, so it rises with temperature and does not care about air pressure.</li>
+<li>Pitch is how many pushes arrive each second; loudness is how hard they push. The faintest sound we hear changes the air pressure by 20 millionths of a pascal, five billionths of an atmosphere.</li>
+<li>Real sounds are many pitches at once. The mix of harmonics, and the resonances that shape them, is why a violin, a flute, and a voice saying "ah" sound different on the same note.</li>
+<li>The ear converts a whisper of air pressure into motion of fluid, then sorts it by pitch along a coiled membrane 35 mm long: high notes near the entrance, low notes at the far end.</li>
+</ul></div>
+
+<p class="lede">Clap your hands and a person across the room hears it about a hundredth of a second later. Nothing crossed the room in that time but a disturbance: no air from your hands reached their ears. What did arrive was a pattern, a few millimeters of squeezed air followed by a few millimeters of stretched air, passed along by trillions of molecules that each moved less than the width of a hair.</p>
+
+<p>Everything about sound, from the pitch of a violin to the rumble of thunder and the way your ear tells them apart, comes from that one idea: a push handed from one bit of air to the next. Here is a loudspeaker doing it. Press play to hear the tone, and drag the <span class="c-orange" data-part="cone">cone's</span> frequency <span class="scrub" data-key="f"></span> to watch the pattern in the air squeeze closer together as the pitch rises:</p>
+
+<script>
+// Shared model for every figure on this page. SI units unless noted.
+window.SND = (() => {
+  const R = 8.314; // J/(mol K)
+  // Gases: ratio of heat capacities and molar mass (kg/mol).
+  const GASES = {
+    air: { label: "air", gamma: 1.4, M: 0.02897 },
+    helium: { label: "helium", gamma: 1.66, M: 0.004003 },
+    co2: { label: "carbon dioxide", gamma: 1.29, M: 0.04401 },
+  };
+  const K = c => c + 273.15;
+  // Speed of sound in an ideal gas, c = sqrt(gamma R T / M), and the molecules' rms speed sqrt(3 R T / M).
+  const speed = (tc, gas = "air") => Math.sqrt((GASES[gas].gamma * R * K(tc)) / GASES[gas].M);
+  const vrms = (tc, gas = "air") => Math.sqrt((3 * R * K(tc)) / GASES[gas].M);
+  // International Standard Atmosphere up to 20 km: temperature (C), pressure (Pa), density (kg/m3) at altitude h (km).
+  function atmosphere(h) {
+    const g0 = 9.80665, M = 0.0289644, L = 0.0065, T0 = 288.15, P0 = 101325;
+    let T, P;
+    if (h <= 11) { T = T0 - L * h * 1000; P = P0 * Math.pow(T / T0, (g0 * M) / (R * L)); }
+    else { const T11 = T0 - L * 11000, P11 = P0 * Math.pow(T11 / T0, (g0 * M) / (R * L)); T = T11; P = P11 * Math.exp((-g0 * M * (h - 11) * 1000) / (R * T11)); }
+    return { tc: T - 273.15, P, rho: (P * M) / (R * T), c: Math.sqrt((1.4 * R * T) / M) };
+  }
+  // Notes: equal temperament from A4 = 440 Hz.
+  const NAMES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+  const midiOf = f => 69 + 12 * Math.log2(f / 440);
+  const freqOf = m => 440 * Math.pow(2, (m - 69) / 12);
+  const noteName = f => { const m = Math.round(midiOf(f)); return NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1); };
+  // Greenwood's map for the human cochlea: x is the fraction of the way from the apex (0) to the base (1).
+  const greenwood = x => 165.4 * (Math.pow(10, 2.1 * x) - 0.88);
+  const place = f => Math.log10(f / 165.4 + 0.88) / 2.1;
+  // Decibels of sound pressure re 20 micropascals.
+  const P_REF = 20e-6;
+  const dB = p => 20 * Math.log10(p / P_REF), pOf = L => P_REF * Math.pow(10, L / 20);
+
+  // A small 2D gas of hard discs in a box, pushed by a piston at the left. Plain arrays, so it
+  // can live in a figure's state. Velocities are in box widths per second (shown slowed).
+  function gas(o = {}) {
+    const rng = Num.rng(o.seed ?? 7), N = o.n ?? 600, W = 1, H = o.h ?? 0.42, rad = o.r ?? 0.0052, sig = o.sigma ?? 0.45;
+    const cols = Math.round(Math.sqrt((N * W) / H)), rows = Math.ceil(N / cols);
+    const x = [], y = [], vx = [], vy = [];
+    for (let i = 0; i < N; i++) {
+      const c = i % cols, r = Math.floor(i / cols);
+      x.push(0.06 + ((c + 0.5 + (rng() - 0.5) * 0.5) / cols) * (W - 0.08));
+      y.push(((r + 0.5 + (rng() - 0.5) * 0.5) / rows) * H);
+      vx.push(rng.gauss(0, sig)); vy.push(rng.gauss(0, sig));
+    }
+    return { x, y, vx, vy, N, W, H, rad, sig, xp: 0.03, x0: 0.03, up: 0, t: 0, push: -10, dens: new Array(40).fill(1), mark: [Math.floor(N * 0.31), Math.floor(N * 0.52), Math.floor(N * 0.73)] };
+  }
+  // The piston goes in and back out once: depth D over Tp seconds.
+  const PUSH = { D: 0.045, Tp: 0.32 };
+  function stepGas(G, dt) {
+    const n = 5, h = dt / n, d2 = 4 * G.rad * G.rad, cs = 2 * G.rad, ncx = Math.ceil(G.W / cs) + 1, ncy = Math.ceil(G.H / cs) + 1;
+    const head = new Int32Array(ncx * ncy), next = new Int32Array(G.N);
+    for (let s = 0; s < n; s++) {
+      G.t += h;
+      const tau = G.t - G.push;
+      const was = G.xp;
+      G.xp = G.x0 + (tau > 0 && tau < PUSH.Tp ? PUSH.D * Math.pow(Math.sin((Math.PI * tau) / PUSH.Tp), 2) : 0);
+      G.up = (G.xp - was) / h;
+      for (let i = 0; i < G.N; i++) {
+        G.x[i] += G.vx[i] * h; G.y[i] += G.vy[i] * h;
+        if (G.y[i] < G.rad) { G.y[i] = 2 * G.rad - G.y[i]; G.vy[i] = Math.abs(G.vy[i]); }
+        if (G.y[i] > G.H - G.rad) { G.y[i] = 2 * (G.H - G.rad) - G.y[i]; G.vy[i] = -Math.abs(G.vy[i]); }
+        if (G.x[i] > G.W - G.rad) { G.x[i] = 2 * (G.W - G.rad) - G.x[i]; G.vx[i] = -Math.abs(G.vx[i]); }
+        const wall = G.xp + G.rad;
+        if (G.x[i] < wall) { G.x[i] = Math.min(G.W - G.rad, 2 * wall - G.x[i]); if (G.vx[i] < G.up) G.vx[i] = 2 * G.up - G.vx[i]; }
+      }
+      // Collisions between discs, found through a grid of cells one diameter wide.
+      head.fill(-1);
+      for (let i = 0; i < G.N; i++) { const c = Math.min(ncx - 1, Math.max(0, Math.floor(G.x[i] / cs))) + Math.min(ncy - 1, Math.max(0, Math.floor(G.y[i] / cs))) * ncx; next[i] = head[c]; head[c] = i; }
+      for (let i = 0; i < G.N; i++) {
+        const cx = Math.floor(G.x[i] / cs), cy = Math.floor(G.y[i] / cs);
+        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+          const qx = cx + ox, qy = cy + oy;
+          if (qx < 0 || qy < 0 || qx >= ncx || qy >= ncy) continue;
+          for (let j = head[qx + qy * ncx]; j >= 0; j = next[j]) {
+            if (j <= i) continue;
+            const dx = G.x[j] - G.x[i], dy = G.y[j] - G.y[i], dd = dx * dx + dy * dy;
+            if (dd >= d2 || dd < 1e-12) continue;
+            const d = Math.sqrt(dd), nx = dx / d, ny = dy / d;
+            const dvn = (G.vx[j] - G.vx[i]) * nx + (G.vy[j] - G.vy[i]) * ny;
+            if (dvn < 0) { G.vx[i] += dvn * nx; G.vy[i] += dvn * ny; G.vx[j] -= dvn * nx; G.vy[j] -= dvn * ny; }
+            const push = (2 * G.rad - d) / 2;
+            G.x[i] -= nx * push; G.y[i] -= ny * push; G.x[j] += nx * push; G.y[j] += ny * push;
+          }
+        }
+      }
+    }
+    // Density along the box (40 strips), smoothed over a few frames so the pulse reads through the noise.
+    const bins = G.dens.length, cnt = new Array(bins).fill(0), span = G.W - G.x0;
+    for (let i = 0; i < G.N; i++) { const b = Math.floor(((G.x[i] - G.x0) / span) * bins); if (b >= 0 && b < bins) cnt[b]++; }
+    const mean = G.N / bins;
+    for (let b = 0; b < bins; b++) G.dens[b] += (cnt[b] / mean - G.dens[b]) * 0.35;
+  }
+  // Rescale every velocity for a new temperature (kinetic energy is proportional to T).
+  function heat(G, sig) { const k = sig / G.sig; for (let i = 0; i < G.N; i++) { G.vx[i] *= k; G.vy[i] *= k; } G.sig = sig; }
+
+  // A loudspeaker seen from the side, facing right: magnet, frame, cone, dust cap, with the cone
+  // moved forward by dx px. Returns the x of the cone's front edge.
+  function speaker(g, x, cy, size, dx, o = {}) {
+    const s = size, lit = o.lit;
+    g.rect(x - s * 0.62, cy - s * 0.22, s * 0.3, s * 0.44, { fill: g.mix("panel", "ink", 0.55), r: 3 });
+    g.rect(x - s * 0.34, cy - s * 0.12, s * 0.12, s * 0.24, { fill: g.mix("panel", "ink", 0.3) });
+    const front = x + s * 0.18;
+    g.path([[x - s * 0.22, cy - s * 0.16], [front, cy - s * 0.62], [front, cy + s * 0.62], [x - s * 0.22, cy + s * 0.16]], { stroke: "muted", width: 1.5, close: true });
+    const cone = [[x - s * 0.2 + dx, cy - s * 0.15], [front - s * 0.03 + dx, cy - s * 0.56], [front - s * 0.03 + dx, cy + s * 0.56], [x - s * 0.2 + dx, cy + s * 0.15]];
+    g.path(cone, { fill: g.rgba("orange", lit ? 0.45 : 0.25), stroke: "orange", width: lit ? 3 : 2, close: true });
+    g.circle([x - s * 0.12 + dx, cy], s * 0.11, { fill: g.rgba("orange", 0.35), stroke: "orange", width: 1.5 });
+    return front + dx;
+  }
+  return { GASES, speed, vrms, atmosphere, noteName, midiOf, freqOf, greenwood, place, dB, pOf, P_REF, gas, stepGas, heat, PUSH, speaker };
+})();
+</script>
+
+<figure class="demo" id="hero" aria-label="A loudspeaker on the left pushes on a field of air parcels. Red bands of squeezed air and blue bands of stretched air travel to the right while each parcel only rocks back and forth. A plot below shows the pressure and the displacement along the air."></figure>
+<script>
+{
+  const tone = Sound.voice({ type: "sine", freq: 220, gain: 0.6 });
+  const SPAN = 4; // meters of air across the figure
+  demo("hero", {
+    aspect: w => (w < 560 ? 1.05 : 1.75),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "f", label: "Frequency", min: 110, max: 880, step: 1, value: 220, unit: " Hz", color: "orange" },
+      Sound.button(tone),
+    ],
+    caption: "A loudspeaker driving air. Red bands are squeezed air (higher pressure), blue bands stretched air; the orange parcels show that each bit of air only rocks in place while the pattern travels. Motion is slowed about 400 times; the drawing spans 4 m of air.",
+    status: (s, v) => `${v.f} Hz (${SND.noteName(v.f)}) · wavelength ${(343 / v.f).toFixed(2)} m`,
+    step(dt, s, v) { s.t += dt * (v.f / 400); },
+    draw(g, s, v) {
+      tone.set({ freq: v.f });
+      const narrow = g.w < 560, plotH = Math.round(g.h * 0.27), fh = g.h - plotH - 14, cy = fh / 2;
+      const size = Math.min(fh * 0.52, 90), sx = size * 0.75;
+      const ph = TAU * s.t, A = Math.min(9, size * 0.09);
+      const front0 = sx + size * 0.18, airW = g.w - front0 - 6, lamPx = ((343 / v.f) / SPAN) * airW, k = TAU / lamPx;
+      const disp = x => A * Math.cos(k * x - ph), pres = x => Math.sin(k * x - ph);
+      // Pressure shading and parcels.
+      g.clip([front0, 0, airW + 6, fh], () => {
+        for (let x = 0; x < airW + 6; x += 2) { const p = pres(x); g.rect(front0 + x, 0, 2.3, fh, { fill: g.rgba(p > 0 ? "red" : "blue", Math.abs(p) * 0.3) }); }
+        const sp = narrow ? 8 : 9, rng = Num.rng(5);
+        for (let y = sp / 2; y < fh; y += sp) for (let x = sp / 2; x < airW; x += sp) {
+          const x0 = x + (rng() - 0.5) * sp * 0.8, y0 = y + (rng() - 0.5) * sp * 0.8;
+          g.circle([front0 + x0 + disp(x0), y0], 1.45, { fill: "ink", alpha: 0.7 });
+        }
+        for (let m = 0; m < 3; m++) {
+          const x0 = lamPx * (0.35 + m * 1.05) + 10, y0 = fh * (0.25 + 0.25 * m);
+          if (x0 > airW - 8) break;
+          g.line([front0 + x0, y0 - 8], [front0 + x0, y0 + 8], { stroke: "muted", width: 1, dash: [2, 2] });
+          g.circle([front0 + x0 + disp(x0), y0], 4.5, { fill: "orange", stroke: "panel", width: 1.5 });
+        }
+      });
+      SND.speaker(g, sx, cy, size, A * Math.cos(-ph), { lit: g.lit("cone") });
+      // Wavelength bracket.
+      if (lamPx < airW - 20) {
+        const x1 = front0 + ((ph / k) % lamPx) + lamPx * 0.25, x2 = x1 + lamPx, yb = fh - 12;
+        if (x2 < front0 + airW) { g.dimension([x1, yb], [x2, yb], `one wavelength, ${(343 / v.f).toFixed(2)} m`, { offset: 0 }); }
+      }
+      // The plot below: pressure (red) and displacement (blue, dashed) along the air.
+      const pb = [front0, fh + 14, airW, plotH - 4], Y = val => pb[1] + pb[3] / 2 - (val * pb[3]) / 2.4;
+      g.line([pb[0], Y(0)], [pb[0] + pb[2], Y(0)], { stroke: "grid", width: 1 });
+      const pp = [], dd = [];
+      for (let x = 0; x <= airW; x += 2) { pp.push([pb[0] + x, Y(pres(x))]); dd.push([pb[0] + x, Y(disp(x) / A)]); }
+      g.path(dd, { stroke: "blue", width: 1.5, dash: [5, 4] });
+      g.path(pp, { stroke: "red", width: 2.25 });
+      g.text("pressure", [8, Y(0.75)], { size: 11.5, color: "red", align: "left" });
+      g.text("displacement", [8, Y(-0.75)], { size: 11.5, color: "blue", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>Two things are moving in that picture, and they are easy to confuse. The <span class="c-red">red</span> and <span class="c-blue">blue</span> bands race off to the right, one wavelength for every swing of the cone. The <span class="c-orange">orange</span> parcels of air go nowhere: each rocks forward and back about a fixed spot and ends where it started. The bands are the sound. The air only carries them, the way a crowd carries a stadium wave without anyone leaving their seat.</p>
+
+<p>This page builds up how that works, piece by piece. First what passes the push along and what sets its speed, then what pitch and loudness are in this picture, how sounds add up into music and voices, and finally how a few square centimeters of tissue in your head turn the bands back into the experience of hearing. Most figures make a sound when you press their play button; nothing plays until you do, and the volume is kept low.</p>
+
+<h2>A push that travels</h2>
+
+<p>Start with a simpler material than air: a row of beads joined by springs. Each bead stands for a slab of air, with mass, and each spring for the air's tendency to push back when squeezed. Press <b>Push</b> to shove the <span class="c-orange" data-part="piston">piston</span> in and back once, and keep an eye on the <span class="c-orange" data-part="bead">orange bead</span> in the middle:</p>
+
+<figure class="demo" id="chain" aria-label="A row of beads joined by springs with a piston at the left end. A push sends a squeeze along the row; a marked bead in the middle moves forward and back once as the squeeze passes."></figure>
+<script>
+{
+  const N = 22;
+  // Starts with a pulse already on its way, so the row is never idle.
+  const fresh = () => ({ x: new Array(N).fill(0), v: new Array(N).fill(0), t: 0, push: 0, trace: [] });
+  demo("chain", {
+    aspect: w => (w < 560 ? 1.15 : 2.1),
+    state: fresh,
+    controls: [
+      { label: "Push", type: "button", primary: true, action: s => { s.push = s.t; } },
+      { key: "k", label: "Stiffness", min: 0.25, max: 4, step: 0.05, value: 1, color: "red", format: k => `${k.toFixed(2)}×` },
+      { key: "m", label: "Mass", min: 0.25, max: 4, step: 0.05, value: 1, color: "blue", format: m => `${m.toFixed(2)}×` },
+    ],
+    presets: [{ label: "Stiff and light", set: { k: 4, m: 0.25 } }, { label: "Soft and heavy", set: { k: 0.25, m: 4 } }],
+    caption: "A bead-and-spring model of a column of air. The squeeze travels down the row at a speed set by the springs' stiffness and the beads' mass; each bead moves forward and back once and stops.",
+    status: (s, v) => `pulse speed ${Math.sqrt(v.k / v.m).toFixed(2)}× the starting speed`,
+    step(dt, s, v) {
+      const n = 24, h = (dt * 9) / n, w2 = v.k / v.m, T = 1.4;
+      for (let i = 0; i < n; i++) {
+        s.t += h;
+        const tau = s.t - s.push;
+        const x0 = tau > 0 && tau < T ? 0.9 * Math.pow(Math.sin((Math.PI * tau) / T), 2) : 0;
+        for (let j = 0; j < N; j++) {
+          const left = j === 0 ? x0 : s.x[j - 1];
+          // The last bead feels a damper that absorbs the pulse instead of bouncing it back.
+          const right = j === N - 1 ? s.x[j] : s.x[j + 1];
+          let a = w2 * (left - 2 * s.x[j] + right);
+          if (j === N - 1) a -= Math.sqrt(w2) * s.v[j];
+          s.v[j] += a * h;
+        }
+        for (let j = 0; j < N; j++) s.x[j] += s.v[j] * h;
+      }
+      s.trace.push([s.t, s.x[Math.floor(N / 2)]]);
+      if (s.trace.length > 240) s.trace.shift();
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, top = 16, rowY = narrow ? g.h * 0.34 : g.h * 0.38;
+      const left = 34, gap = (g.w - left - 18) / N, sc = gap * 0.9;
+      // The pulse's speed as an arrow above the row: longer for stiffer springs or lighter beads.
+      const c = Math.sqrt(v.k / v.m), aw = Math.min(g.w - 140, 70 * c);
+      g.arrow([left, top + 18], [left + aw, top + 18], { stroke: "red", width: 2.5 });
+      g.text(`pulse speed ${c.toFixed(2)}×`, [left + aw + 8, top + 18], { size: 12, color: "red", align: "left", baseline: "middle" });
+      const X = j => left + gap * (j + 0.5) + s.x[j] * sc;
+      const tau = s.t - s.push, x0 = tau > 0 && tau < 1.4 ? 0.9 * Math.pow(Math.sin((Math.PI * tau) / 1.4), 2) : 0;
+      const px = left - gap * 0.2 + x0 * sc;
+      // Springs, colored by squeeze.
+      for (let j = 0; j < N; j++) {
+        const a = j === 0 ? px : X(j - 1), b = X(j), strain = (b - a) / gap - 1;
+        const col = strain < -0.02 ? "red" : strain > 0.02 ? "blue" : "muted";
+        g.spring([a + 6, rowY], [b - 6, rowY], { coils: 3, radius: Math.min(6, gap * 0.2), lead: 2, style: "zigzag", stroke: col, width: 1.3 + Math.min(2, Math.abs(strain) * 8) });
+      }
+      g.rect(px - 14, rowY - 26, 12, 52, { fill: g.rgba("orange", g.lit("piston") ? 0.6 : 0.3), stroke: "orange", width: 2 });
+      for (let j = 0; j < N; j++) {
+        const mid = j === Math.floor(N / 2);
+        g.circle([X(j), rowY], mid ? 6.5 : 4.5, { fill: mid ? "orange" : "panel", stroke: mid ? "orange" : "ink", width: mid ? (g.lit("bead") ? 3 : 1.5) : 1.3 });
+      }
+      const mx = left + gap * (Math.floor(N / 2) + 0.5);
+      g.line([mx, rowY + 12], [mx, rowY + 22], { stroke: "orange", width: 1.5, dash: [2, 2] });
+      g.text("rest", [mx, rowY + 32], { size: 11.5, color: "muted" });
+
+      // A trace of the orange bead's position over time.
+      // A strip chart of the orange bead's position: up is forward.
+      const sx0 = left, sx1 = g.w - 18, sy0 = g.h * (narrow ? 0.6 : 0.62), sy1 = g.h - 22, base = sy0 + (sy1 - sy0) * 0.7;
+      const t1 = Math.max(26, s.t), t0 = t1 - 26, TX = t => sx0 + ((t - t0) / 26) * (sx1 - sx0), TY = x => base - x * (sy1 - sy0) * 0.6;
+      g.line([sx0, base], [sx1, base], { stroke: "muted", width: 1, dash: [3, 3] });
+      g.text("orange bead's position over time", [sx0, sy0 - 6], { size: 12, color: "muted", align: "left" });
+      g.text("rest", [sx1, base + 12], { size: 11, color: "muted", align: "right" });
+      const tr = s.trace.filter(([t]) => t >= t0).map(([t, x]) => [TX(t), TY(x)]);
+      if (tr.length > 1) g.path(tr, { stroke: "orange", width: 2.25 });
+    },
+  });
+}
+</script>
+
+<p>The squeeze, shown as <span class="c-red">red springs</span>, runs down the row at a steady speed, and behind it the springs relax. The orange bead lurches forward when the squeeze reaches it and settles back when the stretch behind follows; the trace below records that single wobble. Once the pulse has passed, every bead is back where it began.</p>
+
+<p>Now change the materials. With <button class="set" data-set="k=4 m=0.25">stiff springs and light beads</button>, push again: the pulse shoots down the row. With <button class="set" data-set="k=0.25 m=4">soft springs and heavy beads</button> it crawls. A bead can only start moving once its spring has been squeezed enough to overcome its inertia, so the speed depends on the ratio of the two:</p>
+
+<div class="tex">c = \sqrt{\frac{\red{\text{stiffness}}}{\blue{\text{mass per length}}}}</div>
+
+<p>For air the same formula holds with the air's resistance to squeezing, its <dfn data-def="How much pressure it takes to squeeze a material by a given fraction of its volume; for a gas squeezed quickly, the ratio of heat capacities times the pressure.">bulk modulus</dfn>, in place of the springs, and its density in place of the beads. But a row of beads hides the real question. Air has no springs. What pushes back when you squeeze it?</p>
+
+<h2>Molecules doing the pushing</h2>
+
+<p>Air is mostly empty space with molecules flying through it at the speed of a rifle bullet, about 500 m/s at room temperature, bouncing off each other several billion times a second. Here are a few hundred discs standing in for them, each moving at random. Press <b>Push now</b> to move the <span class="c-orange" data-part="piston">piston</span> in and out once, and watch the strip plot of how crowded each slice of the box is. The piston also pushes by itself every few seconds:</p>
+
+<figure class="demo" id="gas" aria-label="A box of moving discs with a piston at the left. After a push, a band of crowded discs moves across the box; a plot below shows the density along the box with a red bump traveling right. Three orange discs wander randomly and do not ride along with the bump."></figure>
+<script>
+{
+  const sigOf = tc => 0.45 * Math.sqrt((tc + 273.15) / 293.15);
+  demo("gas", {
+    aspect: w => (w < 560 ? 1 : 1.75),
+    state: () => { const G = SND.gas({ seed: 11, n: 620, sigma: sigOf(20) }); for (let i = 0; i < 40; i++) SND.stepGas(G, 1 / 40); G.push = G.t - 3.2; return { G, trail: [[], [], []] }; },
+    controls: [
+      { label: "Push now", type: "button", primary: true, action: s => { s.G.push = s.G.t; } },
+      { key: "tc", label: "Temperature", min: -60, max: 300, step: 1, value: 20, unit: " °C", color: "orange" },
+    ],
+    caption: "A two-dimensional gas of hard discs. The push is handed on by collisions, so a crowded band crosses the box faster than a typical disc wanders but no faster than the discs themselves move. The orange discs, with arrows showing their velocities, stay roughly where they were.",
+    change(key, s, v) { if (key === "tc") SND.heat(s.G, sigOf(v.tc)); },
+    status: (s, v) => `typical disc speed ${(sigOf(v.tc) * Math.SQRT2).toFixed(2)} box widths/s · ${(s.G.t - s.G.push).toFixed(1)} s since the push`,
+    step(dt, s) {
+      // A push every few seconds, so there is always a pulse to watch.
+      if (s.G.t - s.G.push > 3.6) s.G.push = s.G.t + 0.1;
+      SND.stepGas(s.G, Math.min(dt, 1 / 40));
+      s.G.mark.forEach((i, m) => { s.trail[m].push([s.G.x[i], s.G.y[i]]); if (s.trail[m].length > 90) s.trail[m].shift(); });
+    },
+    draw(g, s, v) {
+      const G = s.G, narrow = g.w < 560, pad = 8, bw = g.w - 2 * pad, bh = Math.min(g.h * 0.6, bw * G.H);
+      const bx = pad, by = 6, X = x => bx + x * bw, Y = y => by + y * (bh / G.H);
+      g.rect(bx, by, bw, bh, { stroke: "muted", width: 1.5 });
+      g.rect(bx, by, X(G.xp) - bx, bh, { fill: g.rgba("orange", g.lit("piston") ? 0.55 : 0.25), stroke: "orange", width: 2 });
+      const r = Math.max(1.6, G.rad * bw * 0.9);
+      for (let i = 0; i < G.N; i++) g.circle([X(G.x[i]), Y(G.y[i])], r, { fill: "ink", alpha: 0.55 });
+      s.trail.forEach(tr => { if (tr.length > 1) g.path(tr.map(([x, y]) => [X(x), Y(y)]), { stroke: "orange", width: 1.2, alpha: 0.6 }); });
+      G.mark.forEach(i => { const p = [X(G.x[i]), Y(G.y[i])]; g.arrow(p, [p[0] + G.vx[i] * bw * 0.1, p[1] + G.vy[i] * bw * 0.1], { stroke: "orange", width: 1.5, head: 6 }); g.circle(p, r + 2, { fill: "orange", stroke: "panel", width: 1 }); });
+      // Density along the box.
+      const pb = [bx, by + bh + 16, bw, g.h - bh - by - 22], bins = G.dens.length, span = G.W - G.x0;
+      const P = g.graph({ box: pb, x: [0, 1], y: [0.55, 1.75], axes: "frame", xTicks: false, yTicks: [1], yFormat: () => "average", xLabel: narrow ? "" : "position along the box", yLabel: "crowding", grid: false });
+      P.hline(1, { color: "muted" });
+      const pts = G.dens.map((d, b) => [G.x0 + ((b + 0.5) / bins) * span, Math.min(1.75, d)]);
+      P.series(pts, { color: "red", width: 2.25, fill: true, to: 1 });
+    },
+  });
+}
+</script>
+
+<p>A crowded band, a region where discs are packed a little more tightly, breaks away from the piston and crosses the box. The discs right in front of the piston get hit harder and rebound faster; they catch up with their neighbors and hit them a little harder; those hit the next layer. The push is handed forward one collision at a time, which is why the band moves at about the speed of the discs themselves, while each <span class="c-orange">orange disc</span> keeps wandering in its own random way and ends up nowhere in particular.</p>
+
+<p>That is what the springs in the bead model stood for. A gas pushes back when squeezed because squeezing it packs more molecules against each surface, so more of them bounce off it every second. Pressure is the rain of those impacts, and sound is a ripple in that rain.</p>
+
+<h2>What sets the speed</h2>
+
+<p>If the push is passed along by molecules hitting molecules, it cannot outrun them. Heat a gas and its molecules move faster, so the push should travel faster too. A light gas, whose molecules move faster at the same temperature, should carry sound faster than a heavy one. Drag the <span class="c-orange">temperature</span> <span class="scrub" data-key="tc"></span> and switch gases:</p>
+
+<figure class="demo" id="speed" aria-label="A graph of the speed of sound against temperature for air, helium, and carbon dioxide, with a marker on the chosen gas. Two bars below compare the speed of sound with the molecules' average speed."></figure>
+<script>
+{
+  const COLORS = { air: "blue", helium: "purple", co2: "green" };
+  demo("speed", {
+    aspect: w => (w < 560 ? 1.05 : 1.9),
+    controls: [
+      { key: "tc", label: "Temperature", min: -100, max: 300, step: 1, value: 20, unit: " °C", color: "orange", marks: [{ value: 0, label: "freezing" }, { value: 100, label: "boiling" }] },
+      { key: "gas", label: "Gas", type: "choice", options: [{ value: "air", label: "air" }, { value: "helium", label: "helium" }, { value: "co2", label: "CO₂" }], value: "air" },
+    ],
+    caption: "The speed of sound in three gases, computed from c = √(γRT/M). Sound always travels a little slower than the molecules' typical speed, and both grow with the square root of the absolute temperature.",
+    status: (s, v) => `${SND.GASES[v.gas].label} at ${v.tc} °C: sound ${SND.speed(v.tc, v.gas).toFixed(0)} m/s, molecules ${SND.vrms(v.tc, v.gas).toFixed(0)} m/s`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, ph = Math.round(g.h - 76);
+      const P = g.graph({ box: [0, 0, g.w, ph], x: [-100, 300], y: [0, 1400], axes: "frame", xLabel: "Temperature (°C)", yLabel: "Speed of sound (m/s)", xTicks: 100, yTicks: 200 });
+      for (const k of ["co2", "air", "helium"]) {
+        const on = k === v.gas;
+        P.fn(t => SND.speed(t, k), { color: COLORS[k], width: on ? 3 : 1.5, label: SND.GASES[k].label, labelAt: narrow ? 160 : 220, labelOffset: [0, k === "co2" ? 14 : -12] });
+      }
+      const c = SND.speed(v.tc, v.gas);
+      P.marker(v.tc, c, { color: COLORS[v.gas], drop: true, label: `${c.toFixed(0)} m/s`, pos: v.tc < -40 ? "ne" : "nw" });
+      // Sound against the molecules' own rms speed.
+      const vm = SND.vrms(v.tc, v.gas), top = ph + 26, bw = g.w - 130, scale = bw / 2200;
+      g.text("sound", [0, top + 7], { size: 12.5, color: COLORS[v.gas], align: "left", baseline: "middle" });
+      g.rect(80, top, c * scale, 14, { fill: COLORS[v.gas], r: 3 });
+      g.text(`${c.toFixed(0)} m/s`, [86 + c * scale, top + 7], { size: 12, align: "left", baseline: "middle", color: "muted" });
+      g.text("molecules", [0, top + 34], { size: 12.5, color: "ink", align: "left", baseline: "middle" });
+      g.rect(80, top + 27, vm * scale, 14, { fill: g.rgba("ink", 0.55), r: 3 });
+      g.text(`${vm.toFixed(0)} m/s`, [86 + vm * scale, top + 34], { size: 12, align: "left", baseline: "middle", color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Air at room temperature carries sound at <b>343 m/s</b>, about a kilometer in three seconds, which is why you can count the seconds between lightning and thunder and divide by three for the distance in kilometers. Its molecules average about 500 m/s, so sound runs at roughly two thirds of their speed in every gas, at every temperature. Helium, whose atoms are seven times lighter than an air molecule, carries sound almost three times faster; heavy carbon dioxide carries it slower.</p>
+
+<p>The formula behind the curves reads the same story in symbols:</p>
+
+<div class="tex">c = \sqrt{\frac{\gamma\, R\, \orange{T}}{M}}</div>
+
+<p>Here <span class="tex">\orange{T}</span> is the absolute temperature, <span class="tex">M</span> the molar mass, <span class="tex">R</span> the gas constant, and <span class="tex">\gamma</span> a number near 1.4 for air that accounts for the gas heating up a little as each squeeze passes <a class="cite" href="#ref-kinsler"></a>. Pressure appears nowhere. That should be surprising, since the squeezing force in our bead model was the pressure.</p>
+
+<div class="quiz">
+  <p>An airliner cruises at 11 km, where the air pressure is less than a quarter of what it is on the ground. How fast does sound travel up there?</p>
+  <div class="choices"><button>Faster: thin air is easier to push</button><button>Slower: there are fewer molecules to pass the push along</button><button data-correct>Slower, but only because the air is colder</button></div>
+  <p class="why">Thin air pushes back with less pressure, but it is lighter by exactly the same factor, so stiffness over density does not change. Only temperature is left, and at 11 km it is −56 °C.</p>
+</div>
+
+<p>Climb through the standard atmosphere and watch the three curves. Drag the <span class="c-orange" data-part="plane">altitude</span> <span class="scrub" data-key="h" data-figure="atmos"></span>:</p>
+
+<figure class="demo" id="atmos" aria-label="A column of atmosphere with an altitude marker, next to three graphs against altitude: pressure falling smoothly, temperature falling to 11 km and then constant, and the speed of sound following the temperature."></figure>
+<script>
+{
+  demo("atmos", {
+    aspect: w => (w < 560 ? 0.9 : 1.75),
+    controls: [{ key: "h", label: "Altitude", min: 0, max: 20, step: 0.1, value: 11, unit: " km", color: "orange", marks: [{ value: 11, label: "airliners" }] }],
+    presets: [{ label: "Sea level", set: { h: 0 } }, { label: "Everest", set: { h: 8.85 } }, { label: "Airliner", set: { h: 11 } }, { label: "Above the weather", set: { h: 18 } }],
+    caption: "The International Standard Atmosphere. Pressure keeps falling with height, but the speed of sound follows only the temperature: it drops to 295 m/s at 11 km and stays there in the cold, still layer above, even though the pressure keeps halving.",
+    status: (s, v) => { const a = SND.atmosphere(v.h); return `${v.h.toFixed(1)} km: ${(a.P / 100).toFixed(0)} hPa, ${a.tc.toFixed(1)} °C, sound ${a.c.toFixed(0)} m/s`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, colW = narrow ? 70 : 96, a = SND.atmosphere(v.h);
+      // The column of air, darker where it is denser.
+      const top = 10, bot = g.h - 34, Y = h => bot - (h / 20) * (bot - top);
+      for (let h = 0; h < 20; h += 0.25) { const d = SND.atmosphere(h).rho / 1.225; g.rect(8, Y(h + 0.25), colW, Y(h) - Y(h + 0.25) + 0.5, { fill: g.rgba("blue", 0.05 + 0.32 * d) }); }
+      g.rect(8, top, colW, bot - top, { stroke: "muted", width: 1 });
+      for (const h of [0, 5, 10, 15, 20]) g.text(`${h} km`, [colW + 14, Y(h)], { size: 11.5, color: "muted", align: "left", baseline: "middle" });
+      const py = Y(v.h);
+      g.line([8, py], [colW + 8, py], { stroke: "orange", width: 2 });
+      g.path([[colW * 0.5 - 12, py + 4], [colW * 0.5 + 14, py], [colW * 0.5 - 12, py - 4], [colW * 0.5 - 6, py]], { fill: "orange", close: true });
+      // Three graphs against altitude.
+      const x0 = colW + 60, gw = (g.w - x0 - 6) / 3, gh = bot - top;
+      const plots = [
+        { f: h => SND.atmosphere(h).P / 1000, x: [0, 105], label: "Pressure (kPa)", color: "blue", val: a.P / 1000 },
+        { f: h => SND.atmosphere(h).tc, x: [-70, 20], label: "Temperature (°C)", color: "orange", val: a.tc },
+        { f: h => SND.atmosphere(h).c, x: [280, 350], label: "Sound (m/s)", color: "red", val: a.c },
+      ];
+      plots.forEach((pl, i) => {
+        const P = g.graph({ box: [x0 + i * gw, top, gw - 8, gh + 24], x: pl.x, y: [0, 20], axes: "frame", xLabel: pl.label, yTicks: i === 0 ? 5 : false, yFormat: h => `${h}`, xTicks: { values: [pl.x[0], pl.x[1]] }, grid: false, labelSize: narrow ? 11 : 12 });
+        P.parametric(h => [pl.f(h), h], [0, 20], { color: pl.color, width: 2.25 });
+        P.hline(v.h, { color: "orange" });
+        P.marker(pl.val, v.h, { color: pl.color });
+      });
+    },
+  });
+}
+</script>
+
+<p>From the ground to 11 km the pressure falls to a fifth, the temperature falls by 71 degrees, and the speed of sound drops from 340 to 295 m/s, tracking the temperature. Above 11 km the temperature stops falling. The pressure keeps dropping, by half again at 16 km, yet <button class="set" data-set="h=18">the speed of sound stays flat</button>. That flat stretch is the clean experiment: pressure changes by a factor of three, the speed of sound by nothing.</p>
+
+<p>The reason is the one in the quiz. Thinner air pushes back more weakly when squeezed, but there is proportionally less of it to set moving, so the ratio of stiffness to density, and with it the speed, does not change. What the molecules carry the push with is their own speed, and that depends only on temperature.</p>
+
+<aside class="callout mistake"><p>Sound is not faster in a material because the material is denser. Density slows sound down and stiffness speeds it up. Water and steel carry sound quickly because they are vastly stiffer than air, not because they are heavier.</p></aside>
+
+<details class="deeper">
+  <summary>Why γ is in the formula <span class="hint">2 min</span></summary>
+  <p>Newton worked out the speed of sound in 1687 by treating air as a spring whose stiffness is its pressure. He got about 290 m/s and could not explain why measurements gave over 340. The gap is the factor <span class="tex">\sqrt{\gamma} \approx 1.18</span>, found by Laplace in 1816.</p>
+  <p>Each squeeze in a sound wave happens too fast for heat to leak away, so the compressed air warms slightly and pushes back harder than it would at constant temperature; each stretch cools it. A squeeze without heat exchange is called <dfn data-def="A change in a gas that is too fast for heat to flow in or out.">adiabatic</dfn>, and its stiffness is <span class="tex">\gamma P</span> instead of <span class="tex">P</span>, with <span class="tex">\gamma</span> = 1.4 for air (a gas of two-atom molecules) and 1.67 for helium (single atoms). Dividing by the density <span class="tex">\rho = PM/RT</span> gives the formula above, with the pressure cancelling.</p>
+</details>
+
+<h2>A wave of pressure</h2>
+
+<p>Back to a steady tone. In the first figure, the <span class="c-red">pressure</span> curve and the <span class="c-blue">displacement</span> curve were shifted against each other by a quarter of a wavelength. That shift is the most confusing thing about sound waves, so it is worth a figure of its own. Drag the <span class="c-purple" data-part="probe">probe</span> along the air and compare what the parcels are doing with the pressure there:</p>
+
+<figure class="demo" id="probe" aria-label="Air parcels in a sound wave with a draggable vertical probe. Below, the pressure and displacement curves with dots at the probe, and arrows showing which way the parcels around the probe are moving."></figure>
+<script>
+{
+  let box = null, at = { p: 0, d: 0 };
+  demo("probe", {
+    aspect: w => (w < 560 ? 0.95 : 1.8),
+    state: () => ({ t: 0, px: 0.42 }),
+    controls: [{ key: "speed", label: "Animation", min: 0, max: 1, step: 0.05, value: 0.35, format: x => (x === 0 ? "frozen" : `${x.toFixed(2)}×`) }],
+    caption: "A plane sound wave, slowed and magnified. Pressure is highest where the parcels on either side are moving toward each other, which is a quarter of a wavelength away from where they are pushed farthest.",
+    step(dt, s, v) { s.t += dt * v.speed; },
+    status: () => `at the probe: pressure ${at.p > 0.25 ? "above" : at.p < -0.25 ? "below" : "near"} normal, parcels pushed ${at.d > 0.25 ? "forward" : at.d < -0.25 ? "back" : "hardly at all"}`,
+    drag: {
+      hit: (p) => box && Math.abs(p[0] - (box[0] + 0)) >= 0 && p[1] > box[1] - 4,
+      move(p, s) { if (box) s.px = clamp((p[0] - box[0]) / box[2], 0.02, 0.98); },
+    },
+    draw(g, s, v) {
+      box = [0, 0, g.w, g.h];
+      const lam = g.w / 1.6;
+      const R = g.airWave([0, 0, g.w, g.h], { t: s.t, wavelength: lam, speed: lam * 0.5, amplitude: lam * 0.08, marks: 0, spacing: g.w < 560 ? 8 : 9 });
+      const x = s.px * g.w, fh = R.plot.box[1] - 12;
+      g.line([x, 0], [x, g.h], { stroke: "purple", width: g.lit("probe") ? 3 : 2, dash: [6, 4] });
+      g.handle([x, fh * 0.12], { color: "purple" });
+      // Arrows for the parcels just left and right of the probe, scaled by their velocity.
+      const W = R.field, vl = W.velocity(x - lam * 0.06, s.t), vr = W.velocity(x + lam * 0.06, s.t);
+      at = { p: R.pressure([x, fh / 2]), d: R.displacement([x, fh / 2]) };
+      const ay = fh * 0.55, sc = lam * 0.09;
+      g.arrow([x - 14, ay], [x - 14 + vl * sc, ay], { stroke: "ink", width: 2.5 });
+      g.arrow([x + 14, ay + 14], [x + 14 + vr * sc, ay + 14], { stroke: "ink", width: 2.5 });
+      const pl = R.plot;
+      g.circle([x, pl.y(R.pressure([x, fh / 2]))], 5, { fill: "red" });
+      g.circle([x, pl.y(R.displacement([x, fh / 2]))], 5, { fill: "blue" });
+    },
+  });
+}
+</script>
+
+<p>Put the probe where the <button class="set" data-set="speed=0">frozen</button> pressure curve peaks. The parcels on the left of the probe are moving right and the parcels on its right are moving left: they are closing in, so the air between them is being squeezed. Where the displacement is largest the parcels on both sides are pushed the same way by the same amount, so nothing is squeezed and the pressure is normal. Pressure tracks how quickly displacement changes from one parcel to the next, not how big the displacement is.</p>
+
+<p>Because the air moves along the same line the wave travels, this is called a <dfn data-def="A wave in which the medium moves back and forth along the direction the wave travels, like sound in air.">longitudinal wave</dfn>, unlike a wave on a rope, where the rope moves sideways. A microphone, and your eardrum, respond to the pressure, so from now on the <span class="c-red">red pressure curve</span> is the one we will plot.</p>
+
+<h2>Pitch is how often</h2>
+
+<p>The loudspeaker's cone moved back and forth 220 times a second, and the air delivered 220 squeezes a second to anything in its path. That rate is the <dfn data-def="How many times per second something repeats, measured in hertz (Hz).">frequency</dfn>, and our ears hear it as pitch. Because every squeeze travels at the same 343 m/s, a higher frequency packs them closer together in space. Sweep the <span class="c-orange">frequency</span> <span class="scrub" data-key="lf" data-figure="pitch"></span> from the lowest note of a pipe organ to the edge of human hearing, and press play to hear it:</p>
+
+<figure class="demo" id="pitch" aria-label="Ten milliseconds of a sine wave above a ruler showing one wavelength of the same sound in air against a person, a hand, and a coin for scale."></figure>
+<script>
+{
+  const tone = Sound.voice({ type: "sine", freq: 440, gain: 0.45 });
+  demo("pitch", {
+    aspect: w => (w < 560 ? 1 : 1.9),
+    controls: [
+      // The slider runs over log10 of the frequency, so each octave gets the same length.
+      { key: "lf", label: "Frequency", min: 1.301, max: 4.204, step: 0.001, value: 2.6435, color: "orange", format: x => { const f = Math.pow(10, x); return f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${f.toFixed(0)} Hz`; },
+        marks: [{ value: 2.6435, label: "A4" }, { value: 3.6218, label: "top of a piano" }] },
+      Sound.button(tone),
+    ],
+    presets: [{ label: "Organ pedal", set: { lf: 1.5145 } }, { label: "A4", set: { lf: 2.6435 } }, { label: "Whistle", set: { lf: 3.301 } }, { label: "Mosquito", set: { lf: 3.9031 } }],
+    caption: "A tone's pressure over time (top) and the length of one of its waves in air (bottom), with a 1.7 m person, a 10 cm hand, and a 2 cm coin for scale. Wavelength is 343 m/s divided by the frequency.",
+    status: (s, v) => { const f = Math.pow(10, v.lf), lam = 343 / f; return `${f.toFixed(0)} Hz (${SND.noteName(f)}) · period ${(1000 / f).toFixed(2)} ms · wavelength ${lam >= 1 ? lam.toFixed(2) + " m" : (lam * 100).toFixed(1) + " cm"}`; },
+    draw(g, s, vv) {
+      const v = { ...vv, f: Math.pow(10, vv.lf) };
+      tone.set({ freq: v.f });
+      const narrow = g.w < 560, top = g.h * 0.46;
+      const P = g.graph({ box: [0, 0, g.w, top], x: [0, 10], y: [-1.25, 1.25], axes: "frame", xLabel: "Time (ms)", yTicks: false, yLabel: "pressure", grid: false });
+      const n = Math.max(400, Math.min(4000, Math.round(v.f * 0.01 * 24)));
+      const pts = []; for (let i = 0; i <= n; i++) { const tm = (i / n) * 10; pts.push([tm, Math.sin(TAU * v.f * tm / 1000)]); }
+      P.series(pts, { color: "red", width: v.f > 3000 ? 1 : 2 });
+      // One wavelength on a log ruler from 1 cm to 20 m, with things for scale.
+      const ry = top + (g.h - top) * 0.62, x0 = 10, x1 = g.w - 10, L = m => x0 + ((Math.log10(m) + 2) / (Math.log10(20) + 2)) * (x1 - x0);
+      g.line([x0, ry], [x1, ry], { stroke: "muted", width: 1.5 });
+      for (const [m, lab] of [[0.01, "1 cm"], [0.1, "10 cm"], [1, "1 m"], [10, "10 m"]]) { g.line([L(m), ry - 5], [L(m), ry + 5], { stroke: "muted", width: 1 }); g.text(lab, [L(m), ry + 17], { size: 11.5, color: "muted" }); }
+      for (const [m, lab] of [[0.02, "coin"], [0.1, "hand"], [1.7, "person"]]) { g.circle([L(m), ry], 3, { fill: "ink" }); if (!narrow || m !== 0.1) g.text(lab, [L(m), ry - 13], { size: 11.5, color: "ink" }); }
+      const lam = 343 / v.f;
+      g.path([[x0, ry - 3], [L(Math.min(20, lam)), ry - 3], [L(Math.min(20, lam)), ry + 3], [x0, ry + 3]], { fill: "orange", alpha: 0.85, close: true });
+      g.text(`one wavelength: ${lam >= 1 ? lam.toFixed(2) + " m" : (lam * 100).toFixed(1) + " cm"}`, [L(Math.min(20, lam)), ry - 30], { size: 13, color: "orange", weight: 600, align: lam > 3 ? "right" : "left" });
+    },
+  });
+}
+</script>
+
+<p>At 440 Hz, the A above middle C, the squeezes arrive every 2.3 ms and sit 78 cm apart in the air. The lowest organ pipes make waves over 10 m long, longer than most rooms; the highest sounds a young adult can hear, around 17 000 Hz, make waves 2 cm long, shorter than a fingertip. That thousandfold range in size is why low notes bend around corners and through walls while high notes cast sound shadows: an obstacle only blocks a wave that is small compared with the obstacle.</p>
+
+<p>Sweeping the slider also shows something about the ear. The step from 110 to 220 Hz and the step from 1760 to 3520 Hz sound like the same jump in pitch, although one is 110 Hz and the other sixteen times larger. We hear ratios of frequency, not differences. Play two notes on a keyboard and compare:</p>
+
+<figure class="demo" id="keys" aria-label="Four octaves of a piano keyboard over a frequency axis. Pressing a key plays it and marks its frequency; matching C keys line up at doubling frequencies."></figure>
+<script>
+{
+  let geo = null;
+  const white = [0, 2, 4, 5, 7, 9, 11];
+  const play = m => Sound.play({ type: "triangle", freq: SND.freqOf(m), gain: 0.55, env: { a: 0.01, d: 0.5, s: 0.25, r: 0.25 } }, { duration: 0.9 });
+  demo("keys", {
+    aspect: w => (w < 560 ? 1.2 : 2.6),
+    state: () => ({ last: 60, prev: 48 }),
+    controls: [Sound.button((s) => play(s.last), { label: "Play the marked key" })],
+    caption: "Four octaves from C2 to C6. Each octave doubles the frequency, so equal steps along the keyboard are equal ratios: a key's frequency is 2^(1/12), about 1.059, times its neighbor's.",
+    status: s => `${SND.noteName(SND.freqOf(s.last))}: ${SND.freqOf(s.last).toFixed(1)} Hz · ${SND.noteName(SND.freqOf(s.prev))}: ${SND.freqOf(s.prev).toFixed(1)} Hz · ratio ${(SND.freqOf(s.last) / SND.freqOf(s.prev)).toFixed(3)}`,
+    drag: {
+      hit: p => !!(geo && geo.keyAt(p)),
+      start(p, s) { const m = geo.keyAt(p); if (m != null) { s.prev = s.last; s.last = m; play(m); } },
+    },
+    draw(g, s, v) {
+      const lo = 36, hi = 84, nW = 29, kw = (g.w - 4) / nW, kh = Math.min(g.h * 0.5, kw * 5.2), x0 = 2, y0 = 4;
+      const whites = [], blacks = [];
+      let wi = 0;
+      for (let m = lo; m <= hi; m++) {
+        const pc = m % 12;
+        if (white.includes(pc)) { whites.push({ m, x: x0 + wi * kw }); wi++; }
+        else blacks.push({ m, x: x0 + wi * kw - kw * 0.3 });
+      }
+      for (const k of whites) { const on = k.m === s.last || k.m === s.prev; g.rect(k.x, y0, kw - 1, kh, { fill: k.m === s.last ? g.rgba("orange", 0.5) : k.m === s.prev ? g.rgba("purple", 0.35) : "panel", stroke: "ink", width: 1, r: 2 }); if (k.m % 12 === 0) g.text(`C${k.m / 12 - 1}`, [k.x + kw / 2, y0 + kh - 10], { size: 10.5, color: "muted" }); void on; }
+      for (const k of blacks) g.rect(k.x, y0, kw * 0.6, kh * 0.6, { fill: k.m === s.last ? "orange" : k.m === s.prev ? "purple" : "ink", r: 2 });
+      geo = { keyAt: p => {
+        if (p[1] < y0 || p[1] > y0 + kh) return null;
+        if (p[1] < y0 + kh * 0.6) for (const k of blacks) if (p[0] >= k.x && p[0] <= k.x + kw * 0.6) return k.m;
+        for (const k of whites) if (p[0] >= k.x && p[0] < k.x + kw) return k.m;
+        return null;
+      } };
+      // A frequency axis below: linear, so octaves get wider and wider.
+      const ay = y0 + kh + 44, X = f => x0 + ((f - 0) / 1100) * (g.w - 8);
+      g.line([x0, ay], [g.w - 4, ay], { stroke: "muted", width: 1.5 });
+      for (const f of [0, 250, 500, 750, 1000]) { g.line([X(f), ay - 4], [X(f), ay + 4], { stroke: "muted", width: 1 }); g.text(`${f} Hz`, [X(f), ay + 16], { size: 11, color: "muted" }); }
+      for (let o = 2; o <= 6; o++) { const f = SND.freqOf(12 * (o + 1)); g.line([X(f), ay - 12], [X(f), ay], { stroke: "muted", width: 1 }); g.text(`C${o}`, [X(f), ay - 18], { size: 10.5, color: "muted" }); }
+      for (const [m, col] of [[s.prev, "purple"], [s.last, "orange"]]) { const f = SND.freqOf(m); g.circle([X(Math.min(1100, f)), ay], 6, { fill: col }); }
+      g.text("on a linear axis each octave is twice as wide as the one before", [x0, ay + 36], { size: 11.5, color: "muted", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>Every C on the keyboard has exactly twice the frequency of the C below it: C3 is 130.8 Hz, C4 261.6 Hz, C5 523.3 Hz. Two notes an <dfn data-def="A doubling of frequency; notes an octave apart share a name.">octave</dfn> apart sound like the same note, higher. Between the Cs, the twelve keys of an octave split the doubling into twelve equal ratios of about 1.059 each. On the frequency axis under the keys, those equal musical steps get wider and wider in hertz; to the ear they are all the same size. The ear works in ratios, and it will again.</p>
+
+<h2>Loudness is how hard</h2>
+
+<p>Frequency is how often the air is squeezed. How hard it is squeezed, the size of the pressure swing, is the <dfn data-def="How far the pressure rises above and falls below normal as a sound passes, in pascals.">amplitude</dfn>, and we hear it as loudness. The numbers here are startling. Normal air pressure is about 101 000 pascals. Drag the <span class="c-orange">sound level</span> <span class="scrub" data-key="L" data-figure="tiny"></span> and see how much a sound changes it, and how far it moves the air:</p>
+
+<figure class="demo" id="tiny" aria-label="Two logarithmic rulers. The top one shows pressure from a hundred-thousandth of a pascal to atmospheric pressure, with the sound's pressure swing marked. The bottom one shows how far air parcels move, from a trillionth of a meter to a millimeter, with an atom, a virus, and a hair for scale."></figure>
+<script>
+{
+  demo("tiny", {
+    aspect: w => (w < 560 ? 1.1 : 2.4),
+    controls: [{ key: "L", label: "Sound level", min: 0, max: 140, step: 1, value: 60, unit: " dB", color: "orange", marks: [{ value: 0, label: "faintest" }, { value: 60, label: "talking" }, { value: 120, label: "pain" }] }],
+    presets: [{ label: "Faintest", set: { L: 0 } }, { label: "Conversation", set: { L: 60 } }, { label: "Rock concert", set: { L: 110 } }, { label: "Jet at 30 m", set: { L: 140 } }],
+    caption: "The pressure swing of a sound (top) and how far it moves air parcels back and forth at 1 kHz (bottom), on logarithmic rulers where each tick is ten times the last. Even painfully loud sound changes air pressure by less than a tenth of a percent.",
+    status: (s, v) => {
+      const p = SND.pOf(v.L), x = p / (1.2 * 343 * TAU * 1000);
+      const fp = p < 1e-3 ? `${(p * 1e6).toFixed(0)} µPa` : p < 1 ? `${(p * 1e3).toFixed(1)} mPa` : `${p.toFixed(1)} Pa`;
+      const fx = x < 1e-9 ? `${(x * 1e12).toFixed(1)} pm` : x < 1e-6 ? `${(x * 1e9).toFixed(1)} nm` : `${(x * 1e6).toFixed(2)} µm`;
+      return `${v.L} dB: pressure swing ${fp} · air moves ±${fx}`;
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, x0 = 14, x1 = g.w - 14;
+      const ruler = (y, lo, hi, marks, value, title, fmt) => {
+        const X = q => x0 + ((Math.log10(q) - lo) / (hi - lo)) * (x1 - x0);
+        g.text(title, [x0, y - 34], { size: 13, weight: 600, color: "ink", align: "left" });
+        g.line([x0, y], [x1, y], { stroke: "muted", width: 1.5 });
+        for (let e = lo; e <= hi; e++) { g.line([X(10 ** e), y - 4], [X(10 ** e), y + 4], { stroke: "muted", width: 1 }); if ((e - lo) % (narrow ? 3 : 2) === 0) g.text(fmt(e), [X(10 ** e), y + 16], { size: 10.5, color: "muted" }); }
+        const items = marks.map(([q, lab]) => ({ at: [X(q), y], text: lab, color: "ink", prefer: [0, -1] }));
+        const xv = X(value);
+        g.line([xv, y - 12], [xv, y + 9], { stroke: "orange", width: 3 });
+        for (const [q] of marks) g.circle([X(q), y], 3, { fill: "ink" });
+        g.labels(items, { size: 11.5 });
+      };
+      const p = SND.pOf(v.L), disp = p / (1.2 * 343 * TAU * 1000);
+      ruler(g.h * 0.32, -5, 5, [[2e-5, "faintest sound"], [101325, "the atmosphere"], [63, "pain"]], p, "Pressure swing (pascals)", e => `10${Num.sup(String(e))}`);
+      ruler(g.h * 0.8, -12, -3, [[1e-10, "an atom"], [1e-7, "a virus"], [7e-5, "a hair's width"]], disp, "How far the air moves at 1 kHz (meters)", e => `10${Num.sup(String(e))}`);
+    },
+  });
+}
+</script>
+
+<p>The faintest sound a young ear can detect at 1 kHz swings the pressure by about <b>20 micropascals</b>, a five-billionth of an atmosphere, and moves the air back and forth by about ten trillionths of a meter, a tenth of the width of an atom. At the threshold of pain the swing is about 60 pascals, still less than a tenth of a percent of the air's pressure. Between the two lies a factor of three million in pressure, and the ear handles all of it.</p>
+
+<p>Numbers that span six orders of magnitude are awkward, so sound levels are quoted in <dfn data-def="A logarithmic unit: every 20 dB is ten times the pressure swing; 0 dB SPL is 20 micropascals.">decibels</dfn><span class="sidenote">Strictly, decibels of sound pressure level, dB SPL. A decibel is only a ratio, so every decibel scale names its reference; this one is 20 µPa.</span>: twenty times the base-ten logarithm of the pressure swing over 20 µPa. Every 20 dB is ten times the pressure; every 6 dB is roughly double. The scale happens to match hearing well, because the ear is logarithmic too. Compare the ladder of everyday sounds on a decibel scale with the same sounds on a plain pressure scale, and listen to a tone stepping down in 10 dB stairs:</p>
+
+<figure class="demo" id="ladder" aria-label="Everyday sounds placed on a scale: either decibels, where they spread evenly from a whisper to a jet engine, or plain pressure, where everything quieter than a rock concert piles up at zero."></figure>
+<script>
+{
+  const SOUNDS = [[0, "threshold of hearing"], [20, "rustling leaves"], [30, "whisper"], [45, "quiet office"], [60, "conversation at 1 m"], [70, "vacuum cleaner"], [85, "busy traffic"], [100, "motorbike"], [110, "rock concert"], [120, "thunderclap"], [130, "threshold of pain"], [140, "jet engine at 30 m"]];
+  const stairs = () => Sound.play(t => { const step = Math.min(3, Math.floor(t / 0.75)), gap = (t % 0.75) > 0.6 ? 0 : 1; return gap * Math.pow(10, -step / 2) * Math.sin(TAU * 1000 * t); }, { duration: 3, gain: 0.9 });
+  demo("ladder", {
+    aspect: w => (w < 560 ? 0.85 : 1.6),
+    controls: [
+      { key: "lin", label: "Scale", type: "choice", options: [{ value: 0, label: "decibels" }, { value: 1, label: "pressure" }], value: 0, color: "orange" },
+      Sound.button(() => stairs(), { label: "Play four 10 dB steps" }),
+    ],
+    caption: "Everyday sound levels, from published typical values. On a decibel scale they spread out evenly; on a plain pressure scale everything quieter than a rock concert crowds against zero. Each 10 dB step in the tone sounds about half as loud as the one before.",
+    status: (s, v) => (v.lin ? "plain pressure: 0 to 200 Pa" : "decibels: each 20 dB is ten times the pressure"),
+    draw(g, s, v) {
+      const narrow = g.w < 560, x0 = narrow ? 140 : 210, x1 = g.w - (narrow ? 44 : 52), y0 = 10, rowH = (g.h - 34) / SOUNDS.length;
+      const X = L => (v.lin ? x0 + (SND.pOf(L) / 200) * (x1 - x0) : x0 + (L / 140) * (x1 - x0));
+      SOUNDS.forEach(([L, lab], i) => {
+        const y = y0 + (i + 0.5) * rowH, x = Math.min(x1, X(L));
+        g.text(lab, [x0 - 10, y], { size: narrow ? 11 : 12.5, color: "ink", align: "right", baseline: "middle" });
+        g.rect(x0, y - rowH * 0.3, Math.max(1.5, x - x0), rowH * 0.6, { fill: g.rgba("orange", 0.25 + 0.6 * (L / 140)), r: 2 });
+        if (!v.lin || L >= 110) g.text(v.lin ? `${SND.pOf(L).toFixed(0)} Pa` : `${L} dB`, [x + 6, y], { size: 11, color: "muted", align: "left", baseline: "middle" });
+      });
+      const ay = g.h - 14;
+      g.line([x0, ay - 8], [x1, ay - 8], { stroke: "muted", width: 1 });
+      const ticks = v.lin ? [0, 50, 100, 150, 200] : [0, 20, 40, 60, 80, 100, 120, 140];
+      for (const t of ticks) { const x = v.lin ? x0 + (t / 200) * (x1 - x0) : x0 + (t / 140) * (x1 - x0); g.text(v.lin ? `${t} Pa` : `${t}`, [x, ay + 2], { size: 10.5, color: "muted" }); }
+    },
+  });
+}
+</script>
+
+<p>On the <button class="set" data-set="lin=1">pressure scale</button> a whisper, a conversation, and a vacuum cleaner are all indistinguishable from silence; only the loudest sounds register. Yet the ear tells a whisper from a conversation without effort. Experiments that asked listeners to judge "twice as loud" found that a sound must rise by about 10 dB, three times the pressure, to be heard as twice as loud <a class="cite" href="#ref-stevens"></a>. The stairs in the tone drop by 10 dB each; most people hear each step as roughly halving the loudness.</p>
+
+<div class="quiz">
+  <p>One loudspeaker plays a noise at 80 dB. A second, identical speaker playing a different noise is switched on beside it. What does a sound meter read?</p>
+  <div class="choices"><button>160 dB</button><button>86 dB, double the pressure</button><button data-correct>83 dB</button></div>
+  <p class="why">Two unrelated sounds add their power, not their pressure. Doubling the power is 3 dB. To sound twice as loud you would need about ten speakers.</p>
+</div>
+
+<p>Distance is the other thing that makes sounds quieter. A small source sends its sound out in every direction, so the same energy spreads over a growing sphere. Drag the <span class="c-purple" data-part="listener">listener</span> away from the source:</p>
+
+<figure class="demo" id="spread" aria-label="Seen from above, circular wavefronts spread from a small source. A draggable listener reads the sound level, and a graph below shows the level falling 6 dB for every doubling of distance."></figure>
+<script>
+{
+  let map = null;
+  demo("spread", {
+    aspect: w => (w < 560 ? 0.95 : 1.8),
+    state: () => ({ t: 0, r: 2 }),
+    caption: "Sound spreading from a small source in open air. The same energy covers a sphere whose area grows with the square of the distance, so the intensity falls as 1/r² and the level drops 6 dB for each doubling. The source makes 94 dB at 1 m; the wavefronts are slowed and spaced for clarity.",
+    status: s => `${s.r.toFixed(1)} m from the source: ${(94 - 20 * Math.log10(s.r)).toFixed(1)} dB, ${(1 / (s.r * s.r) * 100).toFixed(s.r > 3 ? 1 : 0)}% of the intensity at 1 m`,
+    step(dt, s) { s.t += dt; },
+    drag: {
+      hit: (p, s) => map && Math.hypot(p[0] - map.X(s.r), p[1] - map.cy) < 26,
+      move(p, s) { s.r = clamp(map.inv(p[0]), 0.5, 16); },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, fh = g.h * 0.58, cx = 26, cy = fh / 2, scale = (g.w - cx - 20) / 16;
+      const X = r => cx + r * scale;
+      map = { X, cy, inv: x => (x - cx) / scale };
+      g.clip([0, 0, g.w, fh], () => {
+        for (let k = 0; k < 12; k++) {
+          const r = ((s.t * 0.9 + k * 1.4) % 16.8);
+          g.circle([cx, cy], r * scale, { stroke: "red", width: 2.2, alpha: Math.max(0, 0.75 - (0.55 * r) / 16) });
+        }
+        // A cone of the same energy: twice the distance, four times the area (here, twice the arc).
+        const a = 0.28, r1 = s.r, r2 = s.r * 2;
+        for (const [r, lab] of [[r1, ""], [r2, "2×"]]) if (r < 16.5) g.path(Array.from({ length: 13 }, (_, i) => { const th = -a + (2 * a * i) / 12; return [cx + r * scale * Math.cos(th), cy + r * scale * Math.sin(th)]; }), { stroke: "purple", width: 3, alpha: lab ? 0.45 : 0.9 });
+      });
+      g.circle([cx, cy], 7, { fill: "ink" });
+      g.text("source", [cx + 10, cy - 14], { size: 11.5, color: "muted", align: "left" });
+      g.circle([X(s.r), cy], g.lit("listener") ? 9 : 7, { fill: "purple", stroke: "panel", width: 1.5 });
+      g.handle([X(s.r), cy], { color: "purple" });
+      const P = g.graph({ box: [0, fh + 10, g.w, g.h - fh - 10], x: [0, 16], y: [60, 100], axes: "frame", xLabel: "Distance (m)", yLabel: "Level (dB)", xTicks: 2, yTicks: 10 });
+      P.fn(r => 94 - 20 * Math.log10(r), { color: "purple", domain: [0.5, 16] });
+      for (const r of [1, 2, 4, 8, 16]) P.marker(r, 94 - 20 * Math.log10(r), { color: "muted" });
+      P.marker(s.r, 94 - 20 * Math.log10(s.r), { color: "purple", drop: true });
+    },
+  });
+}
+</script>
+
+<p>Each time the distance doubles, the same energy covers four times the area, so the <dfn data-def="The power a sound carries through each square meter, in watts per square meter.">intensity</dfn> drops to a quarter and the level by 6 dB: from 1 m to 2 m to 4 m to 8 m the meter reads 94, 88, 82, 76 dB. That is the inverse square law. Indoors, walls send the sound back and the law fails after a few meters. Outdoors it holds until the air itself begins to absorb the sound, which it does far more for high frequencies than low: distant thunder is a rumble because its crackle has been filtered out on the way.</p>
+
+<h2>Sounds add</h2>
+
+<p>When two sounds reach the same spot, the air there gets two sets of pushes at once and simply adds them. The pressure at each instant is the sum of the two pressures. That sounds trivial, but it has striking consequences. Shift the <span class="c-purple">second wave</span> against the <span class="c-blue">first</span> with the phase <span class="scrub" data-key="ph" data-figure="sum"></span>, and listen to the <b>sum</b>:</p>
+
+<figure class="demo" id="sum" aria-label="Two sine waves of the same frequency, one blue and one purple, and their sum in black. A phase control slides the purple wave; at half a cycle the two cancel and the sum is flat."></figure>
+<script>
+{
+  const F = 220;
+  demo("sum", {
+    aspect: w => (w < 560 ? 1 : 2),
+    controls: [
+      { key: "ph", label: "Phase of the second wave", type: "knob", min: 0, max: 360, step: 1, value: 60, unit: "°", wrap: true, color: "purple" },
+      { key: "b", label: "Its strength", min: 0, max: 1, step: 0.01, value: 1, color: "purple" },
+      Sound.button((s, v) => Sound.play(t => 0.5 * (Math.sin(TAU * F * t) + v.b * Math.sin(TAU * F * t + (v.ph * Math.PI) / 180)), { duration: 1.6 }), { label: "Play the sum" }),
+    ],
+    presets: [{ label: "In step", set: { ph: 0, b: 1 } }, { label: "Opposite", set: { ph: 180, b: 1 } }, { label: "Almost opposite", set: { ph: 180, b: 0.8 } }],
+    caption: "Two tones of the same frequency and their sum. In step they double; half a cycle apart and equally strong they cancel to silence. The sound played is exactly the black curve.",
+    status: (s, v) => { const ph = (v.ph * Math.PI) / 180, A = Math.sqrt(1 + v.b * v.b + 2 * v.b * Math.cos(ph)); return `sum's amplitude ${A.toFixed(2)}× one wave (${A < 0.01 ? "silence" : (20 * Math.log10(A)).toFixed(1) + " dB"})`; },
+    draw(g, s, v) {
+      const ph = (v.ph * Math.PI) / 180;
+      const P = g.graph({ x: [0, 12], y: [-2.2, 2.2], axes: "frame", xLabel: "Time (ms)", yTicks: false, yLabel: "pressure", grid: false });
+      P.fn(t => Math.sin(TAU * F * t / 1000), { color: "blue", width: 1.75, dash: [6, 4] });
+      P.fn(t => v.b * Math.sin(TAU * F * t / 1000 + ph), { color: "purple", width: 1.75, dash: [6, 4] });
+      P.fn(t => Math.sin(TAU * F * t / 1000) + v.b * Math.sin(TAU * F * t / 1000 + ph), { color: "ink", width: 3, label: "sum", labelAt: 11 });
+    },
+  });
+}
+</script>
+
+<p>In step, the waves reinforce and the sum is twice as tall. At <button class="set" data-set="ph=180 b=1">half a cycle apart</button> each squeeze of one wave lands on a stretch of the other, and the air does not move at all: two sounds make silence. This is <dfn data-def="Two waves adding so that they reinforce (in step) or cancel (out of step).">interference</dfn>, and noise-cancelling headphones run on it. A microphone outside hears the noise and the speaker inside plays it flipped upside down, so what reaches the eardrum is nearly flat. It works best for steady low drones like an engine's, whose waves are long and predictable.</p>
+
+<p>Two tones that are close in pitch but not equal are more interesting, because their phase difference drifts. Set the second tone a few hertz away from the first, 440 Hz, and listen:</p>
+
+<figure class="demo" id="beats" aria-label="One second of two tones added together. The sum swells and fades a few times a second; a dashed envelope traces the swelling. A slider sets the second tone's frequency."></figure>
+<script>
+{
+  const SR = 8000, a = Sound.voice({ freq: 440, gain: 0.5 }), b = Sound.voice({ freq: 444, gain: 0.5 });
+  let key = "", wave = null;
+  demo("beats", {
+    aspect: w => (w < 560 ? 1.1 : 2.2),
+    controls: [
+      { key: "f2", label: "Second tone", min: 440, max: 470, step: 0.5, value: 444, unit: " Hz", color: "purple" },
+      Sound.button([a, b]),
+    ],
+    presets: [{ label: "Unison", set: { f2: 440 } }, { label: "1 Hz apart", set: { f2: 441 } }, { label: "4 Hz apart", set: { f2: 444 } }, { label: "15 Hz apart", set: { f2: 455 } }],
+    caption: "Two tones a little apart in frequency drift in and out of step, so their sum swells and fades: beats. The number of beats per second is the difference of the two frequencies.",
+    status: (s, v) => (Math.abs(v.f2 - 440) < 0.01 ? "in unison: no beats" : `${Math.abs(v.f2 - 440).toFixed(1)} beats per second`),
+    draw(g, s, v) {
+      b.set({ freq: v.f2 });
+      const k = v.f2.toFixed(2);
+      if (k !== key) { key = k; wave = Sound.fromFunction(t => 0.5 * Math.sin(TAU * 440 * t) + 0.5 * Math.sin(TAU * v.f2 * t), { duration: 1, sampleRate: SR }); }
+      const P = g.graph({ x: [0, 1], y: [-1.15, 1.15], axes: "frame", xLabel: "Time (s)", yTicks: false, yLabel: "pressure", grid: false });
+      g.waveform(wave, P.box, { range: [-1.15, 1.15], color: "ink", rms: false });
+      const df = v.f2 - 440;
+      P.fn(t => Math.abs(Math.cos(Math.PI * df * t)), { color: "purple", width: 1.5, dash: [5, 4] });
+      P.fn(t => -Math.abs(Math.cos(Math.PI * df * t)), { color: "purple", width: 1.5, dash: [5, 4] });
+    },
+  });
+}
+</script>
+
+<p>The two tones slide into step, reinforce, slide out of step, cancel, and come back, so the sum throbs. These swells are <dfn data-def="The slow throbbing heard when two tones of nearly the same frequency are added.">beats</dfn>, and they come at the difference of the two frequencies: 444 and 440 Hz beat four times a second. Piano tuners and guitarists listen for them: when two strings that should match beat slowly, they are almost in tune, and the beating stops when they are exactly equal. Push the difference past about <button class="set" data-set="f2=455">15 Hz</button> and the beats are too fast to follow; the pair sounds rough, and further apart it separates into two notes.</p>
+
+<h2>The color of a sound</h2>
+
+<p>A piano and a clarinet can play the same A, equally loud, and you still tell them apart at once. The difference, their <dfn data-def="The quality that tells two sounds of the same pitch and loudness apart; set mostly by the relative strengths of the harmonics.">timbre</dfn>, lives in the shape of the wave. The pure sines used so far sound plain, like a tuning fork; instruments make waves with corners and wiggles. Early in the 1800s Joseph Fourier showed that any repeating shape can be built by adding sine waves whose frequencies are whole-number multiples of the repetition rate.<span class="sidenote">Mathematicians spent most of the following century settling exactly which shapes this works for. Every sound a microphone can record is among them.</span> Here is a tone built from ten of them. Drag the tips of the stems to set the strength of each, and listen:</p>
+
+<figure class="demo" id="harmonics" aria-label="Ten stems, one for each harmonic of 220 hertz, with draggable tips that set each harmonic's strength. Above them, two cycles of the wave the harmonics add up to. A choice starts from a sine, sawtooth, square, or triangle wave, and a switch shifts the harmonics' phases."></figure>
+<script>
+{
+  const F0 = 220, NH = 10;
+  const SHAPES = {
+    sine: k => (k === 1 ? 1 : 0),
+    sawtooth: k => (k % 2 ? 1 : -1) / k,
+    square: k => (k % 2 ? 1 / k : 0),
+    triangle: k => (k % 2 ? (((k - 1) / 2) % 2 ? -1 : 1) / (k * k) : 0),
+  };
+  const amps = name => Array.from({ length: NH }, (_, i) => Math.round(SHAPES[name](i + 1) * 1000) / 1000);
+  const SHIFT = [0, 2.1, 4.4, 0.9, 3.3, 5.6, 1.7, 4.0, 0.4, 2.8], ZERO = SHIFT.map(() => 0);
+  const voice = Sound.voice({ freq: F0, harmonics: amps("sawtooth"), gain: 0.7 });
+  let PS = null;
+  const stemAt = p => {
+    if (!PS) return null;
+    const [bx, by, bw, bh] = PS.box;
+    if (p[0] < bx - 12 || p[0] > bx + bw + 12 || p[1] < by - 12 || p[1] > by + bh + 12) return null;
+    const k = Math.round(PS.inv(p)[0]);
+    return k >= 1 && k <= NH ? k : null;
+  };
+  const setAmp = (p, s) => {
+    if (!s.k) return;
+    let a = Math.max(-1, Math.min(1, PS.inv(p)[1]));
+    if (Math.abs(a) < 0.04) a = 0;
+    s.a[s.k - 1] = Math.round(a * 100) / 100;
+    s.edited = true;
+  };
+  demo("harmonics", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    state: () => ({ a: amps("sawtooth"), k: null, edited: false }),
+    controls: [
+      { key: "start", label: "Start from", type: "choice", options: [{ value: "sine", label: "sine" }, { value: "sawtooth", label: "sawtooth" }, { value: "square", label: "square" }, { value: "triangle", label: "triangle" }], value: "sawtooth", color: "orange" },
+      { key: "ph", label: "Shift the phases", type: "toggle", value: false, color: "purple" },
+      Sound.button(voice),
+    ],
+    change(key, s, v) { if (key === "start") { s.a = amps(v.start); s.edited = false; } },
+    caption: "A tone built from the first ten harmonics of 220 Hz. Bottom: the spectrum, one stem per harmonic; drag a tip to change its strength (stems below the line are flipped upside down). Top: two cycles of the wave the harmonics add up to. Shifting the phases changes the shape but hardly the sound.",
+    status: (s, v) => {
+      const tot = s.a.reduce((t, a) => t + Math.abs(a), 0);
+      if (tot < 1e-6) return "every harmonic off: silence";
+      const c = (F0 * s.a.reduce((t, a, i) => t + (i + 1) * Math.abs(a), 0)) / tot;
+      const on = s.a.filter(a => Math.abs(a) > 0.005).length;
+      return `pitch 220 Hz (A3) · ${on} harmonic${on > 1 ? "s" : ""} · weighted center ${Math.round(c)} Hz`;
+    },
+    drag: {
+      hit: p => stemAt(p) != null,
+      start(p, s) { s.k = stemAt(p); setAmp(p, s); },
+      move(p, s) { setAmp(p, s); },
+      end(s) { s.k = null; },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, ph = v.ph ? SHIFT : ZERO;
+      const tot = s.a.reduce((t, a) => t + Math.abs(a), 0);
+      voice.set({ harmonics: s.a, phases: ph, gain: tot < 1e-6 ? 0 : 0.7 });
+      // The wave: two periods, scaled to a peak of 1 the way the voice plays it.
+      const T = 2000 / F0, pts = [];
+      let peak = 0;
+      for (let i = 0; i <= 480; i++) {
+        const u = (2 * i) / 480;
+        let y = 0;
+        for (let k = 1; k <= NH; k++) y += s.a[k - 1] * Math.sin(TAU * k * u + ph[k - 1]);
+        pts.push([u * (T / 2), y]);
+        peak = Math.max(peak, Math.abs(y));
+      }
+      const split = g.h * 0.43;
+      const W = g.graph({ box: [0, 0, g.w, split], x: [0, T], y: [-1.2, 1.2], axes: "frame", xLabel: "Time (ms)", yTicks: false, yLabel: "pressure", grid: false, xTicks: narrow ? 3 : 1 });
+      W.hline(0, { color: "muted", width: 1 });
+      W.series(pts.map(([x, y]) => [x, peak > 1e-9 ? y / peak : 0]), { color: "ink", width: 2.5 });
+      PS = g.graph({ box: [0, split + 8, g.w, g.h - split - 8], x: [0.4, NH + 0.6], y: [-1.12, 1.12], axes: "frame", grid: false, xLabel: "Frequency (Hz)", yLabel: "strength",
+        yTicks: [-1, 0, 1], xTicks: { values: Array.from({ length: NH }, (_, i) => i + 1), format: k => (narrow && k % 2 === 0 ? "" : `${k * F0}`) } });
+      PS.hline(0, { color: "muted", width: 1 });
+      const litF = g.lit("fundamental"), litO = g.lit("overtones");
+      for (let k = 1; k <= NH; k++) {
+        const a = s.a[k - 1], col = k === 1 ? "blue" : "orange", lit = k === 1 ? litF : litO;
+        g.line(PS([k, 0]), PS([k, a]), { stroke: col, width: lit ? 5 : 3.5 });
+        g.handle(PS([k, a]), { color: col, r: lit ? 8 : 6.5, active: s.k === k });
+      }
+    },
+  });
+}
+</script>
+
+<p>The bottom of the figure is the tone's <dfn data-def="A sound's ingredients: how strong each frequency in it is.">spectrum</dfn>: one stem per <dfn data-def="A sine wave at a whole-number multiple of a tone's lowest frequency.">harmonic</dfn>, its height the strength of that sine. The top is the wave they add up to. The <span class="c-blue" data-part="fundamental">fundamental</span> alone is a pure sine at 220 Hz. Add <span class="c-orange" data-part="overtones">overtones</span> at 440, 660, 880 Hz and up in the proportions 1, ½, ⅓, ¼, and the sum becomes a <button class="set" data-set="start=sawtooth">sawtooth</button>, the bright buzz of a bowed string. Keep only the odd ones and it becomes a <button class="set" data-set="start=square">square wave</button>, close to a clarinet's hollow low notes. The pitch never moves: the pattern still repeats 220 times a second.</p>
+
+<p>Now <button class="set" data-set="ph=true">shift the phases</button>, sliding each harmonic a different distance along in time. The wave changes shape beyond recognition, yet sounds almost the same. The ear behaves like the spectrum, not the waveform: it splits a sound into its frequencies and largely ignores how they line up. Hermann von Helmholtz made this case in 1863 <a class="cite" href="#ref-helmholtz"></a>; the last section shows the part of the ear that does the splitting.</p>
+
+<aside class="callout key"><p>Pitch is the spacing of the harmonics. Timbre is their heights.</p></aside>
+
+<p>Where do an instrument's harmonics come from? A guitar string is pinned at both ends, so those two points stay still whatever it does. Only ripples that fit a whole number of half-wavelengths between the ends reinforce themselves on every round trip. Step through the shapes that fit:</p>
+
+<figure class="demo" id="string" aria-label="A string fixed at both ends vibrating in one of its natural shapes, with its nodes marked N and antinodes marked A. A stepper picks the harmonic, from one half-wave to eight."></figure>
+<script>
+{
+  const LEN = 0.65, C = 143, tone = Sound.voice({ type: "sine", freq: 110, gain: 0.6 });
+  const M = n => Sound.mode({ kind: "string", n, length: LEN, speed: C });
+  demo("string", {
+    aspect: w => (w < 560 ? 1.15 : 2.6),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "n", label: "Harmonic", type: "stepper", min: 1, max: 8, step: 1, value: 2, color: "blue" },
+      Sound.button(tone),
+    ],
+    caption: "The natural shapes of a 65 cm guitar string, slowed down. Each fits a whole number of half-wavelengths between the fixed ends; N marks the nodes, which never move, and A the antinodes, which swing the most. The tone plays the shape's frequency.",
+    status: (s, v) => { const f = M(v.n).freq; return `${v.n} half-wave${v.n > 1 ? "s" : ""} on the string · ${f.toFixed(0)} Hz (${SND.noteName(f)}) · ${v.n + 1} nodes`; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      tone.set({ freq: M(v.n).freq });
+      g.standingWave([18, 6, g.w - 36, g.h - 12], { kind: "string", n: v.n, t: s.t, color: "blue", rate: 0.55 });
+    },
+  });
+}
+</script>
+
+<p>Each shape is a <dfn data-def="A wave that swings in place instead of traveling: two equal waves running in opposite directions, adding up.">standing wave</dfn>: the string swings in place, with <dfn data-def="A point of a standing wave that never moves.">nodes</dfn> that never move and antinodes that swing the most. On a guitar's 65 cm A string, ripples travel at about 143 m/s, so the first shape, half a wavelength long, vibrates at 143 ÷ (2 × 0.65) = 110 Hz, and shape number <span class="scrub" data-key="n" data-figure="string"></span> at that many times 110 Hz. A string's overtones are exact harmonics, which is why it has a clear pitch. A drumhead's shapes are not whole-number multiples, so most drums thud rather than sing.</p>
+
+<p>A real pluck starts many shapes at once. Just before you let go, the string is two straight lines meeting at your finger, and that triangle is one particular mix of the shapes. Drag the <span class="c-orange" data-part="pick">plucking point</span> along the string, then pluck it:</p>
+
+<figure class="demo" id="pluck" aria-label="A string pulled aside at a draggable point, the sound of the pluck as a fading waveform, and its spectrum in decibels with the harmonics numbered. Plucking at the middle removes every even harmonic."></figure>
+<script>
+{
+  const SR = 22050, F = 110, NB = 40;
+  let pb = null, key = "", wave = null, spec = null, SP = null;
+  // The sound: the string's shapes, each started in the amount the pluck's triangle contains
+  // and heard through the bridge (strength sin(n pi beta) / n), each fading at its own rate.
+  const ring = beta => {
+    const n = Math.round(SR * 2), x = new Float32Array(n);
+    for (let k = 1; k <= 60 && k * F < SR / 2.2; k++) {
+      const a = Math.sin(k * Math.PI * beta) / k;
+      if (Math.abs(a) < 1e-9) continue;
+      const r = Math.exp(-Math.log(1000) / (SR * (3 / (1 + 0.3 * (k - 1))))), w = (TAU * k * F) / SR, c = 2 * r * Math.cos(w);
+      let y2 = 0, y1 = a * r * Math.sin(w);
+      x[1] += y1;
+      for (let i = 2; i < n; i++) { const y = c * y1 - r * r * y2; x[i] += y; y2 = y1; y1 = y; }
+    }
+    let peak = 0;
+    for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(x[i]));
+    for (let i = 0; i < n; i++) x[i] *= 0.9 / peak;
+    return x;
+  };
+  // The ideal string's motion after the pluck: a sum of its shapes, each at its own harmonic,
+  // the higher ones fading faster (slow motion: one period every 1.6 s).
+  const shape = (u, beta, tau) => {
+    let y = 0;
+    for (let n = 1; n <= NB; n++) y += (Math.sin(n * Math.PI * beta) / (n * n)) * Math.sin(n * Math.PI * u) * Math.cos(n * Math.PI * tau) * Math.exp(-0.004 * n * n * tau);
+    return (2 * y) / (Math.PI * Math.PI * beta * (1 - beta));
+  };
+  const pickAt = (p, fig) => {
+    const u = (p[0] - SP.x0) / (SP.x1 - SP.x0);
+    fig.set("pick", Math.round(Math.max(0.05, Math.min(0.5, u)) * 100) / 100);
+  };
+  demo("pluck", {
+    aspect: w => (w < 560 ? 0.8 : 1.45),
+    controls: [
+      { key: "pick", label: "Pluck at", min: 0.05, max: 0.5, step: 0.01, value: 0.2, color: "orange", format: x => `${Math.round(x * 100)}% along` },
+      Sound.button((s, v) => (pb = Sound.play(ring(v.pick), { sampleRate: SR })), { label: "Pluck" }),
+    ],
+    presets: [{ label: "Near the bridge", set: { pick: 0.07 } }, { label: "A fifth along", set: { pick: 0.2 } }, { label: "A third", set: { pick: 0.33 } }, { label: "The middle", set: { pick: 0.5 } }],
+    caption: "A 110 Hz string plucked at a chosen point (the other half of the string mirrors this one). Middle: two seconds of its sound, computed by adding up the string's shapes, each fading at its own rate. Bottom: the spectrum of the first 0.7 s in decibels; harmonics whose shapes have a node at the plucking point are missing.",
+    status: (s, v) => {
+      const gone = [];
+      for (let n = 1; n <= 12; n++) if (Math.abs(Math.sin(n * Math.PI * v.pick)) < 0.06) gone.push(n);
+      return gone.length ? `harmonic${gone.length > 1 ? "s" : ""} ${gone.join(", ")} missing` : "no harmonic up to 12 is missing";
+    },
+    drag: {
+      hit: p => !!SP && Math.abs(p[1] - SP.y) < 34 && p[0] > SP.x0 - 6 && p[0] < SP.x1 + 6,
+      start(p, s, v, fig) { pickAt(p, fig); },
+      move(p, s, v, d, fig) { pickAt(p, fig); },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, k = String(v.pick);
+      if (k !== key) { key = k; wave = ring(v.pick); spec = Sound.spectrum(wave, { size: 16384 }); }
+      // The string.
+      const x0 = 22, x1 = g.w - 22, y = g.h * 0.13, depth = g.h * 0.07, X = u => x0 + u * (x1 - x0);
+      SP = { x0, x1, y };
+      const playing = pb?.playing, tau = playing ? pb.elapsed / 0.8 : 0;
+      g.line([x0, y], [x1, y], { stroke: "muted", width: 1, dash: [3, 4] });
+      for (const [f, lab] of [[1 / 4, "¼"], [1 / 3, "⅓"], [1 / 2, "½"]]) { g.line([X(f), y + depth + 4], [X(f), y + depth + 9], { stroke: "muted", width: 1 }); g.text(lab, [X(f), y + depth + 18], { size: 11, color: "muted" }); }
+      const pts = [];
+      for (let i = 0; i <= 200; i++) { const u = i / 200; pts.push([X(u), y - depth * (playing ? shape(u, v.pick, tau) : u < v.pick ? u / v.pick : (1 - u) / (1 - v.pick))]); }
+      g.path(pts, { stroke: "ink", width: 2.25 });
+      for (const u of [0, 1]) g.rect(X(u) - 3, y - depth - 8, 6, 2 * depth + 16, { fill: "ink" });
+      g.text("bridge", [X(0) + 7, y - depth - 2], { size: 11, color: "muted", align: "left" });
+      if (!playing) g.handle([X(v.pick), y - depth], { color: "orange", r: g.lit("pick") ? 9 : 7 });
+      // The sound and its spectrum.
+      const wy = g.h * 0.3, wh = g.h * 0.18;
+      g.waveform(wave, [8, wy, g.w - 16, wh], { color: "ink", playhead: playing ? pb.progress : null, rms: false });
+      g.text("2 s of sound", [12, wy + 4], { size: 11, color: "muted", align: "left" });
+      const sy = wy + wh + 10;
+      g.spectrum(spec, [0, sy, g.w, g.h - sy], { sampleRate: SR, minFreq: F * 0.5, maxFreq: F * 12.5, db: true, floor: -80, range: [-80, 0], harmonics: F, color: "orange",
+        xTicks: Array.from({ length: 12 }, (_, i) => (i + 1) * F), xFormat: f => `${Math.round(f / F)}`, xLabel: "Harmonic number", yTicks: narrow ? [-80, -40, 0] : [-80, -60, -40, -20, 0], yLabel: "dB" });
+      if (playing) g.wantsFrame = true;
+    },
+  });
+}
+</script>
+
+<p>Pluck near the <button class="set" data-set="pick=0.07">bridge</button> and high harmonics are strong: the thin twang of picking close to it. Pluck at the <button class="set" data-set="pick=0.5">middle</button> and every even harmonic vanishes, because every even shape has a node there, and pulling on a point that a shape keeps still cannot start it. Pluck <button class="set" data-set="pick=0.33">a third of the way along</button> and every third harmonic goes. The sound here is built the same way: each shape starts in the amount the triangle contains and then fades, the high ones faster, which is why a plucked note mellows as it dies away.</p>
+
+<h2>Pipes, resonance, and the voice</h2>
+
+<p>Wind instruments use the same trick with air. In a pipe the air itself sloshes back and forth, and the ends set the rules. At an open end the air moves freely, but its pressure is held at the room's, so the pressure cannot swing there. At a closed end the air cannot move at all. Compare the two kinds of pipe, both 60 cm long:</p>
+
+<figure class="demo" id="pipe" aria-label="A pipe full of air parcels sloshing in one of its natural patterns, with pressure shading and the motion's envelope drawn above. A choice switches between a pipe open at both ends and one closed at the left end; below, the frequencies each pipe can play."></figure>
+<script>
+{
+  const LEN = 0.6, C = 343, NH = 12;
+  const series = kind => Array.from({ length: NH }, (_, i) => (kind === "closed" && i % 2 === 1 ? 0 : 1 / Math.pow(i + 1, 1.3)));
+  const voice = Sound.voice({ freq: 286, harmonics: series("open"), gain: 0.6 });
+  const nOf = v => (v.kind === "closed" ? 2 * v.m - 1 : v.m);
+  const mode = (v, n) => Sound.mode({ kind: v.kind, n, length: LEN, speed: C });
+  demo("pipe", {
+    aspect: w => (w < 560 ? 0.95 : 2.1),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "kind", label: "Pipe", type: "choice", options: [{ value: "open", label: "open both ends" }, { value: "closed", label: "closed at one end" }], value: "open", color: "blue" },
+      { key: "m", label: "Pattern", type: "stepper", min: 1, max: 5, step: 1, value: 1, color: "blue" },
+      Sound.button(voice, { label: "Play the pipe" }),
+    ],
+    caption: "Air in a 60 cm pipe sloshing in one of its natural patterns, slowed down. Shading shows pressure (red high, blue low); the curve above the pipe shows how far the air moves; N marks where it never moves. Below: the frequencies each pipe can sound, with the current one in blue. The button plays the pipe's lowest note with its harmonics.",
+    status: (s, v) => { const n = nOf(v), f = mode(v, n).freq, f1 = mode(v, 1).freq; return `harmonic ${n}: ${f.toFixed(0)} Hz · lowest note ${f1.toFixed(0)} Hz (${SND.noteName(f1)})`; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, n = nOf(v), f1 = mode(v, 1).freq;
+      voice.set({ freq: f1, harmonics: series(v.kind) });
+      const top = narrow ? g.h * 0.56 : g.h * 0.62;
+      g.standingWave([20, 26, g.w - 40, top - 26], { kind: v.kind, n, t: s.t, color: "blue", rate: 0.5, spacing: narrow ? 7 : 8 });
+      if (v.kind === "closed") g.text("closed", [24, 14], { size: 11, color: "muted", align: "left" });
+      const P = g.graph({ box: [0, top + 6, g.w, g.h - top - 6], x: [0, 3000], y: [0, 1.15], axes: "frame", grid: false, yTicks: false, xLabel: "Frequency (Hz)", xTicks: narrow ? [0, 1000, 2000, 3000] : 500 });
+      for (let k = 1; k * 143 <= 3000; k++) {
+        const allowed = v.kind === "open" ? k % 2 === 0 : k % 2 === 1, f = k * 143;
+        if (!allowed) continue;
+        const nn = v.kind === "open" ? k / 2 : k, cur = nn === n;
+        g.line(P([f, 0]), P([f, cur ? 1 : 0.6]), { stroke: cur ? "blue" : "muted", width: cur ? 4 : 2 });
+        if (!narrow || nn <= 5) g.text(`${nn}`, P([f, cur ? 1.07 : 0.68]), { size: 11, color: cur ? "blue" : "muted", weight: cur ? 700 : 500 });
+      }
+    },
+  });
+}
+</script>
+
+<p>In the <button class="set" data-set="kind=open">open pipe</button>, like a flute, every harmonic fits, as on a string. <button class="set" data-set="kind=closed">Close one end</button>, as a clarinet's reed does, and only patterns with still air at the closed end and free air at the open end fit: a quarter wavelength, three quarters, five quarters. The even harmonics vanish and the lowest note drops an octave. That is why a clarinet, about as long as a flute, plays almost an octave lower, and why its low notes sound hollow, like the square wave.</p>
+
+<p>Strings, pipes, and solid objects all have frequencies they prefer. Tap a wine glass and it rings at its own. Now push it with sound instead: a tone whose pressure pushes the rim back and forth. Sweep the frequency of the <span class="c-orange" data-part="push">push</span> past the glass's own, here 660 Hz, and watch how the <span class="c-blue" data-part="rim">rim</span> responds:</p>
+
+<figure class="demo" id="resonance" aria-label="Top: the push on a wine glass and the glass's motion over a few cycles. Bottom: how strongly the glass responds at each pushing frequency, a curve with a peak at its natural frequency of 660 hertz."></figure>
+<script>
+{
+  const F0 = 660, tone = Sound.voice({ type: "sine", freq: 600, gain: 0.3 });
+  const amp = (f, Q) => { const r = f / F0; return 1 / Math.sqrt((1 - r * r) ** 2 + (r / Q) ** 2); };
+  const lag = (f, Q) => { const r = f / F0; return Math.atan2(r / Q, 1 - r * r); };
+  const dB = x => 20 * Math.log10(x);
+  demo("resonance", {
+    aspect: w => (w < 560 ? 0.9 : 1.7),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "f", label: "Push frequency", min: 330, max: 990, step: 1, value: 600, unit: " Hz", color: "orange" },
+      { key: "Q", label: "Sharpness, Q", min: 2, max: 60, step: 1, value: 20, color: "purple" },
+      Sound.button(tone),
+    ],
+    presets: [{ label: "Well below", set: { f: 420 } }, { label: "On resonance", set: { f: 660 } }, { label: "Well above", set: { f: 920 } }],
+    caption: "A wine glass modeled as a damped oscillator with a natural frequency of 660 Hz, after it has settled into a steady response. Top: the push (orange) and the rim's motion (blue), slowed down; the motion is scaled to its largest possible size. Bottom: the response at each pushing frequency in decibels; the dot is the current push. The tone's loudness follows the response.",
+    status: (s, v) => `moves ${amp(v.f, v.Q).toFixed(1)}× as far as a slow push would · ${Math.round((lag(v.f, v.Q) * 180) / Math.PI)}° behind the push`,
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, A = amp(v.f, v.Q), Amax = amp(F0 * Math.sqrt(Math.max(0, 1 - 1 / (2 * v.Q * v.Q))), v.Q), ph = lag(v.f, v.Q);
+      tone.set({ freq: v.f, gain: 0.04 + 0.66 * (A / Amax) });
+      const split = g.h * 0.4;
+      const T = g.graph({ box: [0, 0, g.w, split], x: [0, 3], y: [-1.15, 1.15], axes: "frame", grid: false, yTicks: false, xTicks: false, xLabel: "Time (three cycles, slowed down)" });
+      T.hline(0, { color: "muted", width: 1 });
+      const w0 = s.t * 0.5;
+      T.fn(x => 0.45 * Math.cos(TAU * (x - w0)), { color: "orange", width: g.lit("push") ? 3 : 2, dash: [6, 4] });
+      T.fn(x => 0.98 * (A / Amax) * Math.cos(TAU * (x - w0) - ph), { color: "blue", width: g.lit("rim") ? 4 : 3 });
+      g.text("push", [T.box[0] + 6, T.box[1] + 8], { size: 11.5, weight: 600, color: "orange", align: "left" });
+      g.text("rim", [T.box[0] + 46, T.box[1] + 8], { size: 11.5, weight: 600, color: "blue", align: "left" });
+      const P = g.graph({ box: [0, split + 12, g.w, g.h - split - 12], x: [330, 990], y: [-12, 40], axes: "frame", xLabel: "Push frequency (Hz)", yLabel: "response (dB)", yTicks: [-10, 0, 10, 20, 30, 40], xTicks: narrow ? [400, 660, 900] : 100 });
+      P.hline(0, { color: "muted", width: 1, dash: [3, 4] });
+      P.fn(f => dB(amp(f, v.Q)), { color: "purple", width: 2.5, samples: 400 });
+      P.marker(v.f, dB(A), { color: "orange", drop: true });
+    },
+  });
+}
+</script>
+
+<p><button class="set" data-set="f=420">Well below</button> its own frequency the glass follows the push, in step and only a little. <button class="set" data-set="f=920">Well above</button>, it cannot keep up and barely moves, half a cycle behind. <button class="set" data-set="f=660">At 660 Hz</button> each push arrives just as the rim is already moving that way, and the swings grow until friction drains energy as fast as the pushes add it. This is <dfn data-def="The large response of an object pushed at one of its own natural frequencies.">resonance</dfn>. The <span class="c-purple">sharpness</span> Q sets how tall and narrow the peak is: something that loses little energy each cycle rings long after a tap, and responds hugely, but only near its own frequency.</p>
+
+<p>Your voice uses resonance too. The vocal folds in your larynx snap open and shut about 100 to 250 times a second, making a buzz rich in harmonics. Above them sits the vocal tract, a tube about 17 cm long, closed at the folds and open at the lips. Like the clarinet it resonates at a quarter wavelength and its odd multiples, about 500, 1,500, and 2,500 Hz for a relaxed "uh", boosting the harmonics near them <a class="cite" href="#ref-fant"></a>. Your tongue and lips move these resonances. Drag the point on the <span class="c-purple" data-part="chart">vowel chart</span>, or change the <span class="c-orange">pitch</span> of the voice:</p>
+
+<figure class="demo" id="vowel" aria-label="The spectrum of a sung vowel: harmonics of the voice as stems, under a purple curve with peaks at the vocal tract's resonances. Beside it, a vowel chart with ee, eh, ah, and oo, and a draggable point that moves the first two resonances."></figure>
+<script>
+{
+  const VOWELS = [
+    { name: "ee", word: "heed", F1: 270, F2: 2290 },
+    { name: "eh", word: "head", F1: 530, F2: 1840 },
+    { name: "ah", word: "hod", F1: 730, F2: 1090 },
+    { name: "oo", word: "who'd", F1: 300, F2: 870 },
+    { name: "uh", word: "a relaxed tube", F1: 500, F2: 1500 },
+  ];
+  const B = [70, 100, 130], FMAX = 4000;
+  const env = (f, F1, F2) => {
+    const F = [F1, F2, Math.max(2450, F2 + 700)];
+    let h = 1 / (1 + f / 300);   // the buzz's own slope, fixed in hertz
+    F.forEach((Fi, i) => { h *= (Fi * Fi) / Math.sqrt((Fi * Fi - f * f) ** 2 + (B[i] * f) ** 2); });
+    return h;
+  };
+  const voice = Sound.voice({ freq: 120, harmonics: [1], gain: 0.7 });
+  let CH = null, norm = 1, normKey = "";
+  const chartAt = p => [700 + (2500 - 700) * (1 - (p[0] - CH.x) / CH.w), 200 + (900 - 200) * ((p[1] - CH.y) / CH.h)];
+  const setFrom = (p, fig) => {
+    const [F2, F1] = chartAt(p);
+    fig.set("F1", Math.round(Math.max(200, Math.min(900, F1)) / 10) * 10);
+    fig.set("F2", Math.round(Math.max(700, Math.min(2500, F2)) / 10) * 10);
+  };
+  demo("vowel", {
+    aspect: w => (w < 560 ? 0.72 : 1.85),
+    controls: [
+      { key: "f0", label: "Pitch of the voice", min: 80, max: 300, step: 1, value: 120, unit: " Hz", color: "orange" },
+      { key: "F1", label: "First resonance", min: 200, max: 900, step: 10, value: 730, unit: " Hz", hidden: true },
+      { key: "F2", label: "Second resonance", min: 700, max: 2500, step: 10, value: 1090, unit: " Hz", hidden: true },
+      Sound.button(voice),
+    ],
+    presets: VOWELS.slice(0, 4).map(o => ({ label: `"${o.name}"`, set: { F1: o.F1, F2: o.F2 } })),
+    caption: "A voice as a buzz filtered by a tube. Stems are the harmonics of the vocal folds' buzz; the purple curve is the vocal tract's response, with its resonances (formants) at the peaks. Vowel positions are average men's values from Peterson and Barney; the third resonance follows a simple rule, and the sound is synthesized from exactly these stems.",
+    status: (s, v) => {
+      const near = VOWELS.reduce((b, o) => (Math.hypot((o.F1 - v.F1) / 300, (o.F2 - v.F2) / 1000) < Math.hypot((b.F1 - v.F1) / 300, (b.F2 - v.F2) / 1000) ? o : b));
+      return `F1 ${v.F1} Hz · F2 ${v.F2} Hz · closest to "${near.name}" as in ${near.word}`;
+    },
+    drag: {
+      hit: p => !!CH && p[0] > CH.x - 10 && p[0] < CH.x + CH.w + 10 && p[1] > CH.y - 10 && p[1] < CH.y + CH.h + 10,
+      start(p, s, v, fig) { setFrom(p, fig); },
+      move(p, s, v, d, fig) { setFrom(p, fig); },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560;
+      const nk = `${v.F1},${v.F2}`;
+      if (nk !== normKey) { normKey = nk; norm = 0; for (let f = 60; f <= FMAX; f += 5) norm = Math.max(norm, env(f, v.F1, v.F2)); }
+      const L = f => 20 * Math.log10(env(f, v.F1, v.F2) / norm);
+      const N = Math.min(64, Math.floor(FMAX / v.f0));
+      voice.set({ freq: v.f0, harmonics: Array.from({ length: N }, (_, i) => env((i + 1) * v.f0, v.F1, v.F2) / norm) });
+      const sb = narrow ? [0, 0, g.w, g.h * 0.54] : [0, 0, g.w * 0.62, g.h];
+      const P = g.graph({ box: sb, x: [0, FMAX], y: [-50, 4], axes: "frame", xLabel: "Frequency (Hz)", yLabel: "level (dB)", yTicks: [-40, -20, 0], xTicks: narrow ? [0, 1000, 2000, 3000, 4000] : 500, grid: false });
+      for (let n = 1; n * v.f0 <= FMAX; n++) { const f = n * v.f0, y = Math.max(-50, L(f)); g.line(P([f, -50]), P([f, y]), { stroke: "orange", width: 2 }); }
+      P.fn(f => Math.max(-50, L(Math.max(f, 1))), { color: "purple", width: 2.5, samples: 500 });
+      g.labels([v.F1, v.F2].map((F, i) => ({ at: P([F, Math.min(1.5, L(F))]), text: `F${i + 1}`, color: "purple", prefer: [0, -1] })), { size: 12 });
+      // The vowel chart: F2 runs right to left and F1 downward, like the tongue's position in the mouth.
+      CH = narrow ? { x: g.w * 0.14, y: g.h * 0.63, w: g.w * 0.76, h: g.h * 0.3 } : { x: g.w * 0.7, y: g.h * 0.1, w: g.w * 0.26, h: g.h * 0.72 };
+      const lit = g.lit("chart");
+      const X = F2 => CH.x + CH.w * (1 - (F2 - 700) / 1800), Y = F1 => CH.y + CH.h * ((F1 - 200) / 700);
+      g.rect(CH.x, CH.y, CH.w, CH.h, { stroke: lit ? "purple" : "muted", width: lit ? 2 : 1, r: 6 });
+      g.text("tongue front ← → back", [CH.x + CH.w / 2, CH.y - 9], { size: 10.5, color: "muted" });
+      g.text("F2 high", [CH.x + 4, CH.y + CH.h + 12], { size: 10.5, color: "muted", align: "left" });
+      g.text("F2 low", [CH.x + CH.w - 4, CH.y + CH.h + 12], { size: 10.5, color: "muted", align: "right" });
+      g.labels(VOWELS.map(o => ({ at: [X(o.F2), Y(o.F1)], text: `"${o.name}"`, color: "ink" })), { size: 11.5 });
+      for (const o of VOWELS) g.circle([X(o.F2), Y(o.F1)], 3, { fill: "ink" });
+      g.handle([X(v.F2), Y(v.F1)], { color: "purple" });
+    },
+  });
+}
+</script>
+
+<p>The peaks of the purple curve are the <dfn data-def="A resonance of the vocal tract, seen as a peak in the spectrum of a vowel.">formants</dfn>, and the first two decide the vowel. In Peterson and Barney's measurements of 76 speakers <a class="cite" href="#ref-peterson"></a>, "ee" has a low first formant and a high second, <button class="set" data-set="F1=730 F2=1090">"ah"</button> a high first, and <button class="set" data-set="F1=300 F2=870">"oo"</button> both low. Now slide the <span class="c-orange">pitch</span> from <span class="scrub" data-key="f0" data-figure="vowel"></span>. The harmonics move, the formants stay put, and the vowel stays the same. That is how you understand a child and a bass saying the same word.</p>
+
+<h2>Echoes and moving sources</h2>
+
+<p>Sound that meets a hard wall bounces off it, as light does off a mirror. Clap in front of a cliff or a big building and the clap comes back. Drag the <span class="c-ink" data-part="wall">wall</span> nearer or further, and clap:</p>
+
+<figure class="demo" id="echo" aria-label="Seen from above, a clap spreads from a person, reflects off a draggable wall, and returns. A timeline below marks the clap and the echo's arrival."></figure>
+<script>
+{
+  const C = 343, SR = 22050, SLOW = 8, CV = C / SLOW, XMAX = 64;
+  let pb = null, WL = null;
+  const clap = d => {
+    const at = Math.round(((2 * d) / C) * SR), n = at + Math.round(SR * 0.3), x = new Float32Array(n), rnd = Sound.rng(5), m = Math.round(SR * 0.05);
+    let lp = 0;
+    for (let i = 0; i < m; i++) {
+      const b = (rnd() * 2 - 1) * Math.exp(-i / (SR * 0.006));
+      x[i] += 0.9 * b;
+      lp += 0.45 * (b - lp);   // the wall and the air take some of the highs
+      if (at + i < n) x[at + i] += 0.4 * lp;
+    }
+    return x;
+  };
+  const cycle = d => (2 * d) / CV + 0.5;
+  demo("echo", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    state: () => ({ t: 0.3 }),
+    controls: [
+      { key: "d", label: "Wall distance", min: 2, max: 60, step: 0.5, value: 25, unit: " m", color: "purple" },
+      { key: "img", label: "Show the mirror image", type: "toggle", value: false, color: "purple" },
+      Sound.button((s, v) => { s.t = 0; return (pb = Sound.play(clap(v.d), { sampleRate: SR })); }, { label: "Clap" }),
+    ],
+    presets: [{ label: "Small room", set: { d: 3 } }, { label: "Concert hall", set: { d: 12 } }, { label: "17 m", set: { d: 17 } }, { label: "Cliff", set: { d: 55 } }],
+    caption: "A clap and its echo seen from above, slowed down eight times. The reflected sound spreads as if from a mirror image of the clapper behind the wall. Below: when the echo arrives. For speech, reflections within about 50 ms merge with the sound; the played echo is louder than a real one so you can hear it.",
+    status: (s, v) => `wall ${v.d} m away · echo ${Math.round(((2 * v.d) / C) * 1000)} ms after the clap`,
+    step(dt, s, v) { s.t += dt; if (s.t > cycle(v.d)) s.t = 0; },
+    drag: {
+      hit: p => !!WL && Math.abs(p[0] - WL.x) < 16 && p[1] < WL.bottom,
+      move(p, s, v, d, fig) { fig.set("d", Math.round(Math.max(2, Math.min(60, (p[0] - WL.x0) / WL.k)) * 2) / 2); },
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, top = g.h * (narrow ? 0.6 : 0.64), cy = top * 0.52;
+      const x0 = 26, k = (g.w - x0 - 14) / XMAX, X = m => x0 + m * k, wx = X(v.d);
+      WL = { x: wx, x0, k, bottom: top };
+      const r = CV * s.t, ctx = g.ctx;
+      // Direct sound and its reflection, both kept on this side of the wall.
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, wx - 3, top); ctx.clip();
+      for (const [dr, a] of [[0, 1], [-1.2, 0.45]]) {
+        if (r + dr > 0) g.circle([x0, cy], (r + dr) * k, { stroke: "red", width: 2.5, alpha: a });
+        if (r + dr > v.d) g.circle([X(2 * v.d), cy], (r + dr) * k, { stroke: "purple", width: 2.5, alpha: a });
+      }
+      ctx.restore();
+      if (r < v.d) { ctx.save(); ctx.beginPath(); ctx.rect(wx + 4, 0, g.w, top); ctx.clip(); ctx.restore(); }
+      // The wall.
+      const lit = g.lit("wall");
+      g.rect(wx - 3, 12, 7, top - 24, { fill: lit ? "ink" : "muted", r: 2 });
+      g.handle([wx, cy + top * 0.3], { color: "purple" });
+      // The mirror image.
+      if (v.img) {
+        const ix = X(2 * v.d);
+        if (ix < g.w - 10) { g.circle([ix, cy], 6, { stroke: "purple", width: 1.5, dash: [3, 3] }); g.text("mirror image", [ix, cy - 16], { size: 11, color: "purple" }); }
+        else g.text(`mirror image ${2 * v.d} m away →`, [wx + 10, cy - 16], { size: 11, color: "purple", align: "left" });
+        g.line([x0, cy + 22], [Math.min(ix, g.w - 6), cy + 22], { stroke: "purple", width: 1, dash: [4, 4], alpha: 0.6 });
+      }
+      // The clapper; a ring when the echo arrives.
+      const back = r >= 2 * v.d && r < 2 * v.d + CV * 0.35;
+      g.circle([x0, cy], back ? 10 : 7, { fill: "ink" });
+      if (back) g.circle([x0, cy], 18, { stroke: "purple", width: 2.5 });
+      g.text("you", [x0, cy + 22], { size: 11.5, color: "muted" });
+      // The timeline.
+      const ms = ((2 * v.d) / C) * 1000;
+      const P = g.graph({ box: [0, top + 8, g.w, g.h - top - 8], x: [0, 300], y: [0, 1.2], axes: "frame", grid: false, yTicks: false, xLabel: "Time after the clap (ms)", xTicks: narrow ? [0, 100, 200, 300] : 50 });
+      g.rect(P.xpx(0), P.ypx(1.2), P.xpx(50) - P.xpx(0), P.ypx(0) - P.ypx(1.2), { fill: g.rgba("muted", 0.15) });
+      g.text("merges", [P.xpx(27), P.ypx(0.45)], { size: 10.5, color: "muted" });
+      g.line(P([0, 0]), P([0, 1]), { stroke: "red", width: 3.5 });
+      g.text("clap", [P.xpx(0) + 6, P.ypx(1.05)], { size: 11, color: "red", align: "left" });
+      if (ms <= 300) { g.line(P([ms, 0]), P([ms, 0.6]), { stroke: "purple", width: 3.5 }); g.text("echo", P([ms, 0.72]), { size: 11, color: "purple" }); }
+      else g.text(`echo at ${Math.round(ms)} ms →`, [P.xpx(300) - 4, P.ypx(0.6)], { size: 11, color: "purple", align: "right" });
+      if (pb?.playing) g.wantsFrame = true;
+    },
+  });
+}
+</script>
+
+<p>The echo takes as long as the sound needs to reach the wall and come back: twice the distance divided by 343 m/s. The reflection spreads as if from a <button class="set" data-set="img=true">mirror image</button> of you behind the wall. An echo that returns within a few tens of milliseconds fuses with the original into one sound. For speech, reflections up to about 50 ms late make a voice fuller rather than doubled <a class="cite" href="#ref-haas"></a>. Past about <button class="set" data-set="d=17">17 m</button> the echo is a tenth of a second late: a separate clap. Bats time their echoes this way to hunt in the dark.</p>
+
+<p>A siren rushing past drops in pitch the instant it passes: a high note coming, a low note going. The siren never changes its note. It moves while it makes it, and each wavefront spreads from the spot where the source was when it sent that front out. Speed the <span class="c-red" data-part="source">source</span> up:</p>
+
+<figure class="demo" id="doppler" aria-label="Wavefronts from a moving source, seen from above. Ahead they bunch together and behind they spread apart; faster than sound they fall behind inside a cone."></figure>
+<script>
+{
+  const C = 343, F0 = 440, SR = 22050, TE = 0.5, AGES = 20;
+  let pb = null;
+  const passBy = M => {
+    // A horn driving along a road 15 m from you, passing at t = 2 s: what reaches you.
+    const v = M * C, H = 15, T = 4, n = Math.round(SR * T), x = new Float32Array(n);
+    let te = -1, peak = 0;
+    for (let i = 0; i < n; i++) {
+      const tr = i / SR;
+      for (let it = 0; it < (i ? 3 : 30); it++) {
+        const xs = v * (te - T / 2), r = Math.hypot(xs, H);
+        te -= (te + r / C - tr) / (1 + (xs * v) / (r * C));
+      }
+      const xs = v * (te - T / 2), ph = TAU * F0 * te;
+      x[i] = (Math.sin(ph) + 0.35 * Math.sin(2 * ph) + 0.15 * Math.sin(3 * ph)) * (H / Math.hypot(xs, H));
+      peak = Math.max(peak, Math.abs(x[i]));
+    }
+    for (let i = 0; i < n; i++) x[i] *= 0.9 / peak;
+    return x;
+  };
+  const boom = () => {
+    // An N-wave: a sudden rise, a steady fall, a sudden return, then the rumble of the ground.
+    const n = Math.round(SR * 1.2), x = new Float32Array(n), Tn = Math.round(SR * 0.12), rnd = Sound.rng(9);
+    let lp = 0;
+    for (let i = 0; i < n; i++) {
+      const nw = i < Tn ? 1 - (2 * i) / Tn : 0;
+      lp += 0.08 * ((rnd() * 2 - 1) * Math.exp(-i / (SR * 0.25)) - lp);
+      x[i] = 0.75 * nw + 1.6 * lp;
+    }
+    return x;
+  };
+  demo("doppler", {
+    aspect: w => (w < 560 ? 1.0 : 2.1),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "M", label: "Speed", min: 0, max: 1.6, step: 0.01, value: 0.3, color: "red", format: M => `Mach ${M.toFixed(2)}` },
+      Sound.button((s, v) => (pb = Sound.play(v.M < 0.95 ? passBy(v.M) : boom(), { sampleRate: SR })), { label: "Hear it pass" }),
+    ],
+    presets: [{ label: "Car at 110 km/h", set: { M: 0.09 } }, { label: "Race car", set: { M: 0.25 } }, { label: "Speed of sound", set: { M: 1 } }, { label: "Jet at Mach 1.5", set: { M: 1.5 } }],
+    caption: "Wavefronts sent out every half second (slowed down) by a moving source, seen from above, following the source. The road marks show how fast it moves. The sound is a 440 Hz horn driving past 15 m away; at Mach 0.95 and above you hear a sonic boom instead.",
+    status: (s, v) => {
+      const M = v.M, sp = `${Math.round(M * C)} m/s`;
+      if (M < 0.995) return `${sp} · a 440 Hz horn sounds ${Math.round(F0 / (1 - M))} Hz ahead, ${Math.round(F0 / (1 + M))} Hz behind`;
+      if (M < 1.005) return `${sp}: the fronts pile into one shock at the nose`;
+      return `${sp} · cone half-angle ${Math.round((Math.asin(1 / M) * 180) / Math.PI)}° · silent until the cone reaches you`;
+    },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const M = v.M, cy = g.h * 0.46, cpx = g.w * 0.085, xs = g.w * (0.5 + 0.3 * Math.min(1, M));
+      const lit = g.lit("source");
+      for (let k = 0; k < AGES; k++) {
+        const a = (s.t % TE) + k * TE, cx = xs - M * cpx * a, r = cpx * a;
+        g.circle([cx, cy], r, { stroke: "red", width: 1.6, alpha: Math.max(0.12, 0.85 - k * 0.04) });
+      }
+      if (M > 1.005) {
+        const th = Math.asin(1 / M), L = g.w * 1.2;
+        for (const sg of [1, -1]) g.line([xs, cy], [xs - L * Math.cos(th), cy + sg * L * Math.sin(th)], { stroke: "red", width: 3 });
+      }
+      // Road marks drift backward at the source's speed.
+      const ry = g.h - 14, sp = 46;
+      for (let i = -1; i < g.w / sp + 1; i++) { const x = ((i * sp - M * cpx * s.t) % (g.w + sp) + g.w + sp) % (g.w + sp) - sp / 2; g.line([x, ry], [x + 18, ry], { stroke: "muted", width: 2 }); }
+      g.circle([xs, cy], lit ? 9 : 7, { fill: "red", stroke: "panel", width: 1.5 });
+      if (M < 0.995) {
+        g.text(`ahead: ${Math.round(F0 / (1 - M))} Hz`, [g.w - 10, 16], { size: 12, weight: 600, color: "ink", align: "right" });
+        g.text(`behind: ${Math.round(F0 / (1 + M))} Hz`, [10, 16], { size: 12, weight: 600, color: "ink", align: "left" });
+      }
+      if (pb?.playing) g.wantsFrame = true;
+    },
+  });
+}
+</script>
+
+<p>Ahead of the source the fronts crowd together, so more of them reach you each second and the pitch is higher. Behind, they spread out and the pitch drops. This is the <dfn data-def="The change in pitch heard when a source of sound moves toward or away from the listener.">Doppler effect</dfn>: a source approaching at speed v is heard at f·c/(c − v), and receding at f·c/(c + v). A horn at highway speed, <button class="set" data-set="M=0.09">Mach 0.09</button>, falls about three semitones as it passes. At <button class="set" data-set="M=1">the speed of sound</button> the fronts pile into one shock at the nose; faster still they trail inside a cone with sin θ = 1/M. When that cone sweeps over the ground, people hear a <dfn data-def="The double crack heard when the shock cone of a supersonic object sweeps past.">sonic boom</dfn>: a double crack from the shocks at the nose and the tail.</p>
+
+<aside class="callout history"><p>Christian Doppler predicted the effect in 1842, thinking of the colors of double stars. In 1845 the Dutch meteorologist C. H. D. Buys Ballot tested it with sound: horn players rode an open railway car near Utrecht holding a steady note, while musicians beside the track judged the pitch as they went by.</p></aside>
+
+<h2>The ear</h2>
+
+<p>All of this ends at the ear. The outer ear funnels sound into the <span class="c-ink" data-part="canal">ear canal</span>, a tube about 2.5 cm long sealed at its far end by the <span class="c-blue" data-part="eardrum">eardrum</span>. Behind the eardrum, in a small air-filled cavity, three tiny bones, the <span class="c-purple" data-part="ossicles">ossicles</span>, carry the vibration to the <span class="c-red" data-part="cochlea">cochlea</span>, a coiled tube of fluid buried in the skull, where it becomes nerve signals. Point at the parts to name them, and play a tone to set them moving:</p>
+
+<figure class="demo" id="ear" aria-label="A schematic cross-section of the ear: the outer ear and ear canal, the eardrum, the three middle-ear bones, the cochlea and balance canals, and the auditory nerve. Pressure bands travel down the canal and the eardrum and bones rock with them."></figure>
+<script>
+{
+  const voice = Sound.voice({ type: "sine", freq: 500, gain: 0.5 });
+  const PIV = [476, 182];
+  const INFO = {
+    canal: "ear canal: about 2.5 cm long, closed at the eardrum; its quarter-wave resonance boosts sounds near 3 kHz",
+    eardrum: "eardrum: a cone of skin and fiber about 9 mm across and a tenth of a millimeter thick",
+    ossicles: "ossicles: the hammer, anvil, and stirrup; the stirrup is about 3 mm long, the smallest bone in the body",
+    cochlea: "cochlea: a fluid-filled tube about 35 mm long, coiled two and a half turns into the size of a pea",
+    nerve: "auditory nerve: about 30,000 fibers carry what the cochlea hears to the brain",
+    balance: "semicircular canals: organs of balance that share the inner ear's fluid but not its job",
+    tube: "Eustachian tube: lets air into the middle ear so its pressure matches the outside; it is what pops on a plane",
+  };
+  const spiral = (cx, cy) => { const pts = []; for (let i = 0; i <= 160; i++) { const th = (i / 160) * 5 * Math.PI, r = 92 * Math.exp(-(th / (5 * Math.PI)) * Math.log(92 / 14)); pts.push([cx + r * Math.cos(th + Math.PI), cy + r * Math.sin(th + Math.PI)]); } return pts; };
+  const COIL = spiral(712, 330);
+  const rot = (p, a) => { const dx = p[0] - PIV[0], dy = p[1] - PIV[1], c = Math.cos(a), s = Math.sin(a); return [PIV[0] + c * dx - s * dy, PIV[1] + s * dx + c * dy]; };
+  // Hit-testing polylines in design units.
+  const HIT = {
+    canal: [[120, 288], [420, 296]], eardrum: [[420, 240], [446, 300], [432, 352]], ossicles: [[446, 300], [458, 196], [490, 186], [512, 286], [556, 296]],
+    cochlea: COIL.filter((_, i) => i % 8 === 0), nerve: [[712, 330], [850, 312], [985, 300]], balance: [[600, 140], [640, 110], [680, 150]], tube: [[470, 440], [560, 540]],
+  };
+  let M = null;
+  const segDist = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L)); return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy); };
+  const partAt = p => {
+    if (!M) return null;
+    const q = [(p[0] - M.ox) / M.k, (p[1] - M.oy) / M.k];
+    let best = null, bd = 30 / M.k;
+    for (const [name, pts] of Object.entries(HIT)) for (let i = 0; i < pts.length - 1; i++) { const d = segDist(q, pts[i], pts[i + 1]); if (d < bd) { bd = d; best = name; } }
+    return best;
+  };
+  demo("ear", {
+    aspect: w => (w < 560 ? 1.3 : 1.75),
+    state: () => ({ t: 0, hover: null }),
+    controls: [
+      { key: "L", label: "Loudness", min: 0, max: 100, step: 1, value: 70, unit: " dB", color: "blue" },
+      Sound.button(voice, { label: "Play a tone" }),
+    ],
+    caption: "A schematic cross-section of the right ear, seen from the front, not to scale. Pressure bands travel down the canal; the eardrum and ossicles rock with them, slowed down and with the motion enlarged billions of times. Point at a part to name it.",
+    status: s => (s.hover ? INFO[s.hover] : "Point at a part to name it."),
+    hover(p, s) { const h = p ? partAt(p) : null; if (h === s.hover) return false; s.hover = h; return true; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      voice.set({ gain: 0.5 * Math.pow(10, (v.L - 70) / 40) });
+      const k = Math.min(g.w / 1000, g.h / 560), ox = (g.w - 1000 * k) / 2, oy = (g.h - 560 * k) / 2;
+      M = { k, ox, oy };
+      const P = ([x, y]) => [ox + x * k, oy + y * k], W = w => Math.max(1, w * k);
+      const on = n => s.hover === n || g.lit(n);
+      const ph = Math.sin(TAU * 0.8 * s.t), amp = v.L <= 0 ? 0 : Math.min(0.12, 0.07 * Math.pow(10, (v.L - 70) / 60)), ang = -amp * ph;
+      // The temporal bone and the middle ear's air space.
+      g.path([[380, 60], [1000, 40], [1000, 560], [380, 560]].map(P), { fill: g.rgba("muted", 0.1), close: true });
+      { const e = []; for (let i = 0; i <= 48; i++) { const a = (i / 48) * TAU; e.push(P([482 + 70 * Math.cos(a), 300 + 150 * Math.sin(a)])); } g.path(e, { fill: "bg", close: true }); }
+      g.text("bone", P([975, 530]), { size: 11, color: "muted", align: "right" });
+      // Pressure bands in the canal.
+      for (let x = 112; x < 420; x += 4) {
+        const pv = Math.cos(TAU * ((x - 112) / 140 - 0.8 * s.t));
+        g.rect(...P([x, 258 + ((x - 112) / 308) * 8]), W(4.2), W(66), { fill: g.rgba(pv > 0 ? "red" : "blue", Math.min(0.3, Math.abs(pv) * 0.3 * (amp / 0.07))) });
+      }
+      // Outer ear and canal walls.
+      const cw = on("canal") ? 3.5 : 2;
+      g.path([[112, 250], [420, 258]].map(P), { stroke: "ink", width: W(cw * 1.6) });
+      g.path([[112, 324], [420, 334]].map(P), { stroke: "ink", width: W(cw * 1.6) });
+      { const arc = []; for (let i = 0; i <= 40; i++) { const a = Math.PI * (0.62 + 0.86 * (i / 40)); arc.push(P([128 + 78 * Math.cos(a), 292 + 205 * Math.sin(a)])); }
+        g.path(arc, { stroke: "muted", width: W(30), alpha: 0.35 }); g.path(arc, { stroke: "ink", width: W(2.5) }); }
+      // Eustachian tube.
+      g.path([[452, 430], [540, 548]].map(P), { stroke: on("tube") ? "ink" : "muted", width: W(on("tube") ? 5 : 3) });
+      g.path([[492, 420], [580, 540]].map(P), { stroke: on("tube") ? "ink" : "muted", width: W(on("tube") ? 5 : 3) });
+      // Balance canals.
+      for (const [cx, cy, rx, ry] of [[612, 140, 34, 48], [662, 120, 46, 28], [650, 170, 40, 22]]) {
+        const pts = []; for (let i = 0; i <= 48; i++) { const a = (i / 48) * TAU; pts.push(P([cx + rx * Math.cos(a), cy + ry * Math.sin(a)])); }
+        g.path(pts, { stroke: on("balance") ? "ink" : "muted", width: W(on("balance") ? 9 : 7), alpha: 0.8 });
+      }
+      // Cochlea and nerve.
+      g.path([[562, 296], [600, 300], [620, 330]].map(P), { stroke: "red", width: W(16), alpha: 0.55 });
+      g.path(COIL.map(P), { stroke: "red", width: W(on("cochlea") ? 18 : 14), alpha: on("cochlea") ? 0.85 : 0.6 });
+      g.path([[712, 330], [850, 312], [985, 300]].map(P), { stroke: "green", width: W(on("nerve") ? 16 : 12), alpha: 0.65 });
+      // Eardrum (a shallow cone pulled in at its center by the hammer).
+      const umbo = rot([446, 300], ang);
+      g.path([P([420, 240]), P(umbo), P([432, 352])], { stroke: "blue", width: W(on("eardrum") ? 7 : 5) });
+      // Ossicles: hammer and anvil rock about their axis, the stirrup pistons in the oval window.
+      const oc = "purple", ow = on("ossicles") ? 1.3 : 1;
+      g.path([umbo, rot([452, 230], ang), rot([458, 196], ang)].map(P), { stroke: oc, width: W(9 * ow) });
+      g.circle(P(rot([463, 182], ang)), 17 * k * ow, { fill: oc });
+      g.circle(P(rot([494, 184], ang)), 16 * k * ow, { fill: oc });
+      const tip = rot([512, 286], ang);
+      g.path([rot([496, 196], ang), rot([508, 240], ang), tip].map(P), { stroke: oc, width: W(8 * ow) });
+      const dx = tip[0] - 512;
+      g.path([[tip[0], 286], [548 + dx, 278], [556 + dx, 278]].map(P), { stroke: oc, width: W(5 * ow) });
+      g.path([[tip[0], 290], [548 + dx, 312], [556 + dx, 312]].map(P), { stroke: oc, width: W(5 * ow) });
+      g.path([[557 + dx, 272], [557 + dx, 318]].map(P), { stroke: oc, width: W(7 * ow) });
+      // Labels.
+      if (g.w >= 560) {
+        g.callouts([
+          { at: P([260, 254]), text: "ear canal", side: "left" }, { at: P([52, 300]), text: "outer ear", side: "left" },
+          { at: P([428, 352]), text: "eardrum", color: "blue", side: "left" }, { at: P([500, 516]), text: "Eustachian tube", side: "left" },
+          { at: P([463, 168]), text: "hammer", color: "purple", side: "left" }, { at: P([500, 172]), text: "anvil", color: "purple", side: "right" },
+          { at: P([548, 316]), text: "stirrup", color: "purple", side: "right" }, { at: P([660, 98]), text: "balance canals", side: "right" },
+          { at: P([760, 380]), text: "cochlea", color: "red", side: "right" }, { at: P([900, 308]), text: "auditory nerve", color: "green", side: "right" },
+        ]);
+      } else if (s.hover) {
+        const n = { canal: "ear canal", eardrum: "eardrum", ossicles: "ossicles", cochlea: "cochlea", nerve: "auditory nerve", balance: "balance canals", tube: "Eustachian tube" }[s.hover];
+        g.text(n, [g.w / 2, 14], { size: 13, weight: 600, color: "ink" });
+      }
+    },
+  });
+}
+</script>
+
+<p>The motion is enlarged enormously here. At the loudness of conversation the eardrum moves by a few billionths of a meter. Why the bones at all? Because the cochlea is full of fluid, and sound in air bounces off water almost completely. Air is light and gives way easily; water is dense and stiff, so a pressure that sets air moving barely moves water. Of the energy in a sound wave striking a water surface, only about a tenth of a percent gets in. The middle ear has two tricks to do better. Change them:</p>
+
+<figure class="demo" id="lever" aria-label="Sound energy arriving from air splits at the middle ear into a part reflected back and a part that enters the fluid of the inner ear. Below, a curve of the fraction transmitted against the middle ear's pressure gain, with the human ear marked."></figure>
+<script>
+{
+  const ZA = 1.2 * 343, ZW = 1000 * 1480, RATIO = ZW / ZA;
+  const trans = G => { const m = RATIO / (G * G); return (4 * m) / ((1 + m) * (1 + m)); };
+  const pct = T => (T < 0.01 ? `${(T * 100).toFixed(2)}%` : `${Math.round(T * 100)}%`);
+  demo("lever", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    controls: [
+      { key: "A", label: "Area ratio", min: 1, max: 50, step: 0.5, value: 17, color: "blue", format: x => `${x}×` },
+      { key: "L", label: "Lever ratio", min: 1, max: 2, step: 0.05, value: 1.3, color: "purple", format: x => `${x.toFixed(2)}×` },
+    ],
+    presets: [{ label: "No middle ear", set: { A: 1, L: 1 } }, { label: "Human", set: { A: 17, L: 1.3 } }, { label: "Perfect match", set: { A: 46, L: 1.3 } }],
+    caption: "How much sound energy gets from air into the fluid of the inner ear, treating the fluid as water and the middle ear as a lossless lever. Top: the incoming energy splits into a reflected part and a transmitted part (arrow widths to scale); the funnel's mouth grows with the area ratio. Bottom: the transmitted fraction against the total pressure gain.",
+    status: (s, v) => { const G = v.A * v.L; return `pressure gain ${G.toFixed(1)}× (${(20 * Math.log10(G)).toFixed(0)} dB) · ${pct(trans(G))} of the energy enters the fluid`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, G = v.A * v.L, T = trans(G), top = g.h * 0.47, cy = top * 0.5, W0 = Math.min(30, top * 0.2);
+      const fx0 = g.w * 0.4, fx1 = g.w * 0.6, hl = Math.min(top * 0.45, 8 * Math.sqrt(v.A)), hr = 8;
+      g.rect(fx1, 4, g.w - fx1 - 4, top - 8, { fill: g.rgba("blue", 0.1), r: 4 });
+      g.text("air", [14, 14], { size: 12, color: "muted", align: "left" });
+      g.text("inner-ear fluid", [g.w - 12, 14], { size: 12, color: "blue", align: "right" });
+      g.path([[fx0, cy - hl], [fx1, cy - hr], [fx1, cy + hr], [fx0, cy + hl]], { fill: g.rgba("blue", 0.18), stroke: "blue", width: 1.5, close: true });
+      const pv = fx0 + (fx1 - fx0) / (1 + v.L);
+      g.line([pv, cy - hl - 10], [pv, cy + hl + 10], { stroke: "purple", width: 2, dash: [4, 3] });
+      g.circle([pv, cy - hl - 12], 4, { fill: "purple" });
+      g.text("middle ear", [(fx0 + fx1) / 2, cy + Math.max(hl, 20) + 22], { size: 11.5, color: "muted" });
+      g.arrow([10, cy], [fx0 - 6, cy], { stroke: "ink", width: W0 * 0.55, head: W0 * 0.9 });
+      g.text("sound arrives", [14, cy - W0 * 0.5 - 10], { size: 11.5, color: "ink", align: "left" });
+      const wr = Math.max(1.2, W0 * 0.55 * (1 - T)), wt = Math.max(1.2, W0 * 0.55 * T);
+      g.arrow([fx0 - 10, cy + 18], [44, top - 28], { stroke: "red", width: wr, head: Math.max(10, wr * 1.8) });
+      g.text(`reflected ${pct(1 - T)}`, [12, top - 8], { size: 11.5, color: "red", align: "left" });
+      g.arrow([fx1 + 4, cy], [g.w - 12, cy], { stroke: "blue", width: wt, head: Math.max(10, wt * 1.8) });
+      g.text(`enters ${pct(T)}`, [g.w - 12, cy + 22], { size: 11.5, color: "blue", align: "right" });
+      const P = g.graph({ box: [0, top + 8, g.w, g.h - top - 8], x: [0, 2], y: [0, 105], axes: "frame", grid: false, xLabel: "Pressure gain of the middle ear", yLabel: "energy in (%)", yTicks: [0, 50, 100],
+        xTicks: { values: [0, Math.log10(2), Math.log10(5), 1, Math.log10(20), Math.log10(50), 2], format: x => `${Math.round(Math.pow(10, x))}×` } });
+      P.fn(x => 100 * trans(Math.pow(10, x)), { color: "blue", width: 2.5, samples: 300 });
+      P.marker(Math.log10(22.1), 100 * trans(22.1), { color: "muted", label: narrow ? "" : "human" });
+      P.marker(Math.log10(G), 100 * T, { color: "purple", drop: true });
+    },
+  });
+}
+</script>
+
+<p>The eardrum has about 17 times the area of the stirrup's footplate, so the force it collects is concentrated on a patch 17 times smaller, and the pressure rises 17-fold. The hammer and anvil add a lever of about 1.3. Together they raise the pressure about 22 times, some 27 dB <a class="cite" href="#ref-pickles"></a>, which in this simple model lets around 40% of the energy into the fluid instead of 0.1%. A <button class="set" data-set="A=46 L=1.3">perfect match</button> would need about 60 times. When the middle ear fails, from fluid behind the eardrum in a child's ear infection or bones fused by disease, hearing drops by tens of decibels.</p>
+
+<p>Inside the cochlea, running its whole length, is the <span class="c-red" data-part="membrane">basilar membrane</span>, a strip of tissue that carries about 3,500 rows of hair cells. Unroll the cochlea and pick a frequency:</p>
+
+<figure class="demo" id="cochlea3d" aria-label="A three-dimensional cochlea, a tapering tube coiled two and a half turns, which a slider unrolls into a straight tube. A red marker shows where along it a chosen frequency peaks."></figure>
+<script>
+{
+  const LEN = 35, N = 140, ELL = 27, R0 = 4.2, HEIGHT = 4.5;
+  const scene = E3.scene({ shadow: true });
+  scene.look = "diagram";
+  // The duct's centerline: curvature 1/R(s), R shrinking from 4.2 mm at the base to 1.2 mm at the apex
+  // (two and a half turns over 35 mm), rising 4.5 mm. Unrolling scales the curvature and the rise down.
+  const centerline = u => {
+    const pts = [], ds = LEN / N;
+    let phi = 0, x = 0, z = 0;
+    for (let i = 0; i <= N; i++) {
+      const s = i * ds;
+      pts.push([x, (1 - u) * HEIGHT * (s / LEN), z]);
+      phi += ((1 - u) * Math.exp(s / ELL) * ds) / R0;
+      x += Math.cos(phi) * ds; z += Math.sin(phi) * ds;
+    }
+    const c = [0, 1, 2].map(j => pts.reduce((t, p) => t + p[j], 0) / pts.length);
+    return pts.map(p => [p[0] - c[0], p[1] - c[1] + 3, p[2] - c[2]]);
+  };
+  const cache = new Map();
+  const shape = q => {
+    if (!cache.has(q)) { const line = centerline(q / 20); cache.set(q, { line, mesh: E3.mesh.tube(line, t => 0.95 - 0.5 * t, { segments: 18 }) }); }
+    return cache.get(q);
+  };
+  const duct = scene.add(shape(0).mesh, { name: "cochlea", material: "bone", opacity: 0.55 });
+  const peak = scene.add(E3.mesh.sphere(1), { name: "peak", color: "red" });
+  const voice = Sound.voice({ type: "sine", freq: 1000, gain: 0.5 });
+  const fmt = f => (f >= 1000 ? `${(f / 1000).toFixed(f >= 9950 ? 0 : 1)} kHz` : `${Math.round(f)} Hz`);
+  demo("cochlea3d", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    orbit: { yaw: 0.5, pitch: 0.6 },
+    controls: [
+      { key: "u", label: "Unroll", min: 0, max: 1, step: 0.05, value: 0, color: "ink" },
+      { key: "lf", label: "Frequency", min: 1.301, max: 4.301, step: 0.01, value: 3, color: "red", format: x => fmt(Math.pow(10, x)) },
+      Sound.button(voice),
+    ],
+    presets: [{ label: "Coiled", set: { u: 0 } }, { label: "Unrolled", set: { u: 1 } }, { label: "100 Hz", set: { lf: 2 } }, { label: "1 kHz", set: { lf: 3 } }, { label: "10 kHz", set: { lf: 4 } }],
+    caption: "The cochlea's duct, about 35 mm long, coiled two and a half turns and drawn a little simplified. The red bead marks where a tone of the chosen frequency moves the basilar membrane most, by Greenwood's map: high frequencies near the base, by the stirrup, and low ones at the apex.",
+    status: (s, v) => { const f = Math.pow(10, v.lf); return `${fmt(f)} peaks ${((1 - SND.place(f)) * LEN).toFixed(1)} mm from the base`; },
+    draw(g, s, v) {
+      const f = Math.pow(10, v.lf);
+      voice.set({ freq: f });
+      const S = shape(Math.round(v.u * 20));
+      duct.mesh = S.mesh;
+      const d = (1 - SND.place(f)) * LEN, i = Math.min(N, Math.max(0, Math.round((d / LEN) * N)));
+      const lit = g.lit("membrane");
+      peak.position = S.line[i];
+      peak.scale = (0.95 - 0.5 * (i / N)) * (lit ? 1.6 : 1.3);
+      const view = g.render3d(scene, { ...s.view, zoom: (s.view?.zoom ?? 1) * 1.3, fit: "always", fov: 28 });
+      g.callouts([
+        { at: view.project(S.line[0]), text: "base: high pitches" },
+        { at: view.project(S.line[N]), text: "apex: low pitches" },
+        { at: view.project(S.line[i]), text: fmt(f), color: "red" },
+      ]);
+    },
+  });
+}
+</script>
+
+<p>The membrane is narrow and stiff at the base, by the stirrup, and about five times wider and far floppier at the apex. So every stretch of it is tuned to a different frequency, from 20 kHz at the base to 20 Hz at the apex. Georg von Békésy watched the result in cochleas from cadavers <a class="cite" href="#ref-bekesy"></a>: a tone sends a ripple along the membrane that grows until it reaches the place tuned to it, then dies out abruptly.<span class="sidenote">In a living ear the outer hair cells push on the membrane in time with the sound, making the peaks far taller and sharper than in Békésy's cadavers. The figures here show the passive version.</span> Donald Greenwood fitted the map from place to frequency <a class="cite" href="#ref-greenwood"></a>. Here is the membrane unrolled, with two tones:</p>
+
+<figure class="demo" id="basilar" aria-label="The basilar membrane unrolled, base at the left and apex at the right, with a frequency scale beneath. Each tone sends a traveling wave from the base that peaks at its own place and stops."></figure>
+<script>
+{
+  const LEN = 35, a = Sound.voice({ freq: 1000, gain: 0.5 }), b = Sound.voice({ freq: 4000, gain: 0.5 });
+  const fmt = f => (f >= 1000 ? `${(f / 1000).toFixed(f >= 9950 ? 0 : 1)} kHz` : `${Math.round(f)} Hz`);
+  const xPeak = f => (1 - SND.place(f)) * LEN;
+  const env = (x, f) => { const xp = xPeak(f); return x <= xp ? Math.exp(-(xp - x) / 7) : Math.exp(-(((x - xp) / 1.3) ** 2)); };
+  const wave = (x, f, t) => { const xp = Math.max(1.2, xPeak(f)), cyc = Math.min(2.5, 0.6 + xp / 6); return env(x, f) * Math.cos(TAU * 0.6 * t - TAU * cyc * Math.pow(Math.min(x, xp * 1.3) / xp, 1.5)); };
+  demo("basilar", {
+    aspect: w => (w < 560 ? 1.05 : 2.1),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "lf1", label: "First tone", min: 1.5, max: 4.25, step: 0.01, value: 3, color: "red", format: x => fmt(Math.pow(10, x)) },
+      { key: "two", label: "Second tone", type: "toggle", value: true, color: "purple" },
+      { key: "lf2", label: "Second tone", min: 1.5, max: 4.25, step: 0.01, value: 3.6, color: "purple", format: x => fmt(Math.pow(10, x)) },
+      Sound.button([a, b]),
+    ],
+    presets: [{ label: "Far apart", set: { lf1: 3, lf2: 3.6, two: true } }, { label: "Close together", set: { lf1: 3, lf2: 3.06, two: true } }, { label: "Low and high", set: { lf1: 2.3, lf2: 4, two: true } }, { label: "One tone", set: { two: false } }],
+    caption: "The basilar membrane unrolled, base at the left, slowed down so both tones ripple at the same visible rate. Each tone's wave travels from the base, grows, peaks at its place on Greenwood's map, and dies out; the dashed lines are each wave's envelope. The scale below gives the frequency each place is tuned to.",
+    status: (s, v) => { const f1 = Math.pow(10, v.lf1), f2 = Math.pow(10, v.lf2); return `${fmt(f1)} peaks ${xPeak(f1).toFixed(1)} mm from the base` + (v.two ? ` · ${fmt(f2)} at ${xPeak(f2).toFixed(1)} mm` : ""); },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, f1 = Math.pow(10, v.lf1), f2 = Math.pow(10, v.lf2);
+      a.set({ freq: f1 });
+      b.set({ freq: f2, gain: v.two ? 0.5 : 0 });
+      const x0 = 16, x1 = g.w - 16, X = mm => x0 + (mm / LEN) * (x1 - x0), cy = g.h * 0.4, amp = g.h * (narrow ? 0.13 : 0.16);
+      const lit = g.lit("membrane");
+      // The membrane, widening toward the apex.
+      const up = [], dn = [];
+      for (let i = 0; i <= 60; i++) { const mm = (i / 60) * LEN, hw = 3 + (mm / LEN) * 13; up.push([X(mm), cy - hw]); dn.push([X(mm), cy + hw]); }
+      g.path(up.concat(dn.reverse()), { fill: g.rgba("red", lit ? 0.2 : 0.1), close: true });
+      g.text("base", [x0, cy - amp * 1.9], { size: 11.5, color: "muted", align: "left" });
+      g.text("apex", [x1, cy - amp * 1.9], { size: 11.5, color: "muted", align: "right" });
+      const tones = [[f1, "red"]].concat(v.two ? [[f2, "purple"]] : []);
+      for (const [f, col] of tones) {
+        const e1 = [], e2 = [];
+        for (let i = 0; i <= 300; i++) { const mm = (i / 300) * LEN; e1.push([X(mm), cy - amp * env(mm, f)]); e2.push([X(mm), cy + amp * env(mm, f)]); }
+        g.path(e1, { stroke: col, width: 1, dash: [4, 4], alpha: 0.7 });
+        g.path(e2, { stroke: col, width: 1, dash: [4, 4], alpha: 0.7 });
+        g.circle([X(xPeak(f)), cy - amp - 9], 3.5, { fill: col });
+      }
+      g.labels(tones.map(([f, col]) => ({ at: [X(xPeak(f)), cy - amp - 9], text: fmt(f), color: col, r: 3.5, prefer: [0, -1] })), { size: 12 });
+      const pts = [];
+      for (let i = 0; i <= 700; i++) { const mm = (i / 700) * LEN; let y = 0; for (const [f] of tones) y += wave(mm, f, s.t); pts.push([X(mm), cy - amp * y * (tones.length > 1 ? 0.8 : 1)]); }
+      g.path(pts, { stroke: "ink", width: 2.25 });
+      // Greenwood's map as a ruler.
+      const ry = g.h * 0.8;
+      g.line([x0, ry], [x1, ry], { stroke: "muted", width: 1 });
+      const ticks = narrow ? [20000, 5000, 1000, 200, 50] : [20000, 10000, 5000, 2000, 1000, 500, 200, 100, 50, 20];
+      for (const f of ticks) { const x = X(xPeak(f)); g.line([x, ry - 4], [x, ry + 4], { stroke: "muted", width: 1 }); g.text(f >= 1000 ? `${f / 1000}k` : `${f}`, [x, ry + 15], { size: 10.5, color: "muted" }); }
+      g.text("frequency each place is tuned to (Hz)", [g.w / 2, ry + 32], { size: 11.5, color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Each tone sets its own stretch of membrane moving, and the hair cells there fire. The cochlea does in fluid and tissue what the spectrum did on paper: it splits a sound into its frequencies, which is why you hear the harmonics and not the shape of the wave. Tones <button class="set" data-set="lf1=3 lf2=3.06 two=true">close in pitch</button> stir overlapping stretches and blur into beats or roughness; tones far apart are heard as two. And because every sound passes the base on its way in, the hair cells there take the most wear: hearing loss from age and noise begins with the highest pitches.</p>
+
+<aside class="callout key"><p>The cochlea is a spectrum analyzer: each place along it answers to one frequency.</p></aside>
+
+<p>Clap your hands once more. The squeeze leaves your palms at 343 m/s, handed from molecule to molecule while each one only rocks in place. It spreads and fades by 6 dB for every doubling of distance, bounces off the walls, and reaches your ear a few milliseconds later as a pressure wiggle of a fraction of a pascal. The eardrum follows it, three bones turn it into a push on fluid, and a ripple runs along the cochlea. A clap holds every frequency at once, so the whole membrane stirs, base first, and within a few milliseconds your brain knows what made the sound and where.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-kinsler">L. E. Kinsler, A. R. Frey, A. B. Coppens, and J. V. Sanders, <em>Fundamentals of Acoustics</em>, 4th ed. (Wiley, 2000).</li>
+  <li id="ref-stevens">S. S. Stevens, “The measurement of loudness”, <em>Journal of the Acoustical Society of America</em> 27(5), 815–829 (1955).</li>
+  <li id="ref-helmholtz">H. von Helmholtz, <em>On the Sensations of Tone as a Physiological Basis for the Theory of Music</em>, translated by A. J. Ellis, 2nd English ed. (Longmans, Green, 1885); first German edition 1863.</li>
+  <li id="ref-fant">G. Fant, <em>Acoustic Theory of Speech Production</em> (Mouton, The Hague, 1960).</li>
+  <li id="ref-peterson">G. E. Peterson and H. L. Barney, “Control methods used in a study of the vowels”, <em>Journal of the Acoustical Society of America</em> 24(2), 175–184 (1952).</li>
+  <li id="ref-haas">H. Haas, “The influence of a single echo on the audibility of speech”, <em>Journal of the Audio Engineering Society</em> 20(2), 146–159 (1972); translated from <em>Acustica</em> 1, 49–58 (1951).</li>
+  <li id="ref-pickles">J. O. Pickles, <em>An Introduction to the Physiology of Hearing</em>, 4th ed. (Emerald, 2012).</li>
+  <li id="ref-bekesy">G. von Békésy, <em>Experiments in Hearing</em>, translated and edited by E. G. Wever (McGraw-Hill, 1960).</li>
+  <li id="ref-greenwood">D. D. Greenwood, “A cochlear frequency-position function for several species: 29 years later”, <em>Journal of the Acoustical Society of America</em> 87(6), 2592–2605 (1990).</li>
+</ol>
