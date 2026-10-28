@@ -9,8 +9,8 @@
     "deploy": "npm run build && npx -y wrangler@4 deploy"
   },
   "dependencies": {
-    "@safis/svelte": "0.3.0",
-    "safis": "0.3.0"
+    "@safis/svelte": "^0.4.0",
+    "@safis/core": "^0.4.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

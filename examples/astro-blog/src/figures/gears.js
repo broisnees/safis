@@ -1,5 +1,5 @@
 // Two meshing gears in 3D. E3 is the engine; it's set once safis starts in the browser.
-import { E3 } from "safis";
+import { E3 } from "@safis/core";
 
 export default function gears() {
   const scene = E3.scene();

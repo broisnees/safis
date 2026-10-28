@@ -1,5 +1,5 @@
 // A coil spring in 3D, squeezed by a weight. E3 is set once safis starts in the browser.
-import { E3 } from "safis";
+import { E3 } from "@safis/core";
 
 export default function coil() {
   const scene = E3.scene();
