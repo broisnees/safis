@@ -122,9 +122,12 @@
   .card .thumb { display: block; border-radius: 12px; overflow: hidden; margin-bottom: 8px; background: color-mix(in srgb, var(--ink) 2.5%, var(--bg)); box-shadow: inset 0 0 0 1px var(--chip-line); transition: translate 0.25s var(--ease-out), box-shadow 0.25s; }
   .card img, .card .noimg { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
   .card:hover .thumb { translate: 0 -3px; box-shadow: inset 0 0 0 1px var(--faint), 0 18px 36px -24px rgb(0 0 0 / 0.45); }
-  :root[data-theme="dark"] .card img { filter: brightness(0.92); }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .card img { filter: brightness(0.92); } }
   .card .thumb { position: relative; }
+  /* One card image per theme (site.mjs writes thumb-dark.webp); the hidden one never loads. */
+  .card .thumb-dark { display: none !important; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .card .thumb-dark { display: block !important; } :root:not([data-theme="light"]) .card .thumb-light { display: none !important; } }
+  :root[data-theme="dark"] .card .thumb-dark { display: block !important; }
+  :root[data-theme="dark"] .card .thumb-light { display: none !important; }
   .new { position: absolute; top: 10px; left: 10px; padding: 4px 9px; border-radius: 999px; background: var(--brand); color: #fff; font: 700 11px/1 var(--font-text); letter-spacing: 0.06em; text-transform: uppercase; box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--brand) 70%, transparent); }
   h3.latest { display: flex; align-items: baseline; gap: 14px; font: 600 13px/1 var(--font-text); letter-spacing: 0.08em; text-transform: uppercase; color: var(--brand); margin: 0 0 18px; }
   h3.latest::after { content: ""; flex: 1; height: 1px; background: var(--chip-line); }
@@ -195,118 +198,64 @@
   </div>
   <div class="wrap">
     <div class="stage-card showcase rise">
-<script>
-// Shared model of a turbofan on a test stand. Meters; the engine axis runs along x at height HC.
-window.FAN = (() => {
-  const S = Iso.scene(), HC = 1.72, X = "x", cutNear = [0, 1, 0, 0];
-  const on = (x) => [x, 0, HC];
-  // Nacelle: a see-through shell around everything.
-  const nac = [[1.04, 0], [1.1, 0.06], [1.14, 0.25], [1.155, 0.7], [1.14, 1.5], [1.07, 2.2], [0.96, 2.72], [0.94, 2.72], [0.97, 2.2], [1.0, 1.4], [1.015, 0.6], [1.01, 0.18], [0.99, 0.06]];
-  // Coaxial shells share split planes, placed in the gaps between stages and at the nacelle's end,
-  // so each slice of one shell wraps a slice of the other and no stage straddles a plane.
-  const cuts = x0 => [0.72, 1.25, 2.0, 2.5, 2.62, 3.0].map(x => x - x0);
-  S.lathe({ name: "nacelle", at: on(-0.1), axis: X, profile: nac, closed: true, segments: 48, material: "ghost", splitAt: cuts(-0.1) });
-  // Fan, spinner, outlet guide vanes.
-  const lp = S.group({ name: "low-pressure spool" });
-  lp.lathe({ name: "spinner", at: on(-0.24), axis: X, profile: [[0, 0], [0.11, 0.08], [0.21, 0.2], [0.285, 0.34], [0.31, 0.42], [0, 0.42]], segments: 32, material: "steel" });
-  lp.cylinder({ name: "fan", at: on(0.18), axis: X, r: 0.31, length: 0.26, material: "steel" });
-  lp.blades({ name: "fan", at: on(0.31), axis: X, count: 20, r0: 0.31, r1: 0.985, chord: [0.3, 0.34], twist: [0.4, 1.0], spans: 3, thick: 0.014, material: "aluminum" });
-  S.blades({ name: "outlet guide vanes", at: on(0.92), axis: X, count: 30, r0: 0.6, r1: 1.0, chord: 0.13, twist: [0.12, 0.08], spans: 1, thick: 0.01, material: "aluminum" });
-  // Core casing, cut away on the near side.
-  const core = S.group({ name: "core", cut: cutNear });
-  core.lathe({ name: "core casing", at: on(0.72), axis: X, closed: true, segments: 40, material: "porcelain", splitAt: cuts(0.72),
-    profile: [[0.535, 0], [0.58, 0.12], [0.6, 0.6], [0.615, 1.4], [0.58, 2.1], [0.49, 2.7], [0.46, 2.7], [0.55, 2.1], [0.585, 1.4], [0.57, 0.6], [0.55, 0.12], [0.515, 0.03]] });
-  // Rotating stages: a disk and a ring of blades each.
-  const stage = (grp, name, x, rd, rt, n, tw, mat = "steel") => {
-    grp.cylinder({ name, at: on(x - 0.022), axis: X, r: rd, length: 0.044, segments: 24, material: mat });
-    grp.blades({ name, at: on(x), axis: X, count: n, r0: rd, r1: rt, chord: 0.075, twist: tw, spans: 1, thick: 0.008, material: mat });
-  };
-  const xs = [];
-  for (const [i, x] of [0.86, 1.0, 1.14].entries()) { stage(lp, "booster", x, 0.27, 0.5 - i * 0.012, 18, [0.6, 0.9]); xs.push(x); }
-  const hp = S.group({ name: "high-pressure spool" });
-  for (let i = 0; i < 6; i++) { const x = 1.34 + i * 0.12; stage(hp, "compressor", x, 0.22, 0.44 - i * 0.02, 20, [0.7, 1.0]); xs.push(x); }
-  S.lathe({ name: "combustor", at: on(2.05), axis: X, closed: true, segments: 32, material: "hot", profile: [[0.26, 0], [0.4, 0.04], [0.43, 0.2], [0.41, 0.38], [0.3, 0.4], [0.25, 0.22]] });
-  for (let i = 0; i < 2; i++) { const x = 2.56 + i * 0.12; stage(hp, "turbine", x, 0.22, 0.42, 18, [-0.9, -0.7], "steel"); xs.push(x); }
-  for (let i = 0; i < 4; i++) { const x = 2.82 + i * 0.12; stage(lp, "turbine", x, 0.2, 0.44 + i * 0.006, 18, [-0.8, -0.6], "steel"); xs.push(x); }
-  // Shaft pieces between the disks (nothing passes through a part), also cut at the shells' split planes.
-  const ends = [0.44, ...xs.flatMap(x => [x - 0.022, x + 0.022]), ...cuts(0)].sort((a, b) => a - b);
-  for (let i = 0; i + 1 < ends.length; i++) {
-    const a = ends[i], b = ends[i + 1], mid = (a + b) / 2;
-    if (b - a < 0.005 || xs.some(x => Math.abs(mid - x) < 0.022) || mid > xs[xs.length - 1]) continue;
-    (mid > 1.3 && mid < 2.62 ? hp : lp).cylinder({ name: "shaft", from: [a, 0, HC], to: [b, 0, HC], r: 0.06, segments: 16, material: "steel" });
-  }
-  S.lathe({ name: "exhaust cone", at: on(3.24), axis: X, profile: [[0, 0], [0.2, 0], [0.18, 0.2], [0.1, 0.45], [0, 0.56]], segments: 32, material: "steel" });
-  // Test stand: a base plate with a scale, T-slot frame, two pylons up to the nacelle.
-  const stand = S.group({ name: "stand" });
-  const base = stand.box({ name: "base plate", from: [-0.6, -1.0, 0], to: [4.0, 1.0, 0.06], material: "aluminum", bevel: 0.012, split: 1 });
-  base.ruler({ face: "+z", from: [-2.1, -0.9], to: [1.9, -0.9], step: 0.1, major: 10, tick: 0.035, size: 0.07, label: (x, i) => `${i / 10} m` });
-  for (const y of [-0.72, 0.72]) stand.tslot({ name: "stand rail", from: [0.1, y, 0.1], to: [3.0, y, 0.1], size: 0.08, material: "aluminum", split: 6 });
-  for (const x of [0.14, 1.5, 2.96]) stand.tslot({ name: "stand rail", from: [x, -0.68, 0.1], to: [x, 0.68, 0.1], size: 0.08, material: "aluminum", split: 3 });
-  const pyl = [[0.9, 1.158], [2.0, 1.1]];
-  for (const [x, r] of pyl) {
-    for (const y of [-0.72, 0.72]) stand.tslot({ name: "post", from: [x, y, 0.14], to: [x, y, 0.42], size: 0.08, material: "aluminum" });
-    stand.tslot({ name: "cross beam", from: [x, -0.76, 0.46], to: [x, 0.76, 0.46], size: 0.08, material: "aluminum", split: 3 });
-    stand.box({ name: "pylon", from: [x - 0.15, -0.08, 0.5], to: [x + 0.15, 0.08, HC - r - 0.004], material: "steel", bevel: 0.01 });
-    for (const y of [-0.72, 0.72]) for (const dx of [-0.08, 0.08]) stand.screw({ name: "anchor bolt", at: [x + dx, y + (y < 0 ? -0.07 : 0.07), 0.06], r: 0.014, head: "hex", material: "steel" });
-  }
-  // Throttle console with a lever that slides in a slot.
-  const con = stand.box({ name: "throttle console", from: [3.35, 0.35, 0.06], to: [3.75, 0.8, 0.36], bevel: 0.015 });
-  con.decal({ face: "+z", points: [[-0.16, -0.02], [0.16, -0.02], [0.16, 0.02], [-0.16, 0.02]], tone: "slot", line: true });
-  const screen = con.screen({ face: "+y", at: [0, 0.03], size: [0.3, 0.12], text: "", color: "green" });
-  con.vents({ face: "+x", at: [0, -0.04], size: [0.3, 0.14], count: 5 });
-  const lever = stand.group({ name: "throttle" });
-  lever.cylinder({ name: "throttle", at: [3.39, 0.575, 0.36], r: 0.012, length: 0.14, material: "steel", segments: 12 });
-  lever.sphere({ name: "throttle", at: [3.39, 0.575, 0.535], r: 0.035, color: "orange", segments: 20 });
-  const spin = S.find("low-pressure spool"), hpg = hp;
-  function pose(lpAngle, hpAngle, n1, thrust) {
-    for (const k of spin.kids) if (k.name !== "spinner") k.rotate = { axis: "x", angle: lpAngle, about: on(0) };
-    for (const k of hpg.kids) k.rotate = { axis: "x", angle: hpAngle, about: on(0) };
-    S.find("combustor").heat = 0.2 + 0.8 * n1;
-    lever.move = [0.3 * thrust / 100, 0, 0];
-  }
-  return { scene: S, pose, HC, screen, inlet: [-0.1, 0, HC], nozzle: [3.42, 0, HC] };
-})();
-</script>
-<figure class="demo" id="fan" aria-label="A turbofan on a test stand in a cutaway isometric drawing. The nacelle is translucent; the core casing is cut open to show compressor stages, an orange combustor, and turbine stages. Air streaks enter the fan and leave the nozzle. A throttle lever on the console sets thrust."></figure>
+<figure class="demo" id="engine" aria-label="A kerosene rocket engine on a test stand above a concrete pad, firing. A plume with shock diamonds leaves the nozzle and smoke rolls out across the pad. A throttle sets the thrust."></figure>
 <script>
 {
-  const M = FAN, S = M.scene;
-  const D = Iso.drag(S, { part: "throttle", axis: "x", key: "thrust", min: 0, max: 100, scale: 0.003 });
-  const phase = t => (t < 30 ? "idle" : t < 65 ? "approach" : t < 88 ? "climb" : "take-off");
-  const n1Of = thr => 21 + 0.78 * thr, frac = n1 => Math.max(0, (n1 - 21) / 74);
-  const read = (s, v) => { const n1 = s.n1.x, f = frac(n1); return { n1, kN: 334 * Math.pow(f, 1.6), tgt: 420 + 440 * Math.pow(f, 1.3), name: phase(v.thrust) }; };
-  demo("fan", {
+  // The engine from E3.parts, firing: the plume leaves the bell and cools into an exhaust cloud
+  // that drifts off. No stand or floor: the engine is the subject. "Cut open" sections it on the
+  // side facing the viewer to show the flame in the chamber and both pumps turning. Millimeters.
+  const scene = E3.scene({ look: "night", shadow: false });
+  const eng = E3.parts.rocketEngine();
+  scene.add(eng);
+  const Hn = eng.info.height;
+  eng.fire(1);
+  const L = eng.plume.length;
+  // Exhaust past the flame: the jet's gas, cooling as it mixes with the air, streaming away and
+  // widening at a turbulent jet's 12 degree half-angle. Its momentum outlasts its lift for
+  // hundreds of meters, so inside this frame it streams on (no buoyancy) instead of billowing up.
+  const cloud = scene.add(E3.particles({
+    matter: "exhaust", units: "mm", count: 1300, seed: 3, life: [0.9, 1.7], size: [1400, 5200], sizeJitter: 0.6, opacity: 0.6, glow: 0.8, temperature: [1500, 500], fade: [0.08, 0.5],
+    color: "#d9d4cb", volume: { erosion: 0.6, density: 1, flow: [400, -7000, 100] },
+    emitter: { shape: "disk", radius: eng.info.exit * 1.1, position: [0, -L * 0.8, 0], direction: [0, -1, 0], speed: [9000, 15000], spread: 0.21 },
+    forces: { drag: 0.35, buoyancy: 0, wind: [600, 0, 150] },
+  }));
+  let view = null;
+  const nameOf = node => { for (let n = node; n; n = n.parent) if (n.name && eng.notes[n.name]) return n.name; return null; };
+  const read = v => { const thr = v.throttle / 100; return { kN: 550 * thr, pc: 9.7 * thr, pe: 0.8 * (0.35 + 0.65 * thr) }; };
+  const fig = demo("engine", {
     aspect: w => (w < 560 ? 0.95 : 1.55),
-    orbit: Iso.orbit({ yaw: 2.3, pitch: 0.42, minPitch: 0.1, maxPitch: 1.1 }),
-    state: () => ({ n1: { x: n1Of(95), v: 0 }, lp: 0, hp: 0, t: 0, hover: null }),
-    controls: [{ key: "thrust", label: "Thrust", min: 0, max: 100, step: 1, value: 95, unit: "%", color: "orange" }],
-    presets: [{ label: "Idle", set: { thrust: 5 } }, { label: "Cruise", set: { thrust: 72 } }, { label: "Take-off", set: { thrust: 95 } }],
-    caption: "A turbofan cutaway on a test stand. The fan and spools turn far slower than life (a real fan turns about 50 times a second at take-off), and the air streaks follow a model flow, not a fluid simulation.",
-    hover: Iso.hover(S),
-    drag: D,
-    change(key, s, v, fig) { if (!fig.playing) s.n1 = { x: n1Of(v.thrust), v: 0 }; },   // paused: snap, so the still frame matches
-    step(dt, s, v) {
-      s.t += dt;
-      Iso.spring(s.n1, n1Of(v.thrust), dt, 0.55);
-      s.lp = (s.lp + dt * s.n1.x / 100 * 5.5) % (Math.PI * 2);
-      s.hp = (s.hp + dt * (0.4 + s.n1.x / 100) * 7) % (Math.PI * 2);
-    },
+    orbit: { yaw: 0.55, pitch: 0.18, minPitch: -0.4, maxPitch: 1.1 },
+    state: () => ({ t: 0, spin: 0, hover: null, inside: 0 }),
+    controls: [
+      { key: "throttle", label: "Throttle", min: 40, max: 100, step: 1, value: 100, unit: "%", color: "orange" },
+      { key: "cut", label: "Cut open", type: "toggle", value: false },
+    ],
+    presets: [{ label: "Minimum", set: { throttle: 40 } }, { label: "Full", set: { throttle: 100 } }, { label: "Look inside", set: { cut: true } }],
+    caption: "A gas-generator kerosene engine firing, built to real proportions. Cut it open to see the flame in the chamber and the two pumps turning. The plume and the exhaust cloud follow physical rules, not a fluid simulation. Point at a part to name it.",
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    step(dt, s, v) { s.t += dt; s.spin += dt * (2 + 4 * v.throttle / 100); },
+    change(key, s, v, f) { if (key === "cut" && !f.playing) s.inside = v.cut ? 1 : 0; },
     draw(g, s, v) {
-      const r = read(s, v);
-      M.pose(s.lp, s.hp, frac(r.n1), v.thrust);
-      M.screen.text = `N1 ${r.n1.toFixed(1)}%`;
-      const V = g.iso(S, { view: s.view, hover: s.hover, box: [0, 0, g.w, g.h] });
-      if (g.fx && g.fx.flow) {
-        const inlet = V.ellipse(M.inlet, [1, 0, 0], 1.02), nozzle = V.ellipse(M.nozzle, [1, 0, 0], 0.45);
-        g.fx.flow(null, { inlet, nozzle, throttle: frac(r.n1), temperature: r.tgt + 273, speed: 0.1, t: s.t, seed: 4, density: 0.35, trail: 0.3 });
-      }
-      const x = 16, y = g.w < 560 ? 18 : g.h - 122, rows = [[r.name, ""], [`N1 ${r.n1.toFixed(1)}%`, "fan speed"], [`${r.kN.toFixed(0)} kN`, "thrust"], [`TGT ${r.tgt.toFixed(0)}°C`, "turbine gas"]];
+      scene.time = s.t;
+      scene.look = E3.dark ? "night" : "outdoor";
+      const r = read(v);
+      eng.fire(v.throttle / 100).cutaway(v.cut).pose({ spin: s.spin, fuelSpin: s.spin * 1.35 });
+      scene.cutPlane = v.cut ? { facing: "camera", at: [0, Hn * 0.5, 0] } : null;
+      cloud.density = 0.25 + 0.75 * v.throttle / 100;
+      for (const n of Object.values(eng.parts)) n.highlight = n.name === s.hover;
+      // Cutting it open also glides the camera in on the engine.
+      s.inside += ((v.cut ? 1 : 0) - s.inside) * (fig && fig.playing ? 0.12 : 1);
+      if (Math.abs((v.cut ? 1 : 0) - s.inside) > 0.002) g.wantsFrame = true;
+      const k = s.inside * s.inside * (3 - 2 * s.inside);
+      view = g.render3d(scene, { ...s.view, fov: 28, target: [0, Hn * (0.05 + 0.4 * k) - L * 0.35 * (1 - k), 0], distance: 13500 - 6500 * k });
+      const x = 16, y = g.w < 560 ? 18 : g.h - 122, rows = [[r.pe < 0.9 ? "over-expanded" : "matched", ""], [`${v.throttle}%`, "throttle"], [`${r.kN.toFixed(0)} kN`, "thrust"], [`${r.pc.toFixed(1)} MPa`, "chamber"]];
       rows.forEach(([a, b], i) => { g.text(a, [x, y + i * 31], { font: i ? "mono" : undefined, size: i ? 14.5 : 15, weight: 600, align: "left", color: i === 3 || !i ? "orange" : "ink" }); if (b) g.text(b, [x, y + 14 + i * 31], { size: 11.5, align: "left", color: "muted" }); });
-      if (s.hover) { const at = V.at(s.hover); if (at) g.callouts([{ at, text: s.hover }], { split: g.w * 0.5 }); }
-      g.wantsFrame = true;
+      if (s.hover) { const node = eng.parts[s.hover]; const at = view.project(node.toWorld(node.mesh ? node.mesh.bounds.center : [0, 0, 0])); g.callouts([{ at, text: s.hover, side: "right" }]); }
+      else if (v.cut) g.callouts(eng.labels().filter(l => view.kept(l.at) && /chamber|turbine|impeller|pump|nozzle|injector/.test(l.text)).slice(0, 5).map(l => ({ at: view.project(l.at), text: l.text, side: "right" })));
     },
-    status: (s, v) => { const r = read(s, v); return `${r.name} · N1 ${r.n1.toFixed(1)}% · ${r.kN.toFixed(0)} kN · TGT ${r.tgt.toFixed(0)}°C`; },
+    status: (s, v) => { const r = read(v); return s.hover ? `${s.hover}: ${eng.notes[s.hover]}` : `${v.throttle}% throttle · ${r.kN.toFixed(0)} kN · chamber ${r.pc.toFixed(1)} MPa`; },
   });
+  if (window.LAB) { LAB.scenes.engine = scene; LAB.handles.engine = fig; }
 }
 </script>
     </div>
