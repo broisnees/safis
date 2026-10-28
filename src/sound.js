@@ -245,14 +245,15 @@
     const rho = 10 ** (-3 / (Math.max(0.05, o.decay ?? 2) * f));   // per-loop gain: -60 dB after `decay` seconds
     const bright = clamp(o.brightness ?? 0.5, 0, 1), beta = clamp(o.pick ?? 0.2, 0.02, 0.5), r = rng(o.seed ?? 3);
     const exc = new Float32Array(N), k = 1 - bright * 0.95;
-    let lp = 0, mean = 0, peak = 0;
+    let lp = 0, peak = 0;
     for (let i = 0; i < N; i++) {
-      const u = i / N, tri = u < beta ? u / beta : (1 - u) / (1 - beta);
+      // The shape spans one loop period P, not the N whole samples the delay line holds: a shape
+      // squeezed into N leaves a gap that puts every harmonic back about 35 dB down.
+      const u = i / P, tri = u < beta ? u / beta : (1 - u) / (1 - beta);
       lp += (1 - k) * (r() * 2 - 1 - lp);
       exc[i] = tri + bright * 0.7 * lp;
-      mean += exc[i] / N;
+      peak = Math.max(peak, Math.abs(exc[i]));
     }
-    for (let i = 0; i < N; i++) { exc[i] -= mean; peak = Math.max(peak, Math.abs(exc[i])); }   // no DC: it would ring on forever
     const y = new Float32Array(n);
     let apx = 0, apy = 0;
     for (let i = 0; i < n; i++) {
@@ -261,6 +262,10 @@
       apx = u; apy = ap;
       y[i] = (i < N ? exc[i] / (peak || 1) : 0) + ap;
     }
+    // The string's offset is removed by a DC blocker on the output, not by shifting the shape:
+    // a shifted shape steps at the end of its period and puts back the harmonics the pick removed.
+    let xp = 0, yp = 0;
+    for (let i = 0; i < n; i++) { const x = y[i]; yp = x - xp + 0.995 * yp; xp = x; y[i] = yp; }
     let m = 0;
     for (let i = 0; i < n; i++) m = Math.max(m, Math.abs(y[i]));
     const g = clamp(o.gain ?? 0.9, 0, 1) / (m || 1);
@@ -568,6 +573,41 @@
   const playingIn = fig => { const el = fig?.el ?? fig; return [...live].some(q => q.owner === el); };
 
   // ---------- Drawing helpers on g ----------
+  // ---------- Sound in air and standing waves ----------
+  // A sound wave in air moves each parcel back and forth along the direction of travel:
+  // displacement s = A cos(kx - wt). The pressure change is p = -(rho c^2) ds/dx, so it peaks
+  // where parcels bunch up (compressions), a quarter wavelength ahead of the largest
+  // displacement. Both are returned normalized to amplitude 1. A point source spreads its
+  // energy round a growing circle (2D, amplitude ~ 1/sqrt(r)) or sphere (3D, ~ 1/r).
+  function air(o = {}) {
+    const f = o.freq ?? 440, c = o.speed ?? 343, lam = c / f, k = (2 * Math.PI) / lam, w = 2 * Math.PI * f, ph = o.phase ?? 0;
+    const spread = o.source === "point" ? (o.dims === 3 ? r => 1 / Math.max(r * k, 1) : r => 1 / Math.sqrt(Math.max(r * k, 1))) : () => 1;
+    return {
+      freq: f, speed: c, wavelength: lam, k, omega: w, period: 1 / f, source: o.source === "point" ? "point" : "plane",
+      displacement: (x, t) => spread(Math.abs(x)) * Math.cos(k * x - w * t + ph),
+      pressure: (x, t) => spread(Math.abs(x)) * Math.sin(k * x - w * t + ph),
+      velocity: (x, t) => spread(Math.abs(x)) * Math.sin(k * x - w * t + ph),   // in phase with pressure in a traveling wave
+    };
+  }
+  // Standing waves. A string fixed at both ends: f_n = n c / 2L, y = sin(n pi x / L). A pipe open
+  // at both ends: the same frequencies, displacement antinodes (pressure nodes) at the ends. A
+  // pipe closed at x = 0 and open at L: only odd harmonics, f_n = n c / 4L.
+  function mode(o = {}) {
+    const kind = ["string", "open", "closed"].includes(o.kind) ? o.kind : "string", L = o.length ?? 1, c = o.speed ?? (kind === "string" ? 100 : 343);
+    let n = Math.max(1, Math.round(o.n ?? 1));
+    if (kind === "closed" && n % 2 === 0) n += 1;
+    const K = kind === "closed" ? (n * Math.PI) / (2 * L) : (n * Math.PI) / L, freq = kind === "closed" ? (n * c) / (4 * L) : (n * c) / (2 * L);
+    const shape = kind === "open" ? x => Math.cos(K * x) : x => Math.sin(K * x);           // displacement amplitude along the length
+    const pressure = kind === "open" ? x => Math.sin(K * x) : x => Math.cos(K * x);        // pressure amplitude (pipes)
+    const zeros = fn => { const out = []; for (let i = 0; i <= 2000; i++) { const x = (L * i) / 2000; if (Math.abs(fn(x)) < 1e-9 || (i && Math.sign(fn(x)) !== Math.sign(fn((L * (i - 1)) / 2000)))) out.push(+x.toFixed(9)); } return out; };
+    const nodes = [], antinodes = [];
+    for (let m = 0; m <= 4 * n + 2; m++) {
+      const xN = kind === "open" ? ((m + 0.5) * Math.PI) / K : (m * Math.PI) / K, xA = kind === "open" ? (m * Math.PI) / K : ((m + 0.5) * Math.PI) / K;
+      if (xN <= L + 1e-9) nodes.push(xN); if (xA <= L + 1e-9) antinodes.push(xA);
+    }
+    return { kind, n, harmonic: n, length: L, speed: c, freq, wavelength: c / freq, k: K, nodes, antinodes, shape, pressure, zeros };
+  }
+
   (window.__safisG ||= []).push((g, util) => {
     const C = c => util.color(c);
     const fmtHz = f => (f >= 1000 ? `${+(f / 1000).toFixed(f >= 10000 ? 0 : 1)} kHz` : `${Math.round(f)} Hz`);
@@ -589,13 +629,38 @@
             const px = bx + ((c2 + 0.5) * bw) / cols;
             top.push([px, Y(mx)]); bot.push([px, Y(mn) + 0.75]);
           }
-          g.path(top.concat(bot.reverse()), { fill: c, alpha: o.alpha ?? 0.9, close: true });
+          // The peak band, shaded deeper toward its middle, with the loudness (RMS) as a core.
+          const ctx = g.ctx, band = top.concat(bot.slice().reverse()), yz = Y(0), span = Math.max(4, (bh * 1) / (hi - lo));
+          ctx.save();
+          ctx.beginPath(); band.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath();
+          const gr = ctx.createLinearGradient(0, yz - span, 0, yz + span);
+          gr.addColorStop(0, util.rgba(c, (o.alpha ?? 0.9) * 0.55)); gr.addColorStop(0.5, util.rgba(c, o.alpha ?? 0.9)); gr.addColorStop(1, util.rgba(c, (o.alpha ?? 0.9) * 0.55));
+          ctx.fillStyle = gr; ctx.fill();
+          ctx.restore();
+          if (o.rms !== false) {
+            const rt = [], rb = [];
+            for (let c2 = 0; c2 < cols; c2++) {
+              const i0 = from + Math.floor((c2 * n) / cols), i1 = Math.max(i0 + 1, from + Math.floor(((c2 + 1) * n) / cols));
+              let e = 0, m = 0;
+              for (let i = i0; i < i1 && i < to; i++) { e += x[i] * x[i]; m++; }
+              const r = Math.sqrt(e / Math.max(1, m)), px = bx + ((c2 + 0.5) * bw) / cols;
+              rt.push([px, Y(r)]); rb.push([px, Y(-r)]);
+            }
+            g.path(rt.concat(rb.reverse()), { fill: g.mix ? g.mix(c, "ink", 0.35) : c, alpha: 0.55, close: true });
+          }
         } else {
           const pts = [];
           for (let i = from; i < to; i++) pts.push([X(i), Y(x[i])]);
-          if (o.fill) g.path([[X(from), Y(0)], ...pts, [X(to - 1), Y(0)]], { fill: c, alpha: 0.14, close: true });
+          if (o.fill !== false && !o.stems) {
+            // A soft fill between the trace and the zero line, strongest at the peaks.
+            const ctx = g.ctx, yz = Y(0), gr = ctx.createLinearGradient(0, Y(hi), 0, Y(lo));
+            const a = typeof o.fill === "number" ? o.fill : o.fill ? 0.22 : 0.12;
+            gr.addColorStop(0, util.rgba(c, a)); gr.addColorStop(0.5, util.rgba(c, a * 0.15)); gr.addColorStop(1, util.rgba(c, a));
+            ctx.save(); ctx.beginPath(); ctx.moveTo(X(from), yz); for (const q of pts) ctx.lineTo(q[0], q[1]); ctx.lineTo(X(to - 1), yz); ctx.closePath();
+            ctx.fillStyle = gr; ctx.fill(); ctx.restore();
+          }
           if (o.stems) for (const p of pts) { g.line([p[0], Y(0)], p, { stroke: c, width: 1.25, alpha: 0.7 }); g.circle(p, o.dot ?? 2.5, { fill: c }); }
-          else g.path(pts, { stroke: c, width: o.width ?? 2 });
+          else { const ctx = g.ctx; ctx.save(); ctx.lineJoin = ctx.lineCap = "round"; g.path(pts, { stroke: c, width: o.width ?? 2 }); ctx.restore(); }
         }
       });
       if (o.playhead != null) {
@@ -638,12 +703,30 @@
           const pts = [];
           for (let k = 0; k < mags.length; k++) { const f = hz(k); if (f >= f0 && f <= f1 && (!o.log || f > 0)) pts.push(P([f, val(mags[k])])); }
           if (pts.length > 1) {
-            const yb = P([f0, base])[1];
-            if (o.fill !== false) g.path([[pts[0][0], yb], ...pts, [pts[pts.length - 1][0], yb]], { fill: c, alpha: 0.14, close: true });
-            g.path(pts, { stroke: c, width: o.width ?? 1.75 });
+            const yb = P([f0, base])[1], ctx = g.ctx;
+            // A smooth curve through the bins (midpoint quadratics), over a fill that fades down.
+            const curve = () => { ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length - 1; i++) ctx.quadraticCurveTo(pts[i][0], pts[i][1], (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2); ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]); };
+            ctx.save();
+            if (o.fill !== false) {
+              const top = Math.min(...pts.map(q => q[1])), gr = ctx.createLinearGradient(0, top, 0, yb);
+              gr.addColorStop(0, util.rgba(c, 0.3)); gr.addColorStop(1, util.rgba(c, 0.02));
+              ctx.beginPath(); curve(); ctx.lineTo(pts[pts.length - 1][0], yb); ctx.lineTo(pts[0][0], yb); ctx.closePath(); ctx.fillStyle = gr; ctx.fill();
+            }
+            ctx.beginPath(); curve(); ctx.strokeStyle = util.color(c); ctx.lineWidth = o.width ?? 1.75; ctx.lineJoin = ctx.lineCap = "round"; ctx.stroke();
+            ctx.restore();
           }
         }
       });
+      // Harmonic markers: faint lines at whole multiples of a fundamental, numbered at the top.
+      if (o.harmonics) {
+        const f1h = o.harmonics, yTop = P.box[1] + 10, yBot = P.box[1] + P.box[3];
+        for (let k = 1; k * f1h <= f1; k++) {
+          if (k * f1h < f0) continue;
+          const xk = P([k * f1h, base])[0];
+          g.line([xk, yTop + 6], [xk, yBot], { stroke: "muted", width: 1, dash: [2, 4], alpha: 0.6 });
+          if (P.box[2] / ((f1 - f0) / f1h) > 14 || k <= 3) g.text(String(k), [xk, yTop], { size: 10.5, color: "muted" });
+        }
+      }
       if (o.peaks) {
         const list = freqs ? [...mags].map((m, k) => ({ freq: hz(k), mag: Math.abs(m) })).sort((a, b) => b.mag - a.mag).slice(0, o.peaks) : peaks(mags, { count: o.peaks, sampleRate: sr });
         for (const p of list) if (p.freq >= f0 && p.freq <= f1) { const q = P([p.freq, val(p.mag)]); g.label(fmtHz(p.freq), [q[0], q[1] - 12], { color: c, size: 12 }); }
@@ -685,6 +768,101 @@
       return { P, box: area, time: px => ((px - area[0]) / area[2]) * dur, freq: py => (1 - (py - area[1]) / area[3]) * maxF };
     };
 
+    // Sound in air: parcels of air on a seeded grid, each displaced along the direction of travel,
+    // over a shading of the pressure (compressions in high, rarefactions in low), with an
+    // optional plot of pressure and displacement along the wave that stays in sync.
+    const jit = (i, j, k) => { let h = Math.imul(i * 374761393 + j * 668265263 + k * 1442695041, 1274126177); h ^= h >>> 13; return ((Math.imul(h, 1103515245) >>> 0) % 10007) / 10007; };
+    g.airWave = (box = [0, 0, g.w, g.h], o = {}) => {
+      const [bx, by, bw, bh] = box, t = o.t ?? 0, lam = o.wavelength ?? bw / 3.2, speed = o.speed ?? lam * 0.5, amp = o.amplitude ?? lam * 0.09;
+      const point = o.source === "point", W = air({ freq: speed / lam, speed, source: o.source, phase: o.phase });
+      const plotH = o.plot === false ? 0 : Math.round(bh * 0.3), fh = bh - plotH - (plotH ? 12 : 0), src = o.at ?? [bx + bw * 0.08, by + fh / 2];
+      const hi = o.high ?? "red", lo = o.low ?? "blue", ctx = g.ctx;
+      const rOf = (x, y) => (point ? Math.hypot(x - src[0], y - src[1]) : x - bx);
+      g.clip([bx, by, bw, fh], () => {
+        if (point) {
+          const R = Math.hypot(Math.max(src[0] - bx, bx + bw - src[0]), Math.max(src[1] - by, by + fh - src[1])), gr = ctx.createRadialGradient(src[0], src[1], 0, src[0], src[1], R);
+          for (let i = 0; i <= 64; i++) { const r = (R * i) / 64, pv = W.pressure(r, t); gr.addColorStop(i / 64, util.rgba(pv > 0 ? hi : lo, Math.min(1, Math.abs(pv)) * (o.shade ?? 0.32))); }
+          ctx.fillStyle = gr; ctx.fillRect(bx, by, bw, fh);
+        } else for (let x = 0; x < bw; x += 2) { const pv = W.pressure(x, t); ctx.fillStyle = util.rgba(pv > 0 ? hi : lo, Math.abs(pv) * (o.shade ?? 0.32)); ctx.fillRect(bx + x, by, 2.2, fh); }
+        const sp = o.spacing ?? 9, marks = o.marks ?? 3;
+        for (let j = 0, y = by + sp / 2; y < by + fh; y += sp, j++) for (let i = 0, x = bx + sp / 2; x < bx + bw; x += sp, i++) {
+          const x0 = x + (jit(i, j, 1) - 0.5) * sp * 0.8, y0 = y + (jit(i, j, 2) - 0.5) * sp * 0.8, r0 = rOf(x0, y0);
+          if (point && r0 < sp) continue;
+          const d = amp * W.displacement(r0, t), ux = point ? (x0 - src[0]) / r0 : 1, uy = point ? (y0 - src[1]) / r0 : 0;
+          ctx.fillStyle = util.color(o.color ?? "ink"); ctx.globalAlpha = 0.72;
+          ctx.beginPath(); ctx.arc(x0 + ux * d, y0 + uy * d, o.dot ?? 1.5, 0, TAU); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        // A few marked parcels, each with its resting place, so the to-and-fro reads.
+        for (let m = 0; m < marks; m++) {
+          const x0 = point ? src[0] + (lam * (m + 1.25)) : bx + lam * (m + 0.6), y0 = point ? src[1] : by + fh * (0.3 + 0.2 * (m % 2)), r0 = rOf(x0, y0);
+          if (x0 > bx + bw - 6) break;
+          const d = amp * W.displacement(r0, t);
+          g.line([x0, y0 - 7], [x0, y0 + 7], { stroke: "muted", width: 1, dash: [2, 2] });
+          g.circle([x0 + d, y0], 4, { fill: o.markColor ?? "orange", stroke: "panel", width: 1.5 });
+        }
+        if (point) g.circle(src, 6, { fill: "ink" });
+      });
+      let plot = null;
+      if (plotH) {
+        const pb = [bx, by + fh + 12, bw, plotH], X = r => pb[0] + (r / (point ? bw - (src[0] - bx) : bw)) * pb[2], Yp = v => pb[1] + pb[3] / 2 - (v * pb[3]) / 2.4;
+        const R0 = point ? src[0] - bx : 0;
+        g.line([pb[0], Yp(0)], [pb[0] + pb[2], Yp(0)], { stroke: "grid", width: 1 });
+        const pp = [], dd = [];
+        for (let x = 0; x <= bw - R0; x += 2) { pp.push([bx + R0 + x, Yp(W.pressure(x, t))]); dd.push([bx + R0 + x, Yp(W.displacement(x, t))]); }
+        g.path(dd, { stroke: lo, width: 1.5, dash: [5, 4], alpha: 0.9 });
+        g.path(pp, { stroke: hi, width: 2.25 });
+        if (o.labels !== false) {
+          g.text("pressure", [pb[0] + 4, pb[1] + 9], { size: 11.5, color: hi, align: "left" });
+          g.text("displacement", [pb[0] + 64, pb[1] + 9], { size: 11.5, color: lo, align: "left" });
+        }
+        plot = { box: pb, x: X, y: Yp };
+      }
+      return { field: W, wavelength: lam, period: lam / speed, pressure: q => W.pressure(rOf(q[0], q[1]), t), displacement: q => W.displacement(rOf(q[0], q[1]), t), plot };
+    };
+
+    // A standing wave: on a string (fixed ends) or in a pipe (open, or closed at the left), with
+    // its nodes (N) and antinodes (A). In a pipe, parcels slosh along it and the pressure
+    // swings most where they don't move.
+    g.standingWave = (box = [0, 0, g.w, g.h], o = {}) => {
+      const [bx, by, bw, bh] = box, M = mode({ kind: o.kind, n: o.n, length: 1, speed: 1 }), t = o.t ?? 0, ph = Math.cos(TAU * (o.rate ?? 0.7) * t);
+      const X = u => bx + u * bw, cy = by + bh / 2, col = o.color ?? "blue", ctx = g.ctx;
+      if (M.kind === "string") {
+        const A = o.amplitude ?? bh * 0.34, env = [], envB = [], str = [];
+        for (let i = 0; i <= 160; i++) { const u = i / 160, y = M.shape(u); env.push([X(u), cy - A * y]); envB.push([X(u), cy + A * y]); str.push([X(u), cy - A * y * ph]); }
+        g.path(env.concat(envB.reverse()), { fill: col, alpha: 0.07, close: true });
+        g.path(env, { stroke: col, width: 1, dash: [3, 4], alpha: 0.55 });
+        g.path(envB, { stroke: col, width: 1, dash: [3, 4], alpha: 0.55 });
+        ctx.save(); ctx.lineJoin = ctx.lineCap = "round"; g.path(str, { stroke: col, width: o.width ?? 2.75 }); ctx.restore();
+        for (const u of [0, 1]) g.rect(X(u) - 3, cy - bh * 0.42, 6, bh * 0.84, { fill: "ink" });
+      } else {
+        const hh = bh * 0.3, sp = o.spacing ?? 8, A = o.amplitude ?? sp * 1.4, hi = o.high ?? "red", lo = o.low ?? "blue";
+        for (let x = 0; x < bw; x += 2) {
+          const u = x / bw, pv = -M.pressure(u) * ph;
+          ctx.fillStyle = util.rgba(pv > 0 ? hi : lo, Math.abs(pv) * 0.34); ctx.fillRect(bx + x, cy - hh, 2.2, 2 * hh);
+        }
+        for (let j = 0, y = cy - hh + sp / 2; y < cy + hh; y += sp, j++) for (let i = 0, x = bx + sp / 2; x < bx + bw; x += sp, i++) {
+          const x0 = x + (jit(i, j, 3) - 0.5) * sp * 0.7, y0 = y + (jit(i, j, 4) - 0.5) * sp * 0.6, u = (x0 - bx) / bw;
+          ctx.fillStyle = util.color("ink"); ctx.globalAlpha = 0.72;
+          ctx.beginPath(); ctx.arc(x0 + A * M.shape(u) * ph, y0, 1.5, 0, TAU); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        g.line([bx, cy - hh], [bx + bw, cy - hh], { stroke: "ink", width: 2.5 });
+        g.line([bx, cy + hh], [bx + bw, cy + hh], { stroke: "ink", width: 2.5 });
+        if (M.kind === "closed") g.rect(bx - 4, cy - hh - 1.25, 5, 2 * hh + 2.5, { fill: "ink" });
+        // The displacement envelope, drawn above the pipe.
+        const env = [];
+        for (let i = 0; i <= 120; i++) { const u = i / 120; env.push([X(u), cy - hh - 10 - Math.abs(M.shape(u)) * bh * 0.12]); }
+        g.path(env, { stroke: col, width: 1.5, alpha: 0.8 });
+      }
+      if (o.labels !== false) {
+        const yl = M.kind === "string" ? cy + bh * 0.47 : cy + bh * 0.3 + 16;
+        for (const u of M.nodes) if (u >= -1e-9 && u <= 1 + 1e-9) g.text("N", [X(u), yl], { size: 12, weight: 600, color: "ink" });
+        for (const u of M.antinodes) if (u >= -1e-9 && u <= 1 + 1e-9) g.text("A", [X(u), yl], { size: 12, weight: 600, color: col });
+      }
+      return { mode: M, x: X };
+    };
+
     // An ADSR envelope as a shape, with its four phases named.
     g.envelope = (env, box = [0, 0, g.w, g.h], o = {}) => {
       const e = { ...ENV, ...env }, held = o.held ?? e.a + e.d + Math.max(0.25, (e.a + e.d + e.r) * 0.8), T = held + e.r;
@@ -711,6 +889,8 @@
     wake: () => !!audio(),   // create or resume the AudioContext; call only inside a user gesture
     // Offline synthesis
     render, cycle, partials, karplus, noise, fromFunction, adsr, filter, response, biquad,
+    // Waves in air, standing waves
+    air, mode,
     // Analysis
     fft, ifft, spectrum, stft, peaks, binFreq, rms, window: windowOf, nextPow2, sampleRate: SR, rng,
   };

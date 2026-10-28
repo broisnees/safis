@@ -168,12 +168,13 @@ for (const f of [82.41, 196, 440, 987.77]) {
 {
   const calls = [];
   const rec = name => (...args) => { calls.push(name); return name === "measure" ? String(args[0]).length * 7 : undefined; };
-  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+  const gradient = () => ({ addColorStop() {} });
+  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : String(k).endsWith("Gradient") ? gradient : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
   globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData: () => {} }) }) };
   const g = { w: 640, h: 400, ctx };
   for (const k of ["line", "path", "circle", "rect", "arrow", "text", "label", "measure"]) g[k] = rec(k);
   g.clip = (box, fn) => fn(g);
-  const util = { color: c => c, rgb: () => [10, 20, 30], clamp: (x, a, b) => Math.min(b, Math.max(a, x)) };
+  const util = { color: c => c, rgb: () => [10, 20, 30], rgba: (c, a) => c, clamp: (x, a, b) => Math.min(b, Math.max(a, x)) };
   check("one extension registered", window.__safisG.length === 1);
   window.__safisG[0](g, util);
   const x = S.karplus({ freq: 196, duration: 0.5 });
@@ -186,7 +187,39 @@ for (const f of [82.41, 196, 440, 987.77]) {
   const sg = g.spectrogram(S.stft(x, { size: 256 }), [0, 250, 600, 140], { maxFreq: 5000 });
   check("spectrogram maps px back to time and frequency", Math.abs(sg.freq(250) - 5000) < 1e-9 && sg.time(0) === 0);
   g.envelope({ a: 0.05, d: 0.2, s: 0.6, r: 0.5 }, [0, 0, 300, 100], { t: 0.1 });
+  g.spectrum(S.spectrum(x), [0, 0, 600, 120], { maxFreq: 2000, harmonics: 196 });
+  const aw = g.airWave([0, 0, 600, 300], { t: 0.3 }), ap = g.airWave([0, 0, 600, 300], { t: 0.3, source: "point" });
+  check("airWave draws a plane and a point source, with a synced plot", aw.plot && ap.plot && Number.isFinite(aw.pressure([100, 50])) && Math.abs(aw.wavelength - 600 / 3.2) < 1e-9);
+  const sw = ["string", "open", "closed"].map(kind => g.standingWave([0, 0, 600, 160], { kind, n: 2, t: 0.2 }));
+  check("standingWave draws a string and both pipes", sw.every(r => r.mode && r.x(1) === 600) && sw[2].mode.n === 3);
   check("helpers drew", calls.length > 40, `${calls.length} calls`);
+}
+
+// Sound in air: wavelength c/f; pressure leads displacement by a quarter wave; a point source spreads.
+{
+  const W = S.air({ freq: 343, speed: 343 });
+  check("air: wavelength is c / f", Math.abs(W.wavelength - 1) < 1e-12);
+  check("air: pressure peaks where displacement crosses zero (a quarter wave apart)", Math.abs(W.pressure(0.25, 0) - 1) < 1e-9 && Math.abs(W.displacement(0.25, 0)) < 1e-9);
+  check("air: pressure is -ds/dx (parcels bunch up at a compression)", Math.abs(-(W.displacement(0.30001, 0) - W.displacement(0.29999, 0)) / 0.00002 / W.k - W.pressure(0.3, 0)) < 1e-6);
+  const Pt = S.air({ freq: 343, source: "point" });
+  check("air: a point source in 2D falls as 1/sqrt(r)", Math.abs(Pt.pressure(4.25, 0) / Pt.pressure(1.25, 0) - Math.sqrt(1.25 / 4.25)) < 1e-6);
+}
+// Standing waves: frequencies and nodes.
+{
+  const s3 = S.mode({ kind: "string", n: 3, length: 0.65, speed: 260 });
+  check("string: f_n = n c / 2L", Math.abs(s3.freq - (3 * 260) / 1.3) < 1e-9 && s3.nodes.length === 4 && s3.antinodes.length === 3);
+  const op = S.mode({ kind: "open", n: 1, length: 0.5, speed: 343 }), cl = S.mode({ kind: "closed", n: 1, length: 0.5, speed: 343 });
+  check("pipes: open is c/2L with antinodes at both ends, closed is c/4L", Math.abs(op.freq - 343) < 1e-9 && Math.abs(op.antinodes[0]) < 1e-12 && Math.abs(op.antinodes[1] - 0.5) < 1e-12 && Math.abs(cl.freq - 171.5) < 1e-9);
+  check("closed pipe: only odd harmonics", S.mode({ kind: "closed", n: 2 }).n === 3 && Math.abs(cl.shape(0)) < 1e-12 && Math.abs(Math.abs(cl.shape(0.5)) - 1) < 1e-9);
+}
+
+// Plucking at 1/n of the string's length leaves out every nth harmonic: a node can't be plucked.
+{
+  const sr = 22050, f = 110;
+  const amp = (x, h) => { let re = 0, im = 0; for (let i = 2000; i < 2000 + Math.round(sr / f) * 60; i++) { const a = 2 * Math.PI * f * h * i / sr; re += x[i] * Math.cos(a); im += x[i] * Math.sin(a); } return Math.hypot(re, im); };
+  const db = (pick, h) => { const x = S.karplus({ freq: f, pick, brightness: 0, decay: 2.5, sampleRate: sr, duration: 1 }); return 20 * Math.log10(amp(x, h) / amp(x, 1)); };
+  check("pluck at the middle: no 2nd harmonic", db(0.5, 2) < -40, db(0.5, 2).toFixed(1) + " dB");
+  check("pluck at a fifth: no 5th harmonic", db(0.2, 5) < -40, db(0.2, 5).toFixed(1) + " dB");
 }
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");

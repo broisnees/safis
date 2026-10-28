@@ -27,6 +27,8 @@ Rules the kit enforces, so pages don't have to:
 | Noise colors, filters, resonance | `Sound.voice({ type: "noise", filter })`; `Sound.filter` and `Sound.response` for the curves |
 | Attack, decay, sustain, release | `env` on a voice, `g.envelope(env, box)` |
 | An equation as sound | `Sound.play(t => ..., { duration })` |
+| What a sound wave does to the air: parcels sloshing, compressions and rarefactions | `g.airWave(box, { t, source })`, `Sound.air` |
+| Standing waves, harmonics of a string or a pipe, nodes and antinodes | `g.standingWave(box, { kind, n, t })`, `Sound.mode` |
 
 ## Voices
 
@@ -100,6 +102,13 @@ Pure functions that return Float32Arrays; use them for drawing and for the buffe
 | `Sound.adsr(t, env, held)` | Envelope level at time t for a note held `held` seconds. Linear segments, the same shape the live voice uses. |
 | `Sound.filter(x, f, sampleRate)`, `Sound.response(f, freqs, sampleRate)`, `Sound.biquad(f, sampleRate)` | The voice's filter applied offline, its magnitude response at each frequency, and its coefficients (RBJ cookbook, as in Web Audio). |
 
+## Waves in air and standing waves
+
+| call | |
+|---|---|
+| `Sound.air(o)` | A sound wave in air: `freq` [440], `speed` [343], `source` (`"plane"` or `"point"`), `dims` (2 or 3, for a point source), `phase`. Returns `{ wavelength, k, omega, period, displacement(x, t), pressure(x, t), velocity(x, t) }`, normalized to amplitude 1. Displacement is s = cos(kx − ωt); pressure is −ds/dx, so it peaks where parcels bunch up, a quarter wave ahead of the largest displacement. A point source falls as 1/√r in 2D, 1/r in 3D. |
+| `Sound.mode(o)` | A standing wave: `kind` (`"string"` fixed at both ends, `"open"` pipe, `"closed"` pipe closed at x = 0), `n` (harmonic; a closed pipe has only odd ones), `length` [1], `speed`. Returns `{ freq, wavelength, nodes, antinodes, shape(x), pressure(x), n }`. f = n c / 2L for strings and open pipes, n c / 4L for closed ones; `nodes` are displacement nodes. |
+
 ## Analysis
 
 | call | |
@@ -116,9 +125,11 @@ Boxes are `[x, y, w, h]` in px, like the rest of `g`. Each helper returns its ma
 
 | call | |
 |---|---|
-| `g.waveform(x, box, o)` | Samples as a trace; more samples than pixels draw as a min/max band, like an audio editor. `range` [−1, 1], `from`, `to` (sample indexes), `color` ["blue"], `width` [2], `fill`, `stems` (lollipops, for showing samples), `playhead` (0 to 1), `label`, `zero` [true]. Returns `{ box, x(i), y(v), index(px) }`. |
-| `g.spectrum(mags, box, o)` | Frame axes from `g.graph` with Hz labels. `sampleRate` [44100], `minFreq`, `maxFreq`, `log`, `db` (input stays linear; the axis is dB), `floor` [−80], `range` ([0, 1] or [floor, 0]), `style` ("line", "bars", "stems"), `freqs` (one frequency per value: partial amplitudes as stems), `peaks` (label the n largest), `color` ["blue"], `fill`, `highlight` (an index), `axes: false` (draw into `box` as is, for overlaying a second spectrum on the first's returned `box`), plus `g.graph`'s `xTicks`, `yTicks`, `xFormat`, `yFormat`, `xLabel`, `yLabel`, `grid`, `pad`. Returns `{ P, box, x(freq), y(mag) }`. |
+| `g.waveform(x, box, o)` | Samples as a trace; more samples than pixels draw as a min/max band, like an audio editor, shaded deeper toward its middle, with the loudness (RMS per column) as a darker core (`rms: false` hides it). A trace gets a soft fill to the zero line (`fill: false` for none, `true` or a number for more). `range` [−1, 1], `from`, `to` (sample indexes), `color` ["blue"], `width` [2], `stems` (lollipops, for showing samples), `playhead` (0 to 1), `label`, `zero` [true]. Returns `{ box, x(i), y(v), index(px) }`. |
+| `g.spectrum(mags, box, o)` | Frame axes from `g.graph` with Hz labels. `sampleRate` [44100], `minFreq`, `maxFreq`, `log`, `db` (input stays linear; the axis is dB), `floor` [−80], `range` ([0, 1] or [floor, 0]), `style` ("line", a smooth curve over a fill that fades down; "bars"; "stems"), `freqs` (one frequency per value: partial amplitudes as stems), `peaks` (label the n largest), `harmonics` (a fundamental in Hz: faint lines at its multiples, numbered), `color` ["blue"], `fill`, `highlight` (an index), `axes: false` (draw into `box` as is, for overlaying a second spectrum on the first's returned `box`), plus `g.graph`'s `xTicks`, `yTicks`, `xFormat`, `yFormat`, `xLabel`, `yLabel`, `grid`, `pad`. Returns `{ P, box, x(freq), y(mag) }`. |
 | `g.spectrogram(frames, box, o)` | Time across, frequency up, loudness from paper to `color` ["ink"]. `sampleRate`, `hop` (for the time axis), `maxFreq`, `floor` [−80 dB], `ref` [1], `gamma` [1], `smooth` [true], `playhead`, `playheadColor` ["red"], `axes`. Cached per frames array and theme. Returns `{ P, box, time(px), freq(py) }`. |
+| `g.airWave(box, o)` | Parcels of air on a seeded grid, each displaced along the direction of travel, over a shading of the pressure (compressions in `high` ["red"], rarefactions in `low` ["blue"]), with a few marked parcels and their resting places, and a plot below of pressure and displacement that stays in step. `t`, `source` (`"plane"` or `"point"`, from `at`), `wavelength` [w / 3.2 px], `speed` [half a wavelength per s], `amplitude`, `spacing` [9 px], `marks` [3], `plot` [true], `shade`, `labels`. Returns `{ field, wavelength, period, pressure([x, y]), displacement([x, y]), plot }`. |
+| `g.standingWave(box, o)` | A standing wave from `Sound.mode`: on a string, the string and its envelope; in a pipe, parcels sloshing along it over the pressure, and the displacement envelope above. Nodes (N) and antinodes (A) marked. `kind`, `n`, `t`, `rate` [0.7 Hz on screen], `amplitude`, `color`, `labels`. Returns `{ mode, x(u) }`. |
 | `g.envelope(env, box, o)` | An ADSR shape with its phases named. `held` (s), `t` (a dot on the curve), `color` ["orange"], `labels`. Returns `{ box, x(t), y(level), held, T }`. |
 
 ## Examples
@@ -204,6 +215,13 @@ Two voices share one button. The FFT finds both notes in the tangled sum; `peaks
 }
 </script>
 ```
+
+## Recipes
+
+- **What a sound wave is.** `g.airWave(null, { t: s.t })` with a `step` that advances `s.t`, and a "Source" choice between `"plane"` and `"point"`. The marked parcels only rock in place while the pattern travels: say so in the text. Pair it with a tone at the same frequency (`Sound.voice`) and label the wavelength from `Sound.air({ freq }).wavelength`.
+- **Harmonics of a string.** `g.standingWave(box, { kind: "string", n: v.n, t: s.t })` with a stepper for `n`; the status line gives `Sound.mode({ kind, n, length: 0.65, speed: 260 }).freq`, and a voice at that frequency plays it.
+- **Open versus closed pipes.** The same figure with a choice of `"open"` and `"closed"`: the closed pipe skips the even harmonics, which the stepper shows by jumping from 1 to 3.
+- **A pluck and its harmonics.** `g.waveform` of `Sound.karplus(...)` above `g.spectrum(..., { db: true, harmonics: freq })`: each peak sits on a numbered line, and plucking at the middle (`pick: 0.5`) empties the even ones.
 
 ## Pitfalls
 
