@@ -48,7 +48,8 @@ Every page in [`site/`](site) was built with the skill. Open the [live site](htt
 | [![](site/hash-table/thumb.webp)](https://safis.fyi/hash-table/)<br>**How a hash table finds things** | [![](site/next-word/thumb.webp)](https://safis.fyi/next-word/)<br>**How a language model picks the next word** | [![](site/attention/thumb.webp)](https://safis.fyi/attention/)<br>**How attention works** |
 | [![](site/learning/thumb.webp)](https://safis.fyi/learning/)<br>**How a neural network learns** | [![](site/matrix/thumb.webp)](https://safis.fyi/matrix/)<br>**How a matrix transforms space** | [![](site/fourier/thumb.webp)](https://safis.fyi/fourier/)<br>**How spinning circles draw anything** |
 | [![](site/protein/thumb.webp)](https://safis.fyi/protein/)<br>**How a cell builds a protein** | [![](site/battery/thumb.webp)](https://safis.fyi/battery/)<br>**The lithium-ion battery** | [![](site/cdn/thumb.webp)](https://safis.fyi/cdn/)<br>**How a CDN makes a faraway site fast** |
-| [![](site/dns/thumb.webp)](https://safis.fyi/dns/)<br>**How DNS turns a name into an address** | [![](site/derivative/thumb.webp)](https://safis.fyi/derivative/)<br>**What a derivative measures** | |
+| [![](site/dns/thumb.webp)](https://safis.fyi/dns/)<br>**How DNS turns a name into an address** | [![](site/derivative/thumb.webp)](https://safis.fyi/derivative/)<br>**What a derivative measures** | [![](site/rocket-engine/thumb.webp)](https://safis.fyi/rocket-engine/)<br>**How a rocket engine makes thrust** |
+| [![](site/turbofan/thumb.webp)](https://safis.fyi/turbofan/)<br>**How a turbofan moves air** | | |
 
 ## What it makes
 
@@ -136,10 +137,14 @@ The scripts use only Node built-ins and drive Chrome over the DevTools protocol.
 
 ## Use in your app
 
-The figures also ship as npm packages: `safis` (the runtime, types, theme, fonts) and thin wrappers for React, Vue, Svelte, and Astro. In this repo they're npm workspaces; `npm install && npm run build:packages` builds them, and `examples/` has a small app for each.
+The figures also ship as npm packages under one scope: `@safis/core` (the runtime, types, theme, fonts) and thin wrappers for React, Vue, Svelte, and Astro. `examples/` has a small app for each, and every package has its own README.
+
+```sh
+npm install @safis/core @safis/react     # or @safis/vue, @safis/svelte, @safis/astro
+```
 
 ```js
-import "safis/scoped.css";   // the book theme, only inside .safis elements (or "safis/style.css" for the whole page)
+import "@safis/core/scoped.css";   // the book theme, only inside .safis elements (or "@safis/core/style.css" for the whole page)
 ```
 
 **React** (`@safis/react`)
@@ -178,18 +183,48 @@ import Tex from "@safis/astro/Tex.astro";
 
 `ThemeToggle.astro` adds a light/dark switch. Math is rendered to MathML at build time.
 
-**Anything else**: `import { mount, enhance, typeset, setTheme, E3, Num, Sim } from "safis"`, then `mount(figureElement, spec)` returns a handle with `set`, `setMany`, `play`, `highlight`, and `destroy`. Importing on the server is safe; call `mount` from an effect or a client script. `safis/iife` is a classic script that sets `window.Safis`.
+**Anything else**: `import { mount, enhance, typeset, setTheme, E3, Num, Sim } from "@safis/core"`, then `mount(figureElement, spec)` returns a handle with `set`, `setMany`, `play`, `highlight`, and `destroy`. Importing on the server is safe; call `mount` from an effect or a client script. `@safis/core/iife` is a classic script that sets `window.Safis`.
 
-## Deploy the site
+## The website
 
-`site/` is prebuilt static HTML, so every host just serves the folder. Nothing deploys automatically. The site is built with `site.mjs --shared`: the runtime and fonts live once in `site/safis.css` and `site/safis.js` instead of in every page, so a page is about 100 KB instead of 950 KB and a reader downloads the runtime once. It still opens from disk. `--inline` turns that off again. The site is currently live on Cloudflare at https://safis.fyi.
+https://safis.fyi is built with Astro (on Vite) in `website/`, from the explainers in `site/` and the runtime in `src/`. Every page is static HTML. The runtime is split into kits (3D engine, parts library, maps, optics, sound, images, effects, isometric), and a page downloads only the kits its figures use, so a math page never loads the 3D engine and a page without figures loads none. Hashed files and fingerprinted fonts are cached for a year, and links prefetch on hover. A slim bar at the top runs until every figure on the page has drawn, and each figure holds its final shape with a placeholder until then.
+
+| Page | Source |
+|---|---|
+| `/` landing: pitch, live rocket figure, the four doors, newest explainers | `website/src/pages/index.astro`, hero figure in `website/src/figures/hero.html` |
+| `/what-it-makes/`: every kind of figure, each with a real capture or a live figure | `what-it-makes.astro`, captures from `website/scripts/media.mjs` |
+| `/how-it-works/`: the pipeline, the figure spec, what the checks catch | `how-it-works.astro` |
+| `/usage/`: install, the `/safis` command, writing prompts, sites, checks, npm packages | `usage.astro` |
+| `/examples/`: every explainer, with search and category filters | `examples.astro` |
+| `/<slug>/`: each explainer, with the site bar and the sidebar index (Ctrl+B / Cmd+B) | `site/<slug>/index.html` through `website/scripts/sync.mjs` |
+
+Card images come in light and dark (`site.mjs --thumbs` writes `thumb.webp` and `thumb-dark.webp`), and a reader downloads only the one for their theme. `node website/scripts/media.mjs` recaptures the figures the What it makes page shows.
+
+```
+npm run site:dev       # live preview at http://localhost:4321
+npm run site:build     # website/dist
+npm run site:check     # links, every page through verify.mjs, served over HTTP; --compare races it against site/
+```
+
+The pages in `site/` stay the source and keep working as standalone files that open from disk. Edit a page there (or its article, then `put-article.mjs`), and the website picks it up on the next build. A page with a folder in `drafts/` is left out.
 
 | Host | Config | Deploy |
 |---|---|---|
-| Cloudflare Workers | `wrangler.jsonc` | `npm run deploy` (live at https://safis.fyi) |
+| Cloudflare Workers | `wrangler.jsonc` | `tools/deploy-site.sh` (builds, checks, deploys; live at https://safis.fyi), or `npm run deploy` |
 | Vercel | `vercel.json` | `npx vercel --prod`, or import the repo |
 | Netlify | `netlify.toml` | `npx netlify deploy --prod`, or import the repo |
-| GitHub Pages | `.github/workflows/pages.yml` | Settings > Pages > Source: GitHub Actions, then run the workflow (set the repository variable `PAGES_AUTO_DEPLOY=true` to deploy on every push that changes `site/`) |
+| GitHub Pages | `.github/workflows/pages.yml` | Settings > Pages > Source: GitHub Actions, then run the workflow (set the repository variable `PAGES_AUTO_DEPLOY=true` to deploy on every push that changes the site). It builds under the repository's Pages path. |
+
+`SAFIS_BASE=/path` builds the site under a subpath for any other host.
+
+## Publishing the packages
+
+Once: create the `@safis` organization on npmjs.com and run `npm login`. Then, after bumping the versions in `packages/*/package.json`:
+
+```
+npm run test:packages     # builds and checks the four example apps
+npm run publish:packages  # builds @safis/core, then publishes all five (public)
+```
 
 ## Working on the skill itself
 
@@ -200,7 +235,9 @@ npm run build                                       # template + packages
 npm test                                            # engine, TeX, plot, and sim tests
 node skills/safis/scripts/upgrade.mjs site/*/index.html
 node skills/safis/scripts/verify.mjs site/jaw-joint/index.html
-npm run site                                        # home page, 404, sidebars, thumbnails, shared runtime
+npm run site                                        # site/: home page, 404, sidebars, thumbnails, shared runtime
+npm run site:build && npm run site:check            # the website, checked as served
+node tools/check-3d.mjs                             # the 3D lab: every engine and parts proof figure
 npm run test:packages                               # builds and checks the four example apps
 ```
 
