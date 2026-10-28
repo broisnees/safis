@@ -1,0 +1,62 @@
+<!-- The landing page's live figure, included raw in website/src/pages/index.astro. Its script runs
+     in place as the page parses (the page loads the engine3d and parts3d kits in the head). -->
+<figure class="demo" id="engine" aria-label="A kerosene rocket engine firing: the plume leaves the bell and cools into a drifting exhaust cloud. A throttle sets the thrust; Cut open sections the engine to show the flame in the chamber and the pumps turning."></figure>
+<script>
+{
+  // The engine from E3.parts, firing: the plume leaves the bell and cools into an exhaust cloud
+  // that drifts off. No stand or floor: the engine is the subject. "Cut open" sections it on the
+  // side facing the viewer to show the flame in the chamber and both pumps turning. Millimeters.
+  const scene = E3.scene({ look: "night", shadow: false });
+  const eng = E3.parts.rocketEngine();
+  scene.add(eng);
+  const Hn = eng.info.height;
+  eng.fire(1);
+  const L = eng.plume.length;
+  // Exhaust past the flame: the jet's gas, cooling as it mixes with the air, streaming away and
+  // widening at a turbulent jet's 12 degree half-angle. Its momentum outlasts its lift for
+  // hundreds of meters, so inside this frame it streams on (no buoyancy) instead of billowing up.
+  const cloud = scene.add(E3.particles({
+    matter: "exhaust", units: "mm", count: 1300, seed: 3, life: [0.9, 1.7], size: [1400, 5200], sizeJitter: 0.6, opacity: 0.6, glow: 0.8, temperature: [1500, 500], fade: [0.08, 0.5],
+    color: "#d9d4cb", volume: { erosion: 0.6, density: 1, flow: [400, -7000, 100] },
+    emitter: { shape: "disk", radius: eng.info.exit * 1.1, position: [0, -L * 0.8, 0], direction: [0, -1, 0], speed: [9000, 15000], spread: 0.21 },
+    forces: { drag: 0.35, buoyancy: 0, wind: [600, 0, 150] },
+  }));
+  let view = null;
+  const nameOf = node => { for (let n = node; n; n = n.parent) if (n.name && eng.notes[n.name]) return n.name; return null; };
+  const read = v => { const thr = v.throttle / 100; return { kN: 550 * thr, pc: 9.7 * thr, pe: 0.8 * (0.35 + 0.65 * thr) }; };
+  const fig = demo("engine", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    orbit: { yaw: 0.55, pitch: 0.18, minPitch: -0.4, maxPitch: 1.1 },
+    state: () => ({ t: 0, spin: 0, hover: null, inside: 0 }),
+    controls: [
+      { key: "throttle", label: "Throttle", min: 40, max: 100, step: 1, value: 100, unit: "%", color: "orange" },
+      { key: "cut", label: "Cut open", type: "toggle", value: false },
+    ],
+    presets: [{ label: "Minimum", set: { throttle: 40 } }, { label: "Full", set: { throttle: 100 } }, { label: "Look inside", set: { cut: true } }],
+    caption: "A gas-generator kerosene engine firing, built to real proportions. Cut it open to see the flame in the chamber and the two pumps turning. The plume and the exhaust cloud follow physical rules, not a fluid simulation. Point at a part to name it.",
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    step(dt, s, v) { s.t += dt; s.spin += dt * (2 + 4 * v.throttle / 100); },
+    change(key, s, v, f) { if (key === "cut" && !f.playing) s.inside = v.cut ? 1 : 0; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      scene.look = E3.dark ? "night" : "outdoor";
+      const r = read(v);
+      eng.fire(v.throttle / 100).cutaway(v.cut).pose({ spin: s.spin, fuelSpin: s.spin * 1.35 });
+      scene.cutPlane = v.cut ? { facing: "camera", at: [0, Hn * 0.5, 0] } : null;
+      cloud.density = 0.25 + 0.75 * v.throttle / 100;
+      for (const n of Object.values(eng.parts)) n.highlight = n.name === s.hover;
+      // Cutting it open also glides the camera in on the engine.
+      s.inside += ((v.cut ? 1 : 0) - s.inside) * (fig && fig.playing ? 0.12 : 1);
+      if (Math.abs((v.cut ? 1 : 0) - s.inside) > 0.002) g.wantsFrame = true;
+      const k = s.inside * s.inside * (3 - 2 * s.inside);
+      view = g.render3d(scene, { ...s.view, fov: 28, target: [0, Hn * (0.05 + 0.4 * k) - L * 0.35 * (1 - k), 0], distance: 13500 - 6500 * k });
+      const x = 16, y = g.w < 560 ? 18 : g.h - 122, rows = [[r.pe < 0.9 ? "over-expanded" : "matched", ""], [`${v.throttle}%`, "throttle"], [`${r.kN.toFixed(0)} kN`, "thrust"], [`${r.pc.toFixed(1)} MPa`, "chamber"]];
+      rows.forEach(([a, b], i) => { g.text(a, [x, y + i * 31], { font: i ? "mono" : undefined, size: i ? 14.5 : 15, weight: 600, align: "left", color: i === 3 || !i ? "orange" : "ink" }); if (b) g.text(b, [x, y + 14 + i * 31], { size: 11.5, align: "left", color: "muted" }); });
+      if (s.hover) { const node = eng.parts[s.hover]; const at = view.project(node.toWorld(node.mesh ? node.mesh.bounds.center : [0, 0, 0])); g.callouts([{ at, text: s.hover, side: "right" }]); }
+      else if (v.cut) g.callouts(eng.labels().filter(l => view.kept(l.at) && /chamber|turbine|impeller|pump|nozzle|injector/.test(l.text)).slice(0, 5).map(l => ({ at: view.project(l.at), text: l.text, side: "right" })));
+    },
+    status: (s, v) => { const r = read(v); return s.hover ? `${s.hover}: ${eng.notes[s.hover]}` : `${v.throttle}% throttle · ${r.kN.toFixed(0)} kN · chamber ${r.pc.toFixed(1)} MPa`; },
+  });
+  if (window.LAB) { LAB.scenes.engine = scene; LAB.handles.engine = fig; }
+}
+</script>

@@ -1,0 +1,30 @@
+<!-- From skills/safis/references/iso.md. -->
+<figure class="demo" id="axis" style="--ph: 1.9" aria-label="An isometric linear axis: a rail on a base, a blue carriage the reader drags along it, and a stepper motor at one end."></figure>
+<script>
+{
+  const S = Iso.scene();
+  S.box({ name: "base", from: [0, -0.05, 0], to: [0.6, 0.05, 0.012], material: "aluminum", bevel: 0.002 });
+  S.box({ name: "rail", from: [0.02, -0.01, 0.012], to: [0.58, 0.01, 0.027], material: "steel" });
+  for (const x of [0.03, 0.57]) S.screw({ name: "screw", at: [x, 0.03, 0.012], r: 0.005 });
+  S.box({ name: "motor", from: [-0.045, -0.022, 0], to: [0, 0.022, 0.044], material: "plastic", bevel: 0.003 });
+  S.cylinder({ name: "motor", at: [-0.045, 0, 0.022], axis: "-x", r: 0.012, length: 0.006, material: "steel", segments: 20 });
+  const car = S.group({ name: "carriage" });
+  car.box({ name: "carriage", from: [0.1, -0.03, 0.027], to: [0.18, 0.03, 0.047], color: "blue", bevel: 0.002 });
+  for (const x of [0.11, 0.17]) for (const y of [-0.02, 0.02]) car.screw({ name: "screw", at: [x, y, 0.047], r: 0.004 });
+  const D = Iso.drag(S, { part: "carriage", axis: "x", key: "x", min: -0.08, max: 0.38 });
+  demo("axis", {
+    aspect: 1.9,
+    orbit: Iso.orbit({ minPitch: 0.15, maxPitch: 1.2 }),
+    state: () => ({ x: 0.12, hover: null }),
+    controls: [{ label: "Download SVG", type: "button", action: () => Iso.download(S, "linear-axis.svg") }],
+    hover: Iso.hover(S),
+    drag: D,
+    draw(g, s) {
+      car.move = [s.x, 0, 0];
+      const V = g.iso(S, { view: s.view, hover: s.hover });
+      if (s.hover) g.callouts([{ at: V.at(s.hover), text: s.hover }]);
+    },
+    status: s => `${(s.x * 1000 + 100).toFixed(0)} mm from the motor`,
+  });
+}
+</script>

@@ -1,0 +1,249 @@
+---
+import Site from "../layouts/Site.astro";
+import CodeBlock from "../components/CodeBlock.astro";
+import pages from "../generated/pages.json";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+const has = (s: string) => pages.some(p => p.slug === s);
+const INSTALL = [
+  ["Any agent", "The skills CLI asks which of your agents to set up. Leave off -g to install for one project only.", "npx skills add broisnees/safis -g", "sh"],
+  ["Claude Code, by hand", "Clone the repo and link the skill folder into your skills directory.", `git clone https://github.com/broisnees/safis\nln -s "$PWD/safis/skills/safis" ~/.claude/skills/safis`, "sh"],
+  ["Anything else", "Copy the skill folder into the folder your agent reads skills from. Its paths are relative to its own folder.", "cp -r safis/skills/safis <skills-folder>/", "sh"],
+] as const;
+type P = { q: string; get: string; tags: string[]; link?: string };
+const PROMPTS: P[] = [
+  { q: "/safis how DNS finds a website", get: "An in-depth Computing page: the trip from your laptop to the root servers and back, referrals you step through, a map of the hops, and the caches that make it fast.", tags: ["in depth", "maps", "diagrams"], link: "dns" },
+  { q: "explain how a rocket engine makes thrust, and show me the actual engine in 3D, it should look real", get: "A Machines page built on the parts library: the engine at real proportions, firing at a pad, its pumps cut open, and the thrust worked out from the physics.", tags: ["3D", "parts", "plume"], link: "rocket-engine" },
+  { q: "explain how a car's differential lets the outside wheel spin faster, I want to see the gears in 3D", get: "Gears you turn and cut open in 3D, with the two wheel speeds read off as you steer through a corner.", tags: ["3D", "mechanism"] },
+  { q: "a short interactive page on why the Pythagorean theorem is true", get: "A short piece: 8 to 12 figures and a proof you rearrange by dragging, instead of the default in-depth page.", tags: ["short", "math"] },
+  { q: "how does a heart valve work? go in depth, for a nursing student", get: "A Body page pitched at the reader you named, with every term defined while it's on screen.", tags: ["in depth", "anatomy", "audience"] },
+  { q: "why do rainbows form, and why is the sky inside one brighter?", get: "Rays you send through a raindrop, the dispersion that splits white light, and the angle that puts the bow where it is.", tags: ["optics", "physics"] },
+  { q: "how do seismologists find where an earthquake started?", get: "Stations on a map, the circles their arrival times draw, and the point where the circles meet.", tags: ["maps", "Earth & Space"] },
+  { q: "a visual essay on Diffie-Hellman key exchange", get: "The shared-secret trick as figures you run with your own numbers, from mixing colors to modular arithmetic.", tags: ["computing", "math"] },
+  { q: "walk me through this paper's method with figures I can rerun: <link to the paper>", get: "The research arc: the question, what was known, the method as figures you run, the results reproduced live, the limits, and references with DOIs.", tags: ["research"] },
+  { q: "why are soap bubbles round? keep it light", get: "The same care in a lighter voice: surface tension you can stretch, and why a sphere wins.", tags: ["casual", "physics"] },
+  { q: "make a small site of explainers on how a car works: engine, gearbox, differential, brakes", get: "Several pages in one folder, a home page grouped by category, and a shared sidebar index across them.", tags: ["site", "machines"] },
+  { q: "add an interactive figure of a spring and mass to my React blog post", get: "A figure spec and the component to mount it with, using the npm packages.", tags: ["packages", "React"] },
+];
+const TIPS = [
+  ["Ask a question, not a topic.", "“What happens in the jaw joint when it locks?” gets a sharper page than “the TMJ”."],
+  ["Say what you want to see or move.", "“I want to turn the gears in 3D” or “let me drag the light” shapes the figures."],
+  ["Name the reader.", "“For a nursing student”, “for a curious 12-year-old”, “for an engineer” sets the pace and the terms."],
+  ["Say how long.", "In depth is the default (about 25 figures). Ask for “a short page” for 8 to 12."],
+  ["Ask for realism when it matters.", "“It should look real” means real dimensions, real materials, and the parts library."],
+  ["Point at sources.", "Link a paper or a spec sheet and the page follows it, with citations to real sources."],
+];
+const OPTIONS = [
+  ["In depth (default)", "nothing extra", "About 25 figures in 7 to 12 sections, from the everyday phenomenon to the full mechanism and its complications"],
+  ["A short piece", "“a short page”, “keep it short”", "8 to 12 figures, 1,000 to 2,000 words"],
+  ["A research walkthrough", "a link to the paper", "Question, prior work, method, results reproduced live, limits, references with DOIs"],
+  ["A particular reader", "“for a nursing student”", "Definitions and pace for that reader"],
+  ["3D that looks real", "“show it in 3D”, “make it look real”", "Real proportions, real materials, cutaways, exploded views"],
+  ["A place to put it", "a path, or an existing site folder", "<root>/<slug>/index.html, joined to that site"],
+];
+const react = `import "@safis/core/scoped.css";
+import { Explainer, Figure, Scrub, Tex } from "@safis/react";
+import spring from "./figures/spring.js";
+
+export default function Post() {
+  return (
+    <Explainer>
+      <p>Give it a stiffness of <Scrub figure="spring" k="k" />:</p>
+      <Figure id="spring" spec={spring} label="A block on a spring." />
+      <p>One swing takes <Tex src="T = 2\\pi\\sqrt{m/k}" />.</p>
+    </Explainer>
+  );
+}`;
+const vue = `<script setup>
+import "@safis/core/scoped.css";
+import { Explainer, Figure, Scrub } from "@safis/vue";
+import spring from "./figures/spring.js";
+</script>
+
+<template>
+  <Explainer>
+    <p>Give it a stiffness of <Scrub figure="spring" k="k" />:</p>
+    <Figure id="spring" :spec="spring" label="A block on a spring." />
+  </Explainer>
+</template>`;
+const svelte = `<script>
+  import "@safis/core/scoped.css";
+  import { Explainer, Figure, Scrub } from "@safis/svelte";
+  import spring from "./figures/spring.js";
+</script>
+
+<Explainer>
+  <p>Give it a stiffness of <Scrub figure="spring" k="k" />:</p>
+  <Figure id="spring" spec={spring} label="A block on a spring." />
+</Explainer>`;
+const astro = `---
+// src/layouts/Post.astro
+import "@safis/core/style.css";
+---
+<slot />
+<script>
+  import { mountFigures } from "@safis/astro/client";
+  mountFigures(import.meta.glob("../figures/*.js"));
+</script>
+
+// In a post (MDX):
+import Figure from "@safis/astro/Figure.astro";
+<Figure name="spring" label="A block on a spring." />`;
+const vanilla = `import "@safis/core/style.css";
+import { mount, enhance } from "@safis/core";
+import spring from "./figures/spring.js";
+
+const fig = mount(document.querySelector("figure#spring"), spring);
+enhance(document);          // binds scrubs, "try this" links, and colored terms
+// later: fig.set("k", 2), fig.play(false), fig.destroy()`;
+const springSpec = `// figures/spring.js: the same spec in every framework
+export default () => ({
+  controls: [{ key: "k", label: "Stiffness", min: 1, max: 10, value: 4, unit: "N/m" }],
+  state: () => ({ x: 1, v: 0 }),
+  step(dt, s, v) { s.v -= v.k * s.x * dt; s.x += s.v * dt; },
+  draw(g, s) { g.circle([g.w / 2 + 120 * s.x, g.h / 2], 16, { fill: "blue" }); },
+});`;
+---
+<Site title="Usage · Safis" description="Install the Safis skill in any agent, ask for a page with /safis, write prompts that get the page you want, build a site of explainers, check pages, and use the figures in React, Vue, Svelte, or Astro." current="usage">
+  <header class="phead">
+    <div class="wrap">
+      <p class="eyebrow">Usage</p>
+      <h1>Install it once, then <em>ask</em>.</h1>
+      <p class="lede-x">Safis follows the Agent Skills format, so any agent that reads skills can use it. You ask how something works; it plans the page, builds it, checks it in a browser, and tells you what it made.</p>
+      <div class="metaline"><span><b>Needs</b> Node 22+ and Chrome, Chromium, or Edge for the checks</span><span><b>Pages need</b> nothing: they carry their fonts and runtime</span><span><b>3D</b> needs WebGL 2</span></div>
+    </div>
+  </header>
+
+  <section class="sec" id="install">
+    <div class="wrap"><div class="sec-grid">
+      <div class="sec-num"><b>1</b>Install</div>
+      <div>
+        <h2>One command, any agent.</h2>
+        <p class="sub">Works in Claude Code, Codex, OpenCode, Cursor, and any agent that reads Agent Skills.</p>
+        <div class="install-grid">{INSTALL.map(([t, d, c, l]) => <div class="icard"><h3>{t}</h3><p>{d}</p><CodeBlock code={c} lang={l} title="terminal" /></div>)}</div>
+      </div>
+    </div></div>
+  </section>
+
+  <section class="sec" id="ask">
+    <div class="wrap"><div class="sec-grid">
+      <div class="sec-num"><b>2</b>Ask</div>
+      <div class="split">
+        <div class="body-text">
+          <h2>Name the skill, or just ask.</h2>
+          <p>In Claude Code, type <span class="chip-code">/safis</span> and what you want to understand. In any agent, asking for an interactive page, a visual essay, or an explainer with figures is enough; the skill picks itself up.</p>
+          <p>The agent shares a short plan first: the question, the model every figure draws from, and one line per figure. Then it builds the page in passes, checks it, and reports one line per figure, what the checks found, and what it simplified.</p>
+          <p>The page lands where you say, or at <span class="chip-code">./&lt;slug&gt;/index.html</span>. Open it in a browser; no server needed.</p>
+        </div>
+        <div>
+        <div class="term" aria-label="An example session">
+          <div class="tb"><i></i><i></i><i></i></div>
+          <pre><span class="u">› /safis how a rocket engine makes thrust, in 3D, it should look real</span>
+
+<span class="m">Question: how does an open chamber of burning gas push a rocket?
+Shared model: E3.parts rocketEngine, 110 mm throat, 16× bell
+1. Firing at a pad. Figure (3D): throttle / the plume shortens
+2. Pressure is molecules. Figure: push the piston / pressure doubles
+…</span>
+
+<span class="p">✓</span> verify  desktop and phone, 8 figures, no errors
+<span class="p">✓</span> explore 8 contact sheets read, 2 fixes
+<span class="u">site/rocket-engine/index.html</span></pre>
+        </div>
+        <p class="term-cap">An illustrative session, shortened.</p>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <section class="sec" id="prompts">
+    <div class="wrap"><div class="sec-grid">
+      <div class="sec-num"><b>3</b>Prompts</div>
+      <div>
+        <h2>How to word a prompt.</h2>
+        <p class="sub">Any plain request works. These six habits get you the page you had in mind.</p>
+        <ol class="tips">{TIPS.map(([b, t]) => <li><b>{b}</b> {t}</li>)}</ol>
+        <h2 style="margin-top: 64px">Example prompts, and what they get.</h2>
+        <p class="sub">Pages that already exist are linked; the rest describe what the skill aims for with that request.</p>
+        <div class="prompts-x">
+          {PROMPTS.map(p => (
+            <div class="pcard">
+              <q>{p.q}</q>
+              <p class="get"><b>You get:</b> {p.get}</p>
+              <div class="tags">{p.tags.map(t => <span>{t}</span>)}</div>
+              <div style="display: flex; gap: 16px; align-items: center">
+                <button class="pcopy" type="button" data-copy={p.q}>Copy prompt</button>
+                {p.link && has(p.link) && <a class="pcopy" href={`${base}${p.link}/`} style="text-decoration: none">See the page →</a>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <section class="sec" id="options">
+    <div class="wrap"><div class="sec-grid">
+      <div class="sec-num"><b>4</b>Options</div>
+      <div>
+        <h2>Length, reader, and realism.</h2>
+        <p class="sub">The defaults, and the words that change them.</p>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>You want</th><th>Say</th><th>You get</th></tr></thead>
+          <tbody>{OPTIONS.map(([a, b, c]) => <tr><td>{a}</td><td>{b}</td><td>{c}</td></tr>)}</tbody>
+        </table></div>
+      </div>
+    </div></div>
+  </section>
+
+  <section class="sec" id="site">
+    <div class="wrap"><div class="sec-grid">
+      <div class="sec-num"><b>5</b>Sites</div>
+      <div class="split">
+        <div class="body-text">
+          <h2>Several pages become a site.</h2>
+          <p>Put each page at <span class="chip-code">&lt;root&gt;/&lt;slug&gt;/index.html</span> and run the site script. It writes a home page grouped by category and puts the same index in every page's sidebar, which readers hide with the corner button or <kbd>Ctrl</kbd> <kbd>B</kbd> (<kbd>⌘</kbd> <kbd>B</kbd> on a Mac).</p>
+          <p><span class="chip-code">--thumbs</span> takes a card image of each page's first figure, in light and dark. <span class="chip-code">--shared</span> moves the runtime into one cached file for a hosted site; the pages still open from disk.</p>
+        </div>
+        <CodeBlock code={`node <skill>/scripts/site.mjs site --thumbs --shared\n# a home page of your own:\nnode <skill>/scripts/site.mjs site --shared --home home.html`} lang="sh" title="terminal" />
+      </div>
+    </div></div>
+  </section>
+
+  <section class="sec" id="check">
+    <div class="wrap"><div class="sec-grid">
+      <div class="sec-num"><b>6</b>Check</div>
+      <div class="split">
+        <div class="body-text">
+          <h2>Check a page yourself.</h2>
+          <p>The agent runs these while it builds, and you can run them on any page. <span class="chip-code">verify.mjs</span> runs the page's self-check at desktop and phone widths and saves screenshots; <span class="chip-code">explore.mjs</span> plays with every figure into contact sheets. Without Node or Chrome, add <span class="chip-code">?check</span> to the page's address.</p>
+          <p><a href={`${base}how-it-works/#checks`}>What the checks catch →</a></p>
+        </div>
+        <CodeBlock code={`node <skill>/scripts/render.mjs page.html     # diagrams and code, safe to repeat\nnode <skill>/scripts/verify.mjs page.html\nnode <skill>/scripts/explore.mjs page.html --figure plume`} lang="sh" title="terminal" />
+      </div>
+    </div></div>
+  </section>
+
+  <section class="sec" id="in-your-app">
+    <div class="wrap"><div class="sec-grid">
+      <div class="sec-num"><b>7</b>In your app</div>
+      <div>
+        <h2>The figures in React, Vue, Svelte, and Astro.</h2>
+        <p class="sub">The runtime ships on npm as <span class="chip-code">@safis/core</span>, with a thin wrapper for each framework. Figure specs are identical everywhere; only the mounting differs.</p>
+        <div class="split" style="margin-bottom: 28px">
+          <CodeBlock code={`npm install @safis/core @safis/react   # or @safis/vue, @safis/svelte, @safis/astro`} lang="sh" title="terminal" />
+          <CodeBlock code={springSpec} title="figures/spring.js" />
+        </div>
+        <div data-tabs>
+          <div class="tabs-x" role="tablist">
+            {["React", "Vue", "Svelte", "Astro", "Plain JS"].map((t, i) => <button type="button" role="tab" data-tab={t} aria-selected={i === 0 ? "true" : "false"}>{t}</button>)}
+          </div>
+          <div data-panel="React" class="tabpanel"><CodeBlock code={react} lang="jsx" title="Post.jsx" /></div>
+          <div data-panel="Vue" class="tabpanel" hidden><CodeBlock code={vue} lang="vue" title="Post.vue" /></div>
+          <div data-panel="Svelte" class="tabpanel" hidden><CodeBlock code={svelte} lang="svelte" title="Post.svelte" /></div>
+          <div data-panel="Astro" class="tabpanel" hidden><CodeBlock code={astro} lang="astro" title="Post.astro" /></div>
+          <div data-panel="Plain JS" class="tabpanel" hidden><CodeBlock code={vanilla} title="main.js" /></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+</Site>

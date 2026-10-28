@@ -1,0 +1,25 @@
+<!-- From skills/safis/references/effects.md. -->
+<figure class="demo" id="burner" style="--ph: 1.45" aria-label="A gas burner tube with a flame above it. Sliders set the gas flow, the air premixed, and a draft. With little air the flame is tall and yellow; with plenty it is short and blue."></figure>
+<script>
+{
+  demo("burner", {
+    aspect: 1.45,
+    state: () => ({ t: 1.4 }),
+    controls: [
+      { key: "gas", label: "Gas flow", min: 0, max: 1, step: 0.01, value: 0.75, color: "orange" },
+      { key: "air", label: "Air premixed", min: 0, max: 1, step: 0.01, value: 0.1, color: "blue", format: x => `${Math.round(x * 100)}%` },
+      { key: "wind", label: "Draft", min: -1, max: 1, step: 0.01, value: 0, color: "muted" },
+    ],
+    change(key, s, v, fig) { if (!fig.playing) Object.assign(s, { gas: v.gas, air: v.air }); },
+    step(dt, s, v) { s.t += dt; s.gas = Fx.follow(s.gas, v.gas, dt); s.air = Fx.follow(s.air, v.air, dt); },
+    status: (s, v) => `flame height ${Math.round(100 * (s.gas ?? v.gas) ** 0.4)}% of full`,
+    draw(g, s, v) {
+      const cx = g.w / 2, top = g.h * 0.74, tw = Math.min(46, g.w * 0.09);
+      const f = g.fx.fire([0, 0, g.w, top + 1], { t: s.t, power: s.gas ?? v.gas, soot: 1 - (s.air ?? v.air), wind: v.wind * 0.7, base: [cx, top], width: tw * 1.15, height: g.h * 0.68, size: 0.06 });
+      g.rect(cx - tw / 2, top, tw, g.h - top - 18, { fill: "panel", stroke: "ink", width: 1.5 });
+      g.line([cx - tw * 1.6, g.h - 18], [cx + tw * 1.6, g.h - 18], { stroke: "ink", width: 1.5 });
+      if (f.height > 8) g.label("flame tip", [f.tip[0] + 44, f.tip[1] + 6]);
+    },
+  });
+}
+</script>

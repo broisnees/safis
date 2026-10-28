@@ -1,0 +1,57 @@
+---
+// Every kind of figure the skill makes, each shown by a real figure: a capture from an
+// explainer, or (where no explainer uses it yet) a live figure from the references.
+import Site from "../layouts/Site.astro";
+import Shot from "../components/Shot.astro";
+import axis from "../figures/axis.html?raw";
+import burner from "../figures/burner.html?raw";
+import bend from "../figures/bend.html?raw";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+type Kind = { id: string; title: string; text: string[]; list?: string[]; shot?: [string, string]; live?: string; cap?: string; seen: [string, string][] };
+const KINDS: Kind[] = [
+  { id: "2d", title: "2D figures you move", text: ["Cross-sections, mechanisms, and step-throughs on a canvas, with instrument-like controls beneath: sliders with marks, knobs, steppers, XY pads, switches, and presets. Readers drag the parts themselves, and numbers in the prose drag too."], list: ["Grab handles, hover readouts, keyboard control", "Callouts that keep clear of each other", "Magnifier insets, dials, measurement lines, hatching"], shot: ["pendulum", "A pendulum's beat, from the pendulum explainer."], seen: [["pendulum", "How a pendulum keeps time"], ["lock", "How a pin tumbler lock knows your key"]] },
+  { id: "plots", title: "Graphs and the science kit", text: ["Function plots with areas, tangents, vector fields, and contours; measured data with bands and error bars; and numerics underneath, so every number on screen comes from a model."], list: ["Plots in data coordinates with labeled axes", "ODE steps, roots, statistics, small linear algebra", "TeX in the prose as MathML, colored to match the figures"], shot: ["derivative", "The slope function of a curve, from the derivative explainer."], seen: [["derivative", "What a derivative measures"], ["fourier", "How spinning circles draw anything"]] },
+  { id: "sim", title: "Simulations", text: ["Particle and rigid-body physics, waves and diffusion on grids, N-body gravity, random processes, classic ODE systems, and small neural networks trained live in the page."], shot: ["neuron", "A neuron's spike, simulated from its ion currents."], seen: [["neuron", "How a neuron fires"], ["learning", "How a neural network learns"]] },
+  { id: "3d", title: "3D with real materials", text: ["A WebGL engine built for explainers: physically based metals, glass that refracts, soft shadows, section cuts with hatched faces, see-through parts, and ink outlines. Readers turn every model, and zoom with a pinch or Ctrl and the wheel."], list: ["Steel, aluminum, titanium, Inconel, glass, rubber, and temper colors on hot metal", "Studio, night, outdoor, and diagram lighting", "Picking and labels that follow the model"], shot: ["turbofan-cutaway", "A turbofan cut away, from the turbofan explainer."], seen: [["turbofan", "How a turbofan moves air"], ["jaw-joint", "The jaw joint"]] },
+  { id: "parts", title: "Machines from real parts", text: ["A parts library that builds hardware to real proportions: nozzles, pumps, pipes with true bends, flanges with bolt circles, bearings, blades, gears. Whole assemblies come with named moving parts, explode offsets, and labels."], list: ["Rocket engine, turbofan, turbopump, piston engine", "Gearbox, electric motor, centrifugal pump, bicycle drivetrain, steam turbine", "Pose them from one kinematic state; take them apart with one slider"], shot: ["engine-apart", "The rocket engine exploded, from the rocket engine explainer."], seen: [["rocket-engine", "How a rocket engine makes thrust"]] },
+  { id: "flow", title: "Smoke, flame, and air", text: ["GPU particles with real forces, a ray-marched rocket plume with shock diamonds that respond to throttle and expansion, and air tracers that follow the potential flow past a wing."], shot: ["plume", "A bell nozzle firing; the plume changes with fuel, throttle, and exit pressure."], seen: [["rocket-engine", "How a rocket engine makes thrust"], ["turbofan", "How a turbofan moves air"]] },
+  { id: "molecules", title: "Molecules and the body", text: ["Ball-and-stick and space-filling molecules with real bond lengths and angles, crystals, and anatomy modeled from measured dimensions: bones, discs, muscles."], shot: ["molecule", "A water molecule, from the ice explainer."], seen: [["ice", "Why ice floats"], ["protein", "How a cell builds a protein"], ["jaw-joint", "The jaw joint"]] },
+  { id: "iso", title: "Isometric drawings", text: ["Machines and devices drawn from many small solid parts with four-tone shading and ink outlines, crisp at any zoom, turnable, cut away, see-through, and exportable as a standalone SVG. Drag the carriage, turn the view, or download the drawing:"], live: axis, seen: [] },
+  { id: "maps", title: "Maps and globes", text: ["Five projections, 177 countries, cities, great-circle routes, and distances, for anything located on Earth."], shot: ["globe", "Round trips from London, from the CDN explainer."], seen: [["cdn", "How a CDN makes a faraway site fast"], ["dns", "How DNS turns a name into an address"]] },
+  { id: "optics", title: "Optics", text: ["Rays through mirrors, lenses, prisms, raindrops, and the eye, with reflection, refraction, total internal reflection, Fresnel losses, and dispersion. Drag the light or tilt it:"], live: bend, seen: [] },
+  { id: "sound", title: "Sound and images", text: ["Tones, harmonics, and plucked strings the reader hears, with waveforms and spectra; pixels, filters, sampling and aliasing, dithering, and the DCT."], shot: ["spectrum", "A spectrum, from the Fourier explainer."], seen: [["fourier", "How spinning circles draw anything"]] },
+  { id: "effects", title: "Effects", text: ["Fire and exhaust, smoke and steam, airflow streaks, water ripples and caustics, glow, sparks, and electric arcs, drawn with WebGL inside a 2D figure, only where they show something physical. Open the air hole:"], live: burner, seen: [] },
+  { id: "ai", title: "AI and data", text: ["Heatmaps for attention and confusion matrices, networks, tokens, ranked probabilities, and loss surfaces a model descends while you watch."], shot: ["attention", "An attention matrix, from the attention explainer."], seen: [["attention", "How attention works"], ["next-word", "How a language model picks the next word"], ["learning", "How a neural network learns"]] },
+  { id: "diagrams", title: "Diagrams and code", text: ["Sequence, flow, state, class, and entity diagrams drawn in the page's own colors, highlighted code, and diffs, all rendered ahead of time so the page still makes no requests."], shot: ["diagram", "A diagram from the DNS explainer."], seen: [["dns", "How DNS turns a name into an address"], ["hash-table", "How a hash table finds things"]] },
+  { id: "paper", title: "Research furniture", text: ["Everything a serious article needs: an abstract, numbered sections and contents, sidenotes, numbered citations with previews, defined terms, callouts, predictions before surprising figures, collapsible derivations, tables, and light and dark modes."], shot: ["paper", "The opening of the lock explainer."], seen: [["lock", "How a pin tumbler lock knows your key"], ["pendulum", "How a pendulum keeps time"]] },
+];
+---
+<Site figures title="What it makes · Safis" description="Every kind of figure the Safis skill makes: 2D figures, plots, simulations, 3D with real materials, machines from real parts, smoke and flame, maps, optics, sound, effects, diagrams, and research furniture." current="what-it-makes" kits={["iso", "effects", "optics"]}>
+  <header class="phead">
+    <div class="wrap">
+      <p class="eyebrow">What it makes</p>
+      <h1>Every idea gets a figure you can <em>move</em>.</h1>
+      <p class="lede-x">A page has an abstract, numbered sections, and about 25 figures woven into the prose. These are the kinds of figures it draws them from. Every picture here is a real figure: captured from an explainer, or running live.</p>
+      <nav class="kinds-nav" aria-label="Kinds of figures">{KINDS.map(k => <a href={`#${k.id}`}>{k.title}</a>)}</nav>
+    </div>
+  </header>
+  <div class="wrap">
+    {KINDS.map((k, i) => (
+      <section class="kind-x" id={k.id}>
+        <div>
+          <p class="k-n">{String(i + 1).padStart(2, "0")}</p>
+          <h2>{k.title}</h2>
+          {k.text.map(t => <p>{t}</p>)}
+          {k.list && <ul class="checks">{k.list.map(l => <li>{l}</li>)}</ul>}
+          {k.seen.length > 0 && <p class="seen">Seen in {k.seen.map(([s, t], j) => <Fragment>{j > 0 && (j === k.seen.length - 1 ? " and " : ", ")}<a href={`${base}${s}/`}>{t}</a></Fragment>)}.</p>}
+          {k.live && <p class="seen">A live figure from the skill's references.</p>}
+        </div>
+        <div class="kind-media">
+          {k.shot && <Fragment><a href={`${base}${k.seen[0][0]}/`} aria-label={`Open ${k.seen[0][1]}`}><Shot name={k.shot[0]} alt={k.shot[1]} eager={i < 2} /></a><p class="cap">{k.shot[1]}</p></Fragment>}
+          {k.live && <div class="live"><Fragment set:html={k.live} /></div>}
+        </div>
+      </section>
+    ))}
+    <div class="ctas" style="margin-top: 56px"><a class="btn solid" href={`${base}usage/`}>Ask for one <span class="arr">→</span></a><a class="btn" href={`${base}examples/`}>Read the explainers</a></div>
+  </div>
+</Site>

@@ -1,0 +1,17 @@
+---
+import Site from "../layouts/Site.astro";
+import Card from "../components/Card.astro";
+import pages from "../generated/pages.json";
+const picks = [...pages].sort((a, b) => b.added - a.added).slice(0, 3);
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+<Site title="Page not found · Safis" description="There is no page at this address.">
+  <header class="phead">
+    <div class="wrap">
+      <p class="eyebrow">404</p>
+      <h1>There is no page <em>here</em>.</h1>
+      <p class="lede-x">The address may have a typo, or the page moved. These are the newest explainers, or see <a href={`${base}examples/`}>all of them</a>.</p>
+    </div>
+  </header>
+  <section class="sec"><div class="wrap"><div class="cards-x">{picks.map(p => <Card page={p} />)}</div></div></section>
+</Site>

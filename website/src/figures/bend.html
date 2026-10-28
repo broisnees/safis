@@ -1,0 +1,31 @@
+<!-- From skills/safis/references/optics.md. -->
+<figure class="demo" id="bend" style="--ph: 1.75" aria-label="A ray from the upper left meets a flat surface and bends toward the dashed normal below it; a faint part reflects. Arcs mark both angles."></figure>
+<script>
+{
+  let P;
+  const src = a => [-4 * Math.sin(a * Math.PI / 180), 4 * Math.cos(a * Math.PI / 180)];
+  demo("bend", {
+    aspect: 1.75,
+    controls: [
+      { key: "angle", label: "Angle of incidence", min: 0, max: 85, step: 0.5, value: 40, unit: "°", color: "orange" },
+      { key: "mat", label: "Below", type: "choice", options: [{ value: "water", label: "Water" }, { value: "bk7", label: "Glass" }, { value: "diamond", label: "Diamond" }], value: "water" },
+    ],
+    status: (s, v) => `${(Optics.fresnel(1, Optics.index(v.mat), v.angle).R * 100).toFixed(1)}% reflected`,
+    draw(g, s, v) {
+      P = g.fit(-5, 5, -3.2, 3);
+      const S = src(v.angle);
+      const T = g.optics([
+        Optics.slab([0, -4], 18, 8, { n: v.mat }),
+        Optics.wall([-9, -7.9], [9, -7.9], { hidden: true }),   // stops light at the far bottom face
+        Optics.ray(S, [-S[0], -S[1]], { name: "light" }),
+      ], { P });
+      g.rayAngles(T.hits.find(h => h.depth === 0));
+      g.handle(P(S), { color: "orange" });
+    },
+    drag: {
+      hit: (p, s, v) => { const q = P(src(v.angle)); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 24; },
+      move: (p, s, v, d, fig) => { const w = P.inv(p); fig.set("angle", clamp(Math.atan2(-w[0], w[1]) * 180 / Math.PI, 0, 85)); },
+    },
+  });
+}
+</script>

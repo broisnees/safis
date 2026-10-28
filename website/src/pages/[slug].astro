@@ -1,0 +1,11 @@
+---
+import Explainer from "../layouts/Explainer.astro";
+import pages from "../generated/pages.json";
+export function getStaticPaths() {
+  return pages.map(page => ({ params: { slug: page.slug }, props: { page } }));
+}
+const { page } = Astro.props;
+const articles = import.meta.glob("../generated/articles/*.html", { query: "?raw", import: "default", eager: true });
+const article = articles[`../generated/articles/${page.slug}.html`] as string;
+---
+<Explainer page={page} article={article} />
