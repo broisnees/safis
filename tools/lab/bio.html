@@ -1,0 +1,181 @@
+<script>window.LAB = { scenes: {}, handles: {} };</script>
+<h1>Anatomy lab</h1>
+<p class="dek">Every <code>E3.bio</code> assembly, moving, with its cutaway. Render with <code>node tools/check-3d.mjs --lab tools/lab/bio.html</code>.</p>
+
+<h2>Heart</h2>
+<p>The cardiac cycle, with a frontal section through the four chambers:</p>
+<figure class="demo" id="heart" aria-label="A human heart beating; a frontal section shows the four chambers and the valves opening and closing."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const H = E3.bio.heart();
+  scene.add(H);
+  window.LAB.scenes.heart = scene;
+  LAB.handles.heart = demo("heart", {
+    aspect: w => (w < 560 ? 0.85 : 1.2),
+    orbit: { yaw: 0.2, pitch: 0.12 },
+    state: () => ({ t: 0.3 }),
+    controls: [{ key: "cut", label: "Section", type: "toggle", value: true }, { key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0 }],
+    status: s => `${H.state.name} · left ventricle ${H.state.lvVolume.toFixed(0)} mL`,
+    step(dt, s) { s.t += dt / 0.8 / 3; },
+    draw(g, s, v) {
+      H.cutaway(v.cut).explode(v.apart).pose({ phase: s.t % 1 });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(H.labels().slice(0, 10).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>The same heart as a teaching drawing: porcelain, with only the left ventricle in color:</p>
+<figure class="demo" id="heart-plain" aria-label="The heart in porcelain with the left ventricle in red."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "diagram" });
+  const H = E3.bio.heart({ plain: true, detail: 0.7 });
+  H.parts["left ventricle"].traverse(n => { n.material = "red"; });
+  scene.add(H);
+  window.LAB.scenes["heart-plain"] = scene;
+  LAB.handles["heart-plain"] = demo("heart-plain", {
+    aspect: w => (w < 560 ? 0.85 : 1.2),
+    orbit: { yaw: -0.3, pitch: 0.15 },
+    draw(g, s) {
+      H.pose({ phase: 0.75 });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts([{ at: view.project(H.parts["left ventricle"].toWorld([44, -40, -6])), text: "left ventricle", color: "red" }]);
+    },
+  });
+}
+</script>
+
+<h2>Eye</h2>
+<figure class="demo" id="eye" aria-label="A human eye in sagittal section with its six muscles; it looks around, and the pupil and lens change."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const E = E3.bio.eye();
+  scene.add(E);
+  window.LAB.scenes.eye = scene;
+  LAB.handles.eye = demo("eye", {
+    aspect: w => (w < 560 ? 0.9 : 1.3),
+    orbit: { yaw: -1.05, pitch: 0.2 },
+    state: () => ({ t: 0 }),
+    controls: [{ key: "cut", label: "Section", type: "toggle", value: true }, { key: "pupil", label: "Pupil", min: 2, max: 8, step: 0.1, value: 4, unit: " mm" }, { key: "acc", label: "Focus near", min: 0, max: 1, step: 0.01, value: 0 }],
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      E.cutaway(v.cut).pose({ gaze: [0.25 * Math.sin(s.t * 0.7), 0.12 * Math.sin(s.t * 0.5)], pupil: v.pupil, accommodation: v.acc });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(E.labels().slice(0, 9).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>Knee</h2>
+<figure class="demo" id="knee" aria-label="A right knee bending; a sagittal section through the medial condyle shows cortical and cancellous bone and the meniscus."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const K = E3.bio.knee();
+  scene.add(K);
+  window.LAB.scenes.knee = scene;
+  LAB.handles.knee = demo("knee", {
+    aspect: w => (w < 560 ? 0.8 : 1.1),
+    orbit: { yaw: 1.35, pitch: 0.1 },
+    state: () => ({ t: 0 }),
+    controls: [{ key: "cut", label: "Section", type: "toggle", value: true }, { key: "flex", label: "Bend", min: 0, max: 130, step: 1, value: 40, unit: "°" }],
+    status: () => `ACL ${K.state.acl.toFixed(1)} mm · PCL ${K.state.pcl.toFixed(1)} mm · rollback ${K.state.rollback.toFixed(1)} mm`,
+    draw(g, s, v) {
+      K.cutaway(v.cut).pose({ flex: (v.flex * Math.PI) / 180 });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(K.labels().slice(0, 10).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>Neuron</h2>
+<figure class="demo" id="neuron" aria-label="A neuron with dendrites, a myelinated axon, and terminals; an action potential jumps from node to node."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const N = E3.bio.neuron();
+  scene.add(N);
+  window.LAB.scenes.neuron = scene;
+  LAB.handles.neuron = demo("neuron", {
+    aspect: w => (w < 560 ? 0.8 : 1.1),
+    orbit: { yaw: 0.4, pitch: 0.1 },
+    state: () => ({ t: 0 }),
+    controls: [{ key: "cut", label: "Open the cell body", type: "toggle", value: false }],
+    step(dt, s) { s.t += dt * 0.3; },
+    draw(g, s, v) {
+      N.cutaway(v.cut).pose({ signal: s.t % 1 });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(N.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>Cell</h2>
+<figure class="demo" id="cell" aria-label="An animal cell with a quarter cut away: nucleus, ER, Golgi, mitochondria, lysosomes, microtubules."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const C = E3.bio.cell();
+  scene.add(C);
+  window.LAB.scenes.cell = scene;
+  LAB.handles.cell = demo("cell", {
+    aspect: w => (w < 560 ? 0.9 : 1.3),
+    orbit: { yaw: -0.75, pitch: 0.35 },
+    controls: [{ key: "cut", label: "Cut away", type: "toggle", value: true }],
+    draw(g, s, v) {
+      C.cutaway(v.cut);
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(C.labels().slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>Tooth</h2>
+<figure class="demo" id="tooth" aria-label="A lower molar in its socket, cut through to show enamel, dentin, pulp, the root canals, the periodontal ligament, and bone."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const Tt = E3.bio.tooth();
+  scene.add(Tt);
+  window.LAB.scenes.tooth = scene;
+  LAB.handles.tooth = demo("tooth", {
+    aspect: w => (w < 560 ? 0.8 : 1.0),
+    orbit: { yaw: 0.25, pitch: 0.15 },
+    controls: [{ key: "cut", label: "Section", type: "toggle", value: true }],
+    draw(g, s, v) {
+      Tt.cutaway(v.cut);
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(Tt.labels().filter(l => !/cusp/.test(l.text)).slice(0, 9).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>Skin</h2>
+<figure class="demo" id="skin" aria-label="A block of skin: epidermis, dermis, and fat, with a hair follicle, glands, vessels, and nerve endings."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const S = E3.bio.skin();
+  scene.add(S);
+  window.LAB.scenes.skin = scene;
+  LAB.handles.skin = demo("skin", {
+    aspect: w => (w < 560 ? 0.9 : 1.3),
+    orbit: { yaw: 0.6, pitch: 0.3 },
+    controls: [{ key: "cut", label: "Cut away", type: "toggle", value: true }],
+    draw(g, s, v) {
+      S.cutaway(v.cut);
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(S.labels().slice(0, 9).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
