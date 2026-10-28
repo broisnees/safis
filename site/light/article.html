@@ -1,0 +1,1624 @@
+<script>
+// Shared by every figure below. SI units unless a name says otherwise (nm, eV).
+window.LIGHT = (() => {
+  const c = 299792458;              // m/s, exact by definition
+  const h = 6.62607015e-34;         // J s, exact
+  const eV = 1.602176634e-19;       // J, exact
+  const DEG = Math.PI / 180;
+  // A fixed dark backdrop for scenes that are about light itself (it doesn't follow the theme on purpose).
+  const NIGHT = "#0c0e12";
+  // Photon energy in eV for a wavelength in nm: E = h c / lambda, about 1240 / lambda.
+  const photonEV = nm => (h * c) / (nm * 1e-9) / eV;
+  // Frequency in THz for a wavelength in nm.
+  const THz = nm => c / (nm * 1e-9) / 1e12;
+  // Planck's law, spectral radiance per nm (arbitrary scale), wavelength in nm, temperature in K.
+  const planck = (nm, T) => { const l = nm * 1e-9; return 1 / (l ** 5 * (Math.exp((h * c) / (l * 1.380649e-23 * T)) - 1)); };
+  // Cone sensitivities, normalized to 1 at the peak. Log-Gaussian fits to the Stockman and Sharpe
+  // (2000) cone fundamentals: peaks 442, 543 and 570 nm. Good to a few percent over 400-700 nm.
+  const cone = (nm, k) => { const [peak, w] = [[442, 0.072], [543, 0.074], [570, 0.083]][k]; const x = Math.log(nm / peak) / w; return Math.exp(-0.5 * x * x); };
+  // Linear-light RGB of a pure wavelength, for mixing spectra into a display color.
+  const lin = v => Math.pow(Math.max(0, v), 2.2);
+  const rgbLin = nm => Optics.wavelengthRGB(nm).map(lin);
+  // The display color of a spectrum: weights(nm) is the share of an even white that reaches the eye.
+  function colorOf(weights, brightness = 1) {
+    const acc = [0, 0, 0], ref = [0, 0, 0];
+    for (let nm = 380; nm <= 720; nm += 5) {
+      const q = rgbLin(nm), w = weights(nm);
+      for (let k = 0; k < 3; k++) { acc[k] += q[k] * w; ref[k] += q[k]; }
+    }
+    const v = acc.map((a, k) => Math.pow(Math.min(1, (a / ref[k]) * brightness), 1 / 2.2));
+    return `rgb(${v.map(x => Math.round(x * 255)).join(",")})`;
+  }
+  // A soap film of index n and thickness d (nm) in air, seen straight on: the Airy reflectance.
+  function film(nm, d, n = 1.33) {
+    const r = (1 - n) / (1 + n), r2 = -r, delta = (4 * Math.PI * n * d) / nm;
+    const cs = Math.cos(delta);
+    return (r * r + r2 * r2 + 2 * r * r2 * cs) / (1 + r * r * r2 * r2 + 2 * r * r2 * cs);
+  }
+  // Double slit, Fraunhofer: slit width a and separation dSep (both um), angle in radians.
+  function slits(theta, nm, a, dSep) {
+    const k = Math.PI / (nm * 1e-3);
+    const b = k * a * Math.sin(theta), g = k * dSep * Math.sin(theta);
+    const env = Math.abs(b) < 1e-9 ? 1 : (Math.sin(b) / b) ** 2;
+    return env * Math.cos(g) ** 2;
+  }
+  // A display color for cone responses (short, medium, long): a linear map to linear sRGB, fitted
+  // once by least squares to the spectrum colors, weighted toward yellow where the color-match
+  // figure works. Equal cone responses always get the same color.
+  let M = null;
+  function fitM() {
+    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], B = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (let nm = 400; nm <= 700; nm += 5) {
+      const x = [0, 1, 2].map(k => cone(nm, k)), y = rgbLin(nm), wt = 1 + 30 * Math.exp(-(((nm - 570) / 12) ** 2));
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { A[i][j] += wt * x[i] * x[j]; B[i][j] += wt * x[i] * y[j]; }
+    }
+    const [a, b, c] = A[0], [d, e, f] = A[1], [g, h, i] = A[2];
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    const inv = [[e * i - f * h, c * h - b * i, b * f - c * e], [f * g - d * i, a * i - c * g, c * d - a * f], [d * h - e * g, b * g - a * h, a * e - b * d]].map(r => r.map(x => x / det));
+    return [0, 1, 2].map(r => [0, 1, 2].map(j => inv[r][0] * B[0][j] + inv[r][1] * B[1][j] + inv[r][2] * B[2][j]));
+  }
+  function lmsColor(lms, gain = 1) {
+    M = M || fitM();
+    const lin = [0, 1, 2].map(j => Math.max(0, gain * (lms[0] * M[0][j] + lms[1] * M[1][j] + lms[2] * M[2][j])));
+    const top = Math.max(1, ...lin);   // too bright to show: dim it as a whole, keeping its hue
+    const v = lin.map(x => Math.pow(x / top, 1 / 2.2));
+    return `rgb(${v.map(x => Math.round(x * 255)).join(",")})`;
+  }
+  // Work functions in eV (Michaelson 1977).
+  const METALS = { cesium: 2.14, potassium: 2.3, sodium: 2.75, zinc: 4.33, copper: 4.65 };
+  return { c, h, eV, DEG, NIGHT, photonEV, THz, planck, cone, rgbLin, colorOf, lmsColor, film, slits, METALS };
+})();
+</script>
+
+<div class="abstract">
+  <ul>
+    <li>Light travels in straight lines at 299,792 kilometers a second, fast enough that it took two clever experiments in the 1600s and 1800s to clock it.</li>
+    <li>It is a wave of electric and magnetic fields. Its wavelength sets its color; visible light is a thin slice of a spectrum that runs from radio to gamma rays.</li>
+    <li>Light slows down in glass and water. That one fact explains bending, mirages of depth, fibers that trap light, rainbows, and lenses.</li>
+    <li>Two beams can cancel each other, which is where soap-bubble colors come from, and the direction a wave shakes in can be filtered, which is how polarized sunglasses work.</li>
+    <li>Yet light is absorbed in whole lumps, photons, whose energy depends only on color. Your eye counts those lumps with three kinds of cones, and builds every color you see from three numbers.</li>
+  </ul>
+</div>
+
+<p class="lede">Strike a match in a dark room and the room appears. The walls, the chair, your own hand: none of them were missing a moment ago. Something left the flame, crossed the room faster than you could notice, bounced off everything in it, and some of it reached your eyes. This page is about that something: what it is, how fast it goes, what happens when it meets glass and water and other light, and how your eye turns it into color.</p>
+
+<p>We'll start with the plainest facts about light, the ones you can check with a lamp and a box. Drag the <span class="c-orange" data-part="lamp">lamp</span> around the room, and widen it from a pinpoint to a frosted bulb <span class="scrub" data-key="size" data-figure="rays"></span> across. Watch the <span class="c-blue" data-part="shadow">shadow</span> the box throws on the wall:</p>
+
+<figure class="demo" id="rays" aria-label="A dark room seen from above: a lamp on the left sends light in straight lines past a box toward a wall on the right. The wall is brightly lit except for the box's shadow, which has a dark core and soft edges when the lamp is wide."></figure>
+<script>
+{
+  // Room in meters, seen from above. The lamp is a short bright line (its width), the box a square.
+  const BOX = { x: 2.7, y: 0.45, w: 0.4, h: 0.4 }, WALL = 4.6;
+  let P;
+  // Does the segment from a to b cross the box?
+  const blocked = (a, b) => {
+    const { x, y, w, h } = BOX;
+    let t0 = 0, t1 = 1;
+    const d = [b[0] - a[0], b[1] - a[1]];
+    for (const [p, q] of [[-d[0], a[0] - x], [d[0], x + w - a[0]], [-d[1], a[1] - y], [d[1], y + h - a[1]]]) {
+      if (Math.abs(p) < 1e-12) { if (q < 0) return false; continue; }
+      const r = q / p;
+      if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+    }
+    return t0 <= t1;
+  };
+  // Light reaching the wall at height y: the lamp as 15 points across its width, each falling off as cos/r².
+  const lit = (s, v, y) => {
+    let sum = 0;
+    for (let i = 0; i < 15; i++) {
+      const p = [s.lamp[0], s.lamp[1] + (i / 14 - 0.5) * v.size];
+      if (blocked(p, [WALL, y])) continue;
+      const dx = WALL - p[0], dy = y - p[1], r2 = dx * dx + dy * dy;
+      sum += dx / Math.sqrt(r2) / r2;
+    }
+    return sum / 15;
+  };
+  demo("rays", {
+    aspect: w => (w < 560 ? 1.05 : 1.75),
+    state: () => ({ lamp: [0.6, 0.9] }),
+    controls: [{ key: "size", label: "Lamp width", min: 0, max: 1.2, step: 0.01, value: 0.35, unit: " m", color: "orange", marks: [{ value: 0, label: "point" }] }],
+    caption: "A lamp, a box, and a wall, seen from above. Light leaves the lamp in straight lines, so the box throws a shadow; a wide lamp gives the shadow a dark core and gray edges. The bar along the wall shows how brightly each part of it is lit.",
+    status: (s, v) => { const d = WALL - s.lamp[0]; return `lamp ${d.toFixed(1)} m from the wall · light per square meter there 1/${(d * d).toFixed(1)} of what it is 1 m away`; },
+    draw(g, s, v) {
+      g.rect(0, 0, g.w, g.h, { fill: LIGHT.NIGHT });
+      P = g.fit(-0.1, 5.0, -1.25, 2.55);
+      const sun = "#ffd38a";
+      // Rays: a fan from the lamp's center, cut short where they hit the box or the wall.
+      const c = s.lamp;
+      for (let i = 0; i < 60; i++) {
+        const a = -Math.PI / 2 + (i / 59) * Math.PI;
+        let end = [c[0] + Math.cos(a) * 9, c[1] + Math.sin(a) * 9];
+        if (end[0] > WALL) { const t = (WALL - c[0]) / (end[0] - c[0]); end = [WALL, c[1] + (end[1] - c[1]) * t]; }
+        // walk until blocked
+        let hit = null;
+        for (let k = 1; k <= 60; k++) { const q = [c[0] + (end[0] - c[0]) * k / 60, c[1] + (end[1] - c[1]) * k / 60]; if (blocked(c, q)) { hit = q; break; } }
+        g.line(P(c), P(hit || end), { stroke: sun, width: 1, alpha: 0.22 });
+      }
+      // Wall brightness, drawn as a glowing strip; the shadow region outlined.
+      const peak = lit(s, v, s.lamp[1]) || 1;
+      const y0 = -1.2, y1 = 2.5, n = 120;
+      for (let i = 0; i < n; i++) {
+        const y = y0 + (y1 - y0) * (i + 0.5) / n, b = Math.min(1, lit(s, v, y) / peak);
+        const a = P([WALL, y0 + (y1 - y0) * i / n]), bb = P([WALL + 0.16, y0 + (y1 - y0) * (i + 1) / n]);
+        g.rect(a[0], bb[1], bb[0] - a[0], a[1] - bb[1] + 0.5, { fill: sun, alpha: 0.06 + 0.94 * b });
+      }
+      g.line(P([WALL, y0]), P([WALL, y1]), { stroke: "#8a8f98", width: 1.5 });
+      // The umbra and penumbra edges: lines from the lamp's ends past the box's corners.
+      const lit2 = g.lit("shadow");
+      const ends = [[c[0], c[1] - v.size / 2], [c[0], c[1] + v.size / 2]];
+      const corners = [[BOX.x, BOX.y], [BOX.x, BOX.y + BOX.h], [BOX.x + BOX.w, BOX.y], [BOX.x + BOX.w, BOX.y + BOX.h]];
+      for (const e of ends) for (const k of corners) {
+        if (k[0] <= e[0]) continue;
+        const t = (WALL - e[0]) / (k[0] - e[0]), q = [WALL, e[1] + (k[1] - e[1]) * t];
+        if (blocked([e[0], e[1]], [k[0] - 1e-3 * Math.sign(k[0] - e[0]), k[1]]) ) continue;
+        g.line(P(k), P(q), { stroke: palette.blue, width: lit2 ? 1.6 : 1, alpha: lit2 ? 0.9 : 0.45, dash: [4, 4] });
+      }
+      g.rect(P([BOX.x, BOX.y + BOX.h])[0], P([BOX.x, BOX.y + BOX.h])[1], BOX.w * P.sx, BOX.h * P.sy, { fill: "#2a2e36", stroke: "#9aa0aa", width: 1.5 });
+      g.label("box", P([BOX.x + BOX.w / 2, BOX.y - 0.16]), { color: "#c9ccd2" });
+      g.label("wall", [P([WALL, y1])[0] - 26, P([WALL, y1])[1] + 14], { color: "#c9ccd2" });
+      // The lamp: a glowing bar of its width.
+      const L0 = P(ends[0]), L1 = P(ends[1]);
+      const gbox = [L0[0] - 70, L1[1] - 70, 140, (L0[1] - L1[1]) + 140];
+      if (g.fx && g.fx.glow) g.fx.glow(gbox, v.size > 0.01 ? { path: [L0, L1], width: 5, temp: 2900, spread: 18 } : { at: P(c), r: 4, temp: 2900, spread: 18 });
+      else g.line(L0, L1, { stroke: sun, width: 5 });
+      g.handle(P(c), { color: "orange", r: 8, active: g.lit("lamp") });
+    },
+    drag: {
+      hit: (p, s) => { const q = P(s.lamp); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 26; },
+      move: (p, s) => { const w = P.inv(p); s.lamp = [clamp(w[0], 0.1, BOX.x - 0.25), clamp(w[1], -1.0, 2.3)]; },
+    },
+  });
+}
+</script>
+
+<p>Three facts are in that figure. Light leaves the lamp in <strong>straight lines</strong>: a shadow is the region of the wall that no straight line from the lamp can reach. A wide lamp gives the shadow a dark core, the <dfn data-def="The part of a shadow where the light source is completely hidden.">umbra</dfn>, which no part of the lamp can see, and gray edges, the <dfn data-def="The edge of a shadow where part of the light source is hidden and part is visible.">penumbra</dfn>, which see some of it. Shrink the lamp to a <button class="set" data-figure="rays" data-set="size=0">point</button> and the edges go sharp.</p>
+
+<p>The third fact is in the readout. Pull the lamp back from the wall and the wall dims, and not in proportion: twice as far, a quarter as bright. The light leaving the lamp spreads over a sphere whose area grows with the square of its radius, so the same light is shared over four times the area. That's the <dfn data-def="The brightness from a small source falls off as one over the distance squared.">inverse-square law</dfn>, and it's why a candle across a hall barely lights the far wall.</p>
+
+<h2>How fast</h2>
+
+<p>Light seems to arrive the instant the match is struck. Galileo tried to time it around 1638 with two lanterns on hilltops a mile apart, uncovering one when he saw the other, and found no delay he could measure.<span class="sidenote">His reaction time was a few tenths of a second. Light crosses a mile in about five millionths of one.</span> To measure something that fast you need either a very long baseline or a very fast clock. The first measurement used the longest baseline available: the orbit of the Earth.</p>
+
+<p>In the 1670s the Danish astronomer Ole Rømer was timing the eclipses of Io, the innermost large moon of Jupiter, which disappears into Jupiter's shadow every 42.5 hours. The eclipses should tick like a clock. They didn't: some months they came early, some months late. Drag the <span class="c-blue" data-part="earth">Earth</span> around its orbit and watch when we see Io vanish:</p>
+
+<figure class="demo" id="romer" aria-label="The Sun, Earth's orbit, and Jupiter with its moon Io, seen from above. As Earth moves around its orbit, its distance to Jupiter changes, and a plot below shows how late Io's eclipses are seen compared with when Earth is closest."></figure>
+<script>
+{
+  const AU_S = 499.0;                // light-seconds in one astronomical unit
+  const JUP = 5.20, JYEAR = 11.86;   // Jupiter's orbit radius (AU) and period (years)
+  let P;
+  const where = day => {
+    const a = day / 365.25 * TAU, aj = day / 365.25 / JYEAR * TAU;
+    return { earth: [Math.cos(a), Math.sin(a)], jup: [JUP * Math.cos(aj), JUP * Math.sin(aj)] };
+  };
+  const delay = day => { const w = where(day); return (Math.hypot(w.jup[0] - w.earth[0], w.jup[1] - w.earth[1]) - (JUP - 1)) * AU_S; };
+  demo("romer", {
+    aspect: w => (w < 560 ? 0.85 : 1.55),
+    controls: [{ key: "day", label: "Days after Earth passes Jupiter", min: 0, max: 398, step: 1, value: 120, color: "blue" }],
+    caption: "Earth and Jupiter going round the Sun (sizes not to scale, distances are). Io's eclipses happen on a steady schedule, but we see each one when its light arrives. The plot shows how late, compared with the moment Earth is closest to Jupiter.",
+    status: (s, v) => `distance to Jupiter ${(delay(v.day) / AU_S + JUP - 1).toFixed(2)} AU · eclipse seen ${(delay(v.day) / 60).toFixed(1)} min late`,
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const top = wide ? [0, 0, g.w * 0.56, g.h] : [0, 0, g.w, g.h * 0.56];
+      const bot = wide ? [g.w * 0.58, 16, g.w * 0.42, g.h - 30] : [0, g.h * 0.6, g.w, g.h * 0.4 - 6];
+      g.clip(top, () => {
+        g.rect(top[0], top[1], top[2], top[3], { fill: LIGHT.NIGHT });
+        P = g.fit(-1.6, 6.0, -2.1, 2.1, { box: top });
+        const w = where(v.day);
+        g.circle(P([0, 0]), 1 * P.sx, { stroke: "#4b5260", width: 1 });
+        g.path(Array.from({ length: 121 }, (_, i) => P([JUP * Math.cos(i / 120 * TAU), JUP * Math.sin(i / 120 * TAU)])), { stroke: "#4b5260", width: 1 });
+        if (g.fx && g.fx.glow) g.fx.glow([P([0, 0])[0] - 40, P([0, 0])[1] - 40, 80, 80], { at: P([0, 0]), r: 7, temp: 5800, spread: 14 });
+        // Light from Io to Earth, with dots moving along it
+        const io = [w.jup[0] - 0.18, w.jup[1]];
+        g.line(P(io), P(w.earth), { stroke: "#ffd38a", width: 1, alpha: 0.6, dash: [3, 5] });
+        g.circle(P(w.jup), 6, { fill: "#d9b48a" });
+        g.circle(P(io), 2.5, { fill: "#f0e6c8" });
+        g.label("Jupiter", [P(w.jup)[0], P(w.jup)[1] - 14], { color: "#c9ccd2" });
+        g.circle(P(w.earth), 5, { fill: palette.blue });
+        g.label("Sun", [P([0, 0])[0], P([0, 0])[1] + 18], { color: "#c9ccd2" });
+        g.label("Io", [P(io)[0] - 10, P(io)[1] + 14], { color: "#c9ccd2" });
+        g.label("Earth", [P(w.earth)[0], P(w.earth)[1] - 16], { color: palette.blue });
+        g.handle(P(w.earth), { color: "blue", active: g.lit("earth") });
+      });
+      g.clip(bot, () => {
+        const G = g.graph({ box: bot, x: [0, 398], y: [0, 18], axes: "frame", xLabel: "Days after closest approach", yLabel: "Late by (min)", xTicks: 100, yTicks: 5 });
+        G.fn(d => delay(d) / 60, { color: "blue" });
+        G.marker(v.day, delay(v.day) / 60, { color: "blue", drop: true });
+      });
+    },
+    drag: {
+      hit: (p, s, v) => { const q = P(where(v.day).earth); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 26; },
+      move: (p, s, v, d, fig) => {
+        const w = P.inv(p);
+        let a = Math.atan2(w[1], w[0]); if (a < 0) a += TAU;
+        // the day whose Earth angle matches, nearest the current day (the slider runs a little past a year)
+        let day = Math.round((a / TAU) * 365.25);
+        if (Math.abs(day + 365 - v.day) < Math.abs(day - v.day)) day += 365;
+        fig.set("day", clamp(day, 0, 398));
+      },
+    },
+  });
+}
+</script>
+
+<p>When Earth is on the far side of its orbit from Jupiter, every eclipse arrives about 16 and a half minutes later than when Earth is closest. Nothing changed at Jupiter. The light announcing each eclipse simply had farther to travel: the extra distance is the width of Earth's orbit, about 300 million kilometers. Rømer predicted in 1676 that an eclipse due in November would be seen ten minutes late, and it was <a class="cite" href="#ref-romer"></a>.</p>
+
+<p>Rømer's own estimate was 22 minutes for the orbit's width, and his contemporaries didn't know that width well either. Christiaan Huygens combined the two into a speed of about 220,000 km/s. It was wrong by a quarter, but it was the first time anyone had shown that light takes time at all.</p>
+
+<p>The next step needed a clock fast enough to time light across a few kilometers. In 1849 Hippolyte Fizeau built one from a spinning wheel with 720 teeth <a class="cite" href="#ref-fizeau"></a>. Light passes through a gap between two teeth, travels 8.6 km to a mirror on a distant hill, and comes back through the wheel. Spin the <span class="c-orange" data-part="wheel">wheel</span> up to <span class="scrub" data-key="rps" data-figure="fizeau"></span> and watch whether the returning light gets through:</p>
+
+<figure class="demo" id="fizeau" aria-label="Fizeau's apparatus: a lamp, a half-silvered mirror, a toothed wheel, a long path to a distant mirror and back. A close-up of the wheel's rim shows the returning pulse hitting a gap or a tooth, and a plot shows the returning brightness against the wheel's speed."></figure>
+<script>
+{
+  const N = 720, D = 8633;               // teeth, and the distance to the far mirror in m (Fizeau's numbers)
+  const shift = f => (2 * D / LIGHT.c) * f * N;   // how many tooth periods the wheel turns while light is away
+  // Returning light that gets through: a gap moved under the beam by the shift (teeth and gaps equal).
+  const through = f => { const x = shift(f) % 1; return Math.abs(1 - 2 * x); };
+  demo("fizeau", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    state: () => ({ t: 0 }),
+    controls: [{ key: "rps", label: "Wheel speed", min: 0, max: 40, step: 0.1, value: 6, unit: " turns/s", color: "orange", marks: [{ value: 12.1, label: "first dark" }] }],
+    caption: "Fizeau's 1849 experiment. Light leaves through a gap in the wheel, goes 8.6 km to a mirror and back. If the wheel has turned half a tooth spacing by then, a tooth blocks the returning light. The plot shows the returning brightness against wheel speed.",
+    status: (s, v) => `round trip ${(2 * D / LIGHT.c * 1e6).toFixed(1)} µs · wheel turns ${shift(v.rps).toFixed(2)} tooth spacings · ${(through(v.rps) * 100).toFixed(0)}% gets back`,
+    step(dt, s, v) { s.t += dt; },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [0, 0, g.w * 0.55, g.h] : [0, 0, g.w, g.h * 0.55];
+      const B = wide ? [g.w * 0.58, 16, g.w * 0.42, g.h - 32] : [0, g.h * 0.6, g.w, g.h * 0.4 - 6];
+      g.clip(A, () => {
+        const P = g.fit(0, 10, -3, 3, { box: A });
+        const beam = "#ffb84d";
+        // The light path: lamp -> half mirror -> wheel -> (long) -> far mirror, and back to the eye.
+        const lamp = [0.7, 1.8], split = [2.2, 0], wheelC = [3.6, 0], far = [9.4, 0];
+        g.line(P(lamp), P([2.2, 1.8]), { stroke: beam, width: 2 });
+        g.line(P([2.2, 1.8]), P(split), { stroke: beam, width: 2 });
+        g.line(P(split), P([3.4, 0]), { stroke: beam, width: 2 });
+        const back = through(v.rps);
+        g.line(P([3.8, 0]), P([8.0, 0]), { stroke: beam, width: 2 });
+        g.line(P([8.2, 0]), P(far), { stroke: beam, width: 2 });
+        g.text("≈", P([8.1, 0.05]), { size: 20, color: "muted" });
+        g.text("8.6 km", P([6.2, 0.55]), { size: 12, color: "muted" });
+        g.line(P(split), P([2.2, -1.8]), { stroke: beam, width: 2, alpha: 0.15 + 0.85 * back });
+        g.line(P([1.7, 0.5]), P([2.7, -0.5]), { stroke: "muted", width: 2.5 });
+        g.line(P([9.45, -0.8]), P([9.45, 0.8]), { stroke: "ink", width: 3 });
+        g.circle(P(lamp), 6, { fill: beam });
+        g.label("lamp", [P(lamp)[0], P(lamp)[1] - 14]);
+        g.label("half mirror", [P([1.4, 0.6])[0], P([1.4, 0.6])[1]]);
+        g.label("far mirror", [P([9.2, 1.1])[0], P([9.2, 1.1])[1]]);
+        const eye = P([2.2, -2.2]);
+        g.label("eye", [eye[0] + 22, eye[1]]);
+        g.circle(eye, 5, { stroke: "ink", width: 1.5, fill: g.rgba("orange", 0.2 + 0.8 * back) });
+        // The wheel: edge-on in the path, and a face-on close-up of the rim where the beam crosses.
+        g.line(P([3.6, -1.5]), P([3.6, 1.5]), { stroke: g.lit("wheel") ? "orange" : "ink", width: 3 });
+        const zc = P([6.3, -2.05]), zr = Math.min(A[2], A[3]) * 0.12;
+        g.circle(zc, zr * 1.25, { fill: g.rgba("orange", 0.05), stroke: "faint", width: 1 });
+        // Teeth sweep past at the rim speed; one tooth spacing is drawn 14 px wide.
+        const sp = 14, off = (s.t * v.rps * N * sp * 0.002) % (2 * sp);
+        g.clip([zc[0] - zr * 1.2, zc[1] - zr * 0.6, zr * 2.4, zr * 1.2], () => {
+          for (let x = -zr * 1.4 - off; x < zr * 1.4; x += 2 * sp) g.rect(zc[0] + x, zc[1] - zr * 0.6, sp, zr * 1.2, { fill: g.lit("wheel") ? "orange" : "muted", alpha: 0.85 });
+        });
+        // Where the returning pulse lands relative to a gap.
+        const dx = (shift(v.rps) % 1) * 2 * sp;
+        g.line([zc[0] + sp / 2 + dx - 2 * sp, zc[1] - zr * 0.7], [zc[0] + sp / 2 + dx - 2 * sp, zc[1] + zr * 0.7], { stroke: beam, width: 3, alpha: 0.9 });
+        g.label("rim close-up", [zc[0], zc[1] + zr * 0.85], { color: "muted" });
+        g.line(P([3.6, 0]), [zc[0] - zr * 1.2, zc[1]], { stroke: "faint", width: 1, dash: [3, 4] });
+      });
+      g.clip(B, () => {
+        const G = g.graph({ box: B, x: [0, 40], y: [0, 1.05], axes: "frame", xLabel: "Wheel speed (turns/s)", yLabel: "Light returning", yTicks: [0, 0.5, 1], yFormat: y => `${y * 100}%` });
+        G.fn(through, { color: "orange" });
+        G.marker(v.rps, through(v.rps), { color: "orange", drop: true });
+      });
+    },
+  });
+}
+</script>
+
+<p>At rest, light goes out through a gap and comes back through the same gap. Spin the wheel and the returning light finds the gap a little further along; at <button class="set" data-figure="fizeau" data-set="rps=12.1">12.1 turns a second</button> the wheel turns exactly half a tooth spacing in the 58 microseconds the light is away, a tooth sits where the gap was, and the light goes dark. Spin twice as fast and the <em>next</em> gap arrives in time, so the light comes back.</p>
+
+<p>Fizeau saw the first dark at 12.6 turns a second. From that, the speed of light is four times the distance, times the number of teeth, times the spin rate: about 313,000 km/s, within 5% of the modern value. Today the number is no longer measured at all. Since 1983 the meter is defined as the distance light travels in 1/299,792,458 of a second, so the speed of light is exactly 299,792,458 m/s <a class="cite" href="#ref-si"></a>.</p>
+
+<aside class="callout key"><p>Light crosses a room in about ten nanoseconds and goes around the Earth seven and a half times in a second. Nothing carrying information goes faster.</p></aside>
+
+<h2>A wave of fields</h2>
+
+<p>Fast, straight, spreading: none of that yet says what light <em>is</em>. The answer came from an unexpected direction. In the 1860s James Clerk Maxwell wrote down the laws of electricity and magnetism in four equations, and noticed that they allow a disturbance to travel on its own: a changing electric field makes a magnetic field, which, changing, makes an electric field again, and the pair leapfrogs through empty space. He worked out its speed from two constants measured in laboratory experiments with charges and currents. It came out at 310,000 km/s, the speed of light <a class="cite" href="#ref-maxwell"></a>.</p>
+
+<p>Here is a stretch of that wave, frozen in time and then let go. The <span class="c-blue" data-part="E">electric field</span> pushes up and down, the <span class="c-red" data-part="B">magnetic field</span> side to side, both crosswise to the direction of travel. Turn it to see the two fields from the side and from above:</p>
+
+<figure class="demo" id="wave" aria-label="A light wave traveling to the right along an axis drawn in perspective. Blue arrows show the electric field swinging up and down, red arrows the magnetic field swinging side to side, both crosswise to the direction of travel and in step."></figure>
+<script>
+{
+  demo("wave", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    orbit: { yaw: -0.55, pitch: 0.32, minPitch: -1.2, maxPitch: 1.2 },
+    state: () => ({ t: 0 }),
+    controls: [{ key: "lam", label: "Wavelength", min: 1.2, max: 4, step: 0.05, value: 2.2, color: "purple", format: x => `${(x / 2.2 * 500).toFixed(0)} nm (scaled)` }],
+    caption: "An electromagnetic wave. The electric field (blue) and the magnetic field (red) swing crosswise to the direction of travel, in step with each other, and the pattern moves at the speed of light. Drag to turn it.",
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const view = g.view3d({ ...s.view, scale: Math.min(g.w, g.h * 1.9) / 13.5, center: [g.w / 2, g.h / 2] });
+      const L = 5.6, k = TAU / v.lam, ph = s.t * 2.2;
+      // axis
+      g.arrow(view([-L, 0, 0]), view([L + 0.8, 0, 0]), { stroke: "muted", width: 1.5 });
+      g.label("travel", [view([L + 0.8, 0, 0])[0], view([L + 0.8, 0, 0])[1] + 16], { color: "muted" });
+      const n = 64, eLit = g.lit("E"), bLit = g.lit("B");
+      const E = [], B = [];
+      for (let i = 0; i <= n; i++) {
+        const x = -L + 2 * L * i / n, a = Math.sin(k * x - ph);
+        E.push(view([x, 1.6 * a, 0])); B.push(view([x, 0, 1.6 * a]));
+        if (i % 3 === 0) {
+          g.line(view([x, 0, 0]), view([x, 1.6 * a, 0]), { stroke: "blue", width: eLit ? 2 : 1.2, alpha: 0.75 });
+          g.line(view([x, 0, 0]), view([x, 0, 1.6 * a]), { stroke: "red", width: bLit ? 2 : 1.2, alpha: 0.75 });
+        }
+      }
+      g.path(E, { stroke: "blue", width: eLit ? 3.5 : 2.5 });
+      g.path(B, { stroke: "red", width: bLit ? 3.5 : 2.5 });
+      const lab = view([-L + 0.4, 1.9, 0]);
+      g.label("electric field", lab, { color: "blue" });
+      const lab2 = view([-L + 0.4, 0, 2.1]);
+      g.label("magnetic field", lab2, { color: "red" });
+      // one wavelength marked
+      const x0 = (ph / k) % v.lam + v.lam * Math.ceil((-L + 2.6) / v.lam);
+      const pA = view([x0 + v.lam * 0.25, 2.25, 0]), pB = view([x0 + v.lam * 1.25, 2.25, 0]);
+      if (x0 + v.lam * 1.25 < L) g.dimension(pA, pB, "one wavelength", { color: "purple" });
+    },
+  });
+}
+</script>
+
+<p>The two fields rise and fall together and point at right angles to each other and to the direction of travel; light is a <dfn data-def="A wave that shakes crosswise to the direction it travels, like a wave on a rope.">transverse wave</dfn>, like a wave on a rope rather than a sound wave in air. The distance from one crest to the next is the <dfn data-def="The distance between neighboring crests of a wave.">wavelength</dfn>. In visible light it's tiny: between 380 and 750 billionths of a meter, about a hundredth of the width of a hair.</p>
+
+<p>A wave moving at a fixed speed that's this short must shake very fast. The number of crests passing a point each second, the <dfn data-def="How many crests of a wave pass a point each second, measured in hertz.">frequency</dfn>, is the speed divided by the wavelength. Slide the wavelength across the visible range and watch the color and the frequency:</p>
+
+<figure class="demo" id="color" aria-label="A wave drawn against a one-micrometer ruler, colored by its wavelength, with a color swatch and a spectrum strip below. A slider sets the wavelength from 380 to 750 nanometers, and a readout gives the frequency."></figure>
+<script>
+{
+  const NAMES = [[380, "violet"], [450, "blue"], [495, "green"], [570, "yellow"], [590, "orange"], [620, "red"], [751, ""]];
+  const name = nm => { for (let i = 0; i < NAMES.length - 1; i++) if (nm < NAMES[i + 1][0]) return NAMES[i][1]; return "red"; };
+  demo("color", {
+    aspect: w => (w < 560 ? 1.15 : 2.2),
+    state: () => ({ t: 0 }),
+    controls: [{ key: "nm", label: "Wavelength", min: 380, max: 750, step: 1, value: 532, unit: " nm", color: "green", marks: [{ value: 450, label: "blue" }, { value: 532, label: "green laser" }, { value: 650, label: "red" }] }],
+    caption: "One micrometer of a light wave, to scale for each wavelength. Shorter waves look violet and blue, longer ones orange and red; the frequency is the speed of light divided by the wavelength.",
+    status: (s, v) => `${(LIGHT.THz(v.nm)).toFixed(0)} THz · ${(LIGHT.THz(v.nm) * 1e12).toExponential(2).replace("e+", " × 10^")} crests a second · looks ${name(v.nm)}`,
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const col = g.wavelengthColor(v.nm);
+      const x0 = 24, x1 = g.w - 24, w = x1 - x0, cy = g.h * 0.36, amp = g.h * 0.16;
+      const pxPerNm = w / 1000;          // the ruler is 1000 nm long
+      const pts = [];
+      for (let x = 0; x <= w; x += 1.5) pts.push([x0 + x, cy - amp * Math.sin(TAU * (x / pxPerNm) / v.nm - s.t * 3)]);
+      g.line([x0, cy], [x1, cy], { stroke: "faint", width: 1 });
+      g.path(pts, { stroke: col, width: 3 });
+      // ruler
+      const ry = cy + amp + 18;
+      g.line([x0, ry], [x1, ry], { stroke: "muted", width: 1 });
+      for (let i = 0; i <= 10; i++) { const x = x0 + i * w / 10; g.line([x, ry], [x, ry + (i % 5 ? 4 : 8)], { stroke: "muted", width: 1 }); }
+      g.text("0", [x0, ry + 20], { size: 11, color: "muted" });
+      g.text("1 µm = 1000 nm", [x1, ry + 20], { size: 11, color: "muted", align: "right" });
+      // one wavelength
+      const xa = x0 + 6 * pxPerNm, xb = xa + v.nm * pxPerNm;
+      g.dimension([xa, cy - amp - 12], [xb, cy - amp - 12], `${v.nm} nm`, { color: col });
+      // swatch and spectrum strip
+      const sy = g.h - 44, sw = Math.min(360, g.w - 140);
+      g.rect(x0, sy - 6, 64, 30, { fill: col, r: 6 });
+      g.visibleSpectrum([x0 + 84, sy, sw, 12], { range: [380, 750], step: 50 });
+      const mx = x0 + 84 + (v.nm - 380) / 370 * sw;
+      g.line([mx, sy - 6], [mx, sy + 18], { stroke: "ink", width: 2 });
+    },
+  });
+}
+</script>
+
+<p>Every color in the rainbow is just a wavelength: about 450 nm looks blue, 530 green, 570 yellow, 650 red. The frequencies are absurd. Green light at 532 nm shakes 564 trillion times a second, which is why no camera, no wire, no electronic circuit can follow the field of a light wave directly; we only ever measure how much energy it delivers.</p>
+
+<p>Nothing special happens at the ends of the slider. The same kind of wave exists at every wavelength; our eyes just stop responding below about 380 nm and above about 750. Drag along the whole family, from radio to gamma rays, on a scale where each step is ten times the last:</p>
+
+<figure class="demo" id="spectrum" aria-label="The electromagnetic spectrum on a logarithmic scale from gamma rays to radio waves, with the narrow visible band highlighted. A marker the reader drags gives the wavelength, frequency, photon energy, and an everyday example."></figure>
+<script>
+{
+  const BANDS = [[-13, -11, "gamma rays", "purple"], [-11, -8, "X-rays", "blue"], [-8, -6.42, "ultraviolet", "purple"], [-6.42, -6.12, "visible", "green"], [-6.12, -3, "infrared", "red"], [-3, -1, "microwaves", "orange"], [-1, 4, "radio", "brass"]];
+  const EXAMPLES = [[-12, "gamma rays from radioactive decay"], [-10, "a dental X-ray (0.02 nm)"], [-7.5, "the UV that causes sunburn (300 nm)"], [-6.27, "green light (532 nm)"], [-6.03, "a TV remote's infrared (940 nm)"], [-5.0, "heat glowing off your skin (10 µm)"], [-1.1, "a microwave oven (12 cm)"], [0.5, "FM radio (3 m)"], [2.5, "AM radio (300 m)"]];
+  const fmtLen = m => (m >= 1000 ? `${(m / 1000).toPrecision(2)} km` : m >= 1 ? `${m.toPrecision(2)} m` : m >= 1e-3 ? `${(m * 1e3).toPrecision(2)} mm` : m >= 1e-6 ? `${(m * 1e6).toPrecision(2)} µm` : m >= 1e-9 ? `${(m * 1e9).toPrecision(3)} nm` : `${(m * 1e12).toPrecision(2)} pm`);
+  const example = e => { let best = EXAMPLES[0], d = 99; for (const x of EXAMPLES) { const dd = Math.abs(x[0] - e); if (dd < d) { d = dd; best = x; } } return d < 0.6 ? best[1] : ""; };
+  demo("spectrum", {
+    aspect: w => (w < 560 ? 1.3 : 3.0),
+    controls: [{ key: "e", label: "Wavelength (log scale)", min: -12.5, max: 3.5, step: 0.01, value: -6.27, color: "green", format: e => fmtLen(10 ** e) }],
+    caption: "The electromagnetic spectrum, each tick ten times longer than the last. Visible light is the narrow band near 500 nm; every other band is the same kind of wave at a different length.",
+    status: (s, v) => { const m = 10 ** v.e, f = LIGHT.c / m, E = LIGHT.photonEV(m * 1e9); return `${Num.si(f, "Hz")} · photon ${E >= 1000 ? (E / 1000).toPrecision(3) + " keV" : E >= 0.01 ? E.toPrecision(3) + " eV" : E.toExponential(1) + " eV"}`; },
+    draw(g, s, v) {
+      const x0 = 20, x1 = g.w - 20, y = g.h * 0.5, hb = 30;
+      const X = e => x0 + (e + 13) / 17 * (x1 - x0);
+      for (const [a, b, nm, col] of BANDS) {
+        g.rect(X(a), y - hb / 2, X(b) - X(a), hb, { fill: g.rgba(col, nm === "visible" ? 0 : 0.16), stroke: "faint", width: 1 });
+        if (nm !== "visible") g.text(nm, [(X(a) + X(b)) / 2, y + hb / 2 + 16], { size: g.w < 560 ? 10 : 12, color: col, weight: 600 });
+      }
+      g.visibleSpectrum([X(-6.42), y - hb / 2, X(-6.12) - X(-6.42), hb], { ticks: false, range: [380, 760] });
+      g.text("visible", [X(-6.27), y - hb / 2 - 10], { size: 12, weight: 600 });
+      for (let e = -12; e <= 3; e += 3) { g.line([X(e), y + hb / 2], [X(e), y + hb / 2 + 4], { stroke: "muted", width: 1 }); g.text(fmtLen(10 ** e), [X(e), y + hb / 2 + 34], { size: 11, color: "muted" }); }
+      // the marker
+      const mx = X(v.e);
+      g.line([mx, y - hb / 2 - 26], [mx, y + hb / 2 + 2], { stroke: "ink", width: 2 });
+      g.handle([mx, y - hb / 2 - 26], { color: "green" });
+      const ex = example(v.e);
+      g.text(`${fmtLen(10 ** v.e)}${ex ? ": " + ex : ""}`, [clamp(mx, 120, g.w - 120), y - hb / 2 - 44], { size: 13, weight: 600 });
+      // the scale of a wavelength
+      g.text("short waves, high frequency, energetic photons", [x0, g.h - 14], { size: 11, color: "muted", align: "left" });
+      g.text("long waves, low frequency", [x1, g.h - 14], { size: 11, color: "muted", align: "right" });
+    },
+    drag: {
+      hit: (p) => true,
+      move: (p, s, v, d, fig) => { const e = -13 + (p[0] - 20) / (fig.el.clientWidth - 40) * 17; fig.set("e", clamp(Math.round(e * 100) / 100, -12.5, 3.5)); },
+    },
+  });
+}
+</script>
+
+<p>Radio, microwaves, infrared, visible light, ultraviolet, X-rays, and gamma rays are all the same thing: electric and magnetic fields leapfrogging at 299,792 km/s. They differ only in wavelength, which spans about 25 powers of ten, from the size of an atomic nucleus to the size of a city. What changes along the way is how the wave interacts with matter. Radio waves pass through walls, visible light doesn't, X-rays pass through flesh but not bone. The status line also gives each wave's <em>photon energy</em>, a number that won't make sense until much later on this page, where it turns out to matter more than anything else.</p>
+
+<h2>Bouncing</h2>
+
+<p>Light that hits something does one of three things: it bounces off, it goes in and gets absorbed, or it goes through. Start with bouncing. Drag the <span class="c-orange" data-part="light">lamp</span> and the <span class="c-blue" data-part="eye">eye</span> above a flat mirror and watch which ray connects them:</p>
+
+<figure class="demo" id="mirror" aria-label="A flat mirror with a lamp and an eye above it. The one ray from the lamp that reaches the eye bounces at equal angles either side of the dashed normal; dashed lines trace it back to an image of the lamp behind the mirror."></figure>
+<script>
+{
+  let P;
+  const MIRROR = [[-5, 0], [5, 0]];
+  demo("mirror", {
+    aspect: w => (w < 560 ? 1.05 : 1.85),
+    state: () => ({ lamp: [-2.6, 2.6], eye: [3.0, 1.7] }),
+    controls: [{ key: "image", label: "Show where it seems to come from", type: "toggle", value: true, color: "purple" }],
+    caption: "A flat mirror. Of all the light leaving the lamp, the ray that reaches the eye leaves the mirror at the same angle it arrived. Traced back, every reflected ray seems to come from one point behind the mirror: the image.",
+    status: (s) => { const m = s.lamp[0] + (s.eye[0] - s.lamp[0]) * s.lamp[1] / (s.lamp[1] + s.eye[1]); return `bounces ${m.toFixed(2)} m along the mirror · angle in = angle out = ${(Math.atan2(Math.abs(m - s.lamp[0]), s.lamp[1]) / LIGHT.DEG).toFixed(1)}°`; },
+    draw(g, s, v) {
+      P = g.fit(-5.2, 5.2, -3.2, 3.6);
+      const img = [s.lamp[0], -s.lamp[1]];
+      const m = [s.lamp[0] + (s.eye[0] - s.lamp[0]) * s.lamp[1] / (s.lamp[1] + s.eye[1]), 0];
+      const fan = [];
+      for (let i = 0; i < 9; i++) { const x = -4.6 + i * 1.15; fan.push(Optics.ray(s.lamp, [x - s.lamp[0], -s.lamp[1]], { I: 0.25, marker: false })); }
+      const T = g.optics([
+        Optics.mirror(MIRROR[0], MIRROR[1], { name: "mirror" }),
+        ...fan,
+        Optics.ray(s.lamp, [m[0] - s.lamp[0], -s.lamp[1]], { name: "light" }),
+      ], { P, minI: 0.05, arrows: "first", far: 9 });
+      if (v.image) {
+        g.line(P(m), P(img), { stroke: "purple", width: 1.5, dash: [5, 5] });
+        g.circle(P(img), 7, { stroke: "purple", width: 2, fill: g.rgba("purple", 0.15) });
+        g.label("image", [P(img)[0], P(img)[1] + 18], { color: "purple" });
+      }
+      const main = T.hits.filter(h => h.name === "mirror").slice(-1)[0];
+      if (main) g.rayAngles(main, { names: { i: "in", r: "out" }, show: "ir" });
+      g.handle(P(s.lamp), { color: "orange", active: g.lit("light") });
+      // the eye as a small almond
+      const e = P(s.eye), a = Math.atan2(-(s.eye[1] - m[1]), s.eye[0] - m[0]);
+      g.ctx.save(); g.ctx.translate(e[0], e[1]); g.ctx.rotate(Math.PI + a);
+      g.path([[-12, 0], [0, -7], [12, 0], [0, 7]], { close: true, stroke: "blue", width: 2, fill: g.rgba("blue", 0.12) });
+      g.circle([2, 0], 3.5, { fill: "blue" });
+      g.ctx.restore();
+      g.handle(e, { color: "blue", r: 6, active: g.lit("eye") });
+    },
+    drag: {
+      hit: (p, s) => ["lamp", "eye"].find(k => { const q = P(s[k]); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 26; }),
+      start: (p, s) => { s.drag = ["lamp", "eye"].find(k => { const q = P(s[k]); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 26; }); },
+      move: (p, s) => { const w = P.inv(p); if (s.drag) s[s.drag] = [clamp(w[0], -4.6, 4.6), clamp(w[1], 0.5, 3.3)]; },
+    },
+  });
+}
+</script>
+
+<p>However you place them, the <span class="c-orange">ray</span> that connects lamp and eye leaves the mirror at the same angle it arrived, measured from the <dfn data-def="A line at right angles to a surface, at the point where light meets it.">normal</dfn>, the dashed line standing straight up from the surface. That is the whole law of reflection. It has a striking consequence: trace the reflected rays backward and they all meet at one point behind the mirror, the <span class="c-purple" data-part="image">image</span>, as far behind the glass as the lamp is in front. Your eye can't tell those rays didn't start there, which is why a mirror looks like a window into a second room.</p>
+
+<p>Most things aren't mirrors, though. Paper reflects nearly as much light as aluminum foil, yet you can't see your face in it. The difference is in the surface at the scale of the wavelength. Roughen a mirror, from polished to <span class="scrub" data-key="rough" data-figure="rough"></span>, and send a parallel beam at it:</p>
+
+<figure class="demo" id="rough" aria-label="A parallel beam strikes a surface made of many tiny facets. When the facets are level, every ray reflects in the same direction; as the slider tilts them randomly, the reflected rays scatter in all directions."></figure>
+<script>
+{
+  const N = 26, rng = Num.rng(7), TILT = Array.from({ length: N }, () => rng.gauss(0, 1));
+  demo("rough", {
+    aspect: w => (w < 560 ? 1.05 : 1.9),
+    controls: [{ key: "rough", label: "Roughness", min: 0, max: 30, step: 0.5, value: 12, unit: "°", color: "brass", marks: [{ value: 0, label: "mirror" }, { value: 30, label: "paper" }] }],
+    caption: "A surface drawn as tiny flat facets, each a small mirror. Each ray obeys the law of reflection at its own facet; when the facets tilt every which way, so do the reflected rays.",
+    status: (s, v) => `facets tilted by about ±${v.rough.toFixed(0)}° · reflected rays spread over about ±${Math.min(90, 2 * v.rough).toFixed(0)}°`,
+    draw(g, s, v) {
+      const P = g.fit(-6, 6, -1.4, 5.2);
+      const w = 9.6, fw = w / N, els = [];
+      for (let i = 0; i < N; i++) {
+        const cx = -w / 2 + fw * (i + 0.5), a = TILT[i] * v.rough * LIGHT.DEG, hx = Math.cos(a) * fw / 2, hy = Math.sin(a) * fw / 2;
+        els.push(Optics.mirror([cx - hx, -hy], [cx + hx, hy], { name: "facet" }));
+      }
+      // A hidden floor just under the facets stops rays that slip down between them; the ground covers it.
+      g.optics([...els, Optics.wall([-w / 2 + 0.05, -0.16], [w / 2 - 0.05, -0.16]), Optics.beam([-3.2, 3.8], [1, -1.15], 5.2, { n: 22, color: "orange" })], { P, far: 7, minI: 0.05 });
+      g.rect(P([-w / 2, 0])[0], P([0, -0.1])[1], w * P.sx, 0.8 * P.sy, { fill: "panel", hatch: g.rgba("brass", 0.4) });
+    },
+  });
+}
+</script>
+
+<p>A rough surface is a jumble of tiny mirrors facing every way. Each ray still obeys the law of reflection at its own little facet, but the facets disagree, so the light leaves in all directions. That's <dfn data-def="Reflection from a rough surface, which sends light out in all directions.">diffuse reflection</dfn>, and it's how you see almost everything: light from a lamp lands on the page and leaves toward every eye in the room. A polished surface keeps the rays in order, which is why it shows you an image and paper shows you only itself.</p>
+
+<h2>Bending</h2>
+
+<p>Now the light that goes <em>in</em>. Put a straw in a glass of water and it looks broken at the surface. Light crossing from air into water changes direction. Tilt the <span class="c-orange" data-part="light">ray</span> to <span class="scrub" data-key="angle" data-figure="bend"></span> from the normal and compare <button class="set" data-figure="bend" data-set="mat=water">water</button>, <button class="set" data-figure="bend" data-set="mat=bk7">glass</button>, and <button class="set" data-figure="bend" data-set="mat=diamond">diamond</button>:</p>
+
+<figure class="demo" id="bend" aria-label="A ray from the upper left meets a flat surface and bends toward the dashed normal as it enters the material below; a faint part reflects. Arcs mark the angle in air and the smaller angle inside."></figure>
+<script>
+{
+  let P;
+  const src = a => [-4 * Math.sin(a * LIGHT.DEG), 4 * Math.cos(a * LIGHT.DEG)];
+  demo("bend", {
+    aspect: w => (w < 560 ? 1.05 : 1.85),
+    controls: [
+      { key: "angle", label: "Angle in air", min: 0, max: 85, step: 0.5, value: 40, unit: "°", color: "orange" },
+      { key: "mat", label: "Below", type: "choice", options: [{ value: "water", label: "Water" }, { value: "bk7", label: "Glass" }, { value: "diamond", label: "Diamond" }], value: "water" },
+    ],
+    caption: "Light entering water, glass, or diamond from air. It bends toward the normal, more for a higher refractive index; a few percent reflects at the surface.",
+    status: (s, v) => { const n = Optics.index(v.mat); return `n = ${n.toFixed(3)} · bends to ${Optics.snell(1, n, v.angle).toFixed(1)}° · ${(Optics.fresnel(1, n, v.angle).R * 100).toFixed(1)}% reflects`; },
+    draw(g, s, v) {
+      P = g.fit(-5, 5, -3.2, 3);
+      const S = src(v.angle);
+      const T = g.optics([
+        Optics.slab([0, -4], 18, 8, { n: v.mat }),
+        Optics.wall([-9, -7.9], [9, -7.9], { hidden: true }),
+        Optics.ray(S, [-S[0], -S[1]], { name: "light" }),
+      ], { P });
+      g.rayAngles(T.hits.find(h => h.depth === 0));
+      g.label(v.mat === "bk7" ? "glass" : v.mat, P([3.6, -2.6]), { color: "blue" });
+      g.label("air", P([3.6, 2.4]), { color: "muted" });
+      g.handle(P(S), { color: "orange", active: g.lit("light") });
+    },
+    drag: {
+      hit: (p, s, v) => { const q = P(src(v.angle)); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 26; },
+      move: (p, s, v, d, fig) => { const w = P.inv(p); fig.set("angle", clamp(Math.round(Math.atan2(-w[0], w[1]) / LIGHT.DEG * 2) / 2, 0, 85)); },
+    },
+  });
+}
+</script>
+
+<p>Going in, the ray bends <em>toward</em> the normal: the angle inside, <span class="tex">\purple{\theta_2}</span>, is always smaller than the angle in air, <span class="tex">\blue{\theta_1}</span>, except straight on, where nothing bends. Diamond bends it most, water least. The rule was measured by Willebrord Snell in 1621 and is named after him:</p>
+
+<div class="tex">n_1 \sin \blue{\theta_1} = n_2 \sin \purple{\theta_2}</div>
+
+<p>Each material has a number <span class="tex">n</span>, its <dfn data-def="How many times slower light travels in a material than in a vacuum.">refractive index</dfn>: 1.000 for air, 1.333 for water, about 1.52 for window glass, 2.42 for diamond. The status line also shows the share that bounces off instead, about 2% for water at this angle, rising toward 100% as the ray grazes the surface. That's why a lake mirrors the far shore but you can see straight down into it at your feet.</p>
+
+<p>Why should light bend at all? The index has a second meaning: it's how many times slower light travels in the material. In water light does 225,000 km/s, in diamond 124,000. Think of a beam not as a line but as a row of crests marching side by side, like a marching band crossing from pavement onto mud at a slant. Send a <span class="c-orange">beam</span> into the glass at <span class="scrub" data-key="angle" data-figure="slow"></span> and watch its <span class="c-purple" data-part="fronts">crests</span>:</p>
+
+<figure class="demo" id="slow" aria-label="A wide beam of light enters a block of glass at an angle. The beam is drawn with its wavefronts, lines across it marking crests; inside the glass the crests are closer together and the beam turns, because the side that enters first slows down first."></figure>
+<script>
+{
+  demo("slow", {
+    aspect: w => (w < 560 ? 1.0 : 1.85),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "angle", label: "Angle in air", min: 0, max: 70, step: 0.5, value: 45, unit: "°", color: "orange" },
+      { key: "mat", label: "Glass", type: "choice", options: [{ value: "water", label: "Water" }, { value: "bk7", label: "Window glass" }, { value: "diamond", label: "Diamond" }], value: "bk7" },
+    ],
+    caption: "A beam drawn with its crests. The edge of each crest that reaches the glass first slows down first, so the crest swings round, and the beam turns. Inside, crests are closer together: same rhythm, slower speed, shorter wavelength.",
+    status: (s, v) => { const n = Optics.index(v.mat); return `light ${(LIGHT.c / n / 1000).toFixed(0)} km/s inside · crests ${(100 / n).toFixed(0)}% as far apart`; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const P = g.fit(-5.5, 5.5, -3.6, 3.4);
+      const a = v.angle * LIGHT.DEG, dir = [Math.sin(a), -Math.cos(a)], c = [-3.4 * Math.sin(a), 3.4 * Math.cos(a)];
+      const sp = 0.55;
+      g.optics([
+        Optics.slab([0, -4], 18, 8, { n: v.mat }),
+        Optics.wall([-9, -7.9], [9, -7.9], { hidden: true }),
+        Optics.beam(c, [dir[0], dir[1]], 4.2, { n: 21, marker: false }),
+      ], { P, fresnel: false, alpha: 0.12, wavefronts: { spacing: sp, phase: (s.t * 0.6) % sp, alpha: g.lit("fronts") ? 1 : 0.85, width: 2 } });
+    },
+  });
+}
+</script>
+
+<p>The side of each crest that touches the glass first slows down first, while the rest is still going full speed in air, so the crest swings round. Once the whole crest is inside, it marches on in its new direction. The crests also bunch up: the light shakes at the same rate inside the glass, but covers less distance per shake, so its wavelength there is shorter by the same factor <span class="tex">n</span>. Snell's law is just the geometry of that turn, worked out in the box below.</p>
+
+<details class="deeper">
+  <summary>Snell's law from the crests <span class="hint">2 min</span></summary>
+  <p>Take one crest as it straddles the surface. In the time <span class="tex">t</span> that its end in air moves a distance <span class="tex">c t</span> to reach the surface, its end in the glass moves only <span class="tex">c t / n</span>. Both ends sit on the same stretch of surface, of length <span class="tex">L</span>. The crest in air makes angle <span class="tex">\theta_1</span> with the surface, the crest in glass angle <span class="tex">\theta_2</span>, the same angles the rays make with the normal. Then</p>
+  <div class="tex">\sin\theta_1 = \frac{c\,t}{L}, \qquad \sin\theta_2 = \frac{c\,t / n}{L}</div>
+  <p>and dividing one by the other gives <span class="tex">\sin\theta_1 = n \sin\theta_2</span>. Pierre de Fermat reached the same law in 1662 by a different road: light takes the path between two points that takes the least time, like a lifeguard who runs further along the sand to swim less.</p>
+</details>
+
+<p>Bending has an everyday trick to it. Stand at the edge of a pool and look at a coin on the bottom. Drag the <span class="c-blue" data-part="eye">eye</span> round from overhead to <span class="scrub" data-key="look" data-figure="depth"></span>, looking across the water more and more, and watch where the coin <span class="c-purple" data-part="ghost">seems to be</span>:</p>
+
+<figure class="demo" id="depth" aria-label="A coin on the floor of a pool and an eye above the water. Light from the coin bends at the surface on its way to the eye; traced back in a straight line, it seems to come from a point higher up, and the higher the more slanted the view."></figure>
+<script>
+{
+  let P;
+  const D = 2.0, COIN = [-0.6, -D];
+  // Where on the surface the ray from the coin to the eye crosses: Snell's law, solved by bisection.
+  const eyeAt = look => { const a = look * LIGHT.DEG; return [COIN[0] + 3.6 * Math.sin(a) + 0.0001, 3.6 * Math.cos(a)]; };
+  // Where on the surface the ray from the coin to the eye crosses: Snell's law, solved by bisection.
+  const crossing = eye => (eye[0] - COIN[0] < 0.01 ? COIN[0] : Num.solve(x => {
+    const s1 = (x - COIN[0]) / Math.hypot(x - COIN[0], D), s2 = (eye[0] - x) / Math.hypot(eye[0] - x, eye[1]);
+    return 1.333 * s1 - s2;
+  }, COIN[0], eye[0]));
+  // The apparent position: where two neighboring rays leaving the water, traced back, meet.
+  const ghost = eye => {
+    const x1 = crossing(eye);
+    if (x1 - COIN[0] < 0.005) return [COIN[0], -D / 1.333];
+    const x2 = x1 + 0.01;
+    const back = x => { const s1 = (x - COIN[0]) / Math.hypot(x - COIN[0], D), s2 = 1.333 * s1, c2 = Math.sqrt(Math.max(1e-9, 1 - s2 * s2)); return [x, s2 / c2]; };
+    const [a, ta] = back(x1), [b, tb] = back(x2);
+    const xg = (a * tb - b * ta) / (tb - ta);
+    return [xg, (xg - a) / ta];
+  };
+  demo("depth", {
+    aspect: w => (w < 560 ? 1.0 : 1.8),
+    controls: [{ key: "look", label: "Viewing angle", min: 0, max: 70, step: 0.5, value: 40, unit: "° from straight down", color: "blue", marks: [{ value: 0, label: "overhead" }] }],
+    caption: "A coin 2 m down in a pool. Light from it bends away from the normal as it leaves the water, so traced back in a straight line it seems to come from higher up. Straight overhead it looks 1.5 m deep; at a slant, shallower still.",
+    status: (s, v) => { const gpt = ghost(eyeAt(v.look)); return `real depth 2.00 m · looks ${(-gpt[1]).toFixed(2)} m deep from here`; },
+    draw(g, s, v) {
+      P = g.fit(-3, 5.4, -2.6, 3.9);
+      const eye = eyeAt(v.look), X = crossing(eye), G = ghost(eye);
+      g.rect(P([-3, 0])[0], P([0, 0])[1], 8.4 * P.sx, 2.6 * P.sy, { fill: g.rgba("blue", 0.14) });
+      g.line(P([-3, 0]), P([5.4, 0]), { stroke: "blue", width: 1.5 });
+      g.line(P([-3, -D]), P([5.4, -D]), { stroke: "muted", width: 1.5 });
+      g.rect(P([-3, -D])[0], P([0, -D])[1], 8.4 * P.sx, 0.6 * P.sy, { hatch: g.rgba("muted", 0.35) });
+      g.label("water", P([-2.3, -0.4]), { color: "blue" });
+      g.line(P(COIN), P([X, 0]), { stroke: "orange", width: 2.2 });
+      g.arrow(P([X, 0]), P(eye), { stroke: "orange", width: 2.2 });
+      g.line(P([X, 0]), P(G), { stroke: "purple", width: 1.5, dash: [5, 5] });
+      g.line(P([X, 0.6]), P([X, -0.6]), { stroke: "muted", width: 1, dash: [3, 4] });
+      const coin = P(COIN);
+      g.rect(coin[0] - 14, coin[1] - 4, 28, 5, { fill: "brass", r: 2 });
+      const gh = P(G);
+      g.rect(gh[0] - 14, gh[1] - 4, 28, 5, { fill: g.rgba("purple", g.lit("ghost") ? 0.6 : 0.35), stroke: "purple", width: 1, r: 2 });
+      g.label("coin", [coin[0], coin[1] + 16], { color: "brass" });
+      g.label("seems to be here", [gh[0] - 40, gh[1] + 4], { color: "purple", align: "right" });
+      g.circle(P(eye), 7, { stroke: "blue", width: 2, fill: g.rgba("blue", 0.15) });
+      g.handle(P(eye), { color: "blue", active: g.lit("eye") });
+    },
+    drag: {
+      hit: (p, s, v) => { const q = P(eyeAt(v.look)); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 26; },
+      move: (p, s, v, d, fig) => { const w = P.inv(p); fig.set("look", clamp(Math.round(Math.atan2(w[0] - COIN[0], w[1]) / LIGHT.DEG * 2) / 2, 0, 70)); },
+    },
+  });
+}
+</script>
+
+<p>Leaving the water, light bends <em>away</em> from the normal, and your brain traces it back in a straight line to a point higher than the coin. Straight overhead a pool looks three quarters as deep as it is, 1.5 m for a 2 m pool, because the index of water is 1.33. Look from <button class="set" data-figure="depth" data-set="look=0">straight overhead</button>, then from a <button class="set" data-figure="depth" data-set="look=65">low slant</button>, and the coin rises toward the surface. Anyone who has stepped into a pool expecting it to be shallower has met Snell's law; spear fishers learn to aim low.</p>
+
+<h2>Trapped light</h2>
+
+<p>Run the bending backward and something new happens. Light leaving glass for air bends away from the normal, so the angle in air is always bigger than the angle in glass. At some angle inside, the angle outside reaches 90°: the ray skims along the surface. Beyond that, there's no angle left for it to take. Inside a half-disc of glass, aim a <span class="c-orange">ray</span> at the flat face at <span class="scrub" data-key="angle" data-figure="tir"></span>, and watch the share that <span class="c-green" data-part="reflected">reflects</span>:</p>
+
+<div class="quiz">
+  <p>A ray inside glass meets the surface at a steeper and steeper slant. What happens to the light that gets out into the air?</p>
+  <div class="choices"><button>It dims gradually to nothing as the slant reaches 90°</button><button data-correct>It vanishes suddenly at one angle, and all of it reflects</button><button>It never fully vanishes; some always gets out</button></div>
+  <p class="why">Past the critical angle, about 41° for glass, Snell's law has no solution: the light can't leave at all, and every bit of it reflects back inside.</p>
+</div>
+
+<figure class="demo" id="tir" aria-label="A ray inside a half-disc of glass hits the flat face from below. Below about 41 degrees most of it leaves into the air above, bending away from the normal; past that angle none leaves and all of it reflects. A plot shows the reflected share against the angle."></figure>
+<script>
+{
+  demo("tir", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    controls: [
+      { key: "angle", label: "Angle inside", min: 0, max: 80, step: 0.5, value: 30, unit: "°", color: "orange" },
+      { key: "mat", label: "Material", type: "choice", options: [{ value: "water", label: "Water" }, { value: "bk7", label: "Glass" }, { value: "diamond", label: "Diamond" }], value: "bk7" },
+    ],
+    caption: "Light inside glass reaching the surface. As the angle grows, more of it reflects; past the critical angle, all of it does. The plot shows the reflected share against angle.",
+    status: (s, v) => { const n = Optics.index(v.mat), cr = Optics.critical(n); const F = Optics.fresnel(n, 1, v.angle); return v.angle >= cr ? `past the critical angle (${cr.toFixed(1)}°): 100% reflects` : `${(F.R * 100).toFixed(1)}% reflects · the rest leaves at ${Optics.snell(n, 1, v.angle).toFixed(1)}° · critical angle ${cr.toFixed(1)}°`; },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [0, 0, g.w * 0.54, g.h] : [0, 0, g.w, g.h * 0.58];
+      const B = wide ? [g.w * 0.58, 14, g.w * 0.42, g.h - 30] : [0, g.h * 0.62, g.w, g.h * 0.38 - 4];
+      const n = Optics.index(v.mat), cr = Optics.critical(n);
+      g.clip(A, () => {
+        const P = g.fit(-3.2, 3.2, -3.0, 2.6, { box: A });
+        const a = v.angle * LIGHT.DEG, src = [-2.55 * Math.sin(a), -2.55 * Math.cos(a)];
+        const T = g.optics([
+          Optics.semicircle([0, 0], 2.6, { n: v.mat, angle: -90, name: "glass" }),
+          Optics.ray(src, [Math.sin(a), Math.cos(a)], { name: "light", marker: false }),
+        ], { P, minI: 0.02, far: 4 });
+        const h = T.hits.find(x => x.p && Math.abs(x.p[1]) < 1e-3 && x.depth <= 1);
+        if (h) g.rayAngles(h, { show: "itr", names: { i: "θ", t: "out", r: "back" } });
+      });
+      g.clip(B, () => {
+        const G = g.graph({ box: B, x: [0, 90], y: [0, 1.05], axes: "frame", xLabel: "Angle inside (°)", yLabel: "Reflected", yTicks: [0, 0.5, 1], yFormat: y => `${y * 100}%`, xTicks: 30 });
+        G.fn(t => (t >= cr ? 1 : Optics.fresnel(n, 1, t).R), { color: "green" });
+        G.vline(cr, { label: "critical", color: "muted" });
+        G.marker(v.angle, v.angle >= cr ? 1 : Optics.fresnel(n, 1, v.angle).R, { color: "green", drop: true });
+      });
+    },
+  });
+}
+</script>
+
+<p>Below the critical angle most of the light gets out, a little more reflecting each degree. Then, at 41.2° for glass, the outgoing ray lies flat along the surface, and one degree past it there is no outgoing ray: 100% of the light reflects. This is <dfn data-def="Complete reflection of light trying to leave a dense material at a slant steeper than the critical angle.">total internal reflection</dfn>, and it's a better mirror than any metal, which always absorbs a few percent. Diamond's critical angle is only 24.4°, so light that gets into a cut diamond bounces around inside many times before it finds a way out, which is much of its sparkle.</p>
+
+<p>Make the glass long and thin and light can be carried around corners. Send a <span class="c-orange">fan</span> of light into one end of a bent rod of clear acrylic, and tighten the bend to <span class="scrub" data-key="R" data-figure="fiber"></span>:</p>
+
+<figure class="demo" id="fiber" aria-label="A clear acrylic rod bent through a right angle, with light entering one end. The rays bounce along inside by total internal reflection and come out the far end; when the bend is made tight, some rays hit the wall below the critical angle and leak out."></figure>
+<script>
+{
+  const T0 = 1.0, L1 = 4.0, L2 = 3.2;
+  const rod = R => Optics.body([
+    Optics.segment([-1, 0], [L1, 0]),
+    Optics.arc([L1, R + T0], R + T0, -90, 0),
+    Optics.segment([L1 + R + T0, R + T0], [L1 + R + T0, R + T0 + L2]),
+    Optics.segment([L1 + R + T0, R + T0 + L2], [L1 + R, R + T0 + L2]),
+    Optics.segment([L1 + R, R + T0 + L2], [L1 + R, R + T0]),
+    Optics.arc([L1, R + T0], R, -90, 0),
+    Optics.segment([L1, T0], [-1, T0]),
+    Optics.segment([-1, T0], [-1, 0]),
+  ], { n: "acrylic", name: "rod" });
+  demo("fiber", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    controls: [{ key: "R", label: "Bend radius", min: 0.3, max: 4, step: 0.05, value: 2.2, unit: " cm", color: "orange" }],
+    caption: "Light in a bent acrylic rod (1 cm thick). It reflects totally at every wall it meets beyond the critical angle, 42° for acrylic. Bend it too tightly and rays meet the outer wall too steeply and leak.",
+    status: (s, v) => {
+      const T = Optics.trace([rod(v.R), Optics.sensor([L1 + v.R - 0.05, v.R + T0 + L2 + 0.02], [L1 + v.R + T0 + 0.05, v.R + T0 + L2 + 0.02], { name: "end" }), Optics.fan([-1.6, T0 / 2], 0, 36, { n: 21 })], { fresnel: false });
+      const out = (T.sensors.end || []).reduce((a, r) => a + r.I, 0) / 21;
+      return `${(out * 100).toFixed(0)}% of the light reaches the far end`;
+    },
+    draw(g, s, v) {
+      const P = g.fit(-2, 9.2, -0.8, 8.6);
+      g.optics([rod(v.R), Optics.fan([-1.6, T0 / 2], 0, 36, { n: 21 })], { P, fresnel: false, far: 4, tir: false });
+      g.label("acrylic rod", P([1.4, -0.45]), { color: "blue" });
+    },
+  });
+}
+</script>
+
+<p>Every time a ray meets the wall at more than 42° from the normal, all of it reflects, and the light zigzags along the rod and out of the far end. A gentle bend loses nothing. Bend it <button class="set" data-figure="fiber" data-set="R=0.4">too tight</button> and rays hit the outer wall too steeply and escape; you can see the same glow where an optical fiber is kinked. Telephone and internet traffic travels this way, through glass fibers a tenth of a millimeter thick with a core of slightly higher index than its sheath, so pure that light crosses 20 km of it and loses only half its strength <a class="cite" href="#ref-kao"></a>.</p>
+
+<h2>Colors from white</h2>
+
+<p>The refractive index isn't quite one number. In glass, violet light travels a little slower than red, so it bends a little more. Isaac Newton let a beam of sunlight through a hole in his shutter in 1666 and put a prism in its path. Do the same: aim a narrow beam of <span class="c-orange">white light</span> at the prism and compare <button class="set" data-figure="prism" data-set="mat=bk7">window glass</button> with <button class="set" data-figure="prism" data-set="mat=flint">lead glass</button>:</p>
+
+<figure class="demo" id="prism" aria-label="A narrow beam of white light enters a glass prism and fans out into colors, violet bent most and red least, landing in order on a screen. A small plot shows the glass's refractive index falling from violet to red."></figure>
+<script>
+{
+  demo("prism", {
+    aspect: w => (w < 560 ? 1.0 : 1.7),
+    controls: [
+      { key: "aim", label: "Aim", min: 12, max: 40, step: 0.5, value: 24, unit: "°", color: "orange" },
+      { key: "mat", label: "Prism", type: "choice", options: [{ value: "bk7", label: "Window glass" }, { value: "flint", label: "Lead glass" }], value: "flint" },
+    ],
+    caption: "White light through a prism. Each wavelength is traced with its own refractive index (inset), so violet bends most and the colors fan out onto the screen. Lead (flint) glass spreads them about twice as much as window (crown) glass.",
+    status: (s, v) => `n from ${Optics.index(v.mat, 650).toFixed(3)} for red to ${Optics.index(v.mat, 415).toFixed(3)} for violet`,
+    draw(g, s, v) {
+      const P = g.fit(-7.4, 7.4, -5.6, 3.3, { box: [0, 0, g.w, g.h - 40] });
+      const t = Math.tan(v.aim * LIGHT.DEG), M = [-0.85, 0.49];
+      const T = g.optics([
+        Optics.prism([0, 0], 3.4, { n: v.mat, label: "prism" }),
+        Optics.wall([-5.8, M[1] - 4.95 * t + 0.14], [-5.8, 3.4]), Optics.wall([-5.8, M[1] - 4.95 * t - 0.14], [-5.8, -5.8]),
+        Optics.screen([6.4, -5.7], [6.4, 0.6], { name: "screen" }),
+        Optics.ray([-7.4, M[1] - 6.55 * t], v.aim, { wl: "white" }),
+      ], { P, minI: 0.07 });
+      const top = T.sensors.screen && T.sensors.screen.reduce((a, r) => (r.wl && (!a || r.p[1] > a.p[1]) ? r : a), null);
+      if (top) g.label("red", [top.px[0] - 10, top.px[1] - 4], { align: "right", color: g.wavelengthColor(top.wl) });
+      const bot = T.sensors.screen && T.sensors.screen.reduce((a, r) => (r.wl && (!a || r.p[1] < a.p[1]) ? r : a), null);
+      if (bot) g.label("violet", [bot.px[0] - 10, bot.px[1] + 12], { align: "right", color: g.wavelengthColor(bot.wl) });
+      // inset: index against wavelength
+      const box = g.w >= 560 ? [g.w - 200, 14, 180, 92] : [g.w - 150, 8, 136, 80];
+      const G = g.graph({ box, x: [400, 700], y: [Optics.index(v.mat, 700) - 0.003, Optics.index(v.mat, 400) + 0.003], axes: "frame", xLabel: "nm", yLabel: "n", xTicks: [400, 550, 700], yTicks: false, labelSize: 11 });
+      G.fn(nm => Optics.index(v.mat, nm), { color: "blue", width: 1.6 });
+      g.visibleSpectrum([(g.w - 420) / 2, g.h - 30, Math.min(420, g.w - 30), 10], { marks: [{ wl: 415 }, { wl: 650 }] });
+    },
+  });
+}
+</script>
+
+<p>White light isn't a color of its own. It's every visible wavelength at once, and a prism sorts them by how much each one slows down in the glass. That spread is called <dfn data-def="The spreading of light into colors because the refractive index depends on wavelength.">dispersion</dfn>. In lead glass the index falls from 1.647 for violet to 1.615 for red, a difference of only 2%, but it's enough to fan the colors a few degrees apart. Newton's real insight was the next step: he picked out one color with a second hole and sent it through a second prism, and it stayed one color. The prism doesn't add color to white light; it separates what was already there.</p>
+
+<p>A rainbow is the same separation, done by billions of raindrops at once. Start with one drop. Sunlight arrives as a parallel beam; follow one <span class="c-orange" data-part="ray">ray</span> that enters the drop <span class="scrub" data-key="b" data-figure="drop"></span> of the way from its center to its edge, bounces once off the back, and comes out:</p>
+
+<figure class="demo" id="drop" aria-label="A water drop with a ray of sunlight entering on the left, reflecting once off the back, and leaving toward the lower left, split slightly into colors. A plot shows the angle at which light leaves against where it entered; the curve peaks at 42 degrees."></figure>
+<script>
+{
+  const dev = (b, nm) => { const n = Optics.index("water", nm), i = Math.asin(b), r = Math.asin(b / n); return (4 * r - 2 * i) / LIGHT.DEG; };
+  demo("drop", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    controls: [{ key: "b", label: "Enters at", min: 0, max: 0.99, step: 0.005, value: 0.86, color: "orange", format: b => `${(b * 100).toFixed(0)}% out` }],
+    caption: "One ray through a raindrop, reflecting once inside. The plot gives the angle between the outgoing light and the sunlight's direction, for every entry point: it rises to a maximum of about 42° and turns back, so the light piles up at that angle. Red (top curve) peaks a little higher than violet.",
+    status: (s, v) => `leaves at ${dev(v.b, 650).toFixed(1)}° (red) and ${dev(v.b, 415).toFixed(1)}° (violet) from the sunlight's direction`,
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [0, 0, g.w * 0.5, g.h] : [0, 0, g.w, g.h * 0.56];
+      const B = wide ? [g.w * 0.55, 14, g.w * 0.45, g.h - 30] : [0, g.h * 0.6, g.w, g.h * 0.4 - 4];
+      g.clip(A, () => {
+        const P = g.fit(-2.6, 1.6, -1.9, 1.5, { box: A });
+        g.optics([
+          Optics.drop([0, 0], 1, { name: "drop", label: "raindrop" }),
+          Optics.ray([-2.6, v.b], 0, { wl: "white", name: "ray" }),
+        ], { P, gain: 6, minI: 0.002, filter: sg => sg.via === "" || sg.via === "T" || sg.via === "TR" || sg.via === "TRT", far: 3 });
+        for (const y of [-0.8, -0.4, 0, 0.4]) if (Math.abs(y - v.b) > 0.15) g.line(P([-2.6, y]), P([-Math.sqrt(1 - y * y), y]), { stroke: "faint", width: 1 });
+        g.label("sunlight", P([-2.05, v.b + 0.2]), { color: "muted" });
+      });
+      g.clip(B, () => {
+        const G = g.graph({ box: B, x: [0, 1], y: [0, 45], axes: "frame", xLabel: "Where it enters (center to edge)", yLabel: "Leaves at (°)", xTicks: [0, 0.5, 1], yTicks: [0, 20, 40] });
+        for (const nm of [650, 590, 530, 470, 415]) G.fn(b => dev(b, nm), { color: g.wavelengthColor(nm), width: 1.6, domain: [0, 0.999] });
+        G.hline(42.1, { label: "42°", color: "muted" });
+        G.marker(v.b, dev(v.b, 590), { color: "orange", drop: true });
+      });
+    },
+  });
+}
+</script>
+
+<p>Slide the entry point from the center to the edge and the exit angle climbs, levels off at about 42°, and comes back down. Rays near the turn all leave at nearly the same angle, so light from a whole band of the drop piles up there, while other angles get only a thin share. That pile-up is the rainbow. And because red's peak sits at 42.3° and violet's at 40.6°, the colors pile up at slightly different angles <a class="cite" href="#ref-nussenzveig"></a>.</p>
+
+<p>Now step back from the drop. Every drop in the sky sends its piled-up light out at 42° from the direction the sunlight is going. You only see the drops sitting exactly 42° from the point directly opposite the sun, which is the shadow of your own head. Those drops form a circle around it. Raise the <span class="c-brass" data-part="sun">sun</span> to <span class="scrub" data-key="sun" data-figure="bow"></span> above the horizon:</p>
+
+<div class="quiz">
+  <p>You see a rainbow in the late afternoon. Where is the sun?</p>
+  <div class="choices"><button>Somewhere above the rainbow</button><button data-correct>Behind you, low in the sky</button><button>Off to one side of the rainbow</button></div>
+  <p class="why">A rainbow is always centered on the point opposite the sun, so the sun is behind you, and the lower it is the higher the arc stands.</p>
+</div>
+
+<figure class="demo" id="bow" aria-label="What an observer sees with the sun behind them: a horizon, the point opposite the sun below it, and the primary rainbow drawn as a colored circle 42 degrees around that point with red outside, plus a fainter secondary bow at 51 degrees with its colors reversed and a darker band of sky between them."></figure>
+<script>
+{
+  const BAND = Array.from({ length: 57 }, (_, k) => 410 + k * 5);
+  demo("bow", {
+    aspect: w => (w < 560 ? 1.05 : 1.9),
+    controls: [
+      { key: "sun", label: "Sun height", min: 0, max: 55, step: 0.5, value: 12, unit: "°", color: "brass" },
+      { key: "second", label: "Secondary bow", type: "toggle", value: false, color: "purple" },
+    ],
+    caption: "The sky opposite the sun, as an observer sees it. The bow is a circle 42° around the point opposite the sun; the horizon hides its lower part. Red is on the outside. A second reflection inside each drop makes a fainter bow at 51° with the colors reversed.",
+    status: (s, v) => (v.sun >= 42.3 ? "the whole primary bow is below the horizon" : `top of the bow ${(42.1 - v.sun).toFixed(1)}° above the horizon`),
+    draw(g, s, v) {
+      g.rect(0, 0, g.w, g.h, { fill: "#24303f" });
+      const deg = Math.min(g.w / 120, g.h / 64);           // px per degree of sky
+      const hy = g.h * 0.82, cx = g.w / 2, anti = [cx, hy + v.sun * deg];
+      // Sky: lighter inside the primary bow, darkest between the bows (Alexander's band).
+      g.ctx.save();
+      g.ctx.beginPath(); g.ctx.rect(0, 0, g.w, hy); g.ctx.clip();
+      g.circle(anti, 41 * deg, { fill: "rgba(255,255,255,0.10)" });
+      // Each wavelength is smeared over the sun's half-degree width; added light blends into a band.
+      g.ctx.globalCompositeOperation = "lighter";
+      const w = Math.max(2, deg * 0.55);
+      for (const nm of BAND) {
+        g.circle(anti, Optics.rainbow(Optics.index("water", nm)).angle * deg, { stroke: g.wavelengthColor(nm), width: w, alpha: 0.11 });
+        if (v.second) g.circle(anti, Optics.rainbow(Optics.index("water", nm), 2).angle * deg, { stroke: g.wavelengthColor(nm), width: w, alpha: 0.05 });
+      }
+      g.ctx.globalCompositeOperation = "source-over";
+      g.ctx.restore();
+      // ground and horizon
+      g.rect(0, hy, g.w, g.h - hy, { fill: "#3a3a2c" });
+      g.line([0, hy], [g.w, hy], { stroke: "#c9ccd2", width: 1 });
+      g.circle(anti, 4, { fill: "#c9ccd2" });
+      g.label("opposite the sun", [anti[0], Math.min(g.h - 8, anti[1] + 14)], { color: "#c9ccd2", halo: "#3a3a2c" });
+      g.label("horizon", [12, hy - 9], { color: "#c9ccd2", align: "left", halo: "#24303f" });
+      if (v.sun < 42) g.label("42°", [cx + 6, hy - (42.1 - v.sun) * deg - 12], { color: "#e8e8e8", align: "left", halo: "#24303f" });
+    },
+  });
+}
+</script>
+
+<p>The bow is a circle centered on the shadow of your head, and the ground cuts it off. At sunset the center sits on the horizon and you get a full half-circle. As the sun climbs the circle sinks, and with the sun more than 42° up there's no rainbow at all: rainbows belong to mornings and late afternoons. Light that reflects twice inside each drop makes a <button class="set" data-figure="bow" data-set="second=true">fainter second bow</button> at 51° with the colors flipped, and the sky between the two bows is darker than anywhere else: no drop there sends you light that reflected once or twice.</p>
+
+<aside class="callout mistake"><p>Every person sees their own rainbow. The drops that make it for you are the ones at 42° from your own shadow; someone standing ten meters away sees light from a different set of drops.</p></aside>
+
+<h2>Focusing</h2>
+
+<p>Curve a piece of glass and refraction stops being a nuisance and becomes a tool. A lens is thicker in the middle than at the edges, so a ray hitting it far from the center meets a more steeply tilted surface and bends more. Done right, every ray from one point of an object bends just enough to meet again at one point behind the lens. Drag the <span class="c-orange" data-part="object">candle</span> toward the lens, or change the lens's focal length to <span class="scrub" data-key="f" data-figure="lens"></span>:</p>
+
+<figure class="demo" id="lens" aria-label="A lens on an axis with a candle-shaped arrow on the left. Rays from the tip of the arrow spread toward the lens, bend, and meet on the right to form an upside-down image. When the arrow is inside the focal length, the rays spread out after the lens and seem to come from a larger upright image on the left."></figure>
+<script>
+{
+  let P;
+  demo("lens", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    state: () => ({ d: 7.5 }),
+    controls: [{ key: "f", label: "Focal length", min: 2, max: 6, step: 0.1, value: 3.6, unit: " cm", color: "blue" }],
+    caption: "An ideal lens. Rays from the tip of the object bend to meet at the tip of the image. Far objects make small, upside-down real images near the focal point F; inside F the rays never meet, and the eye sees a larger upright virtual image.",
+    status: (s, v) => { const im = Optics.image(v.f, s.d); return im.d > 0 ? `object ${s.d.toFixed(1)} cm away · real image ${im.d.toFixed(1)} cm behind the lens, ${Math.abs(im.m).toFixed(2)}× and upside down` : `object inside the focal length · virtual image ${(-im.d).toFixed(1)} cm in front, ${Math.abs(im.m).toFixed(2)}× and upright`; },
+    draw(g, s, v) {
+      P = g.fit(-11, 11, -3.4, 3.6);
+      const h = 1.3, obj = [-s.d, 0], tip = [-s.d, h];
+      const im = Optics.image(v.f, s.d), itip = [im.d, im.m * h];
+      g.line(P([-11, 0]), P([11, 0]), { stroke: "faint", width: 1 });
+      g.optics([
+        Optics.thinLens([0, 0], v.f, { aperture: 5.6, name: "lens" }),
+        Optics.fanTo(tip, [0, -2.6], [0, 2.6], { n: 9, color: "orange", marker: false }),
+      ], { P, focal: true, far: 12, alpha: 0.85 });
+      // object
+      g.arrow(P(obj), P(tip), { stroke: "orange", width: 3.5, head: 9 });
+      g.handle(P(tip), { color: "orange", active: g.lit("object") });
+      // image
+      if (Math.abs(im.d) < 40) {
+        if (im.d > 0) g.arrow(P([im.d, 0]), P(itip), { stroke: "purple", width: 3.5, head: 9 });
+        else {
+          g.arrow(P([im.d, 0]), P(itip), { stroke: "purple", width: 2.5, head: 9, dash: [5, 4] });
+          for (const y of [-2.2, 0, 2.2]) { const a = [0, y]; g.line(P(a), P(itip), { stroke: "purple", width: 1, dash: [4, 5], alpha: 0.6 }); }
+        }
+        g.label(im.d > 0 ? "image" : "virtual image", [P(itip)[0], P(itip)[1] + (im.m * h > 0 ? -14 : 16)], { color: "purple" });
+      }
+    },
+    drag: {
+      hit: (p, s) => { const q = P([-s.d, 1.3]); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 28; },
+      move: (p, s) => { s.d = clamp(-P.inv(p)[0], 1.0, 10.6); },
+    },
+  });
+}
+</script>
+
+<p>Far from the lens, the candle's image forms just beyond the focal point F, small and upside down: that's how the lens in your eye and in a camera puts a picture on the retina or the sensor. Bring the candle closer and the image moves back and grows; at twice the focal length it's life size. Bring it <button class="set" data-figure="lens" data-set="f=5.5">inside the focal length</button> and the rays leave the lens still spreading, never to meet. Your eye traces them back to a larger, upright image on the same side: a magnifying glass. All of it follows from one formula, <span class="tex">1/d_o + 1/d_i = 1/\blue{f}</span>.</p>
+
+<p>The ray picture hides what a lens does to the wave. Watch the <span class="c-purple" data-part="fronts">crests</span> leaving a point of light: they spread as circles, and the lens, slowing the middle of each crest more than its edges because the glass is thicker there, turns them inside out. Move the lens to <span class="scrub" data-key="x" data-figure="lensfronts"></span> from the light:</p>
+
+<figure class="demo" id="lensfronts" aria-label="Circular wavefronts spread from a point of light, pass through a glass lens, and come out curved the other way, shrinking toward a focus; the rays are drawn faintly underneath."></figure>
+<script>
+{
+  demo("lensfronts", {
+    aspect: w => (w < 560 ? 1.0 : 2.0),
+    state: () => ({ t: 0 }),
+    controls: [{ key: "x", label: "Lens distance", min: 3.2, max: 8, step: 0.1, value: 5.5, unit: " cm", color: "blue" }],
+    caption: "Crests from a point of light through a lens of 3 cm focal length. The lens slows the middle of each crest the most, so the expanding circles come out converging, and they shrink to a point at the image.",
+    status: (s, v) => { const im = Optics.image(3, v.x); return im.d > 0 ? `image ${im.d.toFixed(1)} cm behind the lens` : "the crests still spread after the lens: no real image"; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const P = g.fit(-1, 16, -3.4, 3.4);
+      const src = [0, 0], sp = 0.6;
+      g.optics([
+        Optics.lens([v.x, 0], { f: 3, aperture: 3.2, name: "lens" }),
+        Optics.fanTo(src, [v.x, -1.5], [v.x, 1.5], { n: 17, color: "orange" }),
+      ], { P, alpha: 0.18, fresnel: false, far: 10, wavefronts: { spacing: sp, phase: (s.t * 0.7) % sp, alpha: g.lit("fronts") ? 1 : 0.9, width: 2 } });
+    },
+  });
+}
+</script>
+
+<p>Out of the light come circles; out of the lens come circles curving the other way, each one shrinking as it goes until it closes to a point at the image, then spreading again beyond it. A focus is where the crests from every part of the lens arrive in step. Keep that picture of crests arriving together or not, because the next thing light does can't be explained any other way.</p>
+
+<h2>Light meets light</h2>
+
+<p>In 1801 Thomas Young, a physician who later helped decipher the Rosetta Stone, made the case that light is a wave with a question about water. Two stones dropped into a pond send out two sets of ripples. Where the ripples overlap, what does the water do? Run two steady <span class="c-blue" data-part="sources">sources</span> side by side, <span class="scrub" data-key="gap" data-figure="ripples"></span> apart, and watch the water between them:</p>
+
+<figure class="demo" id="ripples" aria-label="Ripples from two sources side by side overlap on a pond. Crests are drawn red and troughs blue. Along lines fanning out from between the sources the two cancel and the water stays flat; a strip at the bottom shows how much the water moves along the shore, bright and dark bands alternating."></figure>
+<script>
+{
+  let lay;
+  demo("ripples", {
+    aspect: w => (w < 560 ? 1.0 : 1.75),
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "gap", label: "Source spacing", min: 1, max: 5, step: 0.1, value: 2.5, unit: " wavelengths", color: "blue" },
+      { key: "calm", label: "Mark the calm lines", type: "toggle", value: true, color: "purple" },
+    ],
+    caption: "Two sources making ripples in step. Red is a crest and blue a trough. Where one source is a half, one and a half, or two and a half wavelengths farther than the other, crests meet troughs and the water stays flat. The strip at the bottom is the shore: how hard the waves arrive along it.",
+    status: (s, v) => `${2 * Math.floor(v.gap + 0.5)} calm lines, where the two sources' paths differ by an odd number of half wavelengths`,
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const shore = 24, H = g.h - shore - 8;
+      const lam = Math.max(16, Math.min(28, g.w / 24)), cx = g.w / 2, y0 = 22;
+      const S = [[cx - (v.gap * lam) / 2, y0], [cx + (v.gap * lam) / 2, y0]];
+      lay = { S, lam };
+      g.fx.ripples([0, 0, g.w, H], { sources: S, wavelength: lam, speed: lam * 1.2, style: "height", t: s.t });
+      // Calm lines: hyperbolas with the sources as foci, path difference (m + 1/2) wavelengths.
+      if (v.calm) {
+        const c = (v.gap * lam) / 2;
+        for (let m = 0; (m + 0.5) < v.gap; m++) {
+          const a = ((m + 0.5) * lam) / 2, b = Math.sqrt(c * c - a * a);
+          for (const side of [-1, 1]) {
+            const pts = [];
+            for (let u = 0; u < 4; u += 0.02) { const p = [cx + side * a * Math.cosh(u), y0 + b * Math.sinh(u)]; pts.push(p); if (p[1] > H || p[0] < 0 || p[0] > g.w) break; }
+            g.path(pts, { stroke: "purple", width: g.lit("calm") ? 3 : 1.8, dash: [6, 5] });
+          }
+        }
+      }
+      // The shore: time-averaged wave energy along the bottom edge.
+      const k = (2 * Math.PI) / lam;
+      g.rect(0, H + 4, g.w, shore, { fill: "faint", alpha: 0.25 });
+      let max = 0; const E = [];
+      for (let x = 0; x <= g.w; x += 2) {
+        const r = S.map(p => Math.hypot(x - p[0], H - p[1]));
+        const re = Math.cos(k * r[0]) / Math.sqrt(r[0]) + Math.cos(k * r[1]) / Math.sqrt(r[1]);
+        const im = Math.sin(k * r[0]) / Math.sqrt(r[0]) + Math.sin(k * r[1]) / Math.sqrt(r[1]);
+        E.push(re * re + im * im); max = Math.max(max, (1 / Math.sqrt(r[0]) + 1 / Math.sqrt(r[1])) ** 2);
+      }
+      E.forEach((e, i) => g.rect(i * 2, H + 4, 2, shore, { fill: "blue", alpha: e / max }));
+      g.text("shore", [8, H + 4 + shore / 2], { size: 11.5, weight: 600, color: "ink", halo: true, baseline: "middle", align: "left" });
+      for (const p of S) g.circle(p, g.lit("sources") ? 6 : 4.5, { fill: "ink", stroke: "panel", width: 1.5 });
+    },
+  });
+}
+</script>
+
+<p>Where a crest from one source meets a crest from the other, the water heaves twice as high. Where a crest meets a trough they cancel, and along certain <span class="c-purple" data-part="calm">calm lines</span> the water barely moves. Those lines run wherever one source is half a wavelength farther away than the other, or one and a half, or two and a half. Move the sources <button class="set" data-figure="ripples" data-set="gap=4.5">farther apart</button> and the lines multiply and crowd together. The shore at the bottom shows the result: bands that get pounded, and bands between them that stay still. This adding and cancelling is called <dfn data-def="Two waves adding where their crests line up and cancelling where a crest meets a trough.">interference</dfn>, and only waves do it. Two streams of pellets would simply add up.</p>
+
+<p>Young showed that light does the same <a class="cite" href="#ref-young"></a>. In the version taught today, one color of light shines through two narrow slits a fraction of a millimeter apart, and each slit becomes a new source of ripples. On a screen a meter behind them, the two add or cancel. Set the light's <span class="c-green">wavelength</span> to <span class="scrub" data-key="nm" data-figure="slits"></span> and the slits <span class="scrub" data-key="d" data-figure="slits"></span> apart, then drag the <span class="c-orange" data-part="marker">marker</span> along the screen:</p>
+
+<figure class="demo" id="slits" aria-label="A laser beam meets a barrier with two slits; curved wavefronts spread from each slit to a dark screen, which shows evenly spaced bright stripes. A plot beside the screen gives the brightness along it. Two lines run from the slits to a marker on the screen."></figure>
+<script>
+{
+  const L = 1, A = 40, YMAX = 15;   // screen 1 m away, slits 40 um wide, screen shown 15 mm either side
+  const bright = (ymm, nm, dmm, one) => { const th = Math.atan(ymm / 1000 / L); return one ? LIGHT.slits(th, nm, A, 0) : 4 * LIGHT.slits(th, nm, A, dmm * 1000); };
+  const extra = (ymm, nm, dmm) => (dmm * 1e-3 * Math.sin(Math.atan(ymm / 1000 / L))) / (nm * 1e-9);
+  let lay;
+  demo("slits", {
+    aspect: w => (w < 560 ? 1.1 : 1.75),
+    state: () => ({ t: 0, y: 1.06 }),
+    controls: [
+      { key: "nm", label: "Wavelength", min: 400, max: 700, step: 1, value: 532, unit: " nm", color: "green" },
+      { key: "d", label: "Slit gap", min: 0.1, max: 1, step: 0.01, value: 0.25, unit: " mm", color: "blue" },
+      { key: "one", label: "Cover one slit", type: "toggle", value: false, color: "brass" },
+    ],
+    caption: "Young's two slits, 40 µm wide, with the screen 1 m away (the drawing isn't to scale; the screen and plot are). Light from the two slits arrives at each point of the screen having traveled slightly different distances: in step it adds, half a wavelength out of step it cancels.",
+    status: (s, v) => {
+      if (v.one) return "one slit: a single broad patch, nothing to cancel against";
+      const D = Math.abs(extra(s.y, v.nm, v.d)), f = D - Math.floor(D);
+      const word = f < 0.15 || f > 0.85 ? "in step: bright" : f > 0.35 && f < 0.65 ? "out of step: dark" : "partly out of step";
+      return `bright stripes ${((v.nm * 1e-6 * L * 1000) / v.d).toFixed(2)} mm apart · at the marker one path is ${D.toFixed(2)} wavelengths longer, ${word}`;
+    },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const top = 26, bot = g.h - 10, mid = (top + bot) / 2, half = (bot - top) / 2;
+      const xL = 10, xB = g.w * 0.28, xS = g.w * 0.62, sw = 12;
+      const ypx = mm => mid - (mm / YMAX) * half;
+      const dpx = 14 + v.d * 60, S = [[xB, mid - dpx / 2], [xB, mid + dpx / 2]];
+      const col = g.wavelengthColor(v.nm), lam = 7 + ((v.nm - 400) / 300) * 7;
+      lay = { xS, sw, mid, half };
+      // laser and its beam with flat crests
+      g.rect(xL, mid - 9, 44, 18, { fill: "ink", r: 3 });
+      g.text("laser", [xL + 22, mid + 22], { size: 11.5, weight: 600, color: "muted" });
+      g.rect(xL + 44, mid - dpx / 2 - 8, xB - xL - 44, dpx + 16, { fill: col, alpha: 0.12 });
+      const ph = (s.t * 30) % lam;
+      for (let x = xL + 44 + ph; x < xB; x += lam) g.line([x, mid - dpx / 2 - 8], [x, mid + dpx / 2 + 8], { stroke: col, width: 1.2, alpha: 0.6 });
+      // circular crests from each open slit, clipped to the space between barrier and screen
+      g.clip([xB, 0, xS - xB, g.h], () => {
+        for (const [k, p] of S.entries()) {
+          if (v.one && k === 1) continue;
+          for (let r = ph; r < xS - xB + dpx; r += lam) { g.ctx.beginPath(); g.ctx.arc(p[0], p[1], Math.max(0.1, r), -1.3, 1.3); g.ctx.strokeStyle = col; g.ctx.globalAlpha = 0.28; g.ctx.lineWidth = 1; g.ctx.stroke(); g.ctx.globalAlpha = 1; }
+        }
+      });
+      // barrier with two slits
+      const gap = 3;
+      g.rect(xB - 3, top, 6, S[0][1] - gap - top, { fill: "ink" });
+      g.rect(xB - 3, S[0][1] + gap, 6, S[1][1] - S[0][1] - 2 * gap, { fill: "ink" });
+      g.rect(xB - 3, S[1][1] + gap, 6, bot - S[1][1] - gap, { fill: "ink" });
+      if (v.one) { g.rect(xB - 12, S[1][1] - 8, 8, 16, { fill: "brass", r: 2 }); g.label("covered", [xB - 16, S[1][1] + 24], { color: "brass", align: "right" }); }
+      // the screen, glowing where light lands
+      g.rect(xS, top, sw, bot - top, { fill: LIGHT.NIGHT });
+      for (let py = top; py < bot; py += 1) { const I = bright((mid - py) / half * YMAX, v.nm, v.d, v.one) / 4; if (I > 0.01) g.rect(xS, py, sw, 1.05, { fill: col, alpha: Math.min(1, I * 1.15) }); }
+      g.text("screen", [xS + sw / 2, top - 8], { size: 11, weight: 600, color: "muted" });
+      // brightness along the screen
+      const x0 = xS + sw + 16, W = g.w - x0 - 10;
+      g.line([x0, top], [x0, bot], { stroke: "faint", width: 1 });
+      for (const mm of [-10, 0, 10]) { g.line([xS - 4, ypx(mm)], [xS, ypx(mm)], { stroke: "muted", width: 1 }); g.text(`${mm > 0 ? "+" : mm < 0 ? "−" : ""}${Math.abs(mm)} mm`, [xS - 5, ypx(mm)], { size: 10.5, color: "muted", align: "right", baseline: "middle", halo: true }); }
+      const curve = (one, o) => { const pts = []; for (let py = top; py <= bot; py += 1) pts.push([x0 + (bright((mid - py) / half * YMAX, v.nm, v.d, one) / 4) * W, py]); g.path(pts, o); };
+      if (v.one) curve(false, { stroke: "muted", width: 1, dash: [3, 3], alpha: 0.7 });
+      curve(v.one, { stroke: col, width: 1.8 });
+      g.text("brightness", [x0 + W, top - 8], { size: 11, weight: 600, color: "muted", align: "right" });
+      // the marker and the two paths to it
+      const M = [xS + sw / 2, ypx(s.y)];
+      for (const [k, p] of S.entries()) if (!(v.one && k === 1)) g.line(p, M, { stroke: k ? "orange" : "blue", width: g.lit("marker") ? 2.2 : 1.4, alpha: 0.9 });
+      g.handle(M, { color: "orange", active: g.lit("marker") });
+    },
+    drag: {
+      hit: p => lay && Math.abs(p[0] - (lay.xS + lay.sw / 2)) < 26,
+      move: (p, s) => { s.y = clamp(((lay.mid - p[1]) / lay.half) * YMAX, -YMAX, YMAX); },
+    },
+  });
+}
+</script>
+
+<p>The screen fills with stripes. At the center both slits are the same distance away, so their light arrives in step and adds. A little off center the far slit's path is half a wavelength longer and the light cancels; a whole wavelength longer, it adds again. The stripes sit <span class="tex">\green{\lambda} L / \blue{d}</span> apart, where L is the meter to the screen and d the gap: 2.1 mm for green light through slits a quarter millimeter apart. So a ruler measures the wavelength. Young, working from Newton's measurements of colored rings, put the ends of the spectrum at about 675 nm for the deepest red and 425 nm for violet <a class="cite" href="#ref-young1802"></a>.</p>
+
+<div class="quiz">
+  <p>Cover one of the two slits. What happens at a spot on the screen that was dark?</p>
+  <div class="choices"><button>It stays dark</button><button data-correct>It gets brighter</button><button>It gets darker still</button></div>
+  <p class="why">The spot was dark because light from the two slits cancelled there. With one slit covered there's nothing left to cancel it, so the light from the open slit lands undisturbed. <button class="set" data-figure="slits" data-set="one=true">Cover one</button> and watch the dark stripes fill in.</p>
+</div>
+
+<p>No stream of pellets gets brighter anywhere when you block half of it. With one slit open the screen shows one broad patch; the dashed line marks the old stripes.</p>
+
+<p>You don't need slits to see interference. A soap film does it with two reflections. Some light bounces off its front surface, and some goes in and bounces off the back, traveling an extra two thicknesses of film. Where that detour puts the two reflections in step for a color, the film shines in that color; colors whose reflections cancel are missing from what you see. A soap film in a wire loop drains as it stands, so it's thinnest at the top. Set its <span class="c-purple" data-part="marker">thickness</span> to <span class="scrub" data-key="d" data-figure="film"></span>:</p>
+
+<figure class="demo" id="film" aria-label="Left, a soap film in a loop against a dark background, thinnest at the top, striped with interference colors that change with thickness; a marker picks one thickness. Right, a plot of how much of each wavelength the film reflects at that thickness, with the color you'd see."></figure>
+<script>
+{
+  const DMAX = 1200;
+  const swatch = d => LIGHT.colorOf(nm => LIGHT.film(nm, d), 10);
+  const COLORS = Array.from({ length: DMAX / 5 + 1 }, (_, k) => swatch(k * 5));
+  let lay;
+  demo("film", {
+    aspect: w => (w < 560 ? 1.05 : 1.85),
+    controls: [{ key: "d", label: "Film thickness", min: 0, max: DMAX, step: 5, value: 300, unit: " nm", color: "purple" }],
+    caption: "A soap film, index 1.33, seen straight on in white light. The plot gives the share of each wavelength it reflects; the two reflections add for some wavelengths and cancel for others, and the mix that's left is the color. The swatch is that color, brightened.",
+    status: (s, v) => {
+      if (v.d < 30) return "thinner than 30 nm: the two reflections cancel at every color";
+      const R = nm => LIGHT.film(nm, v.d);
+      let best = 400; for (let nm = 400; nm <= 700; nm += 2) if (R(nm) > R(best)) best = nm;
+      return `${v.d} nm thick · strongest reflection at ${best} nm`;
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [10, 8, g.w * 0.34, g.h - 16] : [10, 8, g.w - 20, g.h * 0.44];
+      const B = wide ? [g.w * 0.42, 8, g.w * 0.58 - 12, g.h - 16] : [10, g.h * 0.5, g.w - 20, g.h * 0.5 - 8];
+      g.rect(...A, { fill: LIGHT.NIGHT, r: 8 });
+      // the film, a loop draining downward: thickness grows from 0 at the top to DMAX at the bottom
+      const fx = A[0] + A[2] * 0.22, fw = A[2] * 0.56, fy = A[1] + 18, fh = A[3] - 36;
+      lay = { fy, fh, A };
+      g.clip([fx, fy, fw, fh], () => {
+        for (let py = 0; py < fh; py += 1) g.rect(fx, fy + py, fw, 1.2, { fill: COLORS[Math.round(((py / fh) * DMAX) / 5)] });
+      });
+      g.rect(fx, fy, fw, fh, { stroke: "#9aa0a8", width: 2, r: 4 });
+      const my = fy + (v.d / DMAX) * fh;
+      g.line([fx - 10, my], [fx + fw + 10, my], { stroke: "#ffffff", width: g.lit("marker") ? 2.4 : 1.4 });
+      g.handle([fx + fw + 10, my], { color: "purple", active: g.lit("marker") });
+      g.text("0 nm", [fx - 6, fy + 2], { size: 10.5, color: "#c9ccd2", align: "right", baseline: "top" });
+      g.text(`${DMAX} nm`, [fx - 6, fy + fh], { size: 10.5, color: "#c9ccd2", align: "right", baseline: "bottom" });
+      // what it reflects
+      const G = g.graph({ box: B, x: [380, 720], y: [0, 0.1], axes: "frame", xLabel: "Wavelength (nm)", yLabel: "Reflected (%)", xTicks: [400, 500, 600, 700], yTicks: [0, 0.04, 0.08], yFormat: y => (y * 100).toFixed(0) });
+      const wpx = Math.max(1.5, G.sx * 2.2);
+      for (let nm = 382; nm <= 718; nm += 2) g.line(G([nm, 0]), G([nm, LIGHT.film(nm, v.d)]), { stroke: g.wavelengthColor(nm), width: wpx, alpha: 0.55 });
+      G.fn(nm => LIGHT.film(nm, v.d), { color: "ink", width: 1.6 });
+      const sx = G.box[0] + G.box[2] - 54, sy = G.box[1] + 6;
+      g.rect(sx - 4, sy - 4, 52, 52, { fill: LIGHT.NIGHT, r: 6 });
+      g.rect(sx, sy, 44, 44, { fill: swatch(v.d), r: 4 });
+      g.text("seen", [sx + 22, sy + 58], { size: 11, weight: 600, color: "muted" });
+    },
+    drag: {
+      hit: p => lay && p[0] >= lay.A[0] && p[0] <= lay.A[0] + lay.A[2] && p[1] >= lay.A[1] && p[1] <= lay.A[1] + lay.A[3],
+      move: (p, s, v, d, fig) => fig.set("d", Math.round(clamp((p[1] - lay.fy) / lay.fh, 0, 1) * DMAX / 5) * 5),
+    },
+  });
+}
+</script>
+
+<p>The whole film is a few hundred nanometers thick, a hundredth of a hair, and its colors are a map of that thickness. Near the top, thinner than about 30 nm, the two reflections cancel at every wavelength, because the reflection off the front flips the wave over and the one off the back doesn't. The film turns <button class="set" data-figure="film" data-set="d=10">black</button> there, shortly before it pops. Lower down come yellow, magenta, and blue, then greens and pinks, fading toward white where the film is thick. Oil on a wet road and the purple sheen of a coated camera lens are the same effect <a class="cite" href="#ref-hecht"></a>.</p>
+
+<h2>Sideways waves</h2>
+
+<p>A wave on a rope can shake up and down or side to side. The direction a light wave's electric field shakes in is its <dfn data-def="The direction in which a light wave's electric field shakes, crosswise to its travel.">polarization</dfn>, and light from a lamp or the sun is a jumble of every direction at once. A polarizing filter is a plastic sheet of long molecules all lined up, which soak up the part of the field that shakes along them and pass the part that shakes across them. Send lamp light through <span class="c-green" data-part="f1">one filter</span>, then through a <span class="c-orange" data-part="f2">second</span> turned <span class="scrub" data-key="th" data-figure="polar"></span> from the first:</p>
+
+<figure class="demo" id="polar" aria-label="A light beam in perspective: from a lamp the electric field shakes in a jumble of directions, a first filter leaves it shaking up and down, and a second filter turned at an angle leaves a smaller wave shaking along its own direction. A small plot shows the share passed against the angle, a cosine-squared curve."></figure>
+<script>
+{
+  const RAD = Math.PI / 180;
+  const out = v => 0.5 * Math.cos(v.th * RAD) ** 2 * (v.third ? Math.sin(v.th * RAD) ** 2 : 1);
+  demo("polar", {
+    aspect: w => (w < 560 ? 1.05 : 1.9),
+    orbit: { yaw: -0.62, pitch: 0.26, minPitch: -1.2, maxPitch: 1.2 },
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "th", label: "Second filter", type: "knob", min: 0, max: 180, step: 1, value: 30, unit: "°", wrap: true, color: "orange" },
+      { key: "third", label: "Third filter at 90°", type: "toggle", value: false, color: "purple" },
+    ],
+    caption: "Lamp light through polarizing filters, drawn as its electric field. The lines on each filter mark the direction it lets through. The first passes half the light; each next one passes cos²θ of what reaches it, where θ is the angle between it and the one before. Drag to turn the view.",
+    status: (s, v) => `the second filter passes ${(Math.cos(v.th * RAD) ** 2 * 100).toFixed(0)}% of what reaches it · ${(out(v) * 100).toFixed(1)}% of the lamp's light gets through`,
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const view = g.view3d({ ...s.view, scale: wide ? Math.min(g.w, g.h * 1.9) / 15.5 : g.w / 13.5, center: [g.w * 0.52, g.h * (wide ? 0.56 : 0.4)] });
+      const angs = v.third ? [0, v.th, 90] : [0, v.th], FX = v.third ? [-3.4, -0.2, 3.0] : [-3.4, 0.6];
+      const COL = ["green", "orange", "purple"], PART = ["f1", "f2", "f3"];
+      const X0 = -6.4, XE = 6.2, R = 1.75, A = 1.3, k = TAU / 1.15, ph = s.t * 5;
+      const at = (x, a, m) => view([x, m * Math.cos(a * RAD), m * Math.sin(a * RAD)]);
+      g.line(view([X0, 0, 0]), view([XE, 0, 0]), { stroke: "faint", width: 1 });
+      // the lamp, and its unpolarized light: a field whose direction wanders at random
+      g.circle(view([X0 - 0.2, 0, 0]), 10, { fill: "brass" });
+      g.label("lamp", [view([X0 - 0.2, 0, 0])[0], view([X0 - 0.2, 0, 0])[1] + 22], { color: "muted" });
+      const jumble = [];
+      for (let x = X0 + 0.3; x <= FX[0]; x += 0.04) {
+        const a = 90 + 85 * Math.sin(1.9 * x + 2.6 * s.t) + 60 * Math.sin(4.3 * x - 1.7 * s.t), m = A * Math.sin(k * x - ph);
+        jumble.push(at(x, a, m));
+        if (Math.round(x / 0.04) % 3 === 0) g.line(view([x, 0, 0]), at(x, a, m), { stroke: "blue", width: 1, alpha: 0.45 });
+      }
+      g.path(jumble, { stroke: "blue", width: 1.8, alpha: 0.8 });
+      const ul = view([X0 + 0.7, wide ? A + 0.45 : -(A + 0.75), 0]);
+      g.label("unpolarized", ul, { color: "muted" });
+      // each filter, then the polarized wave after it
+      let m = A;
+      angs.forEach((a, i) => {
+        if (i > 0) m *= Math.cos((a - angs[i - 1]) * RAD);
+        const x = FX[i], lit = g.lit(PART[i]), ring = [];
+        for (let t = 0; t <= 360; t += 6) ring.push(at(x, t, R));
+        g.path(ring, { fill: "rgba(128,136,148,0.16)", stroke: COL[i], width: lit ? 2.8 : 1.6, close: true });
+        for (let o = -R + 0.28; o < R - 0.1; o += 0.3) {
+          const hl = Math.sqrt(R * R - o * o) * 0.93, q = a + 90;
+          const c = [o * Math.cos(q * RAD), o * Math.sin(q * RAD)], d = [Math.cos(a * RAD), Math.sin(a * RAD)];
+          g.line(view([x, c[0] - hl * d[0], c[1] - hl * d[1]]), view([x, c[0] + hl * d[0], c[1] + hl * d[1]]), { stroke: COL[i], width: 1, alpha: 0.6 });
+        }
+        const top = view([x, R + 0.45, 0]);
+        g.label(`filter ${i + 1}`, top, { color: COL[i] });
+        const x1 = i + 1 < FX.length ? FX[i + 1] : XE, pts = [];
+        for (let xx = x; xx <= x1; xx += 0.04) {
+          const y = m * Math.sin(k * xx - ph);
+          pts.push(at(xx, a, y));
+          if (Math.round(xx / 0.04) % 3 === 0) g.line(view([xx, 0, 0]), at(xx, a, y), { stroke: "blue", width: 1, alpha: 0.55 });
+        }
+        g.path(pts, { stroke: "blue", width: 2.4 });
+      });
+      // what gets through
+      const sq = [[1.5, 1.5], [1.5, -1.5], [-1.5, -1.5], [-1.5, 1.5]].map(([y, z]) => view([XE, y, z]));
+      g.path(sq, { fill: `rgba(255,205,110,${Math.min(1, out(v) * 2)})`, stroke: "muted", width: 1.2, close: true });
+      // Malus's law
+      const box = wide ? [14, g.h - 96, 170, 84] : [10, g.h - 94, 150, 84];
+      const G = g.graph({ box, x: [0, 180], y: [0, 1], axes: "frame", xTicks: [0, 90, 180], yTicks: [0, 1], yFormat: y => `${y * 100}%`, labelSize: 11, tickSize: 10.5 });
+      G.fn(t => Math.cos(t * RAD) ** 2, { color: "orange", width: v.third ? 1.2 : 2, dash: v.third ? [3, 3] : null });
+      if (v.third) G.fn(t => (Math.cos(t * RAD) * Math.sin(t * RAD)) ** 2, { color: "purple", width: 2 });
+      G.marker(v.th, v.third ? (Math.cos(v.th * RAD) * Math.sin(v.th * RAD)) ** 2 : Math.cos(v.th * RAD) ** 2, { color: v.third ? "purple" : "orange" });
+    },
+  });
+}
+</script>
+
+<p>The first filter passes half the lamp's light, whatever way it's turned: of a jumble of directions, on average half the field lies along it. The second filter passes the share <span class="tex">\cos^2\orange{\theta}</span> of what reaches it, a rule Étienne-Louis Malus found in 1809 <a class="cite" href="#ref-hecht"></a>. Lined up, the second filter hardly matters; crossed at 90°, it blocks everything. In between, it keeps only the part of the field that lies along its own lines, so the light comes out weaker and shaking in a new direction. The plot in the corner is that rule.</p>
+
+<div class="quiz">
+  <p>Two crossed filters let no light through. Now slide a third filter between them, turned 45°. What happens?</p>
+  <div class="choices"><button>Still no light gets through</button><button data-correct>Some light gets through again</button><button>Half the light gets through</button></div>
+  <p class="why">The middle filter keeps the part of the vertical field that lies along 45°, and the last filter keeps the part of that which lies along the horizontal. Each step passes half, so an eighth of the lamp's light reaches the end. <button class="set" data-figure="polar" data-set="third=true th=45">Try it</button>, then turn the middle filter.</p>
+</div>
+
+<p>Light also gets polarized by bouncing. When sunlight reflects off water, the part of the field that shakes parallel to the surface reflects far more readily than the part that shakes up and down. Move the <span class="c-brass" data-part="sun">sun</span> to <span class="scrub" data-key="i" data-figure="glare"></span> from overhead and compare the <span class="c-blue">sideways</span> and the <span class="c-red">up-and-down</span> shaking light in the reflection:</p>
+
+<figure class="demo" id="glare" aria-label="Sunlight strikes a water surface and reflects toward an eye. Dots along the rays show light shaking sideways and arrows show light shaking up and down; in the reflection the arrows shrink to nothing at one angle. A plot gives the reflected share of each against the sun's angle, with Brewster's angle marked at 53 degrees."></figure>
+<script>
+{
+  const n = 1.333, RAD = Math.PI / 180, BREW = Math.atan(n) / RAD;
+  let P;
+  demo("glare", {
+    aspect: w => (w < 560 ? 1.2 : 1.9),
+    controls: [
+      { key: "i", label: "Sun's angle from overhead", min: 0, max: 88, step: 0.5, value: 40, unit: "°", color: "brass", marks: [{ value: 53, label: "Brewster" }] },
+      { key: "shades", label: "Polarized sunglasses", type: "toggle", value: false, color: "purple" },
+    ],
+    caption: "Reflection off water, split into its two polarizations. Dots are light shaking sideways (parallel to the surface), arrows light shaking up and down in the plane of the drawing; their sizes give the amplitude. At 53°, Brewster's angle, the up-and-down part doesn't reflect at all. Drag the sun.",
+    status: (s, v) => {
+      const F = Optics.fresnel(1, n, v.i);
+      const base = `${(F.Rs * 100).toFixed(1)}% of the sideways and ${(F.Rp * 100).toFixed(1)}% of the up-and-down light reflects`;
+      return v.shades ? `${base} · sunglasses cut the glare to ${((F.Rp / (F.Rs + F.Rp)) * 100).toFixed(0)}% of what it was` : base;
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [0, 0, g.w * 0.5, g.h] : [0, 0, g.w, g.h * 0.56];
+      const B = wide ? [g.w * 0.56, 12, g.w * 0.44 - 12, g.h - 26] : [10, g.h * 0.6, g.w - 20, g.h * 0.4 - 8];
+      P = g.fit(-3.1, 3.1, -1.2, 3.1, { box: A });
+      const F = Optics.fresnel(1, n, v.i), si = Math.sin(v.i * RAD), co = Math.cos(v.i * RAD), r = 2.7;
+      const O = [0, 0], S = [-r * si, r * co], E = [2.25 * si, 2.25 * co];
+      // water
+      g.rect(P([-3.1, 0])[0], P([0, 0])[1], P([3.1, 0])[0] - P([-3.1, 0])[0], P([0, -1.2])[1] - P([0, 0])[1], { fill: "blue", alpha: 0.12 });
+      g.line(P([-3.1, 0]), P([3.1, 0]), { stroke: "blue", width: 1.5 });
+      g.label("water", P([-2.5, -0.6]), { color: "blue" });
+      g.line(P([0, -1]), P([0, 2.9]), { stroke: "muted", width: 1, dash: [4, 4] });
+      const t = Math.asin(si / n);
+      g.line(P(O), P([1.2 * Math.tan(t), -1.2]), { stroke: "brass", width: 2, alpha: 0.35 });
+      // rays
+      g.line(P(S), P(O), { stroke: "brass", width: 2.6 });
+      g.line(P(O), P(E), { stroke: "brass", width: 1 + 6 * (F.R), alpha: 0.9 });
+      // polarization marks: dots for sideways, double arrows for up-and-down
+      const mark = (p, dir, as, ap) => {
+        const nrm = [-dir[1], dir[0]];  // perpendicular to the ray, in the drawing's plane
+        if (ap > 0.02) { const h = (3 + 15 * ap) / P.sx, a = P([p[0] - nrm[0] * h, p[1] - nrm[1] * h]), b = P([p[0] + nrm[0] * h, p[1] + nrm[1] * h]); g.arrow(a, b, { stroke: "red", width: 1.8, head: 5 }); g.arrow(b, a, { stroke: "red", width: 1.8, head: 5 }); }
+        if (as > 0.02) g.circle(P(p), 1.5 + 5.5 * as, { fill: "blue" });
+      };
+      for (const f of [0.35, 0.65]) mark([S[0] * f, S[1] * f], [si, -co], 1, 1);
+      const shadeAt = 0.78;
+      for (const f of [0.3, 0.55]) mark([E[0] * f, E[1] * f], [si, co], Math.sqrt(F.Rs), Math.sqrt(F.Rp));
+      if (v.shades) {
+        const c = P([E[0] * shadeAt, E[1] * shadeAt]), q = [co, si];
+        g.line([c[0] - q[0] * 16, c[1] - q[1] * 16], [c[0] + q[0] * 16, c[1] + q[1] * 16], { stroke: "purple", width: 6 });
+        mark([E[0] * 0.9, E[1] * 0.9], [si, co], 0, Math.sqrt(F.Rp));
+      } else mark([E[0] * 0.85, E[1] * 0.85], [si, co], Math.sqrt(F.Rs), Math.sqrt(F.Rp));
+      // sun and eye
+      g.circle(P(S), 11, { fill: "brass" });
+      g.handle(P(S), { color: "brass", active: g.lit("sun") });
+      const e = P(E);
+      g.path([[e[0] - 9, e[1]], [e[0], e[1] - 6], [e[0] + 9, e[1]], [e[0], e[1] + 6]], { stroke: "ink", width: 1.5, close: true });
+      g.circle(e, 3, { fill: "ink" });
+      g.label(v.shades ? "eye, with sunglasses" : "eye", [e[0], e[1] - 14], { color: "muted" });
+      // the reflected share against angle
+      const G = g.graph({ box: B, x: [0, 90], y: [0, 0.6], axes: "frame", xLabel: "Sun's angle from overhead (°)", yLabel: "Reflected (%)", xTicks: [0, 30, 60, 90], yTicks: [0, 0.2, 0.4, 0.6], yFormat: y => (y * 100).toFixed(0) });
+      G.fn(a => Optics.fresnel(1, n, a).Rs, { color: "blue", width: 2, label: "sideways", labelAt: 70 });
+      G.fn(a => Optics.fresnel(1, n, a).Rp, { color: "red", width: 2, label: "up and down", labelAt: 84 });
+      G.vline(BREW, { label: "53°", color: "muted" });
+      G.marker(v.i, F.Rs, { color: "blue" });
+      G.marker(v.i, F.Rp, { color: "red" });
+    },
+    drag: {
+      hit: (p, s, v) => { const q = P([-2.7 * Math.sin(v.i * RAD), 2.7 * Math.cos(v.i * RAD)]); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 26; },
+      move: (p, s, v, d, fig) => { const w = P.inv(p); fig.set("i", Math.round(clamp(Math.atan2(-w[0], Math.max(0.01, w[1])) / RAD, 0, 88) * 2) / 2); },
+    },
+  });
+}
+</script>
+
+<p>At one angle, 53° for water, the up-and-down part doesn't reflect at all. This is <dfn data-def="The angle at which light shaking in the plane of incidence isn't reflected at all; its tangent equals the refractive index.">Brewster's angle</dfn>, where the tangent of the angle equals the refractive index, found by David Brewster in 1815 <a class="cite" href="#ref-brewster"></a>. Near it, the glare off a lake or a wet road is almost all sideways-shaking light. Polarized sunglasses use that: their filters pass only up-and-down shaking light. <button class="set" data-figure="glare" data-set="shades=true i=53">Put them on</button> and the glare at 53° disappears, while light from everything else, which isn't polarized, gets through at half strength. Anglers wear them to see past the reflection into the water.</p>
+
+<p>The sky is polarized too, and for the same reason it's blue. Sunlight crossing the air sets the electrons in each nitrogen and oxygen molecule shaking, and each shaking molecule sends out light of its own in other directions: it <dfn data-def="Light redirected in all directions by particles or molecules it passes.">scatters</dfn> it. Molecules far smaller than a wavelength scatter in proportion to <span class="tex">1/\lambda^4</span>, so violet light is scattered about nine times as strongly as red <a class="cite" href="#ref-rayleigh"></a>. Lower the <span class="c-brass" data-part="sun">sun</span> to <span class="scrub" data-key="h" data-figure="sky"></span> above the horizon:</p>
+
+<figure class="demo" id="sky" aria-label="The view toward a setting sun: a blue sky that pales toward the horizon and a sun disk whose color goes from white to orange and red as it sinks. A plot gives the share of each wavelength of sunlight that gets through the air, with blue cut most."></figure>
+<script>
+{
+  const RAD = Math.PI / 180;
+  const tau = nm => 0.0088 * Math.pow(nm / 1000, -4.05);       // Rayleigh optical depth of the whole atmosphere, straight up
+  const airmass = h => 1 / (Math.sin(h * RAD) + 0.50572 * Math.pow(h + 6.07995, -1.6364));   // Kasten and Young
+  const through = (nm, h) => Math.exp(-tau(nm) * airmass(h));
+  demo("sky", {
+    aspect: w => (w < 560 ? 1.15 : 1.9),
+    controls: [{ key: "h", label: "Sun height", min: 0, max: 60, step: 0.5, value: 30, unit: "°", color: "brass" }],
+    caption: "Sunlight through the air, counting only scattering by air molecules (no dust, haze, or ozone). The plot gives the share of each wavelength that reaches you straight from the sun; the dashed curve is how strongly air scatters each wavelength, relative to violet. The low sun loses its blue to the sky.",
+    status: (s, v) => `the sunlight crosses ${airmass(v.h).toFixed(1)}× as much air as from overhead · ${(through(450, v.h) * 100).toFixed(0)}% of its blue and ${(through(650, v.h) * 100).toFixed(0)}% of its red get through`,
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [0, 0, g.w * 0.5, g.h] : [0, 0, g.w, g.h * 0.52];
+      const B = wide ? [g.w * 0.57, 12, g.w * 0.43 - 12, g.h - 26] : [10, g.h * 0.57, g.w - 20, g.h * 0.43 - 8];
+      // the sky: scattered light, weighted by 1/lambda^4, dimming and warming near the horizon at low sun
+      const T = nm => through(nm, v.h);
+      const zen = LIGHT.colorOf(nm => tau(nm) / tau(450) * Math.exp(-tau(nm) * 0.5) * (0.75 + 0.25 * Math.sqrt(T(nm))), 1.0);
+      const hor = LIGHT.colorOf(nm => (0.55 + 0.45 * tau(nm) / tau(450)) * T(nm) ** 0.35, 0.95);
+      const hy = A[1] + A[3] * 0.8;
+      const grad = g.ctx.createLinearGradient(0, A[1], 0, hy);
+      grad.addColorStop(0, zen); grad.addColorStop(1, hor);
+      g.ctx.fillStyle = grad; g.ctx.fillRect(A[0], A[1], A[2], hy - A[1]);
+      // the sun, colored by what gets through
+      const peak = Math.max(T(700), 1e-6);
+      const sunCol = LIGHT.colorOf(T, 1 / peak);
+      const deg = (hy - A[1]) / 66, sx = A[0] + A[2] * 0.5, sy = hy - v.h * deg;
+      const glow = g.ctx.createRadialGradient(sx, sy, 2, sx, sy, 70);
+      glow.addColorStop(0, sunCol); glow.addColorStop(1, "rgba(255,255,255,0)");
+      g.ctx.save(); g.ctx.beginPath(); g.ctx.rect(A[0], A[1], A[2], hy - A[1]); g.ctx.clip();
+      g.ctx.globalAlpha = 0.55; g.ctx.fillStyle = glow; g.ctx.fillRect(sx - 70, sy - 70, 140, 140); g.ctx.globalAlpha = 1;
+      g.circle([sx, sy], 12, { fill: sunCol });
+      g.ctx.restore();
+      g.rect(A[0], hy, A[2], A[1] + A[3] - hy, { fill: "#2f3326" });
+      g.label("sun", [sx + 20, Math.max(A[1] + 14, sy - 16)], { color: "#1d232c", halo: "rgba(255,255,255,0.6)", align: "left" });
+      // what gets through, and how strongly each wavelength scatters
+      const G = g.graph({ box: B, x: [380, 720], y: [0, 1.05], axes: "frame", xLabel: "Wavelength (nm)", yLabel: "Gets through (%)", xTicks: [400, 500, 600, 700], yTicks: [0, 0.5, 1], yFormat: y => (y * 100).toFixed(0) });
+      const wpx = Math.max(1.5, G.sx * 4.4);
+      for (let nm = 384; nm <= 716; nm += 4) g.line(G([nm, 0]), G([nm, T(nm)]), { stroke: g.wavelengthColor(nm), width: wpx, alpha: 0.5 });
+      G.fn(T, { color: "ink", width: 1.8 });
+      G.fn(nm => (400 / nm) ** 4, { color: "blue", width: 1.4, dash: [5, 4], label: "scattering", labelAt: 560 });
+    },
+  });
+}
+</script>
+
+<p>Look anywhere away from the sun and what reaches you is scattered light, mostly blue: that's the sky. Look at the sun itself and you see what's left. Near the horizon its light crosses nearly forty times as much air as from overhead <a class="cite" href="#ref-kasten"></a>, the blue is scattered away, and the sun goes <button class="set" data-figure="sky" data-set="h=2">yellow, orange, and red</button>. The sky isn't violet, though violet scatters most, because sunlight carries less violet and our eyes are less sensitive to it. And a shaking molecule sends no light along the line it shakes in, so skylight 90° from the sun is strongly polarized: look there through polarized sunglasses and tilt your head, and the sky darkens.</p>
+
+<h2>Lumps of light</h2>
+
+<p>By 1900 the wave picture explained everything above, and one experiment refused to fit. Light shining on a clean metal can knock electrons out of its surface, the <dfn data-def="Light knocking electrons out of the surface of a material.">photoelectric effect</dfn>. If light were only a wave, brighter light would shake the electrons harder and fling them out faster, and any color would do if it were bright enough. Before you try it, make a prediction:</p>
+
+<div class="quiz">
+  <p>Red light shining on sodium frees no electrons at all. What happens if you make the red light a hundred times brighter?</p>
+  <div class="choices"><button>Electrons start coming out</button><button data-correct>Still no electrons come out</button><button>A few slow electrons come out</button></div>
+  <p class="why">Each electron is freed by a single lump of light, and a red lump doesn't carry enough energy to free one from sodium. A brighter light sends more lumps, but none of them is big enough.</p>
+</div>
+
+<p>Pick a <span class="c-blue">color</span> and a metal, and turn up the <span class="c-brass">brightness</span>. The wavelength is now <span class="scrub" data-key="nm" data-figure="photo"></span>:</p>
+
+<figure class="demo" id="photo" aria-label="A lamp sends small packets of light at a metal plate inside a vacuum tube; when the light's frequency is high enough, electrons fly off the plate toward a collector. A plot gives the electrons' top energy against the light's frequency: a straight line for each metal starting at its threshold."></figure>
+<script>
+{
+  const MET = ["cesium", "sodium", "zinc"], MCOL = { cesium: "orange", sodium: "brass", zinc: "blue" };
+  const hEV = 4.135667696e-3;   // Planck's constant in eV per THz
+  const lightColor = (g, nm) => (nm < 380 ? "#8b80d6" : g.wavelengthColor(nm));
+  let lay;
+  demo("photo", {
+    aspect: w => (w < 560 ? 1.15 : 1.9),
+    state: () => ({ ph: [], el: [], acc: 0, rnd: Num.rng(5) }),
+    controls: [
+      { key: "nm", label: "Wavelength", min: 200, max: 700, step: 1, value: 400, unit: " nm", color: "blue" },
+      { key: "I", label: "Brightness", min: 0, max: 1, step: 0.01, value: 0.4, color: "brass", format: x => `${Math.round(x * 100)}%` },
+      { key: "metal", label: "Metal", type: "choice", options: [{ value: "cesium", label: "Cesium" }, { value: "sodium", label: "Sodium" }, { value: "zinc", label: "Zinc" }], value: "sodium" },
+    ],
+    caption: "The photoelectric effect. Each packet is one photon. A photon with more energy than the metal's work function frees one electron, which leaves with the difference; brightness only changes how many photons arrive. Work functions from Michaelson (1977); below 380 nm the light is ultraviolet.",
+    status: (s, v) => { const E = LIGHT.photonEV(v.nm), W = LIGHT.METALS[v.metal]; return `photon ${E.toFixed(2)} eV · ${v.metal} needs ${W.toFixed(2)} eV · ${E > W ? `electrons leave with up to ${(E - W).toFixed(2)} eV` : "no electrons, however bright"}`; },
+    step(dt, s, v) {
+      const E = LIGHT.photonEV(v.nm), W = LIGHT.METALS[v.metal];
+      s.acc += dt * v.I * 45;
+      while (s.acc >= 1) { s.acc -= 1; s.ph.push({ x: 0, y: s.rnd() }); }
+      for (const p of s.ph) p.x += dt * 1.5;
+      for (const p of s.ph) if (p.x >= 1 && E > W) s.el.push({ x: 0, y: p.y, v: Math.sqrt(((E - W) * (0.3 + 0.7 * s.rnd())) / 2.5), a: (s.rnd() - 0.5) * 0.9 });
+      s.ph = s.ph.filter(p => p.x < 1);
+      for (const e of s.el) e.x += dt * e.v * 0.9;
+      s.el = s.el.filter(e => e.x < 1);
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [0, 0, g.w * 0.52, g.h] : [0, 0, g.w, g.h * 0.5];
+      const B = wide ? [g.w * 0.59, 12, g.w * 0.41 - 12, g.h - 26] : [10, g.h * 0.55, g.w - 20, g.h * 0.45 - 8];
+      const E = LIGHT.photonEV(v.nm), W = LIGHT.METALS[v.metal], col = lightColor(g, v.nm);
+      const cy = A[1] + A[3] * 0.5, ph = A[3] * 0.46;
+      const xL = A[0] + 22, xP = A[0] + A[2] * 0.48, xC = A[0] + A[2] * 0.92;
+      const y0 = cy - ph / 2;
+      lay = { A };
+      // vacuum tube, plate and collector
+      g.rect(A[0] + A[2] * 0.38, cy - ph / 2 - 22, A[2] * 0.6, ph + 44, { stroke: "muted", width: 1.2, r: 22, fill: "faint", alpha: 0.12 });
+      g.rect(A[0] + A[2] * 0.38, cy - ph / 2 - 22, A[2] * 0.6, ph + 44, { stroke: "muted", width: 1.2, r: 22 });
+      g.rect(xP - 4, y0, 8, ph, { fill: MCOL[v.metal] });
+      g.rect(xC - 2, y0, 4, ph, { fill: "muted" });
+      g.text(v.metal, [xP, y0 + ph + 16], { size: 11.5, weight: 600, color: "muted" });
+      g.text("collector", [xC - 6, y0 + ph + 16], { size: 11.5, weight: 600, color: "muted", align: "right" });
+      // lamp
+      g.circle([xL, cy], 11, { fill: col });
+      g.text("lamp", [xL, cy + 26], { size: 11.5, weight: 600, color: "muted" });
+      // photons: short wave packets, their wavelength drawn to scale with the color
+      const lam = 5 + v.nm / 70;
+      for (const p of s.ph) {
+        const x = xL + 14 + p.x * (xP - xL - 18), y = y0 + p.y * ph, pts = [];
+        for (let u = -1.5 * lam; u <= 1.5 * lam; u += 1) pts.push([x + u, y + 4 * Math.sin((u / lam) * TAU) * Math.cos((u / (3 * lam)) * Math.PI)]);
+        g.path(pts, { stroke: col, width: 1.8 });
+      }
+      // electrons
+      for (const e of s.el) g.circle([xP + 6 + e.x * (xC - xP - 10), y0 + e.y * ph + e.a * e.x * ph * 0.4], 3, { fill: "blue" });
+      // Millikan's straight line: top electron energy against frequency
+      const G = g.graph({ box: B, x: [0, 1500], y: [0, 4.5], axes: "frame", xLabel: "Frequency (THz)", yLabel: "Electron energy (eV)", xTicks: [0, 500, 1000, 1500], yTicks: [0, 1, 2, 3, 4] });
+      for (let f = 430; f <= 790; f += 4) g.line(G([f, 0]), G([f, 0.14]), { stroke: g.wavelengthColor(LIGHT.c / (f * 1e12) * 1e9), width: Math.max(1.5, G.sx * 4.4) });
+      for (const m of MET) G.fn(f => hEV * f - LIGHT.METALS[m], { color: MCOL[m], width: m === v.metal ? 2.4 : 1, alpha: m === v.metal ? 1 : 0.5, domain: [LIGHT.METALS[m] / hEV, 1500], label: m === v.metal ? m : undefined, labelAt: 1300 });
+      const f = LIGHT.THz(v.nm);
+      G.marker(f, Math.max(0, E - W), { color: E > W ? "blue" : "red", drop: true });
+    },
+  });
+}
+</script>
+
+<p>Below a certain frequency nothing comes out, however bright the light. Above it electrons leave at once, even in dim light, and brighter light frees more of them but no faster ones. Only the color sets their top energy. Einstein's explanation, in 1905, was that light delivers its energy in lumps, now called <dfn data-def="The smallest amount of light of a given frequency: a lump carrying energy h times f.">photons</dfn>, each carrying energy <span class="tex">E = h\,f</span>, where h is Planck's constant <a class="cite" href="#ref-einstein"></a>. One photon frees one electron, which pays a fixed toll to get out, the metal's <dfn data-def="The least energy needed to pull an electron out of a metal's surface.">work function</dfn> <a class="cite" href="#ref-michaelson"></a>, and leaves with the rest. Plot the top electron energy against frequency and every metal gives a straight line with the same slope, h. Robert Millikan, who doubted Einstein's idea, spent years on the measurement and in 1916 found exactly that line <a class="cite" href="#ref-millikan"></a>.</p>
+
+<p>So is light a wave or a stream of lumps? The answer shows up in one experiment. Dim the light in Young's two slits until photons pass through one at a time. Each one lands at a single spot, like a particle. Send them through at <span class="scrub" data-key="rate" data-figure="photons"></span> and watch the spots <span class="c-brass" data-part="dots">pile up</span>:</p>
+
+<figure class="demo" id="photons" aria-label="Dots appear one at a time on a dark screen behind two slits, at random places, gradually forming bright and dark stripes. A histogram below counts them and fills in the wave pattern."></figure>
+<script>
+{
+  const NM = 532, A = 40, D = 250, YMAX = 12, BINS = 120, MAXN = 12000;
+  const I = y => 4 * LIGHT.slits(Math.atan(y / 1000), NM, A, D);
+  const fresh = () => ({ dots: [], counts: new Array(BINS).fill(0), acc: 30, rnd: Num.rng(11) });
+  demo("photons", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    state: fresh,
+    controls: [
+      { key: "rate", label: "Photons per second", min: 2, max: 800, step: 1, value: 40, color: "brass" },
+      { key: "wave", label: "Show the wave's prediction", type: "toggle", value: false, color: "green" },
+      { label: "Start over", type: "button", action: s => Object.assign(s, fresh()) },
+    ],
+    caption: "Two slits 0.25 mm apart, green light, one photon at a time. Each lands at one random spot; where it can land follows the wave pattern from Young's experiment, so the stripes build up out of single hits. The bars count hits across the screen.",
+    status: s => `${s.dots.length.toLocaleString("en-US")} photons so far`,
+    step(dt, s, v) {
+      if (s.dots.length >= MAXN) return;
+      s.acc += dt * v.rate;
+      while (s.acc >= 1 && s.dots.length < MAXN) {
+        s.acc -= 1;
+        let y; do { y = (s.rnd() * 2 - 1) * YMAX; } while (s.rnd() * 4 > I(y));
+        s.dots.push([y, s.rnd()]);
+        s.counts[Math.min(BINS - 1, Math.floor(((y + YMAX) / (2 * YMAX)) * BINS))]++;
+      }
+    },
+    draw(g, s, v) {
+      const S = [12, 10, g.w - 24, g.h * 0.52], H = [12, g.h * 0.6, g.w - 24, g.h * 0.4 - 14];
+      const X = y => S[0] + ((y + YMAX) / (2 * YMAX)) * S[2];
+      g.rect(...S, { fill: LIGHT.NIGHT, r: 6 });
+      const r = g.lit("dots") ? 3.2 : 2.4, col = g.wavelengthColor(NM);
+      g.ctx.fillStyle = col;
+      for (const [y, z] of s.dots) g.ctx.fillRect(X(y) - r / 2, S[1] + 4 + z * (S[3] - 8) - r / 2, r, r);
+      g.text("screen", [S[0] + 8, S[1] + 14], { size: 11, weight: 600, color: "#9aa0a8", align: "left" });
+      // the tally
+      const max = Math.max(4, ...s.counts), bw = H[2] / BINS;
+      g.line([H[0], H[1] + H[3]], [H[0] + H[2], H[1] + H[3]], { stroke: "muted", width: 1 });
+      s.counts.forEach((c, i) => { if (c) g.rect(H[0] + i * bw, H[1] + H[3] - (c / max) * H[3], Math.max(1, bw - 0.6), (c / max) * H[3], { fill: "brass", alpha: 0.8 }); });
+      if (v.wave) {
+        const n = s.dots.length, scale = n ? (n * (2 * YMAX / BINS)) / Num.integrate(I, -YMAX, YMAX, 512) : 0, pts = [];
+        for (let px = 0; px <= H[2]; px += 1.5) { const y = (px / H[2]) * 2 * YMAX - YMAX; pts.push([H[0] + px, H[1] + H[3] - (n ? (I(y) * scale) / max : I(y) / 4) * H[3]]); }
+        g.path(pts, { stroke: "green", width: 1.8 });
+      }
+      g.text("hits", [H[0] + 4, H[1] + 2], { size: 11, weight: 600, color: "muted", align: "left", baseline: "top" });
+    },
+  });
+}
+</script>
+
+<p>The first few dozen spots look scattered at random. After a few thousand, the stripes appear: photons almost never land where the waves from the two slits would cancel. G. I. Taylor did a version of this in 1909 with light so feeble that his longest exposure took about three months, and the fringes came out as sharp as in bright light <a class="cite" href="#ref-taylor"></a>. The wave tells you where a photon is likely to land, and <button class="set" data-figure="photons" data-set="wave=true">its prediction</button> matches the tally; the photon itself arrives whole, in one place. Electrons sent through two slits stripe a screen the same way.</p>
+
+<h2>Three numbers</h2>
+
+<p>The last stop is the eye. Its lens focuses an image on the retina, where about six million cone cells catch photons in daylight. They come in three kinds, called short, medium, and long after the wavelengths they respond to best, near 440, 540, and 570 nm <a class="cite" href="#ref-stockman"></a>. A cone that absorbs a photon can't tell what color it was: a photon either triggers it or doesn't, and all the cone reports is how often. Its sensitivity curve only sets the odds. Shine light of one wavelength, <span class="scrub" data-key="nm" data-figure="cones"></span>, on all three:</p>
+
+<figure class="demo" id="cones" aria-label="The sensitivity curves of the three kinds of cone, short, medium, and long, peaking in the blue, green, and yellow-green. A vertical line marks the chosen wavelength, and bars show how strongly each kind of cone responds to it, with the color it looks."></figure>
+<script>
+{
+  const NAMES = ["short", "medium", "long"], COLS = ["blue", "green", "red"], PART = ["S", "M", "L"];
+  demo("cones", {
+    aspect: w => (w < 560 ? 1.1 : 1.9),
+    controls: [{ key: "nm", label: "Wavelength", min: 390, max: 700, step: 1, value: 570, unit: " nm", color: "orange" }],
+    caption: "How strongly each kind of cone responds to light of one wavelength, each curve scaled to 1 at its peak (fits to the Stockman and Sharpe cone fundamentals). The bars are the three numbers the eye sends on; the swatch is the color they add up to.",
+    status: (s, v) => { const r = [0, 1, 2].map(k => LIGHT.cone(v.nm, k)); return `short ${r[0].toFixed(2)} · medium ${r[1].toFixed(2)} · long ${r[2].toFixed(2)}`; },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [0, 6, g.w * 0.64, g.h - 12] : [0, 6, g.w, g.h * 0.58];
+      const B = wide ? [g.w * 0.7, 14, g.w * 0.3 - 16, g.h - 28] : [16, g.h * 0.64, g.w - 32, g.h * 0.36 - 10];
+      const G = g.graph({ box: A, x: [390, 700], y: [0, 1.1], axes: "frame", xLabel: "Wavelength (nm)", yLabel: "Response", xTicks: [400, 450, 500, 550, 600, 650, 700], yTicks: [0, 0.5, 1] });
+      for (let nm = 392; nm <= 698; nm += 3) g.line(G([nm, 0]), G([nm, 0.05]), { stroke: g.wavelengthColor(nm), width: Math.max(1.5, G.sx * 3.3) });
+      for (let k = 0; k < 3; k++) G.fn(nm => LIGHT.cone(nm, k), { color: COLS[k], width: g.lit(PART[k]) ? 3.4 : 2, label: NAMES[k], labelAt: [418, 520, 640][k] });
+      G.vline(v.nm, { color: "orange" });
+      const r = [0, 1, 2].map(k => LIGHT.cone(v.nm, k));
+      for (let k = 0; k < 3; k++) G.marker(v.nm, r[k], { color: COLS[k] });
+      // the three numbers
+      const sw = Math.min(54, B[3] * 0.3), bw = wide ? B[2] * 0.22 : Math.min(36, B[2] * 0.12);
+      const bx0 = wide ? B[0] + B[2] * 0.08 : B[0] + B[2] * 0.36, base = B[1] + B[3] - 16, hmax = wide ? B[3] - sw - 46 : B[3] - 26;
+      for (let k = 0; k < 3; k++) {
+        const x = bx0 + k * bw * 1.35;
+        g.rect(x, base - hmax, bw, hmax, { fill: "faint", alpha: 0.25, r: 3 });
+        g.rect(x, base - r[k] * hmax, bw, r[k] * hmax, { fill: COLS[k], r: 3 });
+        g.text(PART[k], [x + bw / 2, base + 13], { size: 11.5, weight: 600, color: COLS[k] });
+      }
+      const cx = wide ? B[0] + B[2] / 2 : B[0] + B[2] * 0.14, cyy = wide ? B[1] + sw / 2 + 4 : base - hmax / 2;
+      g.rect(cx - sw / 2 - 4, cyy - sw / 2 - 4, sw + 8, sw + 8, { fill: LIGHT.NIGHT, r: 6 });
+      g.rect(cx - sw / 2, cyy - sw / 2, sw, sw, { fill: Optics.wavelengthColor(v.nm), r: 4 });
+    },
+  });
+}
+</script>
+
+<p>Each wavelength gets its own mix of three numbers. At 450 nm the short cones fire hard and the others hardly at all: blue. At 570 nm the short cones are silent, the long ones at their peak, and the medium ones about four-fifths as strong: yellow. On its own, the <span class="c-red" data-part="L">long</span> cone answers the same to a dim light at its peak and a bright one at 620 nm, so it can't tell color from brightness. Only the comparison between kinds of cone carries color, which is why people born with two kinds instead of three confuse colors that others tell apart easily.</p>
+
+<p>Your brain never sees the spectrum, only those three numbers. So two lights with completely different spectra look identical if they produce the same three numbers. On the left is pure yellow light at 570 nm. On the right, mix a <span class="c-red">red</span> light at 640 nm with a <span class="c-green">green</span> one at 540 nm, and try to make the bars match:</p>
+
+<figure class="demo" id="match" aria-label="Two color patches side by side: pure yellow light on the left, a mix of red and green light on the right, each with its spectrum drawn as spikes and the three cone responses as bars. With the right mix the bars and the patches match."></figure>
+<script>
+{
+  const T = 570, RN = 640, GN = 540, COLS = ["blue", "green", "red"], PART = ["S", "M", "L"];
+  const lms = nm => [0, 1, 2].map(k => LIGHT.cone(nm, k));
+  const mix = v => { const a = lms(RN), b = lms(GN); return [0, 1, 2].map(k => v.r * a[k] + v.gr * b[k]); };
+  const err = v => { const a = lms(T), b = mix(v); return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / Math.hypot(...a); };
+  demo("match", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    controls: [
+      { key: "r", label: "Red light (640 nm)", min: 0, max: 2, step: 0.01, value: 0.6, color: "red" },
+      { key: "gr", label: "Green light (540 nm)", min: 0, max: 1.5, step: 0.01, value: 1.0, color: "green" },
+    ],
+    caption: "A color match. The left patch is one wavelength; the right is two, with no yellow light in it. When red and green are mixed in the right amounts, every kind of cone responds to the two patches equally, and they look the same. Screens make every color this way, from red, green, and blue.",
+    status: (s, v) => (err(v) < 0.03 ? "a match: every kind of cone responds to both patches the same" : `the cone responses differ by ${(err(v) * 100).toFixed(0)}%`),
+    draw(g, s, v) {
+      const wide = g.w >= 560, half = g.w / 2;
+      const a = lms(T), b = mix(v), gain = 0.85;
+      const sides = [{ x: 0, r: a, label: "570 nm", lines: [[T, 1]] }, { x: half, r: b, label: "640 nm + 540 nm", lines: [[RN, v.r], [GN, v.gr]] }];
+      const sw = Math.min(wide ? 92 : 64, g.h * 0.3), top = 10;
+      for (const [i, sd] of sides.entries()) {
+        const cx = sd.x + half / 2;
+        // patch
+        g.rect(cx - sw / 2 - 5, top, sw + 10, sw + 10, { fill: LIGHT.NIGHT, r: 8 });
+        g.rect(cx - sw / 2, top + 5, sw, sw, { fill: LIGHT.lmsColor(sd.r, gain), r: 5 });
+        g.text(sd.label, [cx, top + sw + 26], { size: 12, weight: 600, color: "muted" });
+        // spectrum as spikes
+        const sx0 = sd.x + half * 0.12, sx1 = sd.x + half * 0.88, sy = top + sw + 76, sh = 34;
+        g.line([sx0, sy], [sx1, sy], { stroke: "muted", width: 1 });
+        const X = nm => sx0 + ((nm - 400) / 300) * (sx1 - sx0);
+        for (let nm = 400; nm <= 700; nm += 3) g.line([X(nm), sy + 3], [X(nm), sy + 6], { stroke: g.wavelengthColor(nm), width: Math.max(1.5, (sx1 - sx0) / 100) });
+        for (const [nm, amt] of sd.lines) if (amt > 0) g.line([X(nm), sy], [X(nm), sy - Math.min(1.6, amt) * sh / 1.6], { stroke: g.wavelengthColor(nm), width: 4 });
+        // cone bars, with the target's outlined on the right for comparison
+        const bw = Math.min(30, half * 0.12), base = g.h - 22, hmax = Math.max(30, base - sy - 22);
+        for (let k = 0; k < 3; k++) {
+          const x = cx + (k - 1) * bw * 1.5 - bw / 2;
+          g.rect(x, base - Math.min(1.2, sd.r[k]) / 1.2 * hmax, bw, Math.min(1.2, sd.r[k]) / 1.2 * hmax, { fill: COLS[k], r: 2 });
+          if (i === 1) g.rect(x, base - a[k] / 1.2 * hmax, bw, a[k] / 1.2 * hmax, { stroke: "ink", width: 1.2, dash: [3, 3], r: 2 });
+          g.text(PART[k], [x + bw / 2, base + 13], { size: 11.5, weight: 600, color: COLS[k] });
+        }
+      }
+      g.line([half, top], [half, g.h - 8], { stroke: "faint", width: 1 });
+    },
+  });
+}
+</script>
+
+<p>With about 1.13 parts red to 0.71 parts green, <button class="set" data-figure="match" data-set="r=1.13 gr=0.71">the bars line up</button>: every kind of cone responds to the mixture exactly as it does to pure yellow, and the two patches look the same, though one contains no yellow light at all. Lights that differ in spectrum but look identical are called <dfn data-def="Two lights with different spectra that produce the same three cone responses and so look the same color.">metamers</dfn>, and every screen depends on them. A phone shows yellow by lighting red and green subpixels side by side, and white by lighting all three. It never reproduces the spectrum, and it doesn't need to, because your eye never measures it.</p>
+
+<p>Look back at the candle you started with. Its flame sends out every visible wavelength at 300,000 kilometers a second, a wave of fields shaking hundreds of trillions of times a second. Some of that light bends through the lens of your eye to a focus on the retina, and there it stops being a wave: each photon is caught whole by a single cone. Three kinds of tally reach the brain, and the brain turns three numbers into the warm yellow of a flame. Everything on the way, from the speed to the rainbow to the stripes behind two slits, comes from light being a wave. The counting at the end comes from its arriving in lumps.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-romer">O. Rømer, “Démonstration touchant le mouvement de la lumière trouvé par M. Römer de l'Académie Royale des Sciences”, <em>Journal des Sçavans</em> (7 December 1676), 233–236.</li>
+  <li id="ref-fizeau">H. Fizeau, “Sur une expérience relative à la vitesse de propagation de la lumière”, <em>Comptes Rendus de l'Académie des Sciences</em> 29 (1849), 90–92.</li>
+  <li id="ref-si">Bureau International des Poids et Mesures, <em>The International System of Units (SI)</em>, 9th edition (2019).</li>
+  <li id="ref-maxwell">J. C. Maxwell, “A dynamical theory of the electromagnetic field”, <em>Philosophical Transactions of the Royal Society of London</em> 155 (1865), 459–512.</li>
+  <li id="ref-kao">K. C. Kao and G. A. Hockham, “Dielectric-fibre surface waveguides for optical frequencies”, <em>Proceedings of the IEE</em> 113 (1966), 1151–1158.</li>
+  <li id="ref-nussenzveig">H. M. Nussenzveig, “The theory of the rainbow”, <em>Scientific American</em> 236:4 (1977), 116–127.</li>
+  <li id="ref-young">T. Young, “Experiments and calculations relative to physical optics” (Bakerian Lecture), <em>Philosophical Transactions of the Royal Society of London</em> 94 (1804), 1–16.</li>
+  <li id="ref-young1802">T. Young, “On the theory of light and colours” (Bakerian Lecture), <em>Philosophical Transactions of the Royal Society of London</em> 92 (1802), 12–48.</li>
+  <li id="ref-hecht">E. Hecht, <em>Optics</em>, 5th edition, Pearson (2017).</li>
+  <li id="ref-brewster">D. Brewster, “On the laws which regulate the polarisation of light by reflexion from transparent bodies”, <em>Philosophical Transactions of the Royal Society of London</em> 105 (1815), 125–159.</li>
+  <li id="ref-rayleigh">J. W. Strutt (Lord Rayleigh), “On the light from the sky, its polarization and colour”, <em>Philosophical Magazine</em> 41 (1871), 107–120 and 274–279.</li>
+  <li id="ref-kasten">F. Kasten and A. T. Young, “Revised optical air mass tables and approximation formula”, <em>Applied Optics</em> 28 (1989), 4735–4738.</li>
+  <li id="ref-einstein">A. Einstein, “Über einen die Erzeugung und Verwandlung des Lichtes betreffenden heuristischen Gesichtspunkt”, <em>Annalen der Physik</em> 17 (1905), 132–148.</li>
+  <li id="ref-michaelson">H. B. Michaelson, “The work function of the elements and its periodicity”, <em>Journal of Applied Physics</em> 48 (1977), 4729–4733.</li>
+  <li id="ref-millikan">R. A. Millikan, “A direct photoelectric determination of Planck's ‘h’”, <em>Physical Review</em> 7 (1916), 355–388.</li>
+  <li id="ref-taylor">G. I. Taylor, “Interference fringes with feeble light”, <em>Proceedings of the Cambridge Philosophical Society</em> 15 (1909), 114–115.</li>
+  <li id="ref-stockman">A. Stockman and L. T. Sharpe, “The spectral sensitivities of the middle- and long-wavelength-sensitive cones derived from measurements in observers of known genotype”, <em>Vision Research</em> 40 (2000), 1711–1737.</li>
+</ol>
