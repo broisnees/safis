@@ -23,6 +23,16 @@
   const cyl = (r, a, y) => [r * Math.cos(a), y, -r * Math.sin(a)];
   // Turns a part built along y so its axis runs along x or z.
   const ALONG = { x: RZ(-Math.PI / 2), y: m4.identity(), z: RX(Math.PI / 2) };
+  // Level of detail. Assemblies take `detail` (0.4 to 1, default 1); while one builds, every
+  // revolve, tube, blade section, and fastener scales its segment count by it.
+  let DETAIL = 1;
+  const D = (n, min = 8) => Math.max(min, Math.round(n * DETAIL));
+  function withDetail(o, fn) {
+    const prev = DETAIL;
+    DETAIL = clamp(o.detail ?? DETAIL, 0.25, 1.5);
+    try { return fn(); } finally { DETAIL = prev; }
+  }
+  const detailed = fn => (o = {}) => withDetail(o, () => fn(o));
 
   // ---------- triangle soup ----------
   // Builders emit triangles; build() welds them with E3's crease rule. Closed solids are
@@ -136,6 +146,7 @@
   // Revolves a profile [[r, y], ...] about y. loop: the profile is a closed outline (a wall
   // with thickness). arc < 2π leaves a wedge open, with flat caps on the cut faces.
   function revolve(profile, { segments = 64, arc = TAU, start = 0, loop = false, crease = 35, caps = true } = {}) {
+    segments = D(segments);
     let pr = profile.map(p => [Math.max(0, p[0]), p[1]]);
     const n = pr.length, poles = pr[0][0] < 1e-9 && pr[n - 1][0] < 1e-9;
     if ((loop || poles) && area2(pr) < 0) pr = pr.reverse();
@@ -174,6 +185,7 @@
   // A tube along a path: solid, or hollow when ri > 0 (pipes show a ring when cut).
   // ro may be a function of t in [0, 1].
   function tubeShell(path, ro, ri = 0, { segments = 20, crease = 60, closed = false } = {}) {
+    segments = D(segments, 6);
     const { T: Tg, N, B } = frames(path, closed), n = path.length;
     const rad = typeof ro === "function" ? ro : () => ro, irad = typeof ri === "function" ? ri : () => ri;
     const ring = (i, r) => Array.from({ length: segments }, (_, j) => {
@@ -286,10 +298,13 @@
       if (opts.explode) { node._ex = opts.explode; node._home = (opts.position || [0, 0, 0]).slice(); exploding.push(node); }
       if (opts.label) {
         const L = typeof opts.label === "string" ? { text: opts.label } : opts.label;
-        labels.push({ node, text: L.text, at: L.at || null, color: L.color });
+        labels.push({ node, text: L.text, at: L.at || null, color: L.color, inside: !!L.inside, when: L.when || null });
       }
       return node;
     };
+    // Whether the inside of the machine is showing (set by cutaway()); labels marked
+    // `inside: true` are returned only then. A label's `when: () => bool` overrides.
+    root.open = false;
     const nodeGroup = root.group.bind(root);
     root.group = (gname, opts = {}) => (typeof gname === "string" ? root.part(gname, null, opts) : nodeGroup(gname));
     // Moves a part's resting place (for parts the pose drives), keeping the explode offset.
@@ -312,6 +327,7 @@
         let vis = true;
         for (let n = L.node; n; n = n.parent) if (!n.visible) { vis = false; break; }
         if (!vis) continue;
+        if (L.when ? !L.when(root) : L.inside && !root.open) continue;
         let at = L.at;
         if (!at) {
           const b = L.node.mesh ? L.node.mesh.bounds : null;
@@ -341,6 +357,21 @@
       if (!(pname in root)) Object.defineProperty(root, pname, { get: () => root.ports[pname] });
     };
     root.pose = state => { if (root.onPose) root.onPose(state || {}); return root; };
+    // A casing that can be shown with a wedge cut away: make(revolveOpts) builds the mesh
+    // whole ({}) and cut ({ arc, start }). cutaway(on) swaps them and marks the assembly open.
+    const cuts = [];
+    root.cutPart = (name, make, opts = {}) => {
+      const g = root.part(name, null, opts);
+      const full = g.add(make({}), { name, material: opts.material });
+      const cut = g.add(make({ arc: opts.arc ?? TAU * 0.75, start: opts.start ?? Math.PI * 1.5 }), { name, material: opts.material, visible: false });
+      cuts.push([full, cut]);
+      return g;
+    };
+    root.cutaway = (on = true) => {
+      root.open = !!on;
+      for (const [f, c] of cuts) { f.visible = !on; c.visible = !!on; }
+      return root;
+    };
     return root;
   }
   // Highlights the parts named in `names` (or matching a predicate); handy with hover and g.lit.
@@ -358,8 +389,8 @@
   // Hex bolt: the head's bearing face sits at y = 0, head up, shank down to y = -length.
   function bolt(o = {}) {
     const d = o.d ?? o.diameter ?? 10, L = o.length ?? 4 * d, s = o.across ?? 1.6 * d, k = o.head ?? 0.65 * d;
-    const seg = o.segments ?? 18;
-    const head = plate(hexagon(s), k, { bevel: 0.1 * d, bevelSegments: o.lite ? 1 : 2 });
+    const seg = D(o.segments ?? 18, 6);
+    const head = plate(hexagon(s), k, { bevel: o.lite ? 0 : 0.1 * d, bevelSegments: 2 });
     const r = d / 2, prof = [[0, 0.3 * k], [r, 0.3 * k]];
     const thread = o.thread ?? true, tl = Math.min(L - 0.5 * d, o.threadLength ?? Math.max(2 * d, L * 0.6));
     const p = o.pitch ?? 0.15 * d;
@@ -373,7 +404,7 @@
   // Hex nut sitting on y = 0, up to its height.
   function nut(o = {}) {
     const d = o.d ?? o.diameter ?? 10, s = o.across ?? 1.6 * d, m = o.height ?? 0.8 * d;
-    return plate(hexagon(s), m, { holes: [circle2(d * 0.5, o.lite ? 8 : 16)], bevel: 0.1 * d, bevelSegments: o.lite ? 1 : 2 });
+    return plate(hexagon(s), m, { holes: [circle2(d * 0.5, D(o.lite ? 6 : 16, 6))], bevel: o.lite ? 0 : 0.1 * d, bevelSegments: 2 });
   }
   function washer(o = {}) {
     const d = o.d ?? o.diameter ?? 10, t = o.thickness ?? 0.18 * d;
@@ -382,7 +413,7 @@
   // n bolts on a circle in the xz plane at height y (heads up), with nuts `grip` below.
   function boltCircle(n, radius, o = {}) {
     const d = o.d ?? 8, grip = o.grip ?? 2 * d, a0 = o.start ?? Math.PI / n;
-    const b = bolt({ d, length: o.length ?? grip + d * 1.3, thread: o.thread ?? false, segments: o.segments ?? 10, lite: true });
+    const b = bolt({ d, length: o.length ?? grip + d * 1.3, thread: o.thread ?? false, segments: o.segments ?? 8, lite: true });
     const nt = o.nuts === false ? null : xf(nut({ d, lite: true }), T([0, -grip - 0.8 * d, 0]));
     const one = merge(b, nt);
     const out = [];
@@ -398,12 +429,12 @@
     const R = o.outer ?? Math.max(rp * 2, rp + 30), t = o.thickness ?? Math.max(6, rp * 0.42);
     const n = o.bolts ?? (rp > 120 ? 16 : rp > 70 ? 12 : 8), rb = o.boltCircle ?? (R + Math.max(rp * 1.15, rp + 6)) / 2;
     const hr = o.hole ?? Math.max(2.5, Math.min((R - rp) * 0.17, (Math.PI * rb) / n * 0.32));
-    const holes = [circle2(ri, 32)];
-    for (let i = 0; i < n; i++) { const a = Math.PI / n + (i / n) * TAU; holes.push(circle2(hr, 10, rb * Math.cos(a), rb * Math.sin(a))); }
-    const body = xf(mesh.extrude(circle2(R, 48), t, { holes, bevel: t * 0.12, bevelSegments: 1 }), T([0, -t / 2, 0]), RX(-Math.PI / 2));
+    const holes = [circle2(ri, D(32, 12))];
+    for (let i = 0; i < n; i++) { const a = Math.PI / n + (i / n) * TAU; holes.push(circle2(hr, D(6, 5), rb * Math.cos(a), rb * Math.sin(a))); }
+    const body = xf(mesh.extrude(circle2(R, D(40, 16)), t, { holes, bevel: t * 0.12, bevelSegments: 1 }), T([0, -t / 2, 0]), RX(-Math.PI / 2));
     const neckL = o.neck ?? t * 1.6, rh = Math.max(rp * 1.18, rp + 4);
-    const neck = revolve(fillet([[ri, -t + 0.5], [rh, -t + 0.5], [rh, -t - neckL * 0.15, rh * 0.06], [rp, -t - neckL], [ri, -t - neckL]], { steps: 2 }), { loop: true, segments: 32 });
-    const face = revolve([[ri, -0.3], [rp * 1.45, -0.3], [rp * 1.45, t * 0.06], [ri, t * 0.06]], { loop: true, segments: 32 });
+    const neck = revolve(fillet([[ri, -t + 0.5], [rh, -t + 0.5], [rh, -t - neckL * 0.15, rh * 0.06], [rp, -t - neckL], [ri, -t - neckL]], { steps: 2 }), { loop: true, segments: 28 });
+    const face = revolve([[ri, -0.3], [rp * 1.45, -0.3], [rp * 1.45, t * 0.06], [ri, t * 0.06]], { loop: true, segments: 28 });
     const m = merge(body, neck, face);
     m.flange = { radius: R, thickness: t, bolts: n, boltCircle: rb, hole: hr, bore: ri };
     return m;
@@ -462,15 +493,15 @@
     const c = Math.min(w, ro - ri) * 0.07, rho = rb * 1.04, sh = rb * 0.62;
     const dy = Math.sqrt(rho * rho - sh * sh), al = Math.atan2(dy, sh);
     const rIn = rp - sh, rOut = rp + sh;
-    const innerP = fillet([[ri, 0, c], [rIn, 0, c * 0.6], [rIn, w / 2 - dy], ...arc2(rp, w / 2, rho, Math.PI + al, Math.PI - al, 10).slice(1, -1), [rIn, w / 2 + dy], [rIn, w, c * 0.6], [ri, w, c]], { closed: true, steps: 3 });
-    const outerP = fillet([[rOut, 0, c * 0.6], [ro, 0, c], [ro, w, c], [rOut, w, c * 0.6], [rOut, w / 2 + dy], ...arc2(rp, w / 2, rho, al, -al, 10).slice(1, -1), [rOut, w / 2 - dy]], { closed: true, steps: 3 });
-    const ball = mesh.sphere(rb, { segments: o.ballSegments ?? 8 });
+    const innerP = fillet([[ri, 0, c], [rIn, 0, c * 0.6], [rIn, w / 2 - dy], ...arc2(rp, w / 2, rho, Math.PI + al, Math.PI - al, 6).slice(1, -1), [rIn, w / 2 + dy], [rIn, w, c * 0.6], [ri, w, c]], { closed: true, steps: 2 });
+    const outerP = fillet([[rOut, 0, c * 0.6], [ro, 0, c], [ro, w, c], [rOut, w, c * 0.6], [rOut, w / 2 + dy], ...arc2(rp, w / 2, rho, al, -al, 6).slice(1, -1), [rOut, w / 2 - dy]], { closed: true, steps: 2 });
+    const ball = mesh.sphere(rb, { segments: D(o.ballSegments ?? 5, 4) });
     const balls = merge(Array.from({ length: n }, (_, i) => xf(ball, T(cyl(rp, (i / n) * TAU, w / 2)))));
     const cw = rb * 0.22;
-    const cage = revolve([[rp - cw, w / 2 - rb * 1.02], [rp + cw, w / 2 - rb * 1.02], [rp + cw, w / 2 - rb * 0.8], [rp - cw, w / 2 - rb * 0.8]], { loop: true, segments: 48 });
+    const cage = revolve([[rp - cw, w / 2 - rb * 1.02], [rp + cw, w / 2 - rb * 1.02], [rp + cw, w / 2 - rb * 0.8], [rp - cw, w / 2 - rb * 0.8]], { loop: true, segments: 40 });
     const g = group(o.name ?? "bearing", [
-      [revolve(outerP, { loop: true, segments: o.segments ?? 64 }), { name: "outer ring", material: o.material ?? "steel" }],
-      [revolve(innerP, { loop: true, segments: o.segments ?? 64 }), { name: "inner ring", material: o.material ?? "steel" }],
+      [revolve(outerP, { loop: true, segments: o.segments ?? 40 }), { name: "outer ring", material: o.material ?? "steel" }],
+      [revolve(innerP, { loop: true, segments: o.segments ?? 40 }), { name: "inner ring", material: o.material ?? "steel" }],
       [balls, { name: "balls", material: o.material ?? "steel" }],
       [cage, { name: "cage", material: "brass" }],
     ]);
@@ -529,8 +560,8 @@
   // A strut between two points with rod-end fittings (frames, trusses, links).
   function strut(a, b, o = {}) {
     const r = o.radius ?? 8, L = v3.dist(a, b), e = o.end ?? r * 1.7;
-    const body = revolve(fillet([[0, e * 0.8], [r * 0.8, e * 0.8], [r, e * 1.5, r * 0.5], [r, L - e * 1.5, r * 0.5], [r * 0.8, L - e * 0.8], [0, L - e * 0.8]], { steps: 2 }), { segments: 12 });
-    const eye = xf(mesh.torus(e * 0.62, e * 0.36, { segments: 14, tube: 6 }), RX(Math.PI / 2));
+    const body = revolve(fillet([[0, e * 0.8], [r * 0.8, e * 0.8], [r, e * 1.5, r * 0.5], [r, L - e * 1.5, r * 0.5], [r * 0.8, L - e * 0.8], [0, L - e * 0.8]], { steps: 2 }), { segments: 10 });
+    const eye = xf(mesh.torus(e * 0.62, e * 0.36, { segments: D(10, 8), tube: D(5, 4) }), RX(Math.PI / 2));
     return mesh.transform(merge(body, eye, xf(eye, T([0, L, 0]))), aim(a, v3.sub(b, a)));
   }
 
@@ -638,7 +669,7 @@
     const tubes = o.tubes ?? { count: 96, from: 0.05, to: 0.55 };
     let manifoldY = null;
     if (tubes) {
-      const N = tubes.count ?? 96, k = 4, cols = N * k, rows = tubes.rows ?? 28;
+      const N = tubes.count ?? 96, k = 4, cols = N * k, rows = D(tubes.rows ?? 18, 8);
       const y0 = -C.length * (tubes.from ?? 0.05), y1 = -C.length * (tubes.to ?? 0.55);
       const S = new Soup(), O = [], I = [];
       for (let i = 0; i <= rows; i++) {
@@ -676,7 +707,7 @@
     const bands = o.stiffeners ?? 2, below = manifoldY ?? -C.length * 0.3, sm = [];
     for (let b = 1; b <= bands; b++) {
       const y = lerp(below, -C.length, b / (bands + 1));
-      sm.push(collar(rOut, y + Rt * 0.035, y - Rt * 0.035, Rt * 0.05, { segments: seg }));
+      sm.push(collar(rOut, y + Rt * 0.035, y - Rt * 0.035, Rt * 0.05, { segments: Math.round(seg * 0.75) }));
     }
     sm.push(collar(rOut, -C.length + Rt * 0.09, -C.length, Rt * 0.06, { segments: seg, embed: 0.3 }));
     g.add(merge(sm), { name: "stiffeners", material: o.material ?? "inconel" });
@@ -704,7 +735,7 @@
     const outer = inner.map(([r, y]) => [r + tw, y]);
     const fw = o.flangeWidth ?? Rc * 0.32, fh = o.flangeHeight ?? Rt * 0.22;
     const prof = fillet([...inner, [Rc + tw + fw, top, 1.5], [Rc + tw + fw, top - fh, 1.5], [Rc + tw, top - fh * 2.2, fh * 0.6], ...outer.slice(0, -1).reverse().filter(p => p[1] < top - fh * 2.2)], { closed: true, steps: 4 });
-    const g = group(o.name ?? "combustion chamber", [[revolve(prof, { loop: true, segments: o.segments ?? 96 }), { name: "chamber", material: o.material ?? "inconel" }]]);
+    const g = group(o.name ?? "combustion chamber", [[revolve(prof, { loop: true, segments: o.segments ?? 72 }), { name: "chamber", material: o.material ?? "inconel" }]]);
     const nb = o.bolts ?? 24, d = Math.max(4, fh * 0.45);
     g.add(boltCircle(nb, Rc + tw + fw * 0.55, { d, y: top, grip: fh * 2, nuts: false }), { name: "chamber bolts", material: "steel" });
     g.info = { throat: Rt, chamberRadius: Rc, top, cylinder: Lcyl, flangeRadius: Rc + tw + fw, flangeHeight: fh, wall: tw };
@@ -718,8 +749,8 @@
     const Rc = o.radius ?? 170, R = o.outer ?? Rc * 1.4, t = o.thickness ?? Rc * 0.14, pitch = o.pitch ?? Rc * 0.115;
     const rings = o.rings ?? Math.max(2, Math.round(Rc / pitch) - 1), er = o.element ?? pitch * 0.22;
     const body = revolve(fillet([[0, 0], [Rc, 0], [Rc + 2, -1.2], [R, -1.2, 1], [R, t, 1.5], [0, t]], { steps: 3 }), { segments: o.segments ?? 96 });
-    const post = revolve([[0, -0.8], [er, -0.8], [er, 1], [0, 1]], { segments: 10 });
-    const sleeve = revolve([[er * 1.2, -0.4], [er * 1.6, -0.4], [er * 1.6, 1], [er * 1.2, 1]], { loop: true, segments: 10 });
+    const post = revolve([[0, -0.8], [er, -0.8], [er, 1], [0, 1]], { segments: 4 });
+    const sleeve = revolve([[er * 1.2, -0.4], [er * 1.6, -0.4], [er * 1.6, 1], [er * 1.2, 1]], { loop: true, segments: 8 });
     const posts = [xf(post, T([0, 0, 0]))], sleeves = o.sleeves ? [xf(sleeve, T([0, 0, 0]))] : [];
     for (let k = 1; k <= rings; k++) {
       const r = (Rc * 0.9 * k) / rings, n = Math.max(6, Math.round((TAU * r) / pitch));
@@ -741,10 +772,10 @@
     const beta = (o.exitAngle ?? 24) * DEG, tb = o.back ?? R2 * 0.07, H = o.length ?? R2 * 0.62, Rn = R1 * 0.42, tv = o.vane ?? R2 * 0.045;
     const hubY = r => tb + H * Math.pow(clamp((R2 - r) / (R2 - Rn), 0, 1), 2.2);
     const prof = [[0, 0], [R2 - 1, 0], [R2, 1], [R2, tb]];
-    for (let i = 1; i <= 16; i++) { const r = lerp(R2, Rn, i / 16); prof.push([r, hubY(r)]); }
+    for (let i = 1; i <= 10; i++) { const r = lerp(R2, Rn, i / 10); prof.push([r, hubY(r)]); }
     prof.push(...arc2(0, hubY(Rn), Rn, 0, Math.PI / 2, 6).slice(1));
     const hub = revolve(prof, { segments: o.segments ?? 64 });
-    const S = new Soup(), st = 18, r0 = R1 * 0.92;
+    const S = new Soup(), st = D(12, 6), r0 = R1 * 0.92;
     const tipH = r => lerp(R1 * 0.95, b2, Math.pow((r - r0) / (R2 - r0), 0.7));
     const vane = (phase, rs) => {
       const rings = [];
@@ -770,7 +801,7 @@
   // along -z from the +x side. Section area grows linearly with angle. Hollow.
   function volute(o = {}) {
     const R2 = o.radius ?? 80, R3 = o.base ?? R2 * 1.12, r0 = o.start ?? R2 * 0.12, r1 = o.end ?? R2 * 0.4, yc = o.y ?? 0, t = o.wall ?? R2 * 0.05;
-    const Ld = o.discharge ?? R2 * 1.6, path = [], rs = [], n = 64;
+    const Ld = o.discharge ?? R2 * 1.6, path = [], rs = [], n = D(40, 20);
     for (let i = 0; i <= n; i++) {
       const a = 0.35 + ((TAU - 0.35) * i) / n, r = Math.sqrt(lerp(r0 * r0, r1 * r1, (a - 0.35) / (TAU - 0.35)));
       path.push(cyl(R3 + r * 0.75, a, yc)); rs.push(r);
@@ -901,6 +932,7 @@
   // Lofts NACA sections into a closed blade. sec(s) -> { m, p, t, chord, angle, dx, dz, pivot };
   // map(X, s, Z) places a section point: X chordwise (axial), Z across, s the span fraction.
   function loft(sec, map, { stations = 9, n = 14, hand = 1 } = {}) {
+    n = D(n, 4);
     const rings = [], flat = [];
     for (let k = 0; k < stations; k++) {
       const s = k / (stations - 1), q = sec(s), ca = Math.cos(q.angle), sa = Math.sin(q.angle);
@@ -969,12 +1001,12 @@
     const cx = spanVal(o.chord ?? [h * 0.6, h * 0.5], 0) * 0.55;
     if (o.disk !== false) {
       const w = o.diskWidth ?? cx * 1.3, bore = o.bore ?? hub * 0.35, rim = hub - Math.max(1, h * 0.03);
-      const prof = fillet([[bore, y0 - w * 0.45], [bore + w * 0.3, y0 - w * 0.45, w * 0.1], [lerp(bore, rim, 0.45), y0 - w * 0.14, w * 0.25], [rim * 0.86, y0 - w * 0.14, w * 0.2], [rim * 0.86, y0 - w * 0.5, w * 0.05], [rim, y0 - w * 0.5, w * 0.05], [rim, y0 + w * 0.5, w * 0.05], [rim * 0.86, y0 + w * 0.5, w * 0.05], [rim * 0.86, y0 + w * 0.14, w * 0.2], [lerp(bore, rim, 0.45), y0 + w * 0.14, w * 0.25], [bore + w * 0.3, y0 + w * 0.45, w * 0.1], [bore, y0 + w * 0.45]], { closed: true, steps: 3 });
-      g.add(revolve(prof, { loop: true, segments: o.segments ?? 64 }), { name: `${o.name ?? "rotor"} disk`, material: o.diskMaterial ?? o.material ?? "titanium" });
+      const prof = fillet([[bore, y0 - w * 0.45], [bore + w * 0.3, y0 - w * 0.45, w * 0.1], [lerp(bore, rim, 0.45), y0 - w * 0.14, w * 0.25], [rim * 0.86, y0 - w * 0.14, w * 0.2], [rim * 0.86, y0 - w * 0.5, w * 0.05], [rim, y0 - w * 0.5, w * 0.05], [rim, y0 + w * 0.5, w * 0.05], [rim * 0.86, y0 + w * 0.5, w * 0.05], [rim * 0.86, y0 + w * 0.14, w * 0.2], [lerp(bore, rim, 0.45), y0 + w * 0.14, w * 0.25], [bore + w * 0.3, y0 + w * 0.45, w * 0.1], [bore, y0 + w * 0.45]], { closed: true, steps: 2 });
+      g.add(revolve(prof, { loop: true, segments: o.segments ?? 48 }), { name: `${o.name ?? "rotor"} disk`, material: o.diskMaterial ?? o.material ?? "titanium" });
     }
     if (o.shroud) {
       const w = cx * 1.6, t = Math.max(1, h * 0.06);
-      g.add(revolve([[tip - t * 0.6, y0 - w / 2], [tip + t * 0.4, y0 - w / 2], [tip + t * 0.4 + ts * w, y0 + w / 2], [tip - t * 0.6 + ts * w, y0 + w / 2]], { loop: true, segments: o.segments ?? 96 }), { name: `${o.name ?? "rotor"} shroud`, material: o.material ?? "inconel" });
+      g.add(revolve([[tip - t * 0.6, y0 - w / 2], [tip + t * 0.4, y0 - w / 2], [tip + t * 0.4 + ts * w, y0 + w / 2], [tip - t * 0.6 + ts * w, y0 + w / 2]], { loop: true, segments: o.segments ?? 72 }), { name: `${o.name ?? "rotor"} shroud`, material: o.material ?? "inconel" });
     }
     g.info = { blades: n, hub, tip, y: y0 };
     return g;
@@ -992,7 +1024,7 @@
     const cw = spanVal(chord, 0.5) * 0.62, t = Math.max(1, h * 0.05);
     const band = (r, sl, sgn) => {
       const at = y => r + sl * (y - y0);
-      return revolve([[at(y0 - cw), y0 - cw], [at(y0 - cw) + sgn * t, y0 - cw], [at(y0 + cw) + sgn * t, y0 + cw], [at(y0 + cw), y0 + cw]], { loop: true, segments: o.segments ?? 96 });
+      return revolve([[at(y0 - cw), y0 - cw], [at(y0 - cw) + sgn * t, y0 - cw], [at(y0 + cw) + sgn * t, y0 + cw], [at(y0 + cw), y0 + cw]], { loop: true, segments: o.segments ?? 64 });
     };
     if (o.bands !== false) g.add(merge(band(inner, is, -1), o.outerBand === false ? null : band(outer, os, 1)), { name: `${o.name ?? "stator"} bands`, material: o.bandMaterial ?? o.material ?? "titanium" });
     g.info = { vanes: n, inner, outer, y: y0 };
@@ -1028,14 +1060,14 @@
     const yCF = o.caseFront ?? -Rf * 0.32, yCR = o.caseRear ?? Rf * 0.52, ductR = o.duct ?? Rf * 0.985, te = o.trailing ?? Rf * 0.006;
     const ai = o.lipLength ?? Rf * 0.13, bi = Rh - Rth, k = o.forebody ?? 2.3;
     const outer = [];
-    for (let i = 0; i <= 28; i++) { const u = i / 28; outer.push([Rh + (Rmax - Rh) * Math.pow(1 - Math.pow(1 - u, k), 1 / k), yH + (yMax - yH) * u]); }
-    for (let i = 1; i <= 28; i++) { const u = i / 28; outer.push([Rmax - (Rmax - RE) * Math.pow(u, 1.7), yMax + (yE - yMax) * u]); }
+    for (let i = 0; i <= 20; i++) { const u = i / 20; outer.push([Rh + (Rmax - Rh) * Math.pow(1 - Math.pow(1 - u, k), 1 / k), yH + (yMax - yH) * u]); }
+    for (let i = 1; i <= 20; i++) { const u = i / 20; outer.push([Rmax - (Rmax - RE) * Math.pow(u, 1.7), yMax + (yE - yMax) * u]); }
     const inner = [];
-    for (let i = 1; i <= 10; i++) { const a = Math.PI + (Math.PI / 2) * (i / 10); inner.push([Rh + bi * Math.sin(a), yH + ai + ai * Math.cos(a)]); }
+    for (let i = 1; i <= 8; i++) { const a = Math.PI + (Math.PI / 2) * (i / 8); inner.push([Rh + bi * Math.sin(a), yH + ai + ai * Math.cos(a)]); }
     const yT = yH + ai;
-    for (let i = 1; i <= 14; i++) { const u = i / 14; inner.push([Rth + ((Rc - Rth) * (1 - Math.cos(Math.PI * u))) / 2, yT + (yCF - yT) * u]); }
+    for (let i = 1; i <= 10; i++) { const u = i / 10; inner.push([Rth + ((Rc - Rth) * (1 - Math.cos(Math.PI * u))) / 2, yT + (yCF - yT) * u]); }
     inner.push([Rco, yCF], [Rco, yCR], [ductR, yCR]);
-    for (let i = 1; i <= 20; i++) { const u = i / 20; inner.push([ductR - (ductR - (RE - te)) * Math.pow(u, 1.8), yCR + (yE - te * 3 - yCR) * u]); }
+    for (let i = 1; i <= 14; i++) { const u = i / 14; inner.push([ductR - (ductR - (RE - te)) * Math.pow(u, 1.8), yCR + (yE - te * 3 - yCR) * u]); }
     const loop = [...outer, ...inner.reverse()];
     return { loop, Rf, Rc, Rco, yCF, yCR, ductR, yE, RE, te, yH, Rh, Rmax };
   }
@@ -1051,16 +1083,16 @@
   function bellows(o = {}) {
     const r = o.radius ?? 25, L = o.length ?? 60, n = o.convolutions ?? 8, h = o.depth ?? r * 0.18, t = o.wall ?? Math.max(0.8, r * 0.05);
     const cuff = L * 0.14, pts = [[r, 0], [r, cuff]];
-    for (let i = 0; i <= n * 6; i++) { const u = i / (n * 6), y = cuff + u * (L - 2 * cuff); pts.push([r + h * 0.5 * (1 - Math.cos(u * n * TAU)), y]); }
+    for (let i = 0; i <= n * 4; i++) { const u = i / (n * 4), y = cuff + u * (L - 2 * cuff); pts.push([r + h * 0.5 * (1 - Math.cos(u * n * TAU)), y]); }
     pts.push([r, L]);
     const inner = pts.map(([rr, y]) => [rr - t, y]).reverse();
-    return revolve([...pts, ...inner], { loop: true, segments: o.segments ?? 32, crease: 70 });
+    return revolve([...pts, ...inner], { loop: true, segments: o.segments ?? 24, crease: 70 });
   }
   // Inline ball valve on a pipe of radius `pipe`, flow along y, centered on y = 0, with its
   // actuator on +x. Returns a group: valve body, valve actuator.
   function valve(o = {}) {
     const rp = o.pipe ?? 25, L = o.length ?? rp * 4.2, rb = rp * 1.55;
-    const body = revolve(fillet([[rp * 0.88, -L / 2], [rp * 1.25, -L / 2], [rp * 1.25, -L * 0.36, 2], [rb, -L * 0.2, rp * 0.4], [rb, L * 0.2, rp * 0.4], [rp * 1.25, L * 0.36, 2], [rp * 1.25, L / 2], [rp * 0.88, L / 2]]), { loop: true, segments: 40 });
+    const body = revolve(fillet([[rp * 0.88, -L / 2], [rp * 1.25, -L / 2], [rp * 1.25, -L * 0.36, 2], [rb, -L * 0.2, rp * 0.4], [rb, L * 0.2, rp * 0.4], [rp * 1.25, L * 0.36, 2], [rp * 1.25, L / 2], [rp * 0.88, L / 2]]), { loop: true, segments: 32 });
     const fl = flange({ pipe: rp * 1.25, bore: rp * 0.88 });
     const bonnet = xf(revolve(fillet([[0, rb * 0.6], [rp * 0.5, rb * 0.6], [rp * 0.5, rb * 1.25, 2], [rp * 0.8, rb * 1.3, 2], [rp * 0.8, rb * 1.45], [0, rb * 1.45]]), { segments: 24 }), RZ(-Math.PI / 2));
     const act = xf(mesh.box(rp * 1.4, rp * 2.2, rp * 1.8, { round: rp * 0.25 }), T([rb * 1.45 + rp * 0.7, 0, 0]));
@@ -1077,20 +1109,22 @@
   // pump, impeller axis y, back face on y = 0. Shared by turbopump() and pump().
   function pumpCasing(o = {}) {
     const R2 = o.radius ?? 75;
-    const imp = impeller({ radius: R2, vanes: o.vanes ?? 6, exitAngle: o.exitAngle ?? 24 }), I = imp.impeller;
+    const imp = impeller({ radius: R2, vanes: o.vanes ?? 6, exitAngle: o.exitAngle ?? 24, segments: 48 }), I = imp.impeller;
     const c = R2 * 0.04, tc = R2 * 0.075, Ri = I.eye * 1.08, R3 = R2 * 1.12, r0 = R2 * 0.12, rs = R2 * 0.2, tb2 = R2 * 0.12;
     const yTip = r => I.tipY(Math.min(r, R2));
     const yIn = I.height + R2 * (o.neck ?? 0.5);
     const shIn = [], shOut = [];
     for (let i = 0; i <= 12; i++) { const r = lerp(Ri, R2 + c, i / 12); shIn.push([r, yTip(r) + c]); }
     for (let i = 0; i <= 12; i++) { const r = lerp(R2 + c, Ri + tc, i / 12); shOut.push([r, yTip(r) + c + tc]); }
-    const casing = revolve(fillet([[Ri, yIn], ...shIn, [R3, yTip(R2) + c, 2], [R3, -c, 2], [rs, -c], [rs, -c - tb2], [R3 + r0 * 0.6, -c - tb2, 3], [R3 + r0 * 0.6, yTip(R2) + c + tc, 4], ...shOut, [Ri + tc, yIn]], { closed: true, steps: 3 }), { loop: true, segments: 72 });
+    const casingProf = fillet([[Ri, yIn], ...shIn, [R3, yTip(R2) + c, 2], [R3, -c, 2], [rs, -c], [rs, -c - tb2], [R3 + r0 * 0.6, -c - tb2, 3], [R3 + r0 * 0.6, yTip(R2) + c + tc, 4], ...shOut, [Ri + tc, yIn]], { closed: true, steps: 3 });
+    const casingAt = cut => revolve(casingProf, { loop: true, segments: 48, ...cut });
+    const casing = casingAt({});
     const yc = (I.back + yTip(R2)) / 2;
-    const vol = volute({ radius: R2, base: R3, y: yc, start: r0, end: R2 * 0.36, wall: tc * 0.8, discharge: o.discharge });
+    const vol = volute({ radius: R2, base: R3, y: yc, start: r0, end: R2 * 0.36, wall: tc * 0.8, discharge: o.discharge, segments: 18 });
     const ex = vol.volute.exit;
     const inFl = flange({ pipe: Ri + tc, bore: Ri });
     const disFl = flange({ pipe: ex.radius, bore: ex.radius - tc * 0.8 });
-    return { imp, I, c, tc, Ri, R3, yIn, yc, casing, vol, ex, inFl, disFl, tb2 };
+    return { imp, I, c, tc, Ri, R3, yIn, yc, casing, casingAt, vol, ex, inFl, disFl, tb2 };
   }
 
   // A turbine-driven centrifugal pump on one shaft: axial inlet on top, impeller and volute,
@@ -1099,9 +1133,13 @@
   function turbopump(o = {}) {
     const R2 = o.impeller ?? 75, A = assembly(o.name ?? "turbopump", o), M = (r, f) => matFor(o, r, f);
     const CP = pumpCasing({ radius: R2, vanes: o.vanes ?? 6, exitAngle: o.exitAngle ?? 24 });
-    const { imp, I, c, tc, Ri, yIn, casing, vol, ex, inFl, disFl, tb2 } = CP;
+    const { imp, I, c, tc, Ri, yIn, casingAt, vol, ex, inFl, disFl, tb2 } = CP;
     const hx = [2.6 * R2, 0, 0];
-    A.part("pump housing", merge(casing, vol), { material: M("housing", "aluminum"), explode: [0, 2.6 * R2, 0], label: { text: "volute", at: v3.add(ex.center, [0, 0, R2 * 0.5]) }, note: "the spiral casing slows the flow leaving the impeller and turns speed into pressure" });
+    // The cutaway removes a quarter wedge centered on cutAngle (E3's lathe angle), so the
+    // rotor shows through the pump, bearing, and turbine housings.
+    const cutAt = { arc: TAU * 0.75, start: (o.cutAngle ?? -Math.PI / 4) + Math.PI / 4 };
+    const inWedge = a => { const d = ((a - (o.cutAngle ?? -Math.PI / 4)) % TAU + TAU * 1.5) % TAU - Math.PI; return Math.abs(d) < Math.PI / 4; };
+    A.cutPart("pump housing", cut => merge(casingAt(cut), vol), { ...cutAt, material: M("housing", "aluminum"), explode: [0, 2.6 * R2, 0], label: { text: "volute", at: v3.add(ex.center, [0, 0, R2 * 0.5]) }, note: "the spiral casing slows the flow leaving the impeller and turns speed into pressure" });
     A.part("pump flanges", merge(xf(inFl, T([0, yIn, 0])), mesh.transform(disFl, aim(ex.center, ex.normal))), { material: M("flange", "steel"), explode: [0, 2.6 * R2, 0] });
     const rotor = A.group("rotor");
     A.rotor = rotor;
@@ -1109,27 +1147,28 @@
     const yT = -2.35 * R2, yB = yT - 0.28 * R2, yTop = I.height * 0.55, Ls = yTop - yB;
     const sh = shaft({ steps: [[0.32 * R2, 0.26 * R2], [0.32 * R2, 0.36 * R2], [Ls - 1.6 * R2, 0.32 * R2], [0.32 * R2, 0.36 * R2], [0.64 * R2, 0.26 * R2]], segments: 24 });
     A.part("shaft", xf(sh, T([0, yB, 0])), { parent: rotor, material: M("shaft", "steel"), label: { text: "shaft", at: [0, yT + R2 * 0.9, 0] }, note: "one shaft carries the turbine and the impeller, so they turn together" });
-    const br = { bore: 0.18 * R2, outer: 0.34 * R2, width: 0.26 * R2 };
+    const br = { bore: 0.18 * R2, outer: 0.34 * R2, width: 0.26 * R2, segments: 32 };
     const yb1 = yB + 0.35 * R2, yb2 = yTop - 0.94 * R2;
     A.part("lower bearing", bearing({ ...br, name: "lower bearing" }), { position: [0, yb1, 0], explode: [0, -0.9 * R2, 0] });
     A.part("upper bearing", bearing({ ...br, name: "upper bearing" }), { position: [0, yb2, 0], explode: [0, 0.75 * R2, 0], label: { text: "bearing", at: [br.outer, br.width / 2, 0] }, note: "ball bearings hold the spinning shaft centered in its housing" });
     const hT = -c - tb2, hB = yT + 0.46 * R2;
-    const bh = revolve(fillet([[br.outer, hT], [0.62 * R2, hT], [0.62 * R2, hT - 0.07 * R2, 1], [0.42 * R2, hT - 0.16 * R2, 0.06 * R2], [0.42 * R2, hB + 0.16 * R2, 0.06 * R2], [0.62 * R2, hB + 0.07 * R2, 1], [0.62 * R2, hB], [br.outer, hB]], { closed: true, steps: 3 }), { loop: true, segments: 48 });
-    const ribs = Array.from({ length: 4 }, (_, k) => xf(mesh.box(0.2 * R2, hT - hB - 0.3 * R2, 0.05 * R2, { round: 0.5 }), RY((k / 4) * TAU + Math.PI / 4), T([0.48 * R2, (hT + hB) / 2, 0])));
-    A.part("bearing housing", merge(bh, ribs), { material: M("bearingHousing", "steel"), explode: hx, label: { text: "bearing housing", at: [0.42 * R2, (hT + hB) / 2, 0] }, note: "holds both bearings and keeps hot turbine gas away from the cold pump" });
-    const turb = rotorStage({ name: "turbine", blades: o.turbineBlades ?? 56, hub: 0.6 * R2, tip: 0.8 * R2, y: yT, chord: [0.17 * R2], stagger: [0], camber: [0.13], thickness: [0.16], hand: -1, shroud: true, diskWidth: 0.24 * R2, bore: 0.14 * R2, material: M("turbine", "inconel") });
+    const bhProf = fillet([[br.outer, hT], [0.62 * R2, hT], [0.62 * R2, hT - 0.07 * R2, 1], [0.42 * R2, hT - 0.16 * R2, 0.06 * R2], [0.42 * R2, hB + 0.16 * R2, 0.06 * R2], [0.62 * R2, hB + 0.07 * R2, 1], [0.62 * R2, hB], [br.outer, hB]], { closed: true, steps: 3 });
+    const ribAngles = [0, 1, 2, 3].map(k => (k / 4) * TAU + Math.PI / 4);
+    const ribs = cut => ribAngles.filter(a => !(cut.arc && inWedge(a))).map(a => xf(mesh.box(0.2 * R2, hT - hB - 0.3 * R2, 0.05 * R2), RY(a), T([0.48 * R2, (hT + hB) / 2, 0])));
+    A.cutPart("bearing housing", cut => merge(revolve(bhProf, { loop: true, segments: 40, ...cut }), ribs(cut)), { ...cutAt, material: M("bearingHousing", "steel"), explode: hx, label: { text: "bearing housing", at: [0.42 * R2, (hT + hB) / 2, 0] }, note: "holds both bearings and keeps hot turbine gas away from the cold pump" });
+    const turb = rotorStage({ name: "turbine", blades: o.turbineBlades ?? 56, hub: 0.6 * R2, tip: 0.8 * R2, y: yT, chord: [0.17 * R2], stagger: [0], camber: [0.13], thickness: [0.16], hand: -1, shroud: true, diskWidth: 0.24 * R2, bore: 0.14 * R2, stations: 2, segments: 32, material: M("turbine", "inconel") });
     A.part("turbine rotor", turb, { parent: rotor, explode: [0, -1.25 * R2, 0], label: { text: "turbine", at: [0.8 * R2, yT, 0] }, note: "hot gas from the gas generator pushes on these blades and spins the shaft" });
     const nz = statorStage({ name: "turbine nozzle", vanes: 26, inner: 0.6 * R2, outer: 0.8 * R2, y: yT + 0.21 * R2, chord: 0.15 * R2, stagger: 58, camber: 0.08, thickness: 0.14, material: M("turbine", "inconel") });
     A.part("turbine nozzle", nz, { explode: [0, -1.75 * R2, 0], note: "fixed vanes that aim the hot gas at the turbine blades" });
     const yEx = yT - 0.95 * R2, tw = tc;
-    const th = revolve(fillet([[0.4 * R2, yT + 0.38 * R2], [0.82 * R2, yT + 0.38 * R2, 3], [0.82 * R2, yT - 0.12 * R2, 4], [0.5 * R2, yT - 0.62 * R2, 6], [0.5 * R2, yEx], [0.5 * R2 + tw, yEx], [0.5 * R2 + tw, yT - 0.62 * R2 + tw * 0.4, 6], [0.82 * R2 + tw, yT - 0.12 * R2 + tw * 0.4, 4], [0.82 * R2 + tw, yT + 0.38 * R2 + tw, 3], [0.4 * R2, yT + 0.38 * R2 + tw]], { closed: true, steps: 3 }), { loop: true, segments: 64 });
+    const thProf = fillet([[0.4 * R2, yT + 0.38 * R2], [0.82 * R2, yT + 0.38 * R2, 3], [0.82 * R2, yT - 0.12 * R2, 4], [0.5 * R2, yT - 0.62 * R2, 6], [0.5 * R2, yEx], [0.5 * R2 + tw, yEx], [0.5 * R2 + tw, yT - 0.62 * R2 + tw * 0.4, 6], [0.82 * R2 + tw, yT - 0.12 * R2 + tw * 0.4, 4], [0.82 * R2 + tw, yT + 0.38 * R2 + tw, 3], [0.4 * R2, yT + 0.38 * R2 + tw]], { closed: true, steps: 3 });
     const yM = yT + 0.3 * R2, rM = 0.9 * R2, rt = 0.17 * R2;
-    const man = xf(mesh.torus(rM, rt, { segments: 64, tube: 14 }), T([0, yM, 0]));
+    const man = xf(mesh.torus(rM, rt, { segments: D(48), tube: D(10, 6) }), T([0, yM, 0]));
     const inlet = tubeShell([cyl(rM, Math.PI / 2, yM), cyl(rM + 0.7 * R2, Math.PI / 2, yM)], rt, 0, { segments: 20 });
     const tin = { center: cyl(rM + 0.7 * R2, Math.PI / 2, yM), normal: [0, 0, -1], radius: rt };
     const tinFl = mesh.transform(flange({ pipe: rt, bore: rt * 0.85 }), aim(tin.center, tin.normal));
     const exFl = xf(flange({ pipe: 0.5 * R2 + tw, bore: 0.5 * R2 }), T([0, yEx, 0]), RX(Math.PI));
-    A.part("turbine housing", merge(th, man, inlet), { material: M("turbineHousing", "inconel"), explode: [0, -2.5 * R2, 0], label: { text: "turbine housing", at: cyl(rM + rt, Math.PI / 4, yM) }, note: "a ring manifold spreads the hot gas evenly around the turbine" });
+    A.cutPart("turbine housing", cut => merge(revolve(thProf, { loop: true, segments: 48, ...cut }), man, inlet), { ...cutAt, material: M("turbineHousing", "inconel"), explode: [0, -2.5 * R2, 0], label: { text: "turbine housing", at: cyl(rM + rt, Math.PI / 4, yM) }, note: "a ring manifold spreads the hot gas evenly around the turbine" });
     A.part("turbine flanges", merge(tinFl, exFl), { material: M("flange", "steel"), explode: [0, -2.5 * R2, 0] });
     A.port("inlet", A, [0, yIn, 0], [0, 1, 0], Ri);
     A.port("discharge", A, ex.center, ex.normal, ex.radius);
@@ -1148,7 +1187,7 @@
   function rocketEngine(o = {}) {
     const A = assembly(o.name ?? "rocket engine", o), M = (r, f) => matFor(o, r, f);
     const Rt = o.throat ?? 110, eps = o.expansion ?? 16;
-    const noz = bellNozzle({ throat: Rt, expansion: eps, steps: 28, segments: 72, tubes: o.tubes === false ? false : { count: o.tubeCount ?? 84, from: 0.04, to: 0.5 }, material: M("nozzle", "inconel"), tubeMaterial: M("tubes", "inconel"), manifoldMaterial: M("manifold", "steel") });
+    const noz = bellNozzle({ throat: Rt, expansion: eps, steps: 28, segments: 72, tubes: o.tubes === false ? false : { count: o.tubeCount ?? 84, rows: 14, from: 0.04, to: 0.5 }, material: M("nozzle", "inconel"), tubeMaterial: M("tubes", "inconel"), manifoldMaterial: M("manifold", "steel") });
     const C = noz.contour, yT = C.length, Ln = C.length;
     const ch = combustionChamber({ throat: Rt, contraction: o.contraction ?? 3, material: M("chamber", "inconel") });
     const CI = ch.info, Rc = CI.chamberRadius, top = yT + CI.top, Rfl = CI.flangeRadius;
@@ -1164,7 +1203,7 @@
     const fh = CI.flangeHeight * 1.1, hd = Rc * 0.55, tw = CI.wall * 0.8, domeY = top + ti;
     const outArc = Array.from({ length: 17 }, (_, i) => { const a = (Math.PI / 2) * (i / 16); return [(Rc + tw) * Math.cos(a), fh + hd * Math.sin(a)]; });
     const inArc = Array.from({ length: 17 }, (_, i) => { const a = (Math.PI / 2) * (1 - i / 16); return [Rc * Math.cos(a), fh + (hd - tw) * Math.sin(a)]; });
-    const dome = revolve(fillet([[Rc, 0], [Rfl, 0, 1], [Rfl, fh, 1.5], ...outArc, ...inArc, [Rc, 0]].filter((p, i, a) => i === 0 || v3.dist([p[0], p[1], 0], [a[i - 1][0], a[i - 1][1], 0]) > 1e-6).slice(0, -1), { closed: true, steps: 3 }), { loop: true, segments: 72 });
+    const dome = revolve(fillet([[Rc, 0], [Rfl, 0, 1], [Rfl, fh, 1.5], ...outArc, ...inArc, [Rc, 0]].filter((p, i, a) => i === 0 || v3.dist([p[0], p[1], 0], [a[i - 1][0], a[i - 1][1], 0]) > 1e-6).slice(0, -1), { closed: true, steps: 3 }), { loop: true, segments: 56 });
     const portY = fh + hd * 0.42, portR = Rc * 0.16, portX = (Rc + tw) * Math.cos(Math.asin(0.42)) - 6;
     const stub = tubeShell([[portX, portY, 0], [Rfl + Rc * 0.08, portY, 0]], portR, portR * 0.85, { segments: 24 });
     const stubFl = mesh.transform(flange({ pipe: portR, bore: portR * 0.85 }), aim([Rfl + Rc * 0.08, portY, 0], [1, 0, 0]));
@@ -1179,7 +1218,7 @@
     A.part("gimbal", gim, { position: [0, pivot, 0], explode: [0, 0.34 * H, 0], label: { text: "gimbal", at: [s * 1.3, 0, 0] }, note: "a universal joint: the whole engine tilts on it to steer the rocket" });
     A.gimbalNode = gim;
     const yF = pivot + 1.75 * s + Rc * 1.15, RF = Rc * 1.9;
-    const ring = revolve(fillet([[RF - Rc * 0.13, yF - Rc * 0.09, 2], [RF + Rc * 0.13, yF - Rc * 0.09, 2], [RF + Rc * 0.13, yF + Rc * 0.09, 2], [RF - Rc * 0.13, yF + Rc * 0.09, 2]], { closed: true }), { loop: true, segments: 96 });
+    const ring = revolve(fillet([[RF - Rc * 0.13, yF - Rc * 0.09, 2], [RF + Rc * 0.13, yF - Rc * 0.09, 2], [RF + Rc * 0.13, yF + Rc * 0.09, 2], [RF - Rc * 0.13, yF + Rc * 0.09, 2]], { closed: true }), { loop: true, segments: 72 });
     const struts = [], plateY = pivot + 1.55 * s;
     for (let k = 0; k < 6; k++) {
       const a = (k / 6) * TAU + Math.PI / 6, p = cyl(s * 1.45, a, plateY);
@@ -1202,11 +1241,44 @@
     const R2 = o.pumpSize ?? Rc * 0.5;
     const yP = yT + CI.top * 0.5, pR = Rc + CI.wall + R2 * 1.9;
     const ox = turbopump({ name: "oxidizer turbopump", impeller: R2, materials: o.materials, plain: o.plain });
-    const fu = turbopump({ name: "fuel turbopump", impeller: R2 * 0.92, materials: o.materials, plain: o.plain });
+    const fu = turbopump({ name: "fuel turbopump", impeller: R2 * 0.92, materials: o.materials, plain: o.plain, cutAngle: Math.PI / 4 });
     A.part("oxidizer turbopump", ox, { parent: eng, position: [pR, yP, 0], explode: [0.3 * H, 0, 0], label: { text: "oxidizer pump", at: [R2 * 1.2, R2 * 0.3, R2 * 0.6] }, note: "pumps liquid oxygen up to chamber pressure" });
     A.part("fuel turbopump", fu, { parent: eng, position: [-pR, yP, 0], rotation: [0, Math.PI, 0], explode: [-0.3 * H, 0, 0], label: { text: "fuel pump", at: [R2 * 1.2, R2 * 0.3, R2 * 0.6] }, note: "pumps fuel, which cools the nozzle on its way to the injector" });
     A.pumps = [ox, fu];
-    A.shafts = [ox.rotor, fu.rotor];
+    A.shafts = A.rotors = [ox.rotor, fu.rotor];
+    // The burning gas, injector face to exit: [radius, distance below the injector, temperature K].
+    // Subsonic in the chamber, then isentropic expansion through the bell (gamma 1.2), so the gas
+    // cools from the chamber temperature to about half of it at the exit.
+    A.gasPath = (n = 22, Tc = o.chamberTemperature ?? 3500) => {
+      const g = 1.2, out = [];
+      const area = M => Math.pow((2 / (g + 1)) * (1 + ((g - 1) / 2) * M * M), (g + 1) / (2 * (g - 1))) / M;
+      const mach = (ar, sup) => { let lo = sup ? 1 : 1e-3, hi = sup ? 12 : 1; for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if ((area(m) < ar) === sup) lo = m; else hi = m; } return (lo + hi) / 2; };
+      const total = top;
+      for (let i = 0; i <= n; i++) {
+        const sd = (total * i) / n, y = top - sd;
+        const r = y >= yT ? ch.radiusAt(y - yT) - CI.wall : C.radiusAt(y - yT);
+        const ar = (r / Rt) ** 2, M = ar <= 1.0001 ? 1 : mach(ar, y < yT);
+        out.push([Math.max(r * 0.995, 1), sd, Tc / (1 + ((g - 1) / 2) * M * M)]);
+      }
+      return out;
+    };
+    // Firing: an exhaust plume at the exit and the flame inside the chamber (seen through a
+    // section cut), both on the gimbaled engine so they swing with it. fire(0) puts it out.
+    A.fire = (throttle = 1, f = {}) => {
+      if (!A.plume) {
+        A.plume = E3.plume({ radius: C.exit, length: f.length ?? Ln * 3.4, fuel: f.fuel ?? "kerosene", temperature: f.temperature ?? 2700, cells: 1.4, turbulence: 1.1, intensity: f.intensity ?? 1.3, impact: f.impact ?? null, ground: f.ground ?? 0, splash: f.splash ?? 1 });
+        eng.add(A.plume, { name: "exhaust plume", position: [0, 0, 0], pickable: false });
+        A.flame = E3.plume({ radius: Rc, profile: A.gasPath(), temperature: o.chamberTemperature ?? 3500, turbulence: 1, intensity: 1 });
+        eng.add(A.flame, { name: "combustion", position: [0, top, 0], pickable: false });
+      }
+      for (const k of ["impact", "ground", "fuel", "splash"]) if (f[k] !== undefined) A.plume[k] = f[k];
+      A.plume.throttle = A.flame.throttle = clamp(throttle, 0, 1);
+      A.plume.visible = A.flame.visible = throttle > 0;
+      return A;
+    };
+    // cutaway(on) opens a wedge in both pumps' housings so the spinning rotors show.
+    const baseCut = A.cutaway;
+    A.cutaway = (on = true) => { baseCut(on); ox.cutaway(on); fu.cutaway(on); return A; };
     // Positions in engine coordinates of points on the pumps.
     const at = (pump, p, flipX) => v3.add(flipX ? [-p[0], p[1], -p[2]] : p, [flipX ? -pR : pR, yP, 0]);
     const lp = (pump, name, flipX) => at(pump, pump.portLocal(name).center, flipX);
@@ -1214,14 +1286,14 @@
     const pr = R2 * 0.36 * 1.18;
     // Oxidizer discharge to the dome inlet, through the main oxidizer valve.
     const domePort = [Rfl + Rc * 0.08, domeY + portY, 0];
-    const oxPipe = pipe([oxEx, v3.add(oxEx, [0, 0, -R2 * 0.6]), [oxEx[0], domeY + portY, oxEx[2] - R2 * 0.6], [oxEx[0], domeY + portY, 0], domePort.map((v, i) => (i === 0 ? v + 0.01 : v))], { radius: pr, bend: pr * 2.4, name: "oxidizer line", material: M("pipe", "brushed"), flanges: false });
+    const oxPipe = pipe([oxEx, v3.add(oxEx, [0, 0, -R2 * 0.6]), [oxEx[0], domeY + portY, oxEx[2] - R2 * 0.6], [oxEx[0], domeY + portY, 0], domePort.map((v, i) => (i === 0 ? v + 0.01 : v))], { radius: pr, bend: pr * 2.4, name: "oxidizer line", material: M("pipe", "brushed"), flanges: false, segments: 20 });
     A.part("oxidizer line", oxPipe, { parent: eng, explode: [0.18 * H, 0.04 * H, 0], label: { text: "oxidizer line", at: [oxEx[0], (oxEx[1] + domeY + portY) / 2, oxEx[2] - R2 * 0.6] }, note: "high-pressure oxidizer from the pump to the dome" });
     // Fuel discharge down to the regen manifold on the nozzle.
     const mY = yT + noz.manifoldY - Rt * 0.07, mR = noz.outerRadiusAt(noz.manifoldY) + Rt * 0.2;
     const fuelIn = [-(mR + Rt * 0.35), mY, 0];
     const stubM = tubeShell([[-(mR - 4), mY, 0], fuelIn], pr, pr * 0.85, { segments: 24 });
     A.part("manifold inlet", merge(stubM, mesh.transform(flange({ pipe: pr, bore: pr * 0.85 }), aim(fuelIn, [-1, 0, 0]))), { parent: eng, material: M("manifold", "steel"), explode: [0, -0.32 * H, 0] });
-    const fuPipe = pipe([fuEx, v3.add(fuEx, [0, 0, R2 * 0.7]), [fuEx[0] - R2 * 0.3, mY + R2, fuEx[2] + R2 * 0.7], [fuelIn[0] - R2 * 0.3, mY, fuEx[2] + R2 * 0.7], [fuelIn[0] - R2 * 0.3, mY, 0], fuelIn], { radius: pr, bend: pr * 2.6, name: "fuel line", material: M("pipe", "brushed"), flanges: "end" });
+    const fuPipe = pipe([fuEx, v3.add(fuEx, [0, 0, R2 * 0.7]), [fuEx[0] - R2 * 0.3, mY + R2, fuEx[2] + R2 * 0.7], [fuelIn[0] - R2 * 0.3, mY, fuEx[2] + R2 * 0.7], [fuelIn[0] - R2 * 0.3, mY, 0], fuelIn], { radius: pr, bend: pr * 2.6, name: "fuel line", material: M("pipe", "brushed"), flanges: "end", segments: 20 });
     A.part("fuel line", fuPipe, { parent: eng, explode: [-0.18 * H, -0.1 * H, 0], label: { text: "fuel line", at: [fuEx[0] - R2 * 0.3, (fuEx[1] + mY) / 2, fuEx[2] + R2 * 0.7] }, note: "fuel runs to the nozzle manifold, then up through the tubes to cool the wall" });
     // Main valves sit on the vertical runs.
     const mov = valve({ pipe: pr, name: "main oxidizer valve" });
@@ -1234,7 +1306,7 @@
     const gg = revolve(fillet([[0, gy + gr * 2.6], [gr * 0.5, gy + gr * 2.6, 2], [gr, gy + gr * 2.1, gr * 0.5], [gr, gy + gr * 0.2, 3], [gr * 0.55, gy - gr * 0.6, 3], [gr * 0.55, gy - gr * 1.2], [0, gy - gr * 1.2]]), { segments: 40 });
     const ggN = A.part("gas generator", xf(gg, T([0, 0, -gR])), { parent: eng, material: M("gasGenerator", "inconel"), explode: [0, 0, -0.32 * H], label: { text: "gas generator", at: [gr, gy + gr, -gR] }, note: "burns a little propellant fuel-rich to make the gas that drives the turbines" });
     const ggOut = [0, gy - gr * 1.2, -gR], rd = R2 * 0.17;
-    const ducts = [tinO, tinF].map(tp => pipe([ggOut, [0, tp[1], -gR], [tp[0] * 0.55, tp[1], -gR], [tp[0], tp[1], tp[2] - R2 * 0.55], v3.add(tp, [0, 0, -0.01])], { radius: rd, bend: rd * 2.5, name: "hot gas duct", material: M("hotDuct", "inconel"), flanges: "end" }));
+    const ducts = [tinO, tinF].map(tp => pipe([ggOut, [0, tp[1], -gR], [tp[0] * 0.55, tp[1], -gR], [tp[0], tp[1], tp[2] - R2 * 0.55], v3.add(tp, [0, 0, -0.01])], { radius: rd, bend: rd * 2.5, name: "hot gas duct", material: M("hotDuct", "inconel"), flanges: "end", segments: 16 }));
     A.part("hot gas ducts", ducts[0], { parent: eng, explode: [0, 0, -0.22 * H] });
     A.part("hot gas ducts 2", ducts[1], { parent: eng, explode: [0, 0, -0.22 * H] });
     // Turbine exhaust: a duct from each turbine down beside the nozzle, ending in a small flared exit.
@@ -1242,7 +1314,7 @@
     for (const [pump, flipX] of [[ox, false], [fu, true]]) {
       const e = lp(pump, "exhaust", flipX), sgn = flipX ? -1 : 1, er = pump.portLocal("exhaust").radius + R2 * 0.075;
       const yEnd = yT - Ln * 0.42, xEnd = sgn * (noz.outerRadiusAt(-Ln * 0.42) + er * 2.6);
-      const p = pipe([e, [e[0], e[1] - R2 * 0.6, 0], [xEnd, yEnd + R2 * 1.2, 0], [xEnd, yEnd, 0]], { radius: er, bend: er * 3, flanges: "start", name: "turbine exhaust", material: M("exhaust", "inconel") });
+      const p = pipe([e, [e[0], e[1] - R2 * 0.6, 0], [xEnd, yEnd + R2 * 1.2, 0], [xEnd, yEnd, 0]], { radius: er, bend: er * 3, flanges: "start", name: "turbine exhaust", material: M("exhaust", "inconel"), segments: 16 });
       const flare = revolve(fillet([[er - 1.5, 0], [er, 0], [er * 1.6, -er * 1.4, 3], [er * 1.6 - 2, -er * 1.4], [er - 3.5, 0]].map(q => [q[0], q[1]])), { loop: true, segments: 40 });
       exs.push(p, flare);
       A.part(flipX ? "fuel turbine exhaust" : "oxidizer turbine exhaust", p, { parent: eng, explode: [sgn * 0.3 * H, 0, 0], label: flipX ? undefined : { text: "turbine exhaust", at: [xEnd, yEnd + R2, 0] }, note: "spent turbine gas dumps overboard here" });
@@ -1254,7 +1326,7 @@
       const pin = lp(pump, "inlet", flipX), r = pump.portLocal("inlet").radius + R2 * 0.075;
       const yb = yF - Rc * 0.1, bl = Rc * 0.4;
       const p = pipe([pin, [pin[0], yb - bl - R2 * 0.05, 0]], { radius: r, flanges: "start", name: nm, material: M("pipe", "brushed") });
-      const bel = bellows({ radius: r * 1.02, length: bl, convolutions: 9 });
+      const bel = bellows({ radius: r * 1.02, length: bl, convolutions: 7, segments: 20 });
       const topFl = flange({ pipe: r, bore: r * 0.85 });
       const node = A.part(nm, p, { parent: eng, explode: [(flipX ? -1 : 1) * 0.3 * H, 0.1 * H, 0], label: { text: flipX ? "fuel inlet" : "oxidizer inlet", at: [pin[0], yb - bl * 1.6, 0] }, note: "propellant arrives from the tank through this line" });
       A.part(`${nm} bellows`, merge(xf(bel, T([pin[0], yb - bl, 0])), xf(topFl, T([pin[0], yb, 0]))), { parent: eng, material: M("bellows", "steel"), explode: [(flipX ? -1 : 1) * 0.3 * H, 0.14 * H, 0] });
@@ -1297,15 +1369,9 @@
     const cutStart = o.cutStart ?? Math.PI * 1.5, cutArc = TAU * 0.75;
     // The engine is modeled about local y (flow +y) and turned so local y becomes world x.
     const axis = A.group("axis", { matrix: RZ(-Math.PI / 2) });
-    const cases = [];
     // A static revolved part, built whole and with the cutaway wedge removed.
-    const shell = (name, profile, opts = {}) => {
-      const g = A.part(name, null, { parent: opts.parent || axis, explode: opts.explode, label: opts.label, note: opts.note });
-      const full = g.add(revolve(profile, { loop: true, segments: opts.segments ?? 96 }), { name, material: opts.material });
-      const cut = g.add(revolve(profile, { loop: true, segments: Math.round((opts.segments ?? 96) * 0.75), arc: cutArc, start: cutStart }), { name, material: opts.material, visible: false });
-      cases.push([full, cut]);
-      return g;
-    };
+    const shell = (name, profile, opts = {}) => A.cutPart(name, cut => revolve(profile, { loop: true, segments: cut.arc ? Math.round((opts.segments ?? 96) * 0.75) : opts.segments ?? 96, ...cut }), { parent: opts.parent || axis, explode: opts.explode, label: opts.label, note: opts.note, material: opts.material, arc: cutArc, start: cutStart });
+    const IN = L => (L ? { ...L, inside: true } : L);
     const low = A.group("low spool", { parent: axis }), high = A.group("high spool", { parent: axis });
     A.spools = { low, high };
     // ---- flowpath (mm at a 900 mm fan radius) ----
@@ -1316,9 +1382,9 @@
     const hubAt = y => coreAt(y, 1), tipAt = y => coreAt(y, 2);
     // ---- nacelle and fan case ----
     const P = nacelleProfile({ fan: Rf });
-    shell("nacelle", P.loop, { material: M("nacelle", "porcelain"), segments: 128, explode: [0, -s(1500), 0], label: { text: "nacelle", at: cyl(P.Rmax, Math.PI * 0.62, s(-100)) }, note: "the smooth outer cowl; its lip and inlet slow the air before the fan" });
+    shell("nacelle", P.loop, { material: M("nacelle", "porcelain"), segments: 96, explode: [0, -s(1500), 0], label: { text: "nacelle", at: cyl(P.Rmax, Math.PI * 0.62, s(-100)) }, note: "the smooth outer cowl; its lip and inlet slow the air before the fan" });
     const caseProf = fillet([[P.Rc, P.yCF], [P.Rco, P.yCF], [P.Rco, P.yCR], [P.ductR, P.yCR], [P.ductR, s(260), s(30)], [P.Rc, s(200), s(20)]], { steps: 3 });
-    shell("fan case", caseProf, { material: M("fanCase", "aluminum"), segments: 128, explode: [0, -s(1500), 0], label: { text: "fan case", at: cyl(P.Rc, Math.PI * 0.85, s(-150)) }, note: "a thick ring around the fan that would contain a broken blade" });
+    shell("fan case", caseProf, { material: M("fanCase", "aluminum"), segments: 96, explode: [0, -s(1500), 0], label: IN({ text: "fan case", at: cyl(P.Rc, Math.PI * 0.85, s(-150)) }), note: "a thick ring around the fan that would contain a broken blade" });
     // ---- spinner, fan, fan disk ----
     const hubR = s(275), yS = s(-420);
     const sp = spinner({ radius: hubR, length: s(380), shape: "ellipse", back: s(10) });
@@ -1336,41 +1402,41 @@
     for (let i = 0; i <= 30; i++) { const u = i / 30, y = lerp(s(300), s(2420), u); cowl.push([s(440) + s(125) * Math.sin(Math.min(1, u / 0.3) * Math.PI / 2) - s(150) * sstep(0.3, 1, u), y]); }
     const cowlIn = cowl.slice(3).map(([r, y]) => [r - s(16), y]).reverse();
     const splitIn = [[tipAt(s(640)) + 1, s(640)], [tipAt(s(360)) + 1, s(360)], [s(434), s(304)]];
-    shell("core cowl", fillet([...cowl, [cowl[30][0] - s(14), s(2420)], ...cowlIn.filter(p => p[1] > s(700)), [s(400), s(700)], ...splitIn], { closed: false, steps: 2 }), { material: M("coreCowl", "porcelain"), segments: 96, explode: [0, s(250), 0], label: { text: "core cowl", at: cyl(s(560), Math.PI * 0.7, s(1200)) }, note: "the inner wall of the bypass duct; the core engine is inside it" });
+    shell("core cowl", fillet([...cowl, [cowl[30][0] - s(14), s(2420)], ...cowlIn.filter(p => p[1] > s(700)), [s(400), s(700)], ...splitIn], { closed: false, steps: 2 }), { material: M("coreCowl", "porcelain"), segments: 72, explode: [0, s(250), 0], label: { text: "core cowl", at: cyl(s(560), Math.PI * 0.7, s(1200)) }, note: "the inner wall of the bypass duct; the core engine is inside it" });
     const cowlR = y => { for (let i = 1; i < cowl.length; i++) if (cowl[i][1] >= y) return lerp(cowl[i - 1][0], cowl[i][0], (y - cowl[i - 1][1]) / (cowl[i][1] - cowl[i - 1][1])); return cowl[30][0]; };
     const ogv = statorStage({ name: "outlet guide vanes", vanes: o.ogvs ?? 44, inner: cowlR(s(640)), outer: P.ductR, y: s(640), chord: s(170), stagger: -8, camber: 0.06, thickness: 0.08, innerSlope: (cowlR(s(700)) - cowlR(s(580))) / s(120), bands: false, material: M("ogv", "aluminum") });
-    A.part("outlet guide vanes", ogv, { parent: axis, explode: [0, s(250), 0], label: { text: "outlet guide vanes", at: cyl(s(760), Math.PI * 0.25, s(640)) }, note: "fixed vanes that straighten the swirling bypass air" });
+    A.part("outlet guide vanes", ogv, { parent: axis, explode: [0, s(250), 0], label: IN({ text: "outlet guide vanes", at: cyl(s(760), Math.PI * 0.25, s(640)) }), note: "fixed vanes that straighten the swirling bypass air" });
     // ---- booster (low-pressure compressor) ----
     const boost = [];
     [[360, 64, "s"], [410, 52, "r"], [455, 72, "s"], [500, 56, "r"], [545, 76, "s"], [590, 60, "r"], [630, 80, "s"]].forEach(([y, n, kind], i) => {
       const yy = s(y), hb = hubAt(yy), tp = tipAt(yy), sl = (tipAt(yy + 10) - tipAt(yy - 10)) / 20, hl = (hubAt(yy + 10) - hubAt(yy - 10)) / 20;
-      if (kind === "r") boost.push(A.part(`booster rotor ${i}`, rotorStage({ name: "booster", blades: n, hub: hb, tip: tp - 1.5, y: yy, chord: [s(42), s(38)], stagger: [35, 48], hubSlope: hl, tipSlope: sl, diskWidth: s(30), bore: s(150), material: M("compressor", "titanium") }), { parent: low, explode: [0, -s(500), 0] }));
-      else boost.push(A.part(`booster stator ${i}`, statorStage({ name: "booster stator", vanes: n, inner: hb, outer: tp, y: yy, chord: s(36), stagger: -25, innerSlope: hl, outerSlope: sl, material: M("compressor", "titanium") }), { parent: axis, explode: [0, -s(500), 0] }));
+      if (kind === "r") boost.push(A.part(`booster rotor ${i}`, rotorStage({ name: "booster", blades: n, hub: hb, tip: tp - 1.5, y: yy, chord: [s(42), s(38)], stagger: [35, 48], hubSlope: hl, tipSlope: sl, diskWidth: s(30), bore: s(150), stations: 2, points: 5, segments: 32, material: M("compressor", "titanium") }), { parent: low, explode: [0, -s(500), 0] }));
+      else boost.push(A.part(`booster stator ${i}`, statorStage({ name: "booster stator", vanes: n, inner: hb, outer: tp, y: yy, chord: s(36), stagger: -25, innerSlope: hl, outerSlope: sl, points: 4, segments: 48, material: M("compressor", "titanium") }), { parent: axis, explode: [0, -s(500), 0] }));
     });
     A.parts["booster"] = boost[1];
-    A.part("booster label", null, { parent: axis, label: { text: "booster", at: cyl(s(400), Math.PI * 0.75, s(500)) }, note: "a few low-pressure compressor stages on the fan shaft" });
+    A.part("booster label", null, { parent: axis, label: IN({ text: "booster", at: cyl(s(400), Math.PI * 0.75, s(500)) }), note: "a few low-pressure compressor stages on the fan shaft" });
     // ---- core casings: transition duct, HPC case, combustor case, turbine case ----
     const caseIn = [], caseT = s(14);
     for (let i = 0; i <= 24; i++) { const y = lerp(s(640), s(1390), i / 24); caseIn.push([tipAt(y) + 1, y]); }
-    shell("compressor case", [...caseIn, ...caseIn.slice().reverse().map(([r, y]) => [r + caseT, y])], { material: M("compressorCase", "steel"), segments: 80, explode: [0, s(120), 0], note: "the casing around the compressor; its inner wall sits just clear of the blade tips" });
+    shell("compressor case", [...caseIn, ...caseIn.slice().reverse().map(([r, y]) => [r + caseT, y])], { material: M("compressorCase", "steel"), segments: 64, explode: [0, s(120), 0], note: "the casing around the compressor; its inner wall sits just clear of the blade tips" });
     // Flanges and a bleed manifold on the HP compressor case.
-    const cf = [s(830), s(1050), s(1250)].map(y => collar(yy => tipAt(yy) + caseT, y - s(8), y + s(8), s(16), { segments: 72 }));
-    const bleed = xf(mesh.torus(tipAt(s(1150)) + caseT + s(28), s(20), { segments: 72, tube: 12 }), T([0, s(1150), 0]));
+    const cf = [s(830), s(1050), s(1250)].map(y => collar(yy => tipAt(yy) + caseT, y - s(8), y + s(8), s(16), { segments: 48 }));
+    const bleed = xf(mesh.torus(tipAt(s(1150)) + caseT + s(28), s(20), { segments: D(56), tube: D(10, 6) }), T([0, s(1150), 0]));
     A.part("case flanges", merge(cf, bleed), { parent: axis, material: M("compressorCase", "steel"), explode: [0, s(120), 0] });
     // Inner wall of the transition duct (static).
     const ductIn = []; for (let i = 0; i <= 12; i++) { const y = lerp(s(640), s(820), i / 12); ductIn.push([hubAt(y) - 1, y]); }
-    shell("transition duct", [...ductIn, ...ductIn.slice().reverse().map(([r, y]) => [r - s(12), y])], { material: M("compressorCase", "steel"), segments: 72, explode: [0, s(120), 0] });
+    shell("transition duct", [...ductIn, ...ductIn.slice().reverse().map(([r, y]) => [r - s(12), y])], { material: M("compressorCase", "steel"), segments: 48, explode: [0, s(120), 0] });
     // ---- HP compressor ----
     const hpcN = [38, 44, 50, 56, 60, 64, 68, 72, 76];
     hpcN.forEach((n, i) => {
       const yr = s(850 + i * 54), ys = yr + s(27), sl = (tipAt(yr + 10) - tipAt(yr - 10)) / 20;
-      A.part(`hpc rotor ${i + 1}`, rotorStage({ name: "high-pressure compressor", blades: n, hub: hubAt(yr), tip: tipAt(yr) - 1, y: yr, chord: [s(30 - i * 1.4), s(26 - i * 1.2)], stagger: [38, 52], tipSlope: sl, diskWidth: s(22), bore: s(118), material: M("compressor", "titanium") }), { parent: high, explode: [0, s(120), 0] });
-      A.part(`hpc stator ${i + 1}`, statorStage({ name: "hpc stator", vanes: Math.round(n * 1.3), inner: hubAt(ys), outer: tipAt(ys), y: ys, chord: s(24 - i), stagger: -28, outerSlope: sl, material: M("compressor", "titanium") }), { parent: axis, explode: [0, s(120), 0] });
+      A.part(`hpc rotor ${i + 1}`, rotorStage({ name: "high-pressure compressor", blades: n, hub: hubAt(yr), tip: tipAt(yr) - 1, y: yr, chord: [s(30 - i * 1.4), s(26 - i * 1.2)], stagger: [38, 52], tipSlope: sl, diskWidth: s(22), bore: s(118), stations: 2, points: 5, segments: 28, material: M("compressor", "titanium") }), { parent: high, explode: [0, s(120), 0] });
+      A.part(`hpc stator ${i + 1}`, statorStage({ name: "hpc stator", vanes: Math.round(n * 1.3), inner: hubAt(ys), outer: tipAt(ys), y: ys, chord: s(24 - i), stagger: -28, outerSlope: sl, points: 4, segments: 48, material: M("compressor", "titanium") }), { parent: axis, explode: [0, s(120), 0] });
     });
     A.parts["high-pressure compressor"] = A.parts["hpc rotor 1"];
     const drum = []; for (let i = 0; i <= 10; i++) { const y = lerp(s(830), s(1330), i / 10); drum.push([hubAt(y) - s(1.5), y]); }
-    A.part("hpc drum", revolve([...drum, ...drum.slice().reverse().map(([r, y]) => [r - s(8), y])], { loop: true, segments: 72 }), { parent: high, material: M("compressor", "titanium"), explode: [0, s(120), 0] });
-    A.part("hpc label", null, { parent: axis, label: { text: "high-pressure compressor", at: cyl(s(260), Math.PI * 0.75, s(1100)) }, note: "nine stages squeeze the core air about 20 times" });
+    A.part("hpc drum", revolve([...drum, ...drum.slice().reverse().map(([r, y]) => [r - s(8), y])], { loop: true, segments: 48 }), { parent: high, material: M("compressor", "titanium"), explode: [0, s(120), 0] });
+    A.part("hpc label", null, { parent: axis, label: IN({ text: "high-pressure compressor", at: cyl(s(260), Math.PI * 0.75, s(1100)) }), note: "nine stages squeeze the core air about 20 times" });
     // ---- combustor ----
     const yC0 = s(1400), yC1 = s(1640);
     shell("combustor case", fillet([[s(250), yC0 - s(20)], [s(372), s(1440), s(30)], [s(372), yC1 + s(20), s(10)], [s(330), yC1 + s(40)], [s(330) - s(12), yC1 + s(40)], [s(360), yC1 + s(20)], [s(360), s(1450), s(20)], [s(250), yC0 - s(8)]], { closed: true, steps: 3 }), { material: M("combustorCase", "steel"), explode: [0, s(300), 0], note: "the pressure casing around the combustor" });
@@ -1378,32 +1444,32 @@
     const outerLiner = step(s(322), s(302), 1), innerLiner = step(s(232), s(258), -1);
     const linerT = s(4);
     A.part("combustor", merge(
-      revolve([...outerLiner, ...outerLiner.slice().reverse().map(([r, y]) => [r + linerT, y])], { loop: true, segments: 72, crease: 50 }),
-      revolve([...innerLiner, ...innerLiner.slice().reverse().map(([r, y]) => [r - linerT, y])], { loop: true, segments: 72, crease: 50 }),
-      revolve(fillet([[s(232), s(1440)], [s(250), s(1405), s(14)], [s(305), s(1405), s(14)], [s(322), s(1440)], [s(322) + linerT, s(1440)], [s(305), s(1405) - linerT, s(14)], [s(250), s(1405) - linerT, s(14)], [s(232) - linerT, s(1440)]], { closed: true, steps: 3 }), { loop: true, segments: 96 }),
-    ), { parent: axis, material: M("combustor", "inconel"), explode: [0, s(300), 0], label: { text: "combustor", at: cyl(s(320), Math.PI * 0.75, s(1540)) }, note: "an annular chamber where fuel burns in the compressed air" });
+      revolve([...outerLiner, ...outerLiner.slice().reverse().map(([r, y]) => [r + linerT, y])], { loop: true, segments: 56, crease: 50 }),
+      revolve([...innerLiner, ...innerLiner.slice().reverse().map(([r, y]) => [r - linerT, y])], { loop: true, segments: 56, crease: 50 }),
+      revolve(fillet([[s(232), s(1440)], [s(250), s(1405), s(14)], [s(305), s(1405), s(14)], [s(322), s(1440)], [s(322) + linerT, s(1440)], [s(305), s(1405) - linerT, s(14)], [s(250), s(1405) - linerT, s(14)], [s(232) - linerT, s(1440)]], { closed: true, steps: 3 }), { loop: true, segments: 64 }),
+    ), { parent: axis, material: M("combustor", "inconel"), explode: [0, s(300), 0], label: IN({ text: "combustor", at: cyl(s(320), Math.PI * 0.75, s(1540)) }), note: "an annular chamber where fuel burns in the compressed air" });
     const nozzleStem = revolve(fillet([[0, 0], [s(14), 0], [s(14), s(70)], [s(9), s(80)], [s(9), s(118)], [s(16), s(122)], [s(16), s(134)], [0, s(134)]]), { segments: 14 });
     const nzz = Array.from({ length: o.fuelNozzles ?? 20 }, (_, i) => xf(nozzleStem, RY((i / (o.fuelNozzles ?? 20)) * TAU), T([s(395), s(1415), 0]), RZ(Math.PI / 2 + 0.25)));
-    A.part("fuel nozzles", merge(nzz), { parent: axis, material: M("fuelNozzles", "steel"), explode: [0, s(300), 0], label: { text: "fuel nozzles", at: cyl(s(380), Math.PI * 0.62, s(1420)) }, note: "spray fuel into the front of the combustor" });
+    A.part("fuel nozzles", merge(nzz), { parent: axis, material: M("fuelNozzles", "steel"), explode: [0, s(300), 0], label: IN({ text: "fuel nozzles", at: cyl(s(380), Math.PI * 0.62, s(1420)) }), note: "spray fuel into the front of the combustor" });
     // ---- turbines ----
     const turb = [[1655, 255, 300, "s", 40], [1695, 255, 302, "r", 72], [1740, 258, 312, "s", 44], [1780, 258, 318, "r", 76]];
     turb.forEach(([y, h, t, kind, n], i) => {
       const yy = s(y);
-      if (kind === "r") A.part(`hpt rotor ${i}`, rotorStage({ name: "high-pressure turbine", blades: n, hub: s(h), tip: s(t) - 1, y: yy, chord: [s(30), s(28)], stagger: [-30, -40], camber: [0.12, 0.1], thickness: [0.16, 0.12], hand: -1, diskWidth: s(34), bore: s(110), material: M("turbine", "inconel") }), { parent: high, explode: [0, s(450), 0] });
-      else A.part(`hpt nozzle ${i}`, statorStage({ name: "hpt nozzle", vanes: n, inner: s(h), outer: s(t), y: yy, chord: s(30), stagger: 40, camber: 0.12, thickness: 0.18, hand: 1, material: M("turbine", "inconel") }), { parent: axis, explode: [0, s(450), 0] });
+      if (kind === "r") A.part(`hpt rotor ${i}`, rotorStage({ name: "high-pressure turbine", blades: n, hub: s(h), tip: s(t) - 1, y: yy, chord: [s(30), s(28)], stagger: [-30, -40], camber: [0.12, 0.1], thickness: [0.16, 0.12], hand: -1, diskWidth: s(34), bore: s(110), stations: 2, segments: 40, material: M("turbine", "inconel") }), { parent: high, explode: [0, s(450), 0] });
+      else A.part(`hpt nozzle ${i}`, statorStage({ name: "hpt nozzle", vanes: n, inner: s(h), outer: s(t), y: yy, chord: s(30), stagger: 40, camber: 0.12, thickness: 0.18, hand: 1, points: 5, segments: 48, material: M("turbine", "inconel") }), { parent: axis, explode: [0, s(450), 0] });
     });
     A.parts["high-pressure turbine"] = A.parts["hpt rotor 1"];
-    A.part("hpt label", null, { parent: axis, label: { text: "high-pressure turbine", at: cyl(s(300), Math.PI * 0.8, s(1720)) }, note: "two stages that drive the compressor through the HP shaft" });
+    A.part("hpt label", null, { parent: axis, label: IN({ text: "high-pressure turbine", at: cyl(s(300), Math.PI * 0.8, s(1720)) }), note: "two stages that drive the compressor through the HP shaft" });
     const lptHub = y => lerp(s(265), s(300), (y - s(1830)) / s(450)), lptTip = y => lerp(s(335), s(455), (y - s(1830)) / s(450));
     for (let i = 0; i < 5; i++) {
       const ys = s(1840 + i * 90), yr = ys + s(45), tsl = (lptTip(s(100)) - lptTip(0)) / s(100);
-      A.part(`lpt nozzle ${i + 1}`, statorStage({ name: "lpt nozzle", vanes: 70 + i * 6, inner: lptHub(ys), outer: lptTip(ys), y: ys, chord: s(36), stagger: 38, camber: 0.1, thickness: 0.14, hand: 1, innerSlope: (lptHub(s(100)) - lptHub(0)) / s(100), outerSlope: tsl, material: M("turbine", "inconel") }), { parent: axis, explode: [0, s(700), 0] });
-      A.part(`lpt rotor ${i + 1}`, rotorStage({ name: "low-pressure turbine", blades: 80 + i * 8, hub: lptHub(yr), tip: lptTip(yr) - 2, y: yr, chord: [s(34), s(30)], stagger: [-32, -46], camber: [0.1, 0.08], thickness: [0.12, 0.08], hand: -1, tipSlope: tsl, shroud: true, diskWidth: s(30), bore: s(70), material: M("turbine", "inconel") }), { parent: low, explode: [0, s(700), 0] });
+      A.part(`lpt nozzle ${i + 1}`, statorStage({ name: "lpt nozzle", vanes: 70 + i * 6, inner: lptHub(ys), outer: lptTip(ys), y: ys, chord: s(36), stagger: 38, camber: 0.1, thickness: 0.14, hand: 1, innerSlope: (lptHub(s(100)) - lptHub(0)) / s(100), outerSlope: tsl, points: 4, segments: 48, material: M("turbine", "inconel") }), { parent: axis, explode: [0, s(700), 0] });
+      A.part(`lpt rotor ${i + 1}`, rotorStage({ name: "low-pressure turbine", blades: 80 + i * 8, hub: lptHub(yr), tip: lptTip(yr) - 2, y: yr, chord: [s(34), s(30)], stagger: [-32, -46], camber: [0.1, 0.08], thickness: [0.12, 0.08], hand: -1, tipSlope: tsl, shroud: true, diskWidth: s(30), bore: s(70), stations: 2, points: 5, segments: 32, material: M("turbine", "inconel") }), { parent: low, explode: [0, s(700), 0] });
     }
     A.parts["low-pressure turbine"] = A.parts["lpt rotor 1"];
-    A.part("lpt label", null, { parent: axis, label: { text: "low-pressure turbine", at: cyl(lptTip(s(2100)), Math.PI * 0.8, s(2100)) }, note: "five stages that drive the fan through the LP shaft" });
+    A.part("lpt label", null, { parent: axis, label: IN({ text: "low-pressure turbine", at: cyl(lptTip(s(2100)), Math.PI * 0.8, s(2100)) }), note: "five stages that drive the fan through the LP shaft" });
     const tcase = []; for (let i = 0; i <= 16; i++) { const y = lerp(s(1640), s(2330), i / 16); tcase.push([(y < s(1820) ? s(322) + (y - s(1640)) * 0.05 : lptTip(y)) + 2, y]); }
-    shell("turbine case", [...tcase, ...tcase.slice().reverse().map(([r, y]) => [r + s(14), y])], { material: M("turbineCase", "inconel"), segments: 96, explode: [0, s(600), 0], note: "the casing around both turbines" });
+    shell("turbine case", [...tcase, ...tcase.slice().reverse().map(([r, y]) => [r + s(14), y])], { material: M("turbineCase", "inconel"), segments: 72, explode: [0, s(600), 0], note: "the casing around both turbines" });
     // Turbine rear frame struts and the exhaust plug.
     const trf = statorStage({ name: "turbine rear frame", vanes: 12, inner: s(300), outer: s(460), y: s(2330), chord: s(60), stagger: 0, camber: 0, thickness: 0.16, material: M("turbineCase", "inconel") });
     A.part("turbine rear frame", trf, { parent: axis, explode: [0, s(850), 0] });
@@ -1411,10 +1477,10 @@
     A.part("exhaust cone", plug, { parent: axis, material: M("exhaustCone", "inconel"), explode: [0, s(950), 0], label: { text: "exhaust cone", at: [s(150), s(2600), 0] }, note: "the plug that shapes the hot core exhaust" });
     // ---- shafts and bearings ----
     const lpS = shaft({ steps: [[s(200), s(110)], [s(2150), s(90)], [s(100), s(110)]], bore: s(60), segments: 32 });
-    A.part("LP shaft", xf(lpS, T([0, s(150), 0])), { parent: low, material: M("shaft", "steel"), label: { text: "LP shaft", at: [0, s(1900), s(55)] }, note: "the inner shaft: LP turbine to fan, turning slower" });
+    A.part("LP shaft", xf(lpS, T([0, s(150), 0])), { parent: low, material: M("shaft", "steel"), label: IN({ text: "LP shaft", at: [0, s(1900), s(55)] }), note: "the inner shaft: LP turbine to fan, turning slower" });
     const hpS = shaft({ steps: [[s(60), s(236)], [s(940), s(200)], [s(60), s(220)]], bore: s(150), segments: 40 });
-    A.part("HP shaft", xf(hpS, T([0, s(800), 0])), { parent: high, material: M("shaft", "steel"), label: { text: "HP shaft", at: [0, s(1450), s(100)] }, note: "the outer, hollow shaft: HP turbine to compressor, turning faster" });
-    for (const [y, bore, outer, nm] of [[260, 55, 85, "No. 1 bearing"], [770, 118, 150, "No. 3 bearing"], [2250, 55, 85, "No. 5 bearing"]]) A.part(nm, bearing({ bore: s(bore), outer: s(outer), width: s(24), name: nm, segments: 40, ballSegments: 6 }), { parent: axis, position: [0, s(y), 0], explode: [0, y < 1000 ? -s(300) : s(600), 0] });
+    A.part("HP shaft", xf(hpS, T([0, s(800), 0])), { parent: high, material: M("shaft", "steel"), label: IN({ text: "HP shaft", at: [0, s(1450), s(100)] }), note: "the outer, hollow shaft: HP turbine to compressor, turning faster" });
+    for (const [y, bore, outer, nm] of [[260, 55, 85, "No. 1 bearing"], [770, 118, 150, "No. 3 bearing"], [2250, 55, 85, "No. 5 bearing"]]) A.part(nm, bearing({ bore: s(bore), outer: s(outer), width: s(24), name: nm, segments: 32, ballSegments: 5 }), { parent: axis, position: [0, s(y), 0], explode: [0, y < 1000 ? -s(300) : s(600), 0] });
     // ---- pylon mounts, test stand ----
     const fwdMount = cyl(P.Rco, Math.PI, s(380)), aftMount = cyl(lptTip(s(2330)) + s(16), Math.PI, s(2330));
     A.mounts = { forward: () => axis.toWorld(fwdMount), aft: () => axis.toWorld(aftMount) };
@@ -1452,9 +1518,74 @@
     A.port("nozzle", axis, [0, s(2420), 0], [0, 1, 0], cowl[30][0] - s(16), { inner: s(300) * Math.pow(1 - (s(2420) - s(2300)) / s(560), 0.8) });
     const bypassArea = Math.PI * (P.ductR ** 2 - s(440) ** 2), coreArea = Math.PI * (s(440) ** 2 - s(338) ** 2);
     A.info = { fanRadius: Rf, hubRadius: hubR, splitter: s(440), coreHub: s(338), bypassArea, coreArea, bypassRatio: bypassArea / coreArea, length: s(2860) - P.yH, fanBlades: o.fanBlades ?? 18, maxRadius: P.Rmax };
-    A.cutaway = (on = true) => { for (const [f, c] of cases) { f.visible = !on; c.visible = !!on; } return A; };
     if (o.cutaway) A.cutaway(true);
     A.onPose = p => { if (p.low != null) low.rotation = [0, p.low, 0]; if (p.high != null) high.rotation = [0, p.high, 0]; };
+    // ---- the air through and around it ----
+    // A tube flow (E3.flow.tube) from the engine's own surfaces: the capture streamtube drawn
+    // into the inlet, the dividing surface between core and bypass air ahead of the splitter,
+    // the core duct between hub and casing, the fan duct between core cowl and nacelle, the outside
+    // air displaced by the nacelle, and the two jets widening behind. Speeds come from mass flow,
+    // so air speeds up where a duct narrows. speed: fan-face speed in mm/s (slowed for viewing).
+    const PL = P.loop, outerPts = PL.slice(0, 41), innerRaw = PL.slice(41).reverse();
+    const innerPts = [];
+    for (const pt of innerRaw) { if (pt[1] >= P.yCF - 1e-6 && pt[1] <= P.yCR + 1e-6) continue; innerPts.push(pt); }
+    innerPts.push([P.Rc, P.yCF], [P.Rc, s(200)], [P.ductR, s(260)], [P.ductR, P.yCR]);
+    innerPts.sort((a, b) => a[1] - b[1]);
+    const lin = (pts, y) => { if (y <= pts[0][1]) return pts[0][0]; for (let i = 1; i < pts.length; i++) if (pts[i][1] >= y) { const a = pts[i - 1], b = pts[i]; return lerp(a[0], b[0], (y - a[1]) / (b[1] - a[1] || 1)); } return pts[pts.length - 1][0]; };
+    const yS0 = yS, spL = s(380), yCowlEnd = s(2420), yPlugEnd = s(2860);
+    const fanHubPts = [[hubR, s(-40)], [s(300), s(80)], [s(338), s(240)], [s(338), s(300)]]; // [r, y], like the profiles
+    const plugR = y => s(300) * Math.pow(Math.max(0, 1 - (y - s(2300)) / s(560)), 0.8);
+    const hubLine = y => {
+      if (y < yS0) return 0;
+      if (y < yS0 + spL) { const u = (yS0 + spL - y) / spL; return hubR * Math.sqrt(Math.max(0, 1 - u * u)); }
+      if (y < s(300)) return lin(fanHubPts, y);
+      if (y < s(1390)) return hubAt(y);
+      if (y < s(1640)) return lerp(hubAt(s(1390)), s(255), sstep(s(1390), s(1640), y));
+      if (y < s(1830)) return lerp(s(255), s(265), (y - s(1640)) / s(190));
+      if (y < s(2300)) return lptHub(Math.min(y, s(2280)));
+      return Math.min(lptHub(s(2280)), plugR(y));
+    };
+    const coreTip = y => {
+      let r;
+      if (y < s(1390)) r = tipAt(y);
+      else if (y < s(1640)) r = lerp(tipAt(s(1390)), s(300), sstep(s(1390), s(1640), y));
+      else if (y < s(1830)) r = lerp(s(300), s(335), (y - s(1640)) / s(190));
+      else if (y < s(2280)) r = lptTip(y);
+      else r = lerp(lptTip(s(2280)), cowlR(yCowlEnd) - s(16), Math.min(1, (y - s(2280)) / (yCowlEnd - s(2280))));
+      return Math.min(r, cowlR(Math.min(y, yCowlEnd)) - s(18));
+    };
+    A.airflow = (fo = {}) => {
+      const Uf = fo.speed ?? 2400, U0 = Uf * (fo.freestream ?? 0.45), BPR = A.info.bypassRatio, fc = 1 / (1 + BPR);
+      const hubFace = hubLine(s(-60)), qTot = Uf * (Rf * Rf - hubFace * hubFace), qC = fc * qTot, qB = qTot - qC;
+      const rho2 = Math.sqrt(qTot / U0), rho1 = Math.sqrt(fc) * rho2, lam = Rf * 0.6;
+      const yUp = P.yH - 3 * Rf, yDn = yPlugEnd + 6 * Rf, n = fo.stations ?? 220, dy = (yDn - yUp) / (n - 1);
+      const tube = y => rho2 - (rho2 - P.Rh) * Math.exp((y - P.yH) / lam);
+      const outerWall = y => (y < P.yH ? tube(y) : y <= P.yE ? lin(innerPts, y) : P.RE + 0.04 * (y - P.yE));
+      const rows = [];
+      for (let i = 0; i < n; i++) {
+        const y = yUp + i * dy;
+        const c0 = hubLine(y), b1 = outerWall(y);
+        let c1, b0;
+        if (y < s(300)) { c1 = Math.sqrt(c0 * c0 + fc * (b1 * b1 - c0 * c0)); b0 = c1; }
+        else if (y <= yCowlEnd) { c1 = coreTip(y); b0 = Math.max(cowlR(y), c1); }
+        else { c1 = cowlR(yCowlEnd) - s(16) + 0.05 * (y - yCowlEnd); b0 = c1; }
+        const x0 = y < P.yH ? b1 : y <= P.yE ? Math.max(lin(outerPts, y), b1) : b1;
+        // Burning fuel drops the core gas's density about threefold; the turbines take some back.
+        const heat = y < s(1400) ? 1 : y < s(1640) ? lerp(1, 3.2, sstep(s(1400), s(1640), y)) : y < s(2330) ? lerp(3.2, 2.6, (y - s(1640)) / s(690)) : lerp(2.6, 1.6, Math.min(1, (y - s(2330)) / (5 * Rf)));
+        rows.push([c0, Math.max(c1, c0 + 1), b0, Math.max(b1, b0 + 1), x0, heat]);
+      }
+      const spec = E3.flow.spec({ type: "tube", rows, y0: yUp, dy, q: [qC, qB], U0, matrix: axis.world() });
+      spec.info = { rho1, rho2, yUp, yDn, speed: Uf, freestream: U0, bypassRatio: BPR };
+      return spec;
+    };
+    // Emitters far upstream for each stream layer, in world coordinates, to feed tracers:
+    // { core, bypass, outside }, each { shape, position, direction, radius, thickness, speed }.
+    A.airflowEmitters = (spec, ahead = 0) => {
+      const I = spec.info, W = axis.world(), pos = m4.apply(W, [0, I.yUp + ahead, 0]), dir = v3.norm(m4.applyDir(W, [0, 1, 0]));
+      const ring = (a, b) => ({ shape: "ring", position: pos, direction: dir, radius: (a + b) / 2, thickness: b - a, speed: I.freestream });
+      return { core: { shape: "disk", position: pos, direction: dir, radius: I.rho1 * 0.97, speed: I.freestream }, bypass: ring(I.rho1 * 1.03, I.rho2 * 0.98), outside: ring(I.rho2 * 1.04, I.rho2 * 1.9) };
+    };
+
     return A;
   }
 
@@ -1684,6 +1815,522 @@
     return A;
   }
 
+  // A roller chain along a closed path (3D points; sprocket axles along z). Links sit at
+  // `pitch` spacing starting `phase` (0 to 1) of a pitch along the path. Real proportions
+  // for a 1/2" chain: 7.75 mm rollers between 1 mm plates.
+  function chain(path3, { pitch = 12.7, roller = 7.75, width = 5.6, plate = 1, phase = 0 } = {}) {
+    const n = path3.length, L = pathLength([...path3, path3[0]]), links = Math.max(4, Math.round(L / pitch)), step = L / links;
+    const rp = roller / 2 + 1.3;
+    const outline = roundRect2(step + 2 * rp, 2 * rp, rp * 0.98, D(5, 3));
+    const outer = mesh.extrude(outline, plate), inner = mesh.extrude(roundRect2(step + 2 * rp - 1.6, 2 * rp - 1.6, rp * 0.9, D(5, 3)), plate);
+    const rollerM = xf(mesh.cylinder(roller / 2, width, { segments: D(8, 6) }), RX(Math.PI / 2));
+    const pin = xf(mesh.cylinder(roller * 0.26, width + 4 * plate + 1, { segments: 6 }), RX(Math.PI / 2));
+    const at = s => along([...path3, path3[0]], ((s % L) + L) % L);
+    const out = [];
+    for (let i = 0; i < links; i++) {
+      const s0 = (i + phase) * step, a = at(s0), b = at(s0 + step);
+      const d = v3.sub(b.at, a.at), ang = Math.atan2(d[1], d[0]), mid = v3.lerp(a.at, b.at, 0.5);
+      const zo = i % 2 ? width / 2 + plate * 1.5 : width / 2 + plate / 2, pm = i % 2 ? outer : inner;
+      out.push(xf(rollerM, T(a.at)), xf(pin, T(a.at)));
+      for (const sg of [-1, 1]) out.push(xf(pm, T([mid[0], mid[1], mid[2] + sg * zo]), RZ(ang)));
+    }
+    const m = merge(out);
+    m.chain = { links, pitch: step, length: L };
+    return m;
+  }
+  // Points of a belt or chain path lifted into 3D: z follows each circle's own plane and
+  // runs straight between them (a chain crossing from a chainring to a cog).
+  function liftPath(bp, zs) {
+    const P = bp.points, n = P.length, S = [0];
+    for (let i = 1; i <= n; i++) S.push(S[i - 1] + Math.hypot(P[i % n][0] - P[i - 1][0], P[i % n][1] - P[i - 1][1]));
+    const total = S[n], k = bp.arcs.length;
+    const zAt = s => {
+      for (let i = 0; i < k; i++) {
+        const a = bp.arcs[i], end = i + 1 < k ? bp.arcs[i + 1].start : total, arcEnd = a.start + a.angle * bp.radii[i];
+        if (s < arcEnd) return zs[i];
+        if (s < end) return lerp(zs[i], zs[(i + 1) % k], (s - arcEnd) / Math.max(1e-6, end - arcEnd));
+      }
+      return zs[0];
+    };
+    return P.map((p, i) => [p[0], p[1], zAt(S[i])]);
+  }
+
+  // ---------- gearbox ----------
+  // Two-stage spur reduction in a horizontally split cast housing. Shafts run along z with
+  // the input on the left (x = 0) and the output on the right, their axes in the split plane
+  // y = 0. The input shaft leaves the front (+z), the output the back (-z).
+  // pose({ input }) turns the input (radians); the other shafts follow the tooth counts.
+  function gearbox(o = {}) {
+    const A = assembly(o.name ?? "gearbox", o), M = (r, f) => matFor(o, r, f);
+    const m = o.module ?? 3, ratio = o.ratio ?? 12.25;
+    const z1 = o.pinion ?? 17, z2 = Math.round(z1 * Math.sqrt(ratio)), z3 = z1, z4 = Math.round((z3 * ratio * z1) / z2);
+    const rp = z => (z * m) / 2, a1 = o.centerDistance ?? rp(z1) + rp(z2), a2 = rp(z3) + rp(z4);
+    const b1 = 10 * m, b2 = 12 * m, zs1 = 9 * m, zs2 = -9 * m;
+    const d = [m * 10, m * 13, m * 16], X = [0, a1, a1 + a2];
+    const brg = [{ bore: d[0], outer: d[0] * 2.1, width: m * 5.5 }, { bore: d[1], outer: d[1] * 2.0, width: m * 6 }, { bore: d[2], outer: d[2] * 1.8, width: m * 6.5 }];
+    const ra = z => rp(z) + m, rMax = Math.max(ra(z2), ra(z4));
+    const zi = Math.max(Math.abs(zs1) + b1 / 2, Math.abs(zs2) + b2 / 2) + m * 4, tw = Math.max(16, m * 7);
+    const x0 = X[0] - ra(z1) - m * 8, x1 = X[2] + ra(z4) + m * 8, yTop = rMax + m * 7, yBot = -(rMax + m * 12), wall = Math.max(6, m * 2.5);
+    const fl = m * 7, nb = 14;
+    // End walls: rectangles with half bores on the split line. Each bearing fills its bore.
+    const endWall = (up, sgn) => {
+      const y1 = up ? yTop : yBot, pts = [[x0, y1], [x1, y1], [x1, 0]];
+      const bores = X.map((x, i) => [x, brg[i].outer / 2]).sort((p, q) => q[0] - p[0]);
+      for (const [x, r] of bores) pts.push([x + r, 0], ...arc2(x, 0, r, 0, up ? Math.PI : -Math.PI, 10).slice(1, -1), [x - r, 0]);
+      pts.push([x0, 0]);
+      return xf(mesh.extrude(pts, tw), T([0, 0, sgn * (zi + tw / 2)]));
+    };
+    const half = up => {
+      const y1 = up ? yTop : yBot, h = Math.abs(y1), yc = y1 / 2;
+      const parts = [endWall(up, 1), endWall(up, -1),
+        xf(mesh.box(wall, h, 2 * zi + 2 * tw), T([x0 + wall / 2, yc, 0])), xf(mesh.box(wall, h, 2 * zi + 2 * tw), T([x1 - wall / 2, yc, 0])),
+        xf(mesh.box(x1 - x0, wall, 2 * zi + 2 * tw), T([(x0 + x1) / 2, y1 - Math.sign(y1) * wall / 2, 0]))];
+      const ring = roundRect2(x1 - x0 + 2 * fl, 2 * zi + 2 * tw + 2 * fl, fl, 4, (x0 + x1) / 2, 0);
+      const holes = [roundRect2(x1 - x0 - 2 * wall, 2 * zi, 1, 1, (x0 + x1) / 2, 0)];
+      const bx = [], per = 2 * (x1 - x0 + 2 * zi + 2 * tw);
+      for (let i = 0; i < nb; i++) {
+        const s = ((i + 0.5) / nb) * per, w = x1 - x0 + fl, hgt = 2 * zi + 2 * tw + fl;
+        let p;
+        if (s < w) p = [x0 - fl / 2 + s, hgt / 2]; else if (s < w + hgt) p = [x1 + fl / 2, hgt / 2 - (s - w)]; else if (s < 2 * w + hgt) p = [x1 + fl / 2 - (s - w - hgt), -hgt / 2]; else p = [x0 - fl / 2, -hgt / 2 + (s - 2 * w - hgt)];
+        bx.push(p); holes.push(circle2(m * 1.2, 8, p[0], p[1]));
+      }
+      parts.push(plate(ring, m * 3, { holes, y0: up ? 0 : -m * 3, bevel: m * 0.3, bevelSegments: 1 }));
+      return { mesh: merge(parts), bolts: bx };
+    };
+    const lower = half(false), upper = half(true);
+    A.part("lower case", lower.mesh, { material: M("housing", "porcelain"), label: { text: "lower case", at: [x1, yBot * 0.5, zi + tw] }, note: "the cast bottom half; it holds the oil and the lower bearing halves" });
+    A.part("cover", upper.mesh, { material: M("housing", "porcelain"), explode: [0, rMax * 1.6, 0], label: { text: "cover", at: [x0, yTop * 0.6, zi + tw] }, note: "the top half lifts off at the shaft centerline, so every shaft comes out whole" });
+    const boltM = merge(upper.bolts.map(p => xf(merge(bolt({ d: m * 2.2, length: m * 7.5, lite: true, segments: 8 }), xf(nut({ d: m * 2.2, lite: true }), T([0, -m * 7, 0]))), T([p[0], m * 3, -p[1]]))));
+    A.part("joint bolts", boltM, { material: M("bolts", "steel"), explode: [0, rMax * 1.6 + m * 8, 0] });
+    // Inspection cover, fill plug and breather, drain plug, sight glass, lifting eye, feet.
+    const ic = plate(roundRect2(m * 22, m * 16, m * 2, 3, (X[1] + X[2]) / 2, 0), m * 2, { y0: yTop, bevel: m * 0.3, bevelSegments: 1 });
+    const icb = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => xf(bolt({ d: m * 1.6, length: m * 4, lite: true, segments: 8 }), T([(X[1] + X[2]) / 2 + u * m * 9, yTop + m * 2, v * m * 6])));
+    A.part("inspection cover", merge(ic, icb), { material: M("cover", "steel"), explode: [0, rMax * 2.2, 0], label: { text: "inspection cover", at: [(X[1] + X[2]) / 2, yTop + m * 2, 0] }, note: "lift it to look at the tooth contact without opening the case" });
+    const plug = (x, y, z, dir, rr) => mesh.transform(merge(revolve(fillet([[0, -rr * 0.2], [rr * 0.7, -rr * 0.2], [rr * 0.7, rr * 0.4], [rr, rr * 0.4], [rr, rr * 1.2, rr * 0.2], [0, rr * 1.2]]), { segments: 16 }), plate(hexagon(rr * 1.5), rr * 0.9, { y0: rr * 1.2 })), aim([x, y, z], dir));
+    A.part("fill plug", plug(X[0] + m * 6, yTop, zi * 0.4, [0, 1, 0], m * 2.2), { material: M("plugs", "brass"), note: "oil goes in here; it doubles as the breather" });
+    A.part("drain plug", plug((x0 + x1) / 2, yBot, 0, [0, -1, 0], m * 2.2), { material: M("plugs", "brass"), note: "at the lowest point of the sump" });
+    A.part("sight glass", mesh.transform(revolve(fillet([[0, 0], [m * 3.4, 0], [m * 3.4, m * 1.2, m * 0.3], [0, m * 1.2]]), { segments: 24 }), aim([x1, yBot * 0.4, 0], [1, 0, 0])), { material: M("sightGlass", "glass"), label: { text: "oil level", at: [x1 + m * 1.2, yBot * 0.4, 0] }, note: "the oil should reach the lower teeth of the big gears" });
+    const eye = merge(xf(mesh.torus(m * 3.2, m * 0.9, { segments: 24, tube: 8 }), T([0, m * 4.6, 0]), RX(Math.PI / 2)), mesh.cylinder(m * 1.1, m * 3, { segments: 12 }));
+    A.part("lifting eye", xf(eye, T([(x0 + x1) / 2, yTop + m * 1.5, -zi * 0.5])), { material: M("bolts", "steel"), explode: [0, rMax * 1.6, 0] });
+    const foot = (x, z) => plate(roundRect2(m * 10, m * 8, m * 1.5, 3, x, z), m * 2.5, { holes: [roundRect2(m * 4, m * 2, m * 0.9, 3, x, z)], y0: yBot - m * 2.5, bevel: m * 0.3, bevelSegments: 1 });
+    A.part("feet", merge([[x0 + m * 3, zi], [x1 - m * 3, zi], [x0 + m * 3, -zi], [x1 - m * 3, -zi]].map(([x, z]) => foot(x, z))), { material: M("housing", "porcelain"), note: "slotted feet, so the box can be shimmed into line with the motor" });
+    A.part("dowel pins", merge([[x0 - fl * 0.5, zi + tw + fl * 0.5], [x1 + fl * 0.5, -(zi + tw + fl * 0.5)]].map(([x, z]) => xf(mesh.cylinder(m * 0.8, m * 6, { segments: 10 }), T([x, 0, z])))), { material: M("bolts", "steel"), explode: [0, rMax * 1.6, 0], note: "two dowels locate the cover on the case exactly, so the bores stay round" });
+    A.part("joint gasket", plate(roundRect2(x1 - x0 + 2 * fl, 2 * zi + 2 * tw + 2 * fl, fl, 4, (x0 + x1) / 2, 0), m * 0.15, { holes: [roundRect2(x1 - x0 - 2 * wall, 2 * zi, 1, 1, (x0 + x1) / 2, 0)], y0: 0 }), { material: M("gasket", "paper"), explode: [0, rMax * 0.8, 0], note: "a paper gasket seals the joint" });
+    A.part("nameplate", xf(mesh.box(m * 0.3, m * 7, m * 12, { round: m * 0.2 }), T([x1 + m * 0.15, yTop * 0.45, 0])), { material: M("nameplate", "aluminum"), note: "ratio, rated power, and the oil grade" });
+    // Shafts, gears, bearings, caps, seals, keys.
+    const shafts = [];
+    const even = z => (z % 2 === 0 ? Math.PI / z : 0); // a driven gear with an even count needs a half-pitch turn so a gap faces its pinion
+    const gearM = (z, b, dd, pinion) => xf(pinion ? gear({ teeth: z, module: m, thickness: b, hole: dd / 2, bevel: m * 0.25 }) : gear({ teeth: z, module: m, thickness: b, hole: dd / 2, bevel: m * 0.25, hubRadius: dd * 0.85, hubLength: b * 1.3 }), RX(Math.PI / 2));
+    const defs = [
+      { name: "input shaft", x: X[0], out: 1, gears: [{ z: z1, b: b1, zc: zs1, off: 0, label: "input pinion", note: `${z1} teeth: the smallest, fastest gear` }] },
+      { name: "intermediate shaft", x: X[1], out: 0, gears: [{ z: z2, b: b1, zc: zs1, off: even(z2), label: "intermediate gear", note: `${z2} teeth, meshing with the pinion: the first ${(z2 / z1).toFixed(2)}:1` }, { z: z3, b: b2, zc: zs2, off: 0, label: "second pinion", note: `${z3} teeth on the same shaft as the big gear` }] },
+      { name: "output shaft", x: X[2], out: -1, gears: [{ z: z4, b: b2, zc: zs2, off: even(z4), label: "output gear", note: `${z4} teeth: the second ${(z4 / z3).toFixed(2)}:1, for ${((z2 * z4) / (z1 * z3)).toFixed(1)}:1 overall` }] },
+    ];
+    defs.forEach((S, i) => {
+      const dd = d[i], ext = S.out ? m * 14 : 0, zA = -(zi + tw) - (S.out < 0 ? ext : 0), zB = zi + tw + (S.out > 0 ? ext : 0);
+      const steps = [[m * 2, dd * 0.9], [zB - zA - m * 4, dd], [m * 2, dd * 0.9]];
+      const sh = xf(shaft({ steps, segments: 32, chamfer: m * 0.4 }), T([0, 0, 0]), RX(Math.PI / 2));
+      const g = A.part(S.name, xf(sh, T([0, 0, zA])), { position: [S.x, 0, 0], material: M("shaft", "brushed"), explode: [0, rMax * 0.9 * (i + 1), 0], label: { text: S.name, at: [0, dd * 0.5, S.out ? S.out * (zi + tw + ext * 0.8) : zi * 0.6] }, note: i === 0 ? "turned by the motor" : i === 1 ? "carries one gear of each stage" : "turns slowest, with the most torque" });
+      for (const G of S.gears) A.part(G.label, xf(gearM(G.z, G.b, dd, G.z === z1), T([0, 0, G.zc]), RZ(G.off)), { parent: g, material: M("gears", "steel"), label: { text: G.label, at: [0, ra(G.z) + m * 1.5, G.zc], inside: true }, note: G.note });
+      if (S.out) A.part(`${S.name} key`, xf(mesh.box(dd * 0.25, dd * 0.2, ext * 0.6, { round: m * 0.2 }), T([0, dd * 0.5, S.out * (zi + tw + ext * 0.45)])), { parent: g, material: M("keys", "steel"), note: "a key locks the coupling to the shaft" });
+      if (S.out) A.part(`${S.name} coupling hub`, mesh.transform(revolve(fillet([[dd / 2 + 0.2, 0], [dd * 0.95, 0, 1], [dd * 0.95, ext * 0.5, 1], [dd / 2 + 0.2, ext * 0.5]], { closed: true, steps: 2 }), { loop: true, segments: 32 }), aim([0, 0, S.out * (zi + tw + ext * 0.45)], [0, 0, S.out])), { parent: g, material: M("coupling", "steel"), explode: [0, 0, S.out * m * 10], note: "half of a flexible coupling" });
+      shafts.push(g);
+      for (const sgn of [1, -1]) {
+        const B = brg[i], bz = sgn * (zi + tw / 2);
+        A.part(`${S.name} ${sgn > 0 ? "front" : "rear"} bearing`, bearing({ ...B, segments: 32, name: "bearing" }), { position: [S.x, 0, bz - B.width / 2], rotation: [Math.PI / 2, 0, 0], explode: [0, rMax * 0.9 * (i + 1), sgn * m * 6], label: i === 1 && sgn > 0 ? { text: "ball bearing", at: [B.outer / 2, 0, B.width / 2], inside: true } : undefined, note: "deep-groove ball bearings sit in bores split between case and cover" });
+        const open = S.out === sgn, rc = B.outer / 2 + m * 3.5;
+        const capProf = open ? [[dd / 2 + m * 0.8, 0], [rc, 0], [rc, m * 2.5], [dd / 2 + m * 0.8, m * 2.5]] : [[0, 0], [rc, 0], [rc, m * 2.5], [0, m * 2.5]];
+        const cap = merge(revolve(fillet(open ? capProf : capProf.map((p, k) => (k === 1 || k === 2 ? [...p, m * 0.5] : p)), { closed: true, steps: 2 }), { loop: true, segments: 32 }),
+          ...[0, 1, 2, 3].map(k => xf(bolt({ d: m * 1.4, length: m * 4.5, lite: true, segments: 8 }), T(cyl(rc - m * 1.6, (k / 4) * TAU + Math.PI / 4, m * 2.5)))));
+        A.part(`${S.name} ${sgn > 0 ? "front" : "rear"} cap`, mesh.transform(cap, aim([S.x, 0, sgn * (zi + tw)], [0, 0, sgn])), { material: M("caps", "steel"), explode: [0, rMax * 0.9 * (i + 1), sgn * m * 12], note: "bearing caps close the bores and set the bearing end play" });
+        if (open) A.part(`${S.name} seal`, mesh.transform(revolve([[dd / 2, 0], [dd / 2 + m * 0.9, 0], [dd / 2 + m * 0.9, m * 1.6], [dd / 2, m * 1.6]], { loop: true, segments: 32 }), aim([S.x, 0, sgn * (zi + tw + m * 2.5)], [0, 0, sgn])), { material: M("seals", "rubber"), explode: [0, rMax * 0.9 * (i + 1), sgn * m * 16], note: "a lip seal keeps the oil in where the shaft comes out" });
+      }
+    });
+    A.port("input", shafts[0], [0, 0, zi + tw + m * 14], [0, 0, 1], d[0] / 2);
+    A.port("output", shafts[2], [0, 0, -(zi + tw + m * 14)], [0, 0, -1], d[2] / 2);
+    A.shafts = shafts;
+    A.info = { module: m, teeth: [z1, z2, z3, z4], ratio: (z2 * z4) / (z1 * z3), stages: [z2 / z1, z4 / z3], centers: [a1, a2], width: x1 - x0, length: 2 * (zi + tw), height: yTop - yBot };
+    A.onPose = s => {
+      const t = s.input ?? 0;
+      shafts[0].rotation = [0, 0, t];
+      shafts[1].rotation = [0, 0, -t * (z1 / z2)];
+      shafts[2].rotation = [0, 0, t * ((z1 * z3) / (z2 * z4))];
+    };
+    const baseExplode = A.explode;
+    A.explode = t => { baseExplode(t); A.onPose({}); return A; };
+    A.onPose({});
+    return A;
+  }
+
+  // ---------- electric motor ----------
+  // A totally enclosed fan-cooled induction motor on an IEC frame: `frame` is the shaft
+  // height in mm (132 by default) and sets everything else. Axis along +x, shaft out of
+  // the +x end, feet on y = -frame. pose({ spin }) turns the rotor.
+  function electricMotor(o = {}) {
+    const A = assembly(o.name ?? "electric motor", o), M = (r, f) => matFor(o, r, f);
+    const H = o.frame ?? 132, poles = o.poles ?? 4, k = H / 132;
+    const axis = A.group("axis", { matrix: RZ(-Math.PI / 2) });
+    const Rb = 100 * k, Rf = 112 * k, Lf = 265 * k, dS = 38 * k, lS = 80 * k, fins = o.fins ?? 28;
+    const y0 = -Lf / 2, y1 = Lf / 2;
+    // Frame: a shell with longitudinal fins, a flat top pad for the terminal box, feet lugs.
+    const shellP = fillet([[Rb - 8 * k, y0], [Rb, y0, 3], [Rb, y1, 3], [Rb - 8 * k, y1]], { closed: true, steps: 2 });
+    const fin = xf(mesh.box(Rf - Rb + 10 * k, Lf - 24 * k, 3.2 * k), T([(Rb + Rf) / 2 - 5 * k, 0, 0]));
+    const finM = merge(Array.from({ length: fins }, (_, i) => { const a = (i / fins) * TAU; if (Math.abs(Math.sin(a)) > 0.94 && Math.cos(a) < 0) return null; return xf(fin, RY(a)); }));
+    const padTop = xf(mesh.box(40 * k, Lf * 0.42, 40 * k, { round: 4 * k }), T([-(Rb + 8 * k), -Lf * 0.1, 0]));
+    A.part("frame", merge(revolve(shellP, { loop: true, segments: 64 }), finM, padTop), { parent: axis, material: M("frame", "porcelain"), label: { text: "finned frame", at: [Rf, Lf * 0.1, Rf * 0.2] }, note: "a cast frame with fins; the fan at the back blows air along them to carry the heat off" });
+    // Feet: "down" in this frame is +x. Pads are built flat (plate, normal y) and turned so their normal is x.
+    const footM = (y, sgn) => xf(plate(roundRect2(36 * k, 40 * k, 4 * k, 3, y, sgn * 88 * k), 14 * k, { holes: [roundRect2(20 * k, 14 * k, 5 * k, 3, y, sgn * 88 * k)], y0: -H, bevel: 1.5 * k, bevelSegments: 1 }), RZ(Math.PI / 2));
+    const legs = [[-70 * k, 1], [-70 * k, -1], [70 * k, 1], [70 * k, -1]].map(([y, sgn]) => merge(footM(y, sgn), xf(mesh.box(H - 14 * k - Rb * 0.78, 30 * k, 40 * k), T([(H - 14 * k + Rb * 0.78) / 2, y, sgn * 88 * k]))));
+    A.part("feet", merge(legs), { parent: axis, material: M("frame", "porcelain"), label: { text: "feet", at: [H - 10 * k, 70 * k, 100 * k] }, note: `four slotted feet: this is an IEC ${H} frame, so the shaft sits ${H} mm above them` });
+    // End bells with bearing bosses, bolted to the frame.
+    const bellP = (sgn, len) => fillet([[dS / 2 + 10 * k, 0], [dS / 2 + 24 * k, 0, 3 * k], [dS / 2 + 24 * k, sgn * len * 0.55, 6 * k], [Rb - 2 * k, sgn * len, 10 * k], [Rb + 3 * k, sgn * len], [Rb + 3 * k, sgn * (len - 10 * k)], [Rb - 8 * k, sgn * (len - 10 * k)], [Rb - 8 * k, sgn * len * 0.45, 8 * k], [dS / 2 + 14 * k, sgn * 8 * k, 4 * k], [dS / 2 + 10 * k, sgn * 8 * k]], { closed: true, steps: 3 });
+    const bellBolts = sgn => merge([0, 1, 2, 3].map(i => xf(bolt({ d: 8 * k, length: 24 * k, lite: true, segments: 8 }), T(cyl(Rb - 3 * k, (i / 4) * TAU + Math.PI / 4, sgn * 30 * k)), sgn > 0 ? m4.identity() : RX(Math.PI))));
+    A.part("drive end bell", merge(revolve(bellP(1, 30 * k), { loop: true, segments: 64 }), bellBolts(1)), { parent: axis, position: [0, y1, 0], material: M("endBells", "porcelain"), explode: [0, 150 * k, 0], label: { text: "drive end shield", at: [Rb * 0.6, 32 * k, Rb * 0.5] }, note: "closes the frame and carries the drive-end bearing" });
+    A.part("fan end bell", merge(revolve(bellP(-1, 30 * k), { loop: true, segments: 64 }), bellBolts(-1)), { parent: axis, position: [0, y0, 0], material: M("endBells", "porcelain"), explode: [0, -150 * k, 0], note: "the non-drive end shield; the fan bolts on outside it" });
+    // Stator: laminated core with slots, copper end windings.
+    const slots = 36, Rs = Rb - 10 * k, Rbore = 62 * k, Ls = 160 * k;
+    const boreLoop = [];
+    for (let i = 0; i < slots; i++) { const a = (i / slots) * TAU, da = Math.PI / slots; boreLoop.push([Rbore * Math.cos(a - da * 0.7), Rbore * Math.sin(a - da * 0.7)], [(Rbore + 9 * k) * Math.cos(a - da * 0.35), (Rbore + 9 * k) * Math.sin(a - da * 0.35)], [(Rbore + 9 * k) * Math.cos(a + da * 0.35), (Rbore + 9 * k) * Math.sin(a + da * 0.35)], [Rbore * Math.cos(a + da * 0.7), Rbore * Math.sin(a + da * 0.7)]); }
+    const core = xf(mesh.extrude(circle2(Rs, 48), Ls, { holes: [boreLoop] }), RX(-Math.PI / 2));
+    A.part("stator core", core, { parent: axis, material: M("laminations", "brushed"), explode: [0, 0, 0], label: { text: "stator core", at: [Rs, Ls * 0.3, 0], inside: true }, note: `a stack of steel laminations with ${slots} slots for the winding` });
+    const winding = y => xf(mesh.torus((Rbore + Rs) / 2 - 6 * k, 15 * k, { segments: 48, tube: 12 }), T([0, y, 0]));
+    A.part("windings", merge(winding(Ls / 2 + 12 * k), winding(-Ls / 2 - 12 * k)), { parent: axis, material: M("windings", "copper"), explode: [0, 0, 0], label: { text: "end windings", at: [Rs - 10 * k, Ls / 2 + 20 * k, 0], inside: true }, note: `copper coils in the slots make a rotating field: ${poles} poles, so ${(1500 * 4) / poles} rpm synchronous at 50 Hz` });
+    // Rotor: laminated core, squirrel-cage end rings, stepped shaft, bearings, fan.
+    const rotor = A.group("rotor", { parent: axis });
+    A.rotor = rotor;
+    const Rr = Rbore - 1 * k;
+    A.part("rotor core", merge(mesh.cylinder(Rr, Ls, { segments: 48 }), ...[1, -1].map(s => xf(mesh.cylinder(Rr * 0.97, 14 * k, { segments: 48 }), T([0, s * (Ls / 2 + 7 * k), 0])))), { parent: rotor, material: M("rotor", "brushed"), label: { text: "squirrel-cage rotor", at: [Rr, -Ls * 0.3, 0], inside: true }, note: "laminations with cast aluminum bars shorted by end rings; the field drags it round" });
+    const sh = shaft({ steps: [[30 * k, dS * 0.75], [40 * k, dS * 1.1], [Ls + 24 * k, dS * 1.3], [40 * k, dS * 1.1], [lS + 30 * k, dS]], segments: 32, chamfer: 1.5 * k });
+    const yS0 = -Ls / 2 - 12 * k - 40 * k - 30 * k;
+    A.part("shaft", xf(sh, T([0, yS0, 0])), { parent: rotor, material: M("shaft", "steel"), label: { text: "shaft", at: [dS / 2, y1 + 30 * k + lS * 0.6, 0] }, note: `${dS.toFixed(0)} mm shaft, keyed for the coupling` });
+    A.part("shaft key", xf(mesh.box(dS * 0.26, dS * 0.2, lS * 0.7, { round: 1 }), T([0, y1 + 30 * k + lS * 0.5, 0]), RX(Math.PI / 2), T([0, dS * 0.48, 0])), { parent: rotor, material: M("keys", "steel") });
+    const bDE = { bore: dS * 1.1, outer: dS * 2.1, width: 20 * k }, bNDE = { bore: dS * 1.1, outer: dS * 2.1, width: 20 * k };
+    A.part("drive end bearing", bearing({ ...bDE, segments: 32, name: "drive end bearing" }), { parent: axis, position: [0, y1 + 4 * k, 0], explode: [0, 60 * k, 0], label: { text: "bearing", at: [bDE.outer / 2, bDE.width, 0], inside: true }, note: "a sealed deep-groove ball bearing at each end" });
+    A.part("fan end bearing", bearing({ ...bNDE, segments: 32, name: "fan end bearing" }), { parent: axis, position: [0, y0 - 24 * k, 0], explode: [0, -60 * k, 0] });
+    const fanR = Rb * 0.78, fanY = y0 - 52 * k;
+    const fanBlades = Array.from({ length: 9 }, (_, i) => xf(mesh.box(fanR - 22 * k, 5 * k, 26 * k, { round: 1.5 * k }), RY((i / 9) * TAU), T([(fanR + 22 * k) / 2, 0, 0])));
+    A.part("fan", merge(revolve(fillet([[0, 0], [22 * k, 0, 3], [22 * k, 20 * k, 3], [0, 20 * k]]), { segments: 32 }), xf(merge(fanBlades), T([0, 10 * k, 0]))), { parent: rotor, position: [0, fanY - 20 * k, 0], material: M("fan", "plastic"), explode: [0, -220 * k, 0], label: { text: "cooling fan", at: [fanR, 10 * k, 0], when: a => a.open || a.parts["fan cowl"].visible === false }, note: "turns with the shaft; it draws air in through the cowl and over the fins" });
+    const cowlP = fillet([[0, 0], [Rf * 0.5, 0, 20 * k], [Rf + 6 * k, 55 * k, 24 * k], [Rf + 6 * k, 90 * k], [Rf + 3 * k, 90 * k], [Rf + 3 * k, 55 * k, 22 * k], [Rf * 0.5, 3 * k, 18 * k], [0, 3 * k]], { closed: true, steps: 3 });
+    const grille = merge(Array.from({ length: 10 }, (_, i) => xf(mesh.torus(Rf * 0.12 + i * Rf * 0.085, 1.8 * k, { segments: 40, tube: 6 }), T([0, 2 * k + i * 3 * k, 0]))));
+    const cowlScrews = merge([0, 1, 2, 3].map(i => { const a = (i / 4) * TAU + Math.PI / 4; return mesh.transform(bolt({ d: 5 * k, length: 12 * k, lite: true, segments: 8 }), aim(cyl(Rf + 6 * k, a, 80 * k), [Math.cos(a), 0, -Math.sin(a)])); }));
+    A.part("fan cowl", merge(revolve(cowlP, { loop: true, segments: 64 }), grille), { parent: axis, position: [0, fanY - 40 * k, 0], material: M("cowl", "porcelain"), explode: [0, -300 * k, 0], label: { text: "fan cowl", at: [Rf * 0.7, 30 * k, 0] }, note: "a pressed-steel bowl with a grille; keeps fingers out and aims the air along the frame" });
+    A.part("cowl screws", xf(cowlScrews, T([0, fanY - 40 * k, 0])), { parent: axis, material: M("bolts", "steel"), explode: [0, -300 * k, 0] });
+    // Terminal box with lid and cable gland, nameplate, eyebolt, drain plug.
+    const tb = A.part("terminal box", xf(mesh.box(90 * k, 70 * k, 95 * k, { round: 4 * k }), T([-(Rb + 10 * k + 35 * k), -Lf * 0.1, 0])), { parent: axis, material: M("terminalBox", "porcelain"), explode: [-120 * k, 0, 0], label: { text: "terminal box", at: [-(Rb + 70 * k), -Lf * 0.1, 50 * k] }, note: "the three supply leads land on a terminal block in here" });
+    const lid = merge(xf(mesh.box(10 * k, 96 * k, 100 * k, { round: 3 * k }), T([-(Rb + 10 * k + 70 * k + 5 * k), -Lf * 0.1, 0])), ...[[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => xf(bolt({ d: 5 * k, length: 14 * k, lite: true, segments: 8 }), T([-(Rb + 10 * k + 70 * k + 10 * k), -Lf * 0.1 + v * 40 * k, u * 40 * k]), RZ(Math.PI / 2))));
+    A.part("terminal box lid", lid, { parent: axis, material: M("terminalBox", "porcelain"), explode: [-200 * k, 0, 0] });
+    A.part("cable gland", mesh.transform(revolve(fillet([[0, 0], [11 * k, 0, 2], [11 * k, 12 * k], [8 * k, 12 * k], [8 * k, 30 * k], [0, 30 * k]]), { segments: 20 }), aim([-(Rb + 10 * k + 35 * k), -Lf * 0.1, -47 * k], [0, 0, -1])), { parent: axis, material: M("gland", "brass"), explode: [-120 * k, 0, -40 * k], note: "clamps the cable where it enters" });
+    A.part("eyebolt", xf(merge(xf(mesh.torus(10 * k, 3.5 * k, { segments: 24, tube: 8 }), RX(Math.PI / 2), T([0, 15 * k, 0])), mesh.cylinder(4 * k, 12 * k, { segments: 12 })), T([-(Rf - 2 * k), Lf * 0.3, 0]), RZ(Math.PI / 2)), { parent: axis, material: M("bolts", "steel"), note: "for lifting; the motor weighs about 60 kg" });
+    A.part("nameplate", xf(mesh.box(1.2 * k, 60 * k, 40 * k, { round: 1 }), RY(0), T([0, Lf * 0.05, Rf + 0.5 * k])), { parent: axis, material: M("nameplate", "aluminum"), note: "power, speed, voltage, current, and the frame size" });
+    A.part("drain plugs", merge([1, -1].map(s => xf(mesh.cylinder(4 * k, 8 * k, { segments: 10 }), T([Rb - 4 * k, s * (Lf / 2 - 20 * k), 0])))), { parent: axis, material: M("plugs", "brass") });
+    A.port("shaft", rotor, [0, y1 + 30 * k + lS, 0], [0, 1, 0], dS / 2);
+    A.info = { frame: H, poles, shaft: dS, shaftLength: lS, length: Lf + 60 * k + 100 * k + lS, syncRpm: (120 * 50) / poles, slots, bodyRadius: Rf, span: { back: fanY - 40 * k, tip: y1 + 30 * k + lS } };
+    A.onPose = s => { if (s.spin != null) rotor.rotation = [0, s.spin, 0]; };
+    return A;
+  }
+
+  // ---------- centrifugal pump ----------
+  // An end-suction centrifugal pump: suction along the axis (+x), impeller in a volute,
+  // discharge straight up, a mechanical seal, an oil-lubricated bearing frame, a jaw
+  // coupling under a guard, all on a base plate. motor: true couples an electricMotor behind
+  // it on the same base. pose({ spin }) turns the rotor (and the motor).
+  function pump(o = {}) {
+    const A = assembly(o.name ?? "centrifugal pump", o), M = (r, f) => matFor(o, r, f);
+    const R2 = o.impeller ?? 100;
+    const CP = pumpCasing({ radius: R2, vanes: o.vanes ?? 6, exitAngle: o.exitAngle ?? 22, neck: 0.7, discharge: R2 * 1.1 });
+    const { imp, I, c, tc, Ri, R3, yIn, casingAt, vol, ex, inFl, disFl, tb2 } = CP;
+    const axis = A.group("axis", { matrix: mul(RZ(-Math.PI / 2), RY(Math.PI / 2)) });
+    const dS = Math.max(24, R2 * 0.32), mot = o.motor ? electricMotor({ frame: o.motorFrame ?? 132, materials: o.materials, plain: o.plain, detail: o.detail }) : null;
+    const H = mot ? mot.info.frame : R3 + R2 * 0.3;
+    A.cutPart("volute casing", cut => merge(casingAt(cut), vol), { parent: axis, arc: TAU * 0.75, start: Math.PI * 0.75, material: M("casing", "steel"), explode: [0, R2 * 2.4, 0], label: { text: "volute casing", at: v3.add(ex.center, [0, 0, R2 * 0.4]) }, note: "cast iron; the spiral collects the flow and slows it into pressure" });
+    A.part("suction flange", xf(inFl, T([0, yIn, 0])), { parent: axis, material: M("flange", "steel"), explode: [0, R2 * 3.2, 0], label: { text: "suction", at: [Ri + tc, yIn + R2 * 0.05, 0] }, note: "liquid comes in along the axis, straight into the eye of the impeller" });
+    A.part("discharge flange", mesh.transform(disFl, aim(ex.center, ex.normal)), { parent: axis, material: M("flange", "steel"), explode: [0, R2 * 2.4, 0], label: { text: "discharge", at: v3.add(ex.center, v3.scale(ex.normal, R2 * 0.1)) }, note: "leaves the volute at right angles to the shaft" });
+    const rotor = A.group("rotor", { parent: axis });
+    A.rotor = rotor;
+    A.part("impeller", imp, { parent: rotor, material: M("impeller", "brass"), explode: [0, R2 * 1.4, 0], label: { text: "impeller", at: [R2 * 0.8, I.tipY(R2 * 0.8), 0], inside: true }, note: `${o.vanes ?? 6} backswept vanes fling the liquid outward; at the rim it has gained the head` });
+    A.part("impeller nut", xf(plate(hexagon(dS * 0.9), dS * 0.45, { y0: 0 }), T([0, I.height + 2, 0])), { parent: rotor, material: M("shaft", "steel"), explode: [0, R2 * 1.8, 0], inside: true });
+    // Back cover with the stuffing box, casing bolts, mechanical seal.
+    const yB = -c - tb2, rs = R2 * 0.2;
+    const cover = revolve(fillet([[dS / 2 + 1, yB], [R3 + 0.6 * R2 * 0.12, yB, 3], [R3 + 0.6 * R2 * 0.12, yB - R2 * 0.14, 3], [rs * 1.9, yB - R2 * 0.14, 4], [rs * 1.9, yB - R2 * 0.55, 3], [dS / 2 + 1, yB - R2 * 0.55]], { closed: true, steps: 2 }), { loop: true, segments: 48 });
+    A.part("casing cover", cover, { parent: axis, material: M("casing", "steel"), explode: [0, -R2 * 0.9, 0], label: { text: "casing cover", at: [rs * 1.9, yB - R2 * 0.35, 0] }, note: "the back wall of the pump; it carries the seal housing" });
+    A.part("casing bolts", boltCircle(8, R3 + 0.6 * R2 * 0.12 - R2 * 0.06, { d: R2 * 0.08, y: yB - R2 * 0.14, grip: R2 * 0.14, nuts: false }), { parent: axis, material: M("bolts", "steel"), explode: [0, -R2 * 1.3, 0] });
+    const sealY = yB - R2 * 0.55;
+    const seal = merge(revolve([[dS / 2, sealY + 2], [dS / 2 + R2 * 0.09, sealY + 2], [dS / 2 + R2 * 0.09, sealY + R2 * 0.16], [dS / 2, sealY + R2 * 0.16]], { loop: true, segments: 32 }), xf(spring({ radius: dS / 2 + R2 * 0.05, wire: R2 * 0.02, length: R2 * 0.18, coils: 5 }), T([0, sealY + R2 * 0.16, 0])));
+    A.part("mechanical seal", seal, { parent: rotor, material: M("seal", "graphite"), explode: [0, -R2 * 1.6, 0], label: { text: "mechanical seal", at: [dS / 2 + R2 * 0.09, sealY + R2 * 0.1, 0], inside: true }, note: "a carbon ring spinning against a ceramic ring, pressed together by a spring: the only place the liquid could get out" });
+    const gland = revolve(fillet([[dS / 2 + 1.5, sealY], [rs * 1.6, sealY, 2], [rs * 1.6, sealY - R2 * 0.08], [dS / 2 + 1.5, sealY - R2 * 0.08]], { closed: true, steps: 2 }), { loop: true, segments: 32 });
+    A.part("seal gland", gland, { parent: axis, material: M("gland", "brass"), explode: [0, -R2 * 1.1, 0], note: "holds the stationary half of the seal" });
+    // Bearing frame: a cylinder with a flange toward the casing, two bearings, covers, a sight glass.
+    const yF0 = sealY - R2 * 0.1, Lfr = R2 * 2.6, yF1 = yF0 - Lfr, rF = Math.max(dS * 1.9, R2 * 0.55);
+    const frameP = fillet([[rF * 0.55, yF0], [rs * 1.9 + R2 * 0.1, yF0], [rs * 1.9 + R2 * 0.1, yF0 - R2 * 0.12, 4], [rF, yF0 - R2 * 0.3, 8], [rF, yF1 + R2 * 0.12, 4], [rF * 0.72, yF1, 3], [rF * 0.55, yF1]], { closed: true, steps: 3 });
+    // "Down" in this frame is +z: the feet drop from the frame to the base plate at z = H.
+    const frameFeet = [1, -1].map(s => merge(xf(mesh.box(R2 * 0.3, R2 * 0.5, H - R2 * 0.12 - rF * 0.85), T([s * rF * 0.75, (yF0 + yF1) / 2, (rF * 0.85 + H - R2 * 0.12) / 2])), xf(mesh.box(R2 * 0.5, R2 * 0.7, R2 * 0.12, { round: R2 * 0.02 }), T([s * rF * 0.75, (yF0 + yF1) / 2, H - R2 * 0.06]))));
+    const frameM = merge(revolve(frameP, { loop: true, segments: 56 }), frameFeet);
+    A.part("bearing frame", frameM, { parent: axis, material: M("frame", "steel"), explode: [0, -R2 * 2.2, 0], label: { text: "bearing frame", at: [rF, (yF0 + yF1) / 2, 0] }, note: "an oil bath and two bearings carry the shaft and the impeller's thrust" });
+    const bw = R2 * 0.26, B1 = { bore: dS * 1.05, outer: dS * 2.0, width: bw };
+    const yb1 = yF0 - R2 * 0.55, yb2 = yF1 + R2 * 0.35;
+    A.part("inboard bearing", bearing({ ...B1, segments: 32, name: "inboard bearing" }), { parent: axis, position: [0, yb1 - bw / 2, 0], explode: [0, -R2 * 2.2, 0], label: { text: "bearings", at: [B1.outer / 2, yb1, 0], inside: true }, note: "deep-groove ball bearings; the outboard pair takes the thrust" });
+    A.part("outboard bearing", bearing({ ...B1, segments: 32, name: "outboard bearing" }), { parent: axis, position: [0, yb2 - bw / 2, 0], explode: [0, -R2 * 2.2, 0] });
+    const endCover = revolve(fillet([[dS / 2 + 1, 0], [rF * 0.72 + R2 * 0.04, 0, 2], [rF * 0.72 + R2 * 0.04, R2 * 0.1, 2], [dS / 2 + 1, R2 * 0.1]], { closed: true, steps: 2 }), { loop: true, segments: 40 });
+    A.part("bearing cover", mesh.transform(endCover, aim([0, yF1, 0], [0, -1, 0])), { parent: axis, material: M("frame", "steel"), explode: [0, -R2 * 2.8, 0] });
+    A.part("oil sight glass", mesh.transform(revolve(fillet([[0, 0], [R2 * 0.09, 0], [R2 * 0.09, R2 * 0.05, 1], [0, R2 * 0.05]]), { segments: 20 }), aim([rF * 0.95, (yF0 + yF1) / 2 - R2 * 0.2, 0], [1, 0, 0])), { parent: axis, material: M("sightGlass", "glass"), note: "shows the oil level in the frame" });
+    A.part("breather", mesh.transform(revolve(fillet([[0, 0], [R2 * 0.05, 0], [R2 * 0.05, R2 * 0.1], [R2 * 0.07, R2 * 0.1, 1], [R2 * 0.07, R2 * 0.16], [0, R2 * 0.16]]), { segments: 16 }), aim([0, (yF0 + yF1) / 2, -rF * 0.98], [0, 0, -1])), { parent: axis, material: M("plugs", "brass") });
+    // Shaft and coupling.
+    const yC = yF1 - R2 * 0.55, Lsh = I.height - yC + R2 * 0.1;
+    const sh = shaft({ steps: [[R2 * 0.5, dS * 0.95], [Lsh - R2 * 0.5 - R2 * 0.3, dS * 1.05], [R2 * 0.3, dS * 0.8]], segments: 32, chamfer: 1.5 });
+    A.part("shaft", xf(sh, T([0, yC - R2 * 0.1, 0])), { parent: rotor, material: M("shaft", "brushed"), label: { text: "shaft", at: [dS / 2, yC + R2 * 0.2, 0] }, note: "stainless; it carries the impeller through the seal to the coupling" });
+    const hubP = fillet([[dS / 2, 0], [dS * 1.35, 0, 2], [dS * 1.35, R2 * 0.34, 3], [dS / 2, R2 * 0.34]], { closed: true, steps: 2 });
+    const jaws = n => merge(Array.from({ length: n }, (_, i) => xf(mesh.box(dS * 0.5, R2 * 0.14, dS * 0.42, { round: 1.5 }), RY((i / n) * TAU), T([dS * 0.95, R2 * 0.34 + R2 * 0.07, 0]))));
+    const halfM = merge(revolve(hubP, { loop: true, segments: 32 }), jaws(3));
+    A.part("pump coupling half", mesh.transform(halfM, aim([0, yC, 0], [0, -1, 0])), { parent: rotor, material: M("coupling", "steel"), explode: [0, -R2 * 3.2, 0], label: { text: "jaw coupling", at: [dS * 1.35, yC - R2 * 0.2, 0], when: a => a.open || a.parts["coupling guard"].visible === false }, note: "two hubs with jaws that mesh through a rubber spider: it forgives a little misalignment" });
+    A.part("coupling spider", mesh.transform(revolve([[dS * 0.6, 0], [dS * 1.4, 0], [dS * 1.4, R2 * 0.12], [dS * 0.6, R2 * 0.12]], { loop: true, segments: 24 }), aim([0, yC - R2 * 0.34 - R2 * 0.07, 0], [0, -1, 0])), { parent: rotor, material: M("spider", "rubber"), explode: [0, -R2 * 3.6, 0] });
+    const yMot = yC - R2 * 0.34 * 2 - R2 * 0.14;
+    const motorHalf = A.part("motor coupling half", mesh.transform(merge(revolve(hubP, { loop: true, segments: 32 }), jaws(3)), aim([0, yMot, 0], [0, 1, 0])), { parent: axis, material: M("coupling", "steel"), explode: [0, -R2 * 4.0, 0] });
+    const guardP = fillet([[rF * 0.95, yC + R2 * 0.05], [rF * 0.95 + R2 * 0.03, yC + R2 * 0.05], [rF * 0.95 + R2 * 0.03, yMot - R2 * 0.05], [rF * 0.95, yMot - R2 * 0.05]], { closed: true });
+    A.cutPart("coupling guard", cut => revolve(guardP, { loop: true, segments: 48, ...cut }), { parent: axis, arc: Math.PI * 1.1, start: Math.PI * 0.45, material: M("guard", "porcelain"), explode: [0, 0, R2 * 2.2], label: { text: "coupling guard", at: [0, (yC + yMot) / 2, -rF] }, note: "a sheet-metal shroud over the spinning coupling" });
+    // The motor's own x axis (its shaft) lands on this frame's y, its down (-y) on +z, with
+    // its shaft tip in the motor coupling half.
+    const MROT = new Float32Array([0, 1, 0, 0, 0, 0, -1, 0, -1, 0, 0, 0, 0, 0, 0, 1]);
+    const tyMot = mot ? yMot - mot.info.span.tip : 0;
+    const yBack = mot ? tyMot + mot.info.span.back - R2 * 0.4 : yMot - R2 * 1.2, yFront = yIn - R2 * 0.25;
+    // Base plate (flat, normal z, lying at z = H) with slots for the foundation bolts.
+    const Lb = yFront - yBack, Wb = Math.max(2 * rF + R2 * 1.4, mot ? mot.info.bodyRadius * 2.4 : 0), yMid = (yFront + yBack) / 2;
+    const slotAt = [[-1, -1], [1, -1], [1, 0], [-1, 0], [1, 1], [-1, 1]].map(([u, v]) => [u * (Wb / 2 - R2 * 0.3), yMid + v * (Lb / 2 - R2 * 0.35)]);
+    const slots = slotAt.map(([x, y]) => roundRect2(R2 * 0.18, R2 * 0.3, R2 * 0.08, 3, x, y));
+    const base = merge(
+      xf(mesh.extrude(roundRect2(Wb, Lb, R2 * 0.12, 3, 0, yMid), R2 * 0.18, { holes: slots, bevel: R2 * 0.02, bevelSegments: 1 }), T([0, 0, H + R2 * 0.09])),
+      xf(mesh.extrude(roundRect2(Wb - R2 * 0.3, Lb - R2 * 0.3, R2 * 0.1, 3, 0, yMid), R2 * 0.25, { holes: [roundRect2(Wb - R2 * 0.7, Lb - R2 * 0.7, R2 * 0.08, 3, 0, yMid)] }), T([0, 0, H + R2 * 0.18 + R2 * 0.125])),
+    );
+    const baseNode = A.part("base plate", base, { parent: axis, material: M("base", "steel"), label: { text: "base plate", at: [Wb / 2, yMid, H] }, note: "a fabricated steel base grouted to the floor; pump and motor are aligned on it" });
+    A.part("foundation bolts", merge(slotAt.map(([x, y]) => xf(bolt({ d: R2 * 0.1, length: R2 * 0.3, lite: true, segments: 8 }), T([x, y, H]), RX(-Math.PI / 2)))), { parent: baseNode, material: M("bolts", "steel") });
+    if (mot) {
+      A.part("motor", mot, { parent: axis, matrix: mul(T([0, tyMot, 0]), MROT), note: `an IEC ${mot.info.frame} motor drives it through the coupling` });
+      A.motor = mot;
+    }
+    A.port("inlet", axis, [0, yIn, 0], [0, 1, 0], Ri);
+    A.port("discharge", axis, ex.center, ex.normal, ex.radius);
+    A.info = { impeller: R2, shaft: dS, shaftHeight: H, baseLength: Lb, baseWidth: Wb, inlet: Ri, discharge: ex.radius, motor: mot ? mot.info : null };
+    A.onPose = s => { if (s.spin != null) { rotor.rotation = [0, s.spin, 0]; motorHalf.rotation = [0, s.spin, 0]; if (mot) mot.pose({ spin: s.spin }); } };
+    return A;
+  }
+
+  // ---------- bicycle drivetrain ----------
+  // Crankset, chainrings, chain, cassette, freehub, and rear derailleur, with stubs of the
+  // frame. The bottom bracket is at the origin, the bike faces -x, the drive side is +z,
+  // and sprocket axles run along z. Dimensions are a road bike's: 172.5 mm cranks, 410 mm
+  // chainstays, a compact 50/34 double, an 11-32 eleven-speed cassette, 1/2" chain.
+  // pose({ crank, ring, gear }): crank angle (radians, forward = counterclockwise seen
+  // from the drive side), chainring index, cassette index (0 = smallest cog).
+  function bicycleDrivetrain(o = {}) {
+    const A = assembly(o.name ?? "bicycle drivetrain", o), M = (r, f) => matFor(o, r, f);
+    const rings = o.chainrings ?? [50, 34], cogs = o.cogs ?? [11, 12, 13, 14, 16, 18, 20, 22, 25, 28, 32];
+    const pitch = 12.7, rOf = z => pitch / (2 * Math.sin(Math.PI / z)), mod = pitch / Math.PI;
+    const crankL = o.crank ?? 172.5, stay = o.chainstay ?? 410, zf = -43.5, zC = -2, cogStep = 3.95, jockey = 11;
+    const ringZ = rings.map((_, i) => -i * 7.5), cogZ = cogs.map((_, i) => zC + ((cogs.length - 1) / 2 - i) * cogStep);
+    const sprocket = (z, t, hole) => xf(mesh.gear({ teeth: z, module: mod, thickness: t, hole, bevel: 0.3 }), RX(Math.PI / 2));
+    // Frame stubs (porcelain) and the dropout with its derailleur hanger.
+    const tube = (a, b, r) => tubeShell([a, b], r, 0, { segments: 16 });
+    const drop = [stay, 0, 0];
+    const frame = merge(
+      tube([-10, 20, zf + 24], [stay - 32, 4, zf + 52], 9), tube([-10, 20, zf - 24], [stay - 30, 4, zf - 60], 9),
+      tube([stay - 30, 8, zf + 60], [-40, 380, zf + 22], 7), tube([stay - 30, 8, zf - 60], [-40, 380, zf - 22], 7),
+      tube([0, 30, zf], [-45, 400, zf], 14), tube([-20, 20, zf], [-330, 250, zf], 16),
+    );
+    A.part("frame", frame, { material: M("frame", "porcelain"), label: { text: "chainstay", at: [stay * 0.55, 20, zf + 50] }, note: "the chainstays set the distance from the crank to the rear axle" });
+    const dropout = xf(mesh.extrude(fillet([[-28, 22, 6], [12, 22, 6], [18, -8, 5], [-2, -34, 5], [-26, -14, 6]], { closed: true, steps: 3 }), 5, { holes: [circle2(5.2, 16, 0, 0), circle2(4.5, 16, 6, -28)] }), T([stay, 0, zf + 67]));
+    A.part("dropout", merge(dropout, xf(mesh.extrude(fillet([[-24, 20, 5], [10, 20, 5], [14, -6, 4], [-4, -30, 4], [-22, -12, 5]], { closed: true, steps: 3 }), 5, { holes: [circle2(5.2, 16, 0, 0)] }), T([stay, 0, zf - 64]))), { material: M("frame", "aluminum"), note: "the rear axle sits here; the derailleur hangs from a tab on the drive side" });
+    // Bottom bracket, spindle, cranks, spider, chainrings, pedals.
+    A.part("bottom bracket", xf(revolve([[17.5, -34], [21, -34], [23, -31], [23, 31], [21, 34], [17.5, 34]], { loop: true, segments: 32 }), T([0, 0, zf]), RX(Math.PI / 2)), { material: M("bb", "aluminum"), label: { text: "bottom bracket", at: [0, -22, zf] }, note: "a pair of bearings in the frame shell that the spindle turns in" });
+    const crank = A.group("crankset");
+    A.part("spindle", xf(mesh.cylinder(12, 132, { segments: 24 }), T([0, 0, zf]), RX(Math.PI / 2)), { parent: crank, material: M("spindle", "steel"), note: "24 mm hollow steel spindle" });
+    const armOutline = fillet([[-20, -18, 12], [crankL - 10, -11, 10], [crankL + 10, 0, 10], [crankL - 10, 11, 10], [-20, 18, 12]], { closed: true, steps: 3 });
+    const arm = mesh.extrude(armOutline, 14, { bevel: 2.5, bevelSegments: 2 });
+    const spiderArms = Array.from({ length: 5 }, (_, i) => xf(mesh.extrude(fillet([[0, -9, 4], [58, -6, 3], [58, 6, 3], [0, 9, 4]], { closed: true, steps: 2 }), 6, { bevel: 1 }), RZ((i / 5) * TAU + Math.PI)));
+    A.part("right crank", merge(xf(arm, T([0, 0, 18])), xf(merge(spiderArms), T([0, 0, 8])), xf(mesh.cylinder(22, 30, { segments: 32 }), T([0, 0, 12]), RX(Math.PI / 2))), { parent: crank, material: M("cranks", "aluminum"), explode: [0, 0, 60], label: { text: "crank arm", at: [crankL * 0.6, 14, 25] }, note: `${crankL} mm forged aluminum arms; the five-arm spider carries the chainrings` });
+    A.part("left crank", xf(arm, T([0, 0, zf - 60]), RZ(Math.PI)), { parent: crank, material: M("cranks", "aluminum"), explode: [0, 0, -60] });
+    A.part("crank bolt", xf(merge(plate(hexagon(14), 5, { y0: 0 }), revolve([[0, -3], [9, -3], [9, 0], [0, 0]], { segments: 16 })), T([0, 0, 27]), RX(Math.PI / 2)), { parent: crank, material: M("bolts", "steel"), explode: [0, 0, 90], note: "pulls the right arm onto the spindle" });
+    const pedal = merge(xf(mesh.cylinder(6, 16, { segments: 12 }), T([0, 0, 8]), RX(Math.PI / 2)), xf(mesh.box(64, 14, 64, { round: 4 }), T([0, 0, 16 + 32])));
+    A.part("right pedal", pedal, { parent: crank, position: [crankL, 0, 25], material: M("pedals", "rubber"), explode: [0, 0, 60], label: { text: "pedal", at: [crankL, -8, 70] }, note: "the pedal spins on its own axle so the foot stays level" });
+    A.part("left pedal", xf(pedal, RY(Math.PI)), { parent: crank, position: [-crankL, 0, zf - 67], material: M("pedals", "rubber"), explode: [0, 0, -60] });
+    const ringNodes = rings.map((z, i) => A.part(`chainring ${z}`, sprocket(z, i ? 2.2 : 2.6, 52 - i * 10), { parent: crank, position: [0, 0, ringZ[i]], material: M("chainrings", "aluminum"), explode: [0, 0, 110 + i * 20], label: i === 0 ? { text: `${z}-tooth chainring`, at: [0, rOf(z) + 8, 0] } : undefined, note: `${z} teeth; every link of chain that leaves it has moved ${pitch} mm` }));
+    A.part("chainring bolts", merge(Array.from({ length: 5 }, (_, i) => xf(bolt({ d: 6, length: 10, lite: true, segments: 8, head: 3 }), T([0, 0, 5]), RX(Math.PI / 2), T(cyl(55, (i / 5) * TAU + Math.PI, 0)), RX(-Math.PI / 2)))), { parent: crank, material: M("bolts", "steel"), explode: [0, 0, 150] });
+    // Rear hub, axle, freehub, cassette, lockring.
+    const hub = A.group("rear hub", { position: drop });
+    A.part("hub shell", xf(revolve(fillet([[12, -60], [20, -60, 3], [20, -52], [30, -46, 2], [30, -42, 2], [20, -36], [20, 36], [30, 42, 2], [30, 46, 2], [20, 52], [20, 60, 3], [12, 60]], { closed: true, steps: 2 }), { loop: true, segments: 40 }), T([0, 0, zf - 8]), RX(Math.PI / 2)), { parent: hub, material: M("hub", "aluminum"), note: "the wheel's spokes lace into the two flanges" });
+    A.part("axle", xf(mesh.cylinder(5, 146, { segments: 12 }), T([0, 0, zf]), RX(Math.PI / 2)), { parent: hub, material: M("axle", "steel") });
+    const cassette = A.group("cassette", { parent: hub });
+    A.cassette = cassette;
+    A.part("freehub body", xf(revolve([[12.5, -22], [17.5, -22], [17.5, 24], [12.5, 24]], { loop: true, segments: 32 }), T([0, 0, zC]), RX(Math.PI / 2)), { parent: cassette, material: M("freehub", "steel"), explode: [0, 0, 40], label: { text: "freehub", at: [0, -20, zC + 24], inside: true }, note: "a ratchet inside lets the wheel coast while the cassette stands still" });
+    cogs.forEach((z, i) => A.part(`cog ${z}`, sprocket(z, 1.8, 18), { parent: cassette, position: [0, 0, cogZ[i]], material: M("cassette", "steel"), explode: [0, 0, 30 + (cogs.length - i) * 7], label: i === cogs.length - 1 ? { text: `cassette, ${cogs[0]} to ${cogs[cogs.length - 1]} teeth`, at: [0, rOf(z) + 8, cogZ[i]] } : undefined, note: `${z} teeth` }));
+    A.part("cassette spacers", merge(cogs.slice(1).map((_, i) => xf(revolve([[18, 0], [22, 0], [22, cogStep - 1.8], [18, cogStep - 1.8]], { loop: true, segments: 24 }), T([0, 0, cogZ[i + 1] + 0.9]), RX(Math.PI / 2)))), { parent: cassette, material: M("cassette", "aluminum"), explode: [0, 0, 30] });
+    A.part("lockring", xf(revolve(fillet([[13, 0], [21, 0, 1], [21, 4, 1], [13, 4]], { closed: true }), { loop: true, segments: 24 }), T([0, 0, cogZ[0] + 1]), RX(Math.PI / 2)), { parent: cassette, material: M("lockring", "steel"), explode: [0, 0, 120], note: "threads onto the freehub to clamp the cogs" });
+    // Rear derailleur: hanger bolt and B-knuckle on the dropout, parallelogram, P-knuckle, cage, pulleys.
+    const der = A.group("rear derailleur", { explode: [0, 0, 90] });
+    const B = [stay + 8, -20, cogZ[0] + 12];
+    A.part("B-knuckle", merge(xf(mesh.box(22, 26, 16, { round: 3 }), T(B)), xf(mesh.cylinder(5, 12, { segments: 12 }), T([stay + 6, -28, zf + 67 + 7]), RX(Math.PI / 2))), { parent: der, material: M("derailleur", "aluminum"), label: { text: "rear derailleur", at: [stay + 20, -20, B[2] + 8] }, note: "bolted to the hanger; a spring in here keeps the chain taut" });
+    const link = (a, b, w) => mesh.transform(xf(mesh.box(w, 5, v3.dist(a, b) + w, { round: 2 }), T([0, 0, 0])), mul(T(v3.lerp(a, b, 0.5)), m4.alignY(v3.sub(b, a)), RX(Math.PI / 2)));
+    const linksNode = A.part("parallelogram", null, { parent: der, label: { text: "parallelogram", at: [stay + 6, -50, cogZ[0] - 10] }, note: "two links swing inboard to move the cage under the next cog; the cable pulls, a spring returns" });
+    const pK = A.part("P-knuckle", null, { parent: der });
+    const cageNode = pK.add(null, { name: "cage" });
+    A.part("cage plates", null, { parent: cageNode });
+    const guide = A.part("guide pulley", merge(sprocket(jockey, 2.4, 4), xf(revolve([[4, -3], [8, -3], [8, 3], [4, 3]], { loop: true, segments: 16 }), RX(Math.PI / 2))), { parent: cageNode, material: M("pulleys", "plastic"), label: { text: "guide pulley", at: [12, 0, 12] }, note: "sits just under the cog and steers the chain onto it" });
+    const tension = A.part("tension pulley", merge(sprocket(jockey, 2.4, 4), xf(revolve([[4, -3], [8, -3], [8, 3], [4, 3]], { loop: true, segments: 16 }), RX(Math.PI / 2))), { parent: cageNode, material: M("pulleys", "plastic"), label: { text: "tension pulley", at: [12, 0, 12] }, note: "the cage swings on a spring so this pulley takes up whatever chain the gear doesn't need" });
+    const cableP = E3.smooth([[-150, 60, zf + 30], [100, 32, zf + 36], [300, 16, zf + 44], [392, -6, zf + 58], [412, -30, B[2] - 2]], { steps: 8 });
+    A.part("gear cable", tubeShell(cableP, 2.5, 0, { segments: 8 }), { material: M("cable", "rubber"), label: { text: "shift cable", at: [250, 24, zf + 44] }, note: "the shifter pulls this cable to move the derailleur inboard; a spring moves it back" });
+    A.part("cable stop", xf(mesh.box(16, 10, 12, { round: 2 }), T([300, 20, zf + 44])), { material: M("frame", "aluminum"), note: "the outer housing ends here; only the inner wire runs on along the chainstay" });
+    A.part("barrel adjuster", xf(revolve(fillet([[0, 0], [5, 0], [5, 8], [7, 9, 1], [7, 16], [0, 16]]), { segments: 12 }), T([408, -22, B[2] - 2]), RY(0)), { parent: der, material: M("derailleur", "aluminum"), note: "a threaded barrel to fine-tune the cable tension" });
+    const chainNode = A.part("chain", null, { parent: A, label: { text: "chain", at: [stay * 0.5, rOf(rings[0]) * 0.9, ringZ[0]] }, note: "a 1/2-inch roller chain: 7.75 mm rollers between 1 mm plates, about 110 links" });
+    // Chain length, as a mechanic sets it: big ring, big cog, plus two links.
+    // The guide pulley hangs under the cog; with the cage swung all the way back and chain
+    // still slack, the whole body swings back on the hanger bolt (angle beta) as the B-spring allows.
+    const rJ = rOf(jockey), Lcage = 95, lenAt = (ri, ci, phi, beta = 0) => {
+      const Rr = rOf(rings[ri]), Rc = rOf(cogs[ci]);
+      const g0 = [stay + 6 - 0.25 * Rc - B[0], -(Rc + rJ + 7) - B[1]], cb = Math.cos(beta), sb = Math.sin(beta);
+      const g = [B[0] + g0[0] * cb - g0[1] * sb, B[1] + g0[0] * sb + g0[1] * cb], t = [g[0] + Lcage * Math.sin(phi), g[1] - Lcage * Math.cos(phi)];
+      const bp = beltPath([{ c: [0, 0], r: Rr, cw: false }, { c: t, r: rJ, cw: false }, { c: g, r: rJ, cw: true }, { c: [stay, 0], r: Rc, cw: false }], { step: 3 });
+      bp.radii = [Rr, rJ, rJ, Rc];
+      return { bp, g, t };
+    };
+    const bigBig = lenAt(0, cogs.length - 1, -0.45).bp.length;
+    const chainLen = Math.ceil(bigBig / pitch / 2) * 2 * pitch + 2 * pitch;
+    const solve = (ri, ci) => {
+      let lo = -0.6, hi = 1.7, beta = 0;
+      if (lenAt(ri, ci, hi).bp.length < chainLen) {
+        let b0 = 0, b1 = 1.3;
+        for (let i = 0; i < 24; i++) { const mid = (b0 + b1) / 2; if (lenAt(ri, ci, hi, mid).bp.length < chainLen) b0 = mid; else b1 = mid; }
+        return { phi: hi, beta: (b0 + b1) / 2 };
+      }
+      for (let i = 0; i < 28; i++) { const mid = (lo + hi) / 2; if (lenAt(ri, ci, mid).bp.length < chainLen) lo = mid; else hi = mid; }
+      return { phi: (lo + hi) / 2, beta };
+    };
+    const phases = o.chainPhases ?? 6, cache = new Map();
+    const chainFor = (ri, ci) => {
+      const key = `${ri},${ci}`;
+      if (cache.has(key)) return cache.get(key);
+      const { phi, beta } = solve(ri, ci), { bp, g, t } = lenAt(ri, ci, phi, beta);
+      const pts = liftPath(bp, [ringZ[ri], cogZ[ci], cogZ[ci], cogZ[ci]]);
+      const meshes = Array.from({ length: phases }, (_, k) => chain(pts, { pitch, phase: k / phases }));
+      const entry = { phi, beta, g: [g[0], g[1], cogZ[ci]], t: [t[0], t[1], cogZ[ci]], meshes, length: bp.length };
+      cache.set(key, entry);
+      return entry;
+    };
+    const chainNodes = [];
+    A.info = { chainrings: rings, cogs, chainLinks: Math.round(chainLen / pitch), ratios: rings.map(r => cogs.map(c => r / c)), development: rings.map(r => cogs.map(c => (r / c) * 2.105)), crank: crankL, chainstay: stay };
+    const st = { crank: 0, ring: 0, gear: Math.floor(cogs.length / 2) };
+    A.onPose = p => {
+      Object.assign(st, p);
+      const ri = clamp(Math.round(st.ring), 0, rings.length - 1), ci = clamp(Math.round(st.gear), 0, cogs.length - 1);
+      const zr = rings[ri], zc = cogs[ci], th = st.crank;
+      crank.rotation = [0, 0, th];
+      cassette.rotation = [0, 0, (th * zr) / zc];
+      const C = chainFor(ri, ci);
+      // Parallelogram and knuckle follow the cage inboard; the cage hangs from the guide pulley.
+      const P = [C.g[0] - 4, C.g[1] + 6, C.g[2] + 12];
+      pK.position = P;
+      const pivA = [B[0] - 6, B[1] + 8, B[2]], pivB = [B[0] + 6, B[1] - 8, B[2]];
+      linksNode.mesh = merge(link(pivA, [P[0] - 6, P[1] + 8, P[2]], 9), link(pivB, [P[0] + 6, P[1] - 8, P[2]], 9));
+      linksNode.material = M("derailleur", "aluminum");
+      pK.mesh = xf(mesh.box(18, 24, 14, { round: 3 }), T([0, 0, 0]));
+      pK.material = M("derailleur", "aluminum");
+      const gL = v3.sub(C.g, P), tL = v3.sub(C.t, P);
+      guide.position = [gL[0], gL[1], gL[2]];
+      tension.position = [tL[0], tL[1], tL[2]];
+      const cp = A.parts["cage plates"], mid = v3.lerp(gL, tL, 0.5), ang = Math.atan2(tL[1] - gL[1], tL[0] - gL[0]);
+      const plateM = xf(mesh.extrude(roundRect2(Lcage + 26, 24, 11, 5), 2.2), RZ(ang));
+      cp.mesh = merge(xf(plateM, T([mid[0], mid[1], gL[2] - 6])), xf(plateM, T([mid[0], mid[1], gL[2] + 6])), xf(mesh.cylinder(2.5, 12, { segments: 8 }), T([gL[0], gL[1], gL[2]]), RX(Math.PI / 2)), xf(mesh.cylinder(2.5, 12, { segments: 8 }), T([tL[0], tL[1], tL[2]]), RX(Math.PI / 2)));
+      cp.material = M("derailleur", "aluminum");
+      guide.rotation = [0, 0, -(th * zr) / jockey];
+      tension.rotation = [0, 0, (th * zr) / jockey];
+      // The chain advances one pitch per tooth; show the nearest of the precomputed phases.
+      const s = ((th * rOf(zr)) / pitch) % 1, k = Math.round(((s + 1) % 1) * phases) % phases;
+      if (chainNode.mesh !== C.meshes[k]) chainNode.mesh = C.meshes[k];
+      chainNode.material = M("chain", "steel");
+      A.cageAngle = C.phi; A.bodyAngle = C.beta;
+    };
+    void chainNodes; void ringNodes;
+    A.onPose({});
+    return A;
+  }
+
+  // ---------- axial turbine ----------
+  // A single-casing industrial steam turbine: a split casing (top half lifts off), an
+  // inlet nozzle box on top, an axial-flow path of `stages` reaction stages whose blades
+  // grow as the steam expands, a downward exhaust hood, labyrinth glands, journal
+  // bearings in pedestals, and a coupling. Axis along +x, steam flowing +x, split plane y = 0.
+  // pose({ spin }) turns the rotor.
+  function turbine(o = {}) {
+    const A = assembly(o.name ?? "steam turbine", o), M = (r, f) => matFor(o, r, f);
+    const N = o.stages ?? 6, Rh = o.hub ?? 170, h0 = o.bladeHeight ?? 34, h1 = o.exitHeight ?? 150, pitch = o.stagePitch ?? 125;
+    const axis = A.group("axis", { matrix: RZ(-Math.PI / 2) });
+    const rotor = A.group("rotor", { parent: axis });
+    A.rotor = rotor;
+    const hAt = i => h0 * Math.pow(h1 / h0, i / Math.max(1, N - 1));
+    const y0 = 0, yEnd = y0 + N * pitch, tipMax = Rh + h1;
+    const Rc = tipMax + 30, Rco = Rc + 45, yC0 = y0 - 160, yC1 = yEnd + 60;
+    // Flow path: a stator row (diaphragm) then a rotor row per stage.
+    const stages = [];
+    for (let i = 0; i < N; i++) {
+      const h = hAt(i), ys = y0 + i * pitch + pitch * 0.25, yr = ys + pitch * 0.5, nb = Math.round(110 - 8 * i), nv = Math.round(nb * 0.8);
+      const slope = (hAt(i + 1) - h) / pitch;
+      A.part(`diaphragm ${i + 1}`, statorStage({ name: `stage ${i + 1} diaphragm`, vanes: nv, inner: Rh + 5, outer: Rh + h + 4, y: ys, chord: Math.min(pitch * 0.32, h * 0.9), stagger: 50, camber: 0.12, thickness: 0.14, hand: 1, outerSlope: slope, points: 5, segments: 56, material: M("diaphragms", "steel"), bandMaterial: M("diaphragms", "steel") }), { parent: axis, explode: [-(260 + i * 20), 0, 0], label: i === 1 ? { text: "diaphragm (fixed nozzles)", at: cyl(Rh + h + 4, Math.PI, ys), inside: true } : undefined, note: "fixed vanes that turn pressure into a swirling jet aimed at the moving blades" });
+      const rs = rotorStage({ name: `stage ${i + 1}`, blades: nb, hub: Rh, tip: Rh + h, y: yr, chord: [Math.min(pitch * 0.34, h * 0.95), Math.min(pitch * 0.3, h * 0.85)], stagger: [-28, -44], camber: [0.14, 0.1], thickness: [0.18, 0.12], hand: -1, tipSlope: slope, shroud: true, diskWidth: pitch * 0.42, bore: Rh * 0.3, stations: 2, points: 5, segments: 48, material: M("blades", "brushed"), diskMaterial: M("rotor", "steel") });
+      stages.push(A.part(`rotor stage ${i + 1}`, rs, { parent: rotor, label: i === N - 1 ? { text: `stage ${N} blades`, at: cyl(Rh + h, Math.PI, yr), inside: true } : undefined, note: `${nb} blades, ${h.toFixed(0)} mm tall: the steam has expanded, so later stages need more flow area` }));
+    }
+    A.part("stage labels", null, { parent: axis, label: { text: "rotor", at: [0, y0 + pitch * 1.6, Rh * 0.5], inside: true }, note: "one forged shaft with the blade disks machined from it" });
+    // Shaft through the glands to the bearings and coupling.
+    const yB1 = yC0 - 230, yB2 = yC1 + 230, dj = Rh * 0.72, floor = Rco + 65;
+    const sh = shaft({ steps: [[90, dj * 0.8], [120, dj], [yC0 + 20 - (yB1 + 60), dj * 1.15], [yC1 - yC0 - 40, Rh * 1.62], [yB2 - 60 - (yC1 - 20), dj * 1.15], [120, dj], [200, dj * 0.8]], segments: 48, chamfer: 3 });
+    A.part("shaft", xf(sh, T([0, yB1 - 150, 0])), { parent: rotor, material: M("rotor", "steel"), label: { text: "shaft", at: [dj / 2, yB2 + 60, 0] }, note: "runs at 3,000 to 12,000 rpm; everything on it is balanced as one piece" });
+    const glandP = [[Rh * 0.83, 0], [Rh * 0.98, 0]];
+    for (let i = 0; i < 12; i++) glandP.push([Rh * 0.98, i * 10 + 3], [Rh * 0.86, i * 10 + 4], [Rh * 0.86, i * 10 + 6], [Rh * 0.98, i * 10 + 7]);
+    glandP.push([Rh * 0.98, 123], [Rh * 0.83, 123]);
+    for (const [nm, y] of [["inlet gland", yC0 + 20], ["exhaust gland", yC1 - 143]]) A.part(nm, xf(revolve(glandP, { loop: true, segments: 56 }), T([0, y, 0])), { parent: axis, material: M("glands", "steel"), explode: [-200, 0, 0], label: nm === "inlet gland" ? { text: "labyrinth gland", at: [Rh * 0.98, y + 60, 0], inside: true } : undefined, note: "rows of fine fins that throttle any steam trying to leak out along the shaft" });
+    // Casing halves, horizontal-joint flanges and studs, nozzle box, exhaust hood.
+    const caseP = fillet([[Rc - 40, yC0], [Rco, yC0, 20], [Rco, yC1 - 260, 30], [Rco - 20, yC1, 20], [Rc - 40, yC1], [Rc - 40, yC1 - 60], [Rc, yC1 - 80], [Rc, yC0 + 80], [Rc - 40, yC0 + 60]], { closed: true, steps: 3 });
+    const halfCase = (name, start, opts) => A.part(name, revolve(caseP, { loop: true, segments: 64, arc: Math.PI, start }), { parent: axis, material: M("casing", "steel"), ...opts });
+    halfCase("lower casing", -Math.PI / 2, { label: { text: "lower casing", at: [Rco, (yC0 + yC1) / 2, Rco * 0.3] }, note: "cast steel; it sits on its feet and holds the diaphragms and glands in grooves" });
+    halfCase("upper casing", Math.PI / 2, { explode: [-900, 0, 0], label: { text: "upper casing", at: [-Rco, (yC0 + yC1) / 2, Rco * 0.3] }, note: "lifts straight off the horizontal joint for inspection" });
+    const fw = 90, ft = 50, fL = yC1 - yC0;
+    const flangeBar = (xs, zs) => xf(mesh.box(ft, fL - 40, fw, { round: 6 }), T([xs * ft / 2, (yC0 + yC1) / 2, zs * (Rco - 25 + fw / 2)]));
+    const studs = (xs, zs) => merge(Array.from({ length: 12 }, (_, i) => xf(merge(bolt({ d: 24, length: 2 * ft + 30, lite: true, segments: 8, thread: false }), xf(nut({ d: 24, lite: true }), T([0, -2 * ft - 10, 0]))), T([xs * ft, yC0 + 60 + (i + 0.5) * ((fL - 120) / 12), zs * (Rco - 25 + fw / 2)]), RZ(-xs * Math.PI / 2))));
+    A.part("lower joint flange", merge(flangeBar(1, 1), flangeBar(1, -1)), { parent: axis, material: M("casing", "steel"), note: "the thick horizontal-joint flanges carry the clamping load" });
+    A.part("upper joint flange", merge(flangeBar(-1, 1), flangeBar(-1, -1)), { parent: axis, material: M("casing", "steel"), explode: [-900, 0, 0] });
+    A.part("joint studs", merge(studs(-1, 1), studs(-1, -1)), { parent: axis, material: M("bolts", "steel"), explode: [-1300, 0, 0], label: { text: "joint studs", at: [-ft - 40, yC0 + 300, Rco + 20] }, note: "heated to stretch them, then the nuts are run down: the joint is steam tight without a gasket" });
+    const nbY = y0 - 20, nbW = Rco * 0.9;
+    const nozzleBox = merge(xf(mesh.box(220, 260, nbW, { round: 24 }), T([-(Rco + 60), nbY, 0])), xf(mesh.cylinder(110, 160, { segments: 40 }), T([-(Rco + 200), nbY, 0]), RZ(Math.PI / 2)));
+    const inFlange = mesh.transform(flange({ pipe: 110, bore: 92, bolts: 12 }), aim([-(Rco + 280), nbY, 0], [-1, 0, 0]));
+    A.part("nozzle box", nozzleBox, { parent: axis, material: M("casing", "steel"), explode: [-900, 0, 0], label: { text: "steam inlet", at: [-(Rco + 300), nbY + 110, 0] }, note: "live steam enters here and the first-stage nozzles fan it around the rotor" });
+    A.part("inlet flange", inFlange, { parent: axis, material: M("flange", "steel"), explode: [-900, 0, 0] });
+    const hoodY = yC1 - 120, hoodW = Rco * 2.1;
+    const hood = merge(xf(mesh.box(300, 240, hoodW, { round: 30 }), T([Rco + 90, hoodY, 0])), xf(mesh.box(380, 50, hoodW + 80, { round: 10 }), T([Rco + 265, hoodY, 0])));
+    A.part("exhaust hood", hood, { parent: axis, material: M("casing", "steel"), explode: [700, 0, 0], label: { text: "exhaust hood", at: [Rco + 200, hoodY, hoodW / 2] }, note: "the spent steam turns down to the condenser or the process line" });
+    // Bearing pedestals, journal bearings, thrust collar, coupling, feet.
+    const ped = (y, nm, withThrust) => {
+      const box = merge(xf(mesh.box(floor + dj * 0.9, 220, dj * 2.2, { round: 10 }), T([(floor - dj * 0.9) / 2, y, 0])), xf(mesh.box(40, 300, dj * 3, { round: 6 }), T([floor - 20, y, 0])));
+      A.part(nm, box, { parent: axis, material: M("pedestals", "steel"), label: { text: "bearing pedestal", at: [dj * 0.8, y, dj * 1.1] }, note: "a cast housing bolted to the foundation; the journal bearing sits in its upper half" });
+      A.part(`${nm} journal bearing`, xf(revolve(fillet([[dj / 2 + 1, -60], [dj * 0.72, -60, 4], [dj * 0.72, 60, 4], [dj / 2 + 1, 60]], { closed: true, steps: 2 }), { loop: true, segments: 48, arc: Math.PI * 1.2, start: Math.PI * 0.4 }), T([0, y, 0])), { parent: axis, material: M("bearings", "brass"), explode: [-300, 0, 0], label: nm === "front pedestal" ? { text: "journal bearing", at: [-dj * 0.72, y, 0], inside: true } : undefined, note: "a white-metal lined sleeve: the shaft floats on a film of oil" });
+      if (withThrust) A.part("thrust collar", xf(revolve([[dj / 2 - 1, 0], [dj * 0.9, 0], [dj * 0.9, 30], [dj / 2 - 1, 30]], { loop: true, segments: 48 }), T([0, y + 90, 0])), { parent: rotor, material: M("rotor", "steel"), note: "pads either side of this collar hold the rotor's axial position to a fraction of a millimeter" });
+    };
+    ped(yB1, "front pedestal", true);
+    ped(yB2, "rear pedestal", false);
+    const coup = merge(revolve(fillet([[dj * 0.4, 0], [dj * 1.1, 0, 6], [dj * 1.1, 60, 6], [dj * 0.4, 60]], { closed: true, steps: 2 }), { loop: true, segments: 48 }), boltCircle(10, dj * 0.9, { d: 20, y: 60, grip: 60 }));
+    A.part("coupling", xf(coup, T([0, yB2 + 180, 0])), { parent: rotor, material: M("coupling", "steel"), label: { text: "coupling", at: [dj * 1.1, yB2 + 210, 0] }, note: "bolts the turbine to the generator or gearbox" });
+    const feet = [[yC0 + 150, 1], [yC0 + 150, -1], [yC1 - 150, 1], [yC1 - 150, -1]].map(([y, s]) => xf(mesh.box(floor - Rco + 12, 160, 140, { round: 8 }), T([(floor + Rco - 12) / 2, y, s * (Rco + 50)])));
+    A.part("casing feet", merge(feet), { parent: axis, material: M("casing", "steel"), note: "the casing rests on sliding keys so it can grow with heat and stay on center" });
+    A.part("exhaust flange", xf(mesh.box(20, 420, hoodW + 120, { round: 6 }), T([Rco + 300, hoodY, 0])), { parent: axis, material: M("flange", "steel"), explode: [700, 0, 0], note: "bolts to the condenser neck or the exhaust pipe" });
+    const oil = (y) => pipe([[-dj * 0.9, y, dj * 1.2], [-dj * 0.9 - 120, y, dj * 1.2], [-dj * 0.9 - 120, y + 40, Rco + 120], [-Rco - 120, y + 40, Rco + 120]], { radius: 14, bend: 50, flanges: false, segments: 12, name: "oil pipe", material: M("pipe", "brushed") });
+    A.part("oil pipes", merge(oil(yB1).children[0].mesh, oil(yB2).children[0].mesh), { parent: axis, material: M("pipe", "brushed"), note: "feed and return lines to each bearing from the lube-oil console" });
+    A.part("casing drains", merge([yC0 + 100, yC1 - 200].map(y => xf(mesh.cylinder(16, 90, { segments: 12 }), T([Rco + 40, y, 0]), RZ(-Math.PI / 2)))), { parent: axis, material: M("pipe", "brushed"), note: "drains at the bottom let condensate out on warm-up" });
+    A.part("governor", merge(xf(mesh.box(dj * 1.2, 160, dj * 1.2, { round: 10 }), T([-dj * 0.9 - dj * 0.6, yB1 - 180, 0])), xf(mesh.cylinder(dj * 0.3, 120, { segments: 24 }), T([-dj * 0.9 - dj * 1.2 - 60, yB1 - 180, 0]), RZ(Math.PI / 2))), { parent: axis, material: M("pedestals", "steel"), label: { text: "governor", at: [-dj * 1.5, yB1 - 180, dj * 0.6] }, note: "senses the shaft speed and trims the inlet valve to hold it" });
+    A.part("balance piston", xf(revolve(fillet([[Rh * 0.81, 0], [Rh * 1.05, 0, 6], [Rh * 1.05, 60, 6], [Rh * 0.81, 60]], { closed: true, steps: 2 }), { loop: true, segments: 56 }), T([0, yC0 + 170, 0])), { parent: rotor, material: M("rotor", "steel"), label: { text: "balance piston", at: [0, yC0 + 200, Rh * 1.05], inside: true }, note: "steam pressure on this drum pushes against the thrust the blades make, so the thrust bearing carries only the difference" });
+    A.part("nameplate", xf(mesh.box(2, 160, 110, { round: 2 }), T([-Rco - 1, yC0 + 330, Rco * 0.5]), RX(-0.55)), { parent: axis, material: M("nameplate", "brass"), explode: [-900, 0, 0], note: "rated power, speed, and steam conditions" });
+    A.port("inlet", axis, [-(Rco + 280), nbY, 0], [-1, 0, 0], 92);
+    A.port("exhaust", axis, [Rco + 310, hoodY, 0], [1, 0, 0], hoodW / 2);
+    A.stages = stages;
+    A.info = { stages: N, hub: Rh, bladeHeights: Array.from({ length: N }, (_, i) => hAt(i)), casingRadius: Rco, length: yB2 - yB1 + 400, rotorLength: yEnd - y0 };
+    A.onPose = s => { if (s.spin != null) rotor.rotation = [0, s.spin, 0]; };
+    return A;
+  }
+
   // ---------- exports ----------
   E3.parts = {
     // profiles and geometry helpers
@@ -1694,7 +2341,9 @@
     bellows, valve, bellNozzle, combustionChamber, injectorPlate, impeller, volute, gimbal, actuator, tank,
     blade, rotorStage, statorStage, spinner, nacelle, nacelleProfile,
     // assemblies
-    assembly, highlight, turbopump, rocketEngine, turbofan, pistonEngine, beltPath, belt,
+    assembly, highlight, beltPath, belt, chain, liftPath,
+    turbopump: detailed(turbopump), rocketEngine: detailed(rocketEngine), turbofan: detailed(turbofan), pistonEngine: detailed(pistonEngine),
+    gearbox: detailed(gearbox), electricMotor: detailed(electricMotor), pump: detailed(pump), bicycleDrivetrain: detailed(bicycleDrivetrain), turbine: detailed(turbine),
     materials: [...MATERIALS],
   };
 })();
