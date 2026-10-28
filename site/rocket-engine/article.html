@@ -1,0 +1,298 @@
+<div class="abstract"><ul>
+<li>Thrust is pressure: hot gas pushes on every wall of the chamber, and the wall that is missing, the throat, is where the push is unbalanced.</li>
+<li>A bell-shaped nozzle lets the gas expand from the throat to a jet moving at about 3 km/s. How far it expands should match the air outside; when it doesn't, the plume shows diamonds.</li>
+<li>Two pumps on one shaft, spun by a small turbine, raise the propellants above chamber pressure, which is the only way to get them in.</li>
+<li>The whole engine swings a few degrees on a gimbal, which is how a rocket steers.</li>
+</ul></div>
+
+<p class="lede">A rocket engine has no moving parts where the thrust is made. There is a chamber, open at one end, and a bell. Everything else on the engine, the pumps, the pipes, the valves, the gimbal, exists to keep that chamber full of burning gas at a pressure of a hundred atmospheres and to point it. Throttle the engine up and down and watch what the plume does:</p>
+
+<figure class="demo" id="fire" aria-label="A kerosene rocket engine firing in open air. A plume with shock diamonds leaves the nozzle and its exhaust streams away downward, widening as it mixes with the air. A throttle sets the thrust."></figure>
+<script>
+{
+  // The engine alone, no stand or pad. In open air the exhaust's momentum outlasts its lift for
+  // hundreds of meters, so past the flame it streams away and widens like a turbulent jet.
+  const scene = E3.scene({ look: "night", shadow: false });
+  const eng = E3.parts.rocketEngine();
+  scene.add(eng);
+  eng.fire(1);
+  const L = eng.plume.length, Hn = eng.info.height;
+  const exhaust = scene.add(E3.particles({
+    matter: "exhaust", units: "mm", count: 1300, seed: 3, life: [0.9, 1.7], size: [1400, 5200], sizeJitter: 0.6, opacity: 0.6, glow: 0.8, temperature: [1500, 500], fade: [0.08, 0.5],
+    color: "#d9d4cb", volume: { erosion: 0.6, density: 1, flow: [400, -7000, 100] },
+    emitter: { shape: "disk", radius: eng.info.exit * 1.1, position: [0, -L * 0.8, 0], direction: [0, -1, 0], speed: [9000, 15000], spread: 0.21 },
+    forces: { drag: 0.35, buoyancy: 0, wind: [600, 0, 150] },
+  }));
+  demo("fire", {
+    aspect: w => (w < 560 ? 0.95 : 1.4),
+    orbit: { yaw: 0.55, pitch: 0.18 },
+    state: () => ({ t: 0, spin: 0 }),
+    controls: [{ key: "throttle", label: "Throttle", min: 40, max: 100, step: 1, value: 100, unit: "%", color: "orange" }],
+    presets: [{ label: "Minimum", set: { throttle: 40 } }, { label: "Full", set: { throttle: 100 } }],
+    caption: "A gas-generator kerosene engine firing, modeled to real proportions. The plume is drawn by physical rules, not simulated fluid; past the flame the exhaust streams away as a jet, since its momentum far outlasts its lift.",
+    status: (s, v) => `${v.throttle}% throttle: about ${Math.round(5.5 * v.throttle)} kN`,
+    step(dt, s, v) { s.t += dt; s.spin += dt * (2 + 4 * v.throttle / 100); },
+    draw(g, s, v) {
+      scene.time = s.t;
+      scene.look = E3.dark ? "night" : "outdoor";
+      eng.fire(v.throttle / 100).pose({ spin: s.spin, fuelSpin: s.spin * 1.35 });
+      exhaust.density = 0.25 + 0.75 * v.throttle / 100;
+      const view = g.render3d(scene, { ...s.view, fov: 28, target: [0, Hn * 0.05 - L * 0.35, 0], distance: 13500 });
+      g.callouts([...eng.labels().filter(l => /nozzle/.test(l.text)).slice(0, 1).map(l => ({ at: view.project(l.at), text: "nozzle", side: "right" })), { at: view.project(eng.toWorld([0, Hn, 0])), text: "thrust frame", side: "right" }]);
+    },
+  });
+}
+</script>
+
+<p>At full throttle the flame is a steady column with bright knots in it. Throttled down, the column shortens and the knots crowd together. Both come from one number, the pressure in the chamber, and this page is about where that number comes from and what it does.</p>
+
+<h2>Pressure is molecules hitting a wall</h2>
+
+<p>Gas pushes on a wall because its molecules hit it. Each hit is tiny; there are a great many. Here are a few hundred molecules in a cylinder under a piston, moving at random speeds. Every hit on the piston is counted, and the pressure on the readout is computed from those hits, not drawn in. Push the piston down <span class="scrub" data-key="h"></span> and watch it climb:</p>
+
+<figure class="demo" id="gas" aria-label="Gas molecules bouncing inside a glass cylinder under a steel piston. The piston height is a slider; the readout shows the pressure measured from wall hits."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", ao: false });
+  const side = 1, N = 320, sigma = 1.3;
+  scene.add(E3.mesh.box(1.5, 0.08, 1.5, { round: 0.01 }), { material: "steel", position: [0, -0.04, 0], name: "base" });
+  scene.add(E3.mesh.box(side + 0.04, 1.6, side + 0.04, { round: 0.004 }), { material: "glass", position: [0, 0.8, 0], name: "cylinder", castShadow: false });
+  const piston = scene.add(E3.mesh.cylinder(side * 0.52, 0.12, { segments: 48 }), { material: "steel", name: "piston" });
+  const rod = scene.add(E3.mesh.cylinder(0.05, 1.2, { segments: 16 }), { material: "brushed", name: "rod" });
+  const gas = scene.add(E3.particles({
+    count: N, seed: 3, life: Infinity, style: "sphere", size: [0.022, 0.022], sizeJitter: 0, color: "blue", cpu: true, measure: true, measureWindow: 1, step: 1 / 120,
+    emitter: { shape: "box", size: [side * 0.9, 1.0, side * 0.9], position: [0, 0.55, 0], speed: 0, thermal: sigma },
+    colliders: [{ plane: [0, -1, 0, -1.2], bounce: 1 }, { plane: [0, 1, 0, 0], bounce: 1 }, { plane: [1, 0, 0, -side / 2], bounce: 1 }, { plane: [-1, 0, 0, -side / 2], bounce: 1 }, { plane: [0, 0, 1, -side / 2], bounce: 1 }, { plane: [0, 0, -1, -side / 2], bounce: 1 }],
+  }));
+  demo("gas", {
+    aspect: w => (w < 560 ? 1 : 1.3),
+    orbit: { yaw: 0.4, pitch: 0.15 },
+    state: () => ({ t: 3 }), // warmed up: the pressure is an average over the last second of hits
+    controls: [{ key: "h", label: "Piston height", min: 0.5, max: 1.4, step: 0.01, value: 1.2, unit: " m", color: "orange" }],
+    caption: "The pressure is measured: momentum delivered to the piston per second, divided by its area. Halve the height and it doubles, as the ideal gas law says.",
+    status: (s, v) => { const p = (gas.hits[0] || 0) / (side * side), ideal = N * sigma * sigma / (side * side * v.h); return `measured ${p.toFixed(0)} Pa; ideal gas ${ideal.toFixed(0)} Pa`; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      gas.colliders[0].plane[3] = -v.h;
+      piston.position = [0, v.h + 0.06, 0];
+      rod.position = [0, v.h + 0.72, 0];
+      g.render3d(scene, { ...s.view, fov: 28, target: [0, 0.7, 0] });
+    },
+  });
+}
+</script>
+
+<p>Halving the volume doubles the rate of hits, so the pressure doubles: that is the ideal gas law, <em>p</em> = <em>NkT</em>/<em>V</em>, seen from the molecules' side. Heating the gas makes the molecules faster, and each hit harder, which is the other way to raise pressure. A rocket engine does both at once. It burns kerosene and liquid oxygen into gas at about 3,500 K, and keeps feeding more in, so the chamber runs at 70 to 250 atmospheres <a class="cite" href="#ref-sutton"></a>. Those molecules hit every wall of the chamber equally. The thrust comes from the wall that isn't there.</p>
+
+<h2>The chamber and the throat</h2>
+
+<p>Cut the chamber open and look at its shape. The top is closed by the injector; the bottom narrows to a <dfn data-def="The narrowest point of a rocket nozzle, where the gas reaches the speed of sound.">throat</dfn>, then opens again into the bell. Gas pushing on the top plate has nothing to cancel it at the throat, so the chamber is pushed upward. The bell adds more: as the gas expands down the bell, it pushes outward on the flaring wall, and the forward part of that push is thrust too. Widen the bell <span class="scrub" data-key="eps"></span> and see how much wall the gas gets to push on:</p>
+
+<figure class="demo" id="nozzle" aria-label="A combustion chamber and bell nozzle cut in half, glowing hot at the throat. A slider sets the nozzle's expansion ratio and rebuilds the bell."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const Rt = 110;
+  const ch = E3.parts.combustionChamber({ throat: Rt });
+  scene.add(ch);
+  for (const c of ch.children) c.temperature = { axis: [0, 1, 0], stops: [[0, 1150], [ch.info.top * 0.45, 700], [ch.info.top, 450]] };
+  const inj = E3.parts.injectorPlate({ radius: ch.info.chamberRadius });
+  scene.add(inj, { position: [0, ch.info.top, 0] });
+  let noz = null, eps = 0;
+  const build = e => {
+    if (noz) scene.remove ? scene.remove(noz) : (noz.visible = false);
+    noz = E3.parts.bellNozzle({ throat: Rt, expansion: e });
+    scene.add(noz, { material: "inconel", name: "nozzle" });
+    const ey = noz.exit.center[1];
+    noz.traverse(n => { if (n.mesh) n.temperature = { axis: [0, 1, 0], stops: [[ey, 500], [ey * 0.35, 800], [0, 1100]] }; });
+    eps = e;
+  };
+  build(16);
+  demo("nozzle", {
+    aspect: w => (w < 560 ? 0.8 : 1.15),
+    orbit: { yaw: 0.35, pitch: 0.1 },
+    controls: [{ key: "eps", label: "Expansion ratio", min: 4, max: 60, step: 1, value: 16, unit: "×" }],
+    presets: [{ label: "Sea level", set: { eps: 16 } }, { label: "Upper stage", set: { eps: 60 } }],
+    caption: "The chamber and bell, sectioned. Hot metal is tinted by its temperature. The expansion ratio is the exit area over the throat area; first-stage engines use about 16, vacuum engines 60 and more.",
+    status: (s, v) => `exit radius ${(Rt * Math.sqrt(v.eps)).toFixed(0)} mm for a ${Rt} mm throat`,
+    draw(g, s, v) {
+      if (v.eps !== eps) build(v.eps);
+      scene.cutPlane = [0, 0, 1, 0];
+      const view = g.render3d(scene, { ...s.view, fov: 26, target: [0, (ch.info.top + noz.exit.center[1]) / 2, 0] });
+      g.callouts([
+        { at: view.project([Rt, 0, 0]), text: "throat" },
+        { at: view.project([ch.info.chamberRadius, ch.info.top * 0.5, 0]), text: "chamber" },
+        { at: view.project([noz.exit.radius, noz.exit.center[1], 0]), text: "exit" },
+      ]);
+    },
+  });
+}
+</script>
+
+<p>The throat is where the gas reaches the speed of sound, and nothing downstream can change the flow through it. That is why the throat area and the chamber pressure between them fix the engine's mass flow, and why an engine at a given throttle behaves the same whatever the bell is doing. The bell's job is to turn pressure into speed: by the exit the gas is moving at about 3 km/s and its pressure has fallen a hundredfold <a class="cite" href="#ref-sutton"></a>. The bell's shape is not arbitrary. It follows the contour Rao worked out in 1958 to get the most thrust from a given length <a class="cite" href="#ref-rao"></a>.</p>
+
+<aside class="callout key"><p>Thrust = mass flow × exhaust speed, plus (exit pressure − outside pressure) × exit area. The bell sets the second term, and the best bell makes it zero.</p></aside>
+
+<h2>Reading the plume</h2>
+
+<p>The pressure of the gas leaving the bell should match the air outside. On a sea-level engine it never quite does, and the plume shows it. Leaving at lower pressure than the air, the jet is squeezed inward, overshoots, expands, and overshoots again: the bright knots are <dfn data-def="Standing shock waves in a supersonic jet whose exit pressure doesn't match the surroundings; each knot is a compression where the gas re-heats.">shock diamonds</dfn>. Try the fuels, and drag the exit pressure <span class="scrub" data-key="expansion"></span> through 1:</p>
+
+<figure class="demo" id="plume" aria-label="A bell nozzle firing downward, seen from the side. Fuel, throttle, and exit pressure over ambient are controls; the plume shows shock diamonds that move with them."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "night", shadow: false });
+  const noz = E3.parts.bellNozzle({ throat: 110, expansion: 16 });
+  scene.add(noz, { material: "inconel", name: "nozzle" });
+  noz.traverse(n => { if (n.mesh) n.temperature = { axis: [0, 1, 0], stops: [[-900, 500], [0, 1100]] }; });
+  const exitR = noz.exit.radius, exitY = noz.exit.center[1];
+  const plume = scene.add(E3.plume({ radius: exitR, length: exitR * 14, fuel: "kerosene", temperature: 2700, cells: 1.4, turbulence: 1.1 }), { position: [0, exitY, 0] });
+  demo("plume", {
+    aspect: w => (w < 560 ? 0.8 : 1.1),
+    orbit: { yaw: 0.1, pitch: 0.05 },
+    state: () => ({ t: 0 }),
+    controls: [
+      { key: "fuel", label: "Fuel", type: "choice", options: [{ value: "kerosene", label: "kerosene" }, { value: "methane", label: "methane" }, { value: "hydrogen", label: "hydrogen" }, { value: "solid", label: "solid" }], value: "kerosene" },
+      { key: "throttle", label: "Throttle", min: 40, max: 100, step: 1, value: 100, unit: "%", color: "orange" },
+      { key: "expansion", label: "Exit pressure / ambient", min: 0.3, max: 3, step: 0.05, value: 0.8 },
+    ],
+    presets: [{ label: "Over-expanded", set: { expansion: 0.5 } }, { label: "Matched", set: { expansion: 1 } }, { label: "Under-expanded", set: { expansion: 2.5 } }],
+    caption: "Kerosene burns yellow and sooty, methane blue, hydrogen almost invisible, a solid motor bright and smoky. Below 1 the plume necks in; above 1 it balloons; at 1 the diamonds nearly vanish.",
+    status: (s, v) => `${v.expansion < 0.9 ? "over-expanded" : v.expansion > 1.1 ? "under-expanded" : "about matched"} at ${v.throttle}% throttle`,
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      plume.fuel = v.fuel; plume.throttle = v.throttle / 100; plume.expansion = v.expansion;
+      g.render3d(scene, { ...s.view, fov: 24, target: [0, exitY - exitR * 5, 0], distance: exitR * 40 });
+    },
+  });
+}
+</script>
+
+<p>Throttling down lowers the chamber pressure and with it the exit pressure, so a throttled engine runs more over-expanded and its diamonds bunch up. That is what you saw in the first figure. Climb to altitude and the air thins instead, the exit pressure is now too high, and the plume balloons outward, which is why the same engine looks different in launch footage a minute after liftoff.</p>
+
+<h2>Feeding the fire</h2>
+
+<p>The chamber runs at a hundred atmospheres, and the propellant has to get in. Nothing flows into a higher pressure, so the engine carries two pumps that raise the kerosene and the oxygen above chamber pressure. Both impellers sit on one shaft with a turbine, and the turbine is spun by burning a few percent of the propellant in a small gas generator <a class="cite" href="#ref-huzel"></a>. Pull the pump apart:</p>
+
+<figure class="demo" id="pump" aria-label="A turbopump taken apart along its axis: volute and impeller at the top, bearings and shaft, the turbine and its housing at the bottom. Point at a part for a note."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const tp = E3.parts.turbopump({ impeller: 75 });
+  scene.add(tp);
+  let view = null;
+  const nameOf = node => { for (let n = node; n; n = n.parent) if (n.name && tp.notes[n.name]) return n.name; return null; };
+  demo("pump", {
+    aspect: w => (w < 560 ? 0.8 : 1.1),
+    orbit: { yaw: 0.5, pitch: 0.15 },
+    state: () => ({ spin: 0, hover: null }),
+    controls: [{ key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0.7 }],
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    status: s => (s.hover ? `${s.hover}: ${tp.notes[s.hover]}` : "Point at a part for what it does."),
+    caption: "One shaft, two jobs: the turbine at the bottom is driven by hot gas, the impeller at the top flings propellant outward into the spiral volute, where its speed becomes pressure.",
+    step(dt, s) { s.spin += dt * 3; },
+    draw(g, s, v) {
+      tp.explode(v.apart).pose({ spin: s.spin });
+      for (const n of Object.values(tp.parts)) n.highlight = n.name === s.hover;
+      view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(tp.labels().map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>A real turbopump turns at tens of thousands of revolutions per minute and moves a bathtub of propellant every second, with liquid oxygen at −183 °C on one end of the shaft and 900 K turbine gas on the other. The bearing housing between them keeps those two worlds apart. Here are both pumps in place on the engine, their housings cut open so you can see the rotors turn. Swing the gimbal <span class="scrub" data-key="pitch"></span> and the whole engine, pumps and all, tilts on its two actuators:</p>
+
+<figure class="demo" id="inside" aria-label="The rocket engine with its two pump housings cut open to show the impellers and turbines spinning. A slider swings the engine on its gimbal."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const eng = E3.parts.rocketEngine();
+  scene.add(eng);
+  eng.cutaway(true);
+  demo("inside", {
+    aspect: w => (w < 560 ? 0.8 : 1.2),
+    orbit: { yaw: -0.9, pitch: 0.18 },
+    state: () => ({ spin: 0 }),
+    controls: [{ key: "cut", label: "Open the pumps", type: "toggle", value: true }, { key: "pitch", label: "Gimbal", min: -6, max: 6, step: 0.1, value: 0, unit: "°" }],
+    caption: "Both pumps turn together on the engine; the fuel pump is geared a little faster. The gimbal swings the nozzle about 6° either way, enough to steer a rocket the size of a building.",
+    status: (s, v) => `gimbal ${v.pitch.toFixed(1)}°`,
+    step(dt, s) { s.spin += dt * 4; },
+    draw(g, s, v) {
+      eng.cutaway(v.cut);
+      eng.pose({ pitch: (v.pitch * Math.PI) / 180, spin: s.spin, fuelSpin: s.spin * 1.35 });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(eng.labels().filter(l => /pump|turbine|gimbal|actuator/.test(l.text)).slice(0, 6).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>How much thrust</h2>
+
+<p>Put the pieces together. The chamber pressure and the throat area set the mass flow; the bell sets the exit speed and the exit pressure; the air outside takes its share. The graph below plots thrust against altitude for a 110 mm throat at 97 atmospheres, for three bells. Slide the altitude <span class="scrub" data-key="h"></span> and compare the sea-level bell to the two wider ones:</p>
+
+<figure class="demo" id="thrust" aria-label="A graph of thrust in kilonewtons against altitude in kilometers for three nozzle expansion ratios; a marker follows the altitude slider."></figure>
+<script>
+{
+  const gam = 1.2, pc = 9.7e6, Rt = 0.11, At = Math.PI * Rt * Rt;
+  const machFor = eps => { let lo = 1, hi = 10; for (let i = 0; i < 60; i++) { const M = (lo + hi) / 2, ar = Math.pow((2 / (gam + 1)) * (1 + (gam - 1) / 2 * M * M), (gam + 1) / (2 * (gam - 1))) / M; if (ar < eps) lo = M; else hi = M; } return (lo + hi) / 2; };
+  const pe = eps => pc * Math.pow(1 + (gam - 1) / 2 * machFor(eps) ** 2, -gam / (gam - 1));
+  const pa = h => 101325 * Math.exp(-h / 8.4);
+  const thrust = (eps, h) => { const cf = Math.sqrt((2 * gam * gam / (gam - 1)) * Math.pow(2 / (gam + 1), (gam + 1) / (gam - 1)) * (1 - Math.pow(pe(eps) / pc, (gam - 1) / gam))) + (pe(eps) - pa(h)) / pc * eps; return cf * pc * At / 1000; };
+  const EPS = [[16, "red"], [40, "orange"], [80, "blue"]];
+  demo("thrust", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    controls: [{ key: "h", label: "Altitude", min: 0, max: 40, step: 0.5, value: 0, unit: " km", color: "blue" }],
+    caption: "Thrust against altitude for three bells on the same chamber. Wider bells lose at sea level, where the over-expanded jet drags, and win higher up. Below about 2 km the 80× bell would not even run cleanly; the flow separates from the wall.",
+    status: (s, v) => EPS.map(([e]) => `${e}×: ${thrust(e, v.h).toFixed(0)} kN`).join(" · "),
+    draw(g, s, v) {
+      const P = g.graph({ x: [0, 40], y: [400, 800], axes: "frame", xLabel: "altitude (km)", yLabel: "thrust (kN)" });
+      for (const [e, c] of EPS) { P.fn(h => thrust(e, h), { color: c, label: `${e}×` }); P.marker(v.h, thrust(e, v.h), { color: c }); }
+      P.vline(v.h, { label: `${v.h} km` });
+    },
+  });
+}
+</script>
+
+<p>At the pad the 16× bell wins because its exit pressure is closest to the air's. By 10 km the order has reversed, and in vacuum the widest bell wins by a large margin: it has simply let the gas push on more wall. That is why a first stage and an upper stage can share a chamber and differ only in their bells.</p>
+
+<h2>What it is made of</h2>
+
+<p>Most of an engine's mass is in parts this page hasn't mentioned: the dome that spreads liquid oxygen over the injector, the 84 cooling tubes that make up the bell's wall and carry cold kerosene before it burns, the valves, the ducts that dump the turbine exhaust, the frame that passes the thrust to the rocket. Take it apart and point at anything:</p>
+
+<figure class="demo" id="apart" aria-label="The whole rocket engine exploded along its axis. Point at a part to read what it does."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const eng = E3.parts.rocketEngine();
+  scene.add(eng);
+  let view = null;
+  const nameOf = node => { for (let n = node; n; n = n.parent) if (n.name && eng.notes[n.name]) return n.name; return null; };
+  demo("apart", {
+    aspect: w => (w < 560 ? 0.75 : 1.05),
+    orbit: { yaw: 0.5, pitch: 0.2 },
+    state: () => ({ hover: null }),
+    controls: [{ key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0.6 }],
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    status: s => (s.hover ? `${s.hover}: ${eng.notes[s.hover]}` : "Point at a part for what it does."),
+    caption: "The engine exploded. Hot parts are Inconel, a nickel alloy that keeps its strength red hot; pump housings are aluminum; shafts, flanges and bolts are steel.",
+    draw(g, s, v) {
+      eng.explode(v.apart);
+      for (const n of Object.values(eng.parts)) n.highlight = n.name === s.hover;
+      view = g.render3d(scene, { ...s.view, fov: 24 });
+      g.callouts(eng.labels().slice(0, 7).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>None of it makes thrust. All of it exists so that one open-ended chamber can hold a hundred atmospheres of burning gas, second after second, and so that the push on its missing wall points where the rocket needs to go.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+<li id="ref-sutton">G. P. Sutton and O. Biblarz, <em>Rocket Propulsion Elements</em>, 9th ed. (Wiley, 2017).</li>
+<li id="ref-rao">G. V. R. Rao, “Exhaust nozzle contour for optimum thrust”, <em>Jet Propulsion</em> 28 (1958), 377–382.</li>
+<li id="ref-huzel">D. K. Huzel and D. H. Huang, <em>Modern Engineering for Design of Liquid-Propellant Rocket Engines</em> (AIAA, 1992).</li>
+</ol>
