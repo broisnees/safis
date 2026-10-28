@@ -1,0 +1,1636 @@
+<script>
+// Shared by the figures below: a 2D gas of hard-disk molecules that can react when they collide,
+// a 1D model of a burning match, the H + H2 energy surface, and real numbers used across the page.
+window.RX = (() => {
+  // Energies in the simulations are in units of kT at 300 K: 1 unit = 2.494 kJ/mol.
+  const KJ = 2.494, R = 8.314;
+  const rand = s => { s.rng = (s.rng + 0x6d2b79f5) >>> 0; let t = s.rng; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const gauss = s => { let u = 0; while (u < 1e-12) u = rand(s); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand(s)); };
+
+  // ---------- the gas ----------
+  // species: [{ r, m }]. walls: "thermal" (a heat bath at kT: a molecule leaves a wall with a fresh
+  // thermal velocity) or "elastic" (an insulated box). rules (checked on every collision):
+  //   { a, b, Ea, to: [a2, b2], dE }   exchange: a + b -> a2 + b2 if the head-on energy >= Ea;
+  //                                    dE is the energy the products hold more than the reactants
+  //   { a, b, Ea, merge: c, third, D } a + b -> c, if a third molecule is within `third` to carry off D
+  //   { a, any: true, split: p, D }    a hit by anything with head-on energy >= D falls into p + p
+  // cat: { on, patches: [[x0, x1]], adsorb: [species], tau, Ea } a catalytic floor.
+  function create(o = {}) {
+    const sp = o.species ?? [{ r: 0.5, m: 1 }], cap = o.cap ?? 400;
+    return {
+      W: o.W ?? 30, H: o.H ?? 20, kT: o.kT ?? 1, walls: o.walls ?? "thermal",
+      R: sp.map(q => q.r), M: sp.map(q => q.m),
+      cap, n: 0, x: new Float64Array(cap), y: new Float64Array(cap), vx: new Float64Array(cap), vy: new Float64Array(cap),
+      sp: new Int8Array(cap), stuck: new Float64Array(cap), flash: new Float64Array(cap),
+      rules: o.rules ?? [], cat: o.cat ?? null,
+      h: o.h ?? 0.04, rate: o.rate ?? 10, acc: 0, t: 0, rng: (o.seed ?? 1) >>> 0,
+      measure: o.measure ?? Infinity, coll: 0, over: 0, react: 0, back: 0, released: 0,
+    };
+  }
+  function add(s, k, x, y, kT = s.kT) {
+    if (s.n >= s.cap) return -1;
+    const i = s.n++, sd = Math.sqrt(kT / s.M[k]);
+    s.x[i] = x; s.y[i] = y; s.vx[i] = gauss(s) * sd; s.vy[i] = gauss(s) * sd; s.sp[i] = k; s.stuck[i] = 0; s.flash[i] = 0;
+    return i;
+  }
+  // Scatters counts[k] molecules of each species over a jittered lattice, none overlapping.
+  function fill(s, counts, kT = s.kT) {
+    s.n = 0;
+    const rmax = Math.max(...s.R), cell = 2.3 * rmax;
+    const cols = Math.max(1, Math.floor(s.W / cell)), rows = Math.max(1, Math.floor(s.H / cell));
+    const slots = [];
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) slots.push([(i + 0.5) * (s.W / cols), (j + 0.5) * (s.H / rows)]);
+    for (let i = slots.length - 1; i > 0; i--) { const k = Math.floor(rand(s) * (i + 1)); [slots[i], slots[k]] = [slots[k], slots[i]]; }
+    const kinds = [];
+    counts.forEach((c, k) => { for (let q = 0; q < c; q++) kinds.push(k); });
+    for (let i = kinds.length - 1; i > 0; i--) { const k = Math.floor(rand(s) * (i + 1)); [kinds[i], kinds[k]] = [kinds[k], kinds[i]]; }
+    const jit = Math.max(0, (Math.min(s.W / cols, s.H / rows) - 2 * rmax) * 0.45);
+    kinds.slice(0, slots.length).forEach((k, q) => add(s, k, slots[q][0] + (rand(s) - 0.5) * 2 * jit, slots[q][1] + (rand(s) - 0.5) * 2 * jit, kT));
+    s.coll = s.over = s.react = s.back = s.released = 0;
+    return s;
+  }
+  // Every molecule at the same speed, in random directions (energy per molecule kT).
+  function sameSpeed(s, kT = s.kT) {
+    for (let i = 0; i < s.n; i++) { const v = Math.sqrt(2 * kT / s.M[s.sp[i]]), a = 2 * Math.PI * rand(s); s.vx[i] = v * Math.cos(a); s.vy[i] = v * Math.sin(a); }
+  }
+  // Kinetic temperature: in 2D the mean kinetic energy per molecule is kT.
+  function kTof(s) { let e = 0, n = 0; for (let i = 0; i < s.n; i++) { if (s.stuck[i] > 0) continue; e += 0.5 * s.M[s.sp[i]] * (s.vx[i] ** 2 + s.vy[i] ** 2); n++; } return n ? e / n : 0; }
+  function count(s, k) { let c = 0; for (let i = 0; i < s.n; i++) if (s.sp[i] === k) c++; return c; }
+
+  function wall(s, i, nx, ny) {
+    if (s.walls === "thermal") {
+      const sd = Math.sqrt(s.kT / s.M[s.sp[i]]);
+      const vn = Math.sqrt(-2 * Math.log(Math.max(1e-12, rand(s)))) * sd, vt = gauss(s) * sd;
+      s.vx[i] = nx * vn - ny * vt; s.vy[i] = ny * vn + nx * vt;
+    } else {
+      const d = s.vx[i] * nx + s.vy[i] * ny;
+      if (d < 0) { s.vx[i] -= 2 * d * nx; s.vy[i] -= 2 * d * ny; }
+    }
+  }
+  function floorHit(s, i) {
+    const c = s.cat;
+    if (c && c.on && c.adsorb.includes(s.sp[i])) for (const [a, b] of c.patches) if (s.x[i] >= a && s.x[i] <= b) { s.stuck[i] = c.tau; s.vx[i] = s.vy[i] = 0; return; }
+    wall(s, i, 0, 1);
+  }
+  function release(s, i) { // a molecule leaving the catalyst floor with a fresh thermal velocity
+    s.stuck[i] = 0;
+    const walls = s.walls; s.walls = "thermal"; wall(s, i, 0, 1); s.walls = walls;
+  }
+
+  // Advance by dt seconds of the figure's clock (s.rate time units per second), in fixed substeps.
+  function step(s, dt) {
+    s.acc += dt * s.rate;
+    let guard = 0;
+    while (s.acc >= s.h && guard++ < 400) { sub(s, s.h); s.acc -= s.h; s.t += s.h; }
+    if (guard >= 400) s.acc = 0;
+  }
+  function sub(s, h) {
+    const { x, y, vx, vy, sp, R } = s;
+    for (let i = 0; i < s.n; i++) {
+      if (s.flash[i] > 0) s.flash[i] = Math.max(0, s.flash[i] - h);
+      if (s.stuck[i] > 0) { s.stuck[i] -= h; if (s.stuck[i] <= 0) release(s, i); continue; }
+      x[i] += vx[i] * h; y[i] += vy[i] * h;
+      const r = R[sp[i]];
+      if (x[i] < r) { x[i] = r; wall(s, i, 1, 0); } else if (x[i] > s.W - r) { x[i] = s.W - r; wall(s, i, -1, 0); }
+      if (y[i] < r) { y[i] = r; floorHit(s, i); } else if (y[i] > s.H - r) { y[i] = s.H - r; wall(s, i, 0, -1); }
+    }
+    collide(s);
+  }
+
+  function collide(s) {
+    const { x, y, vx, vy, sp, R, M, stuck } = s, n = s.n;
+    const rmax = Math.max(...R), cs = 2 * rmax;
+    const gx = Math.max(1, Math.ceil(s.W / cs)), gy = Math.max(1, Math.ceil(s.H / cs));
+    const head = new Int32Array(gx * gy).fill(-1), next = new Int32Array(n);
+    const cellOf = i => Math.min(gy - 1, Math.max(0, Math.floor(y[i] / cs))) * gx + Math.min(gx - 1, Math.max(0, Math.floor(x[i] / cs)));
+    for (let i = 0; i < n; i++) { const c = cellOf(i); next[i] = head[c]; head[c] = i; }
+    const busy = new Uint8Array(n), dead = new Uint8Array(n), spawn = [];
+    const near = (px, py, dist, a, b) => {
+      const cx = Math.min(gx - 1, Math.max(0, Math.floor(px / cs))), cy = Math.min(gy - 1, Math.max(0, Math.floor(py / cs))), reach = Math.ceil(dist / cs);
+      for (let yy = Math.max(0, cy - reach); yy <= Math.min(gy - 1, cy + reach); yy++) for (let xx = Math.max(0, cx - reach); xx <= Math.min(gx - 1, cx + reach); xx++)
+        for (let k = head[yy * gx + xx]; k !== -1; k = next[k]) if (k !== a && k !== b && !busy[k] && (x[k] - px) ** 2 + (y[k] - py) ** 2 < dist * dist) return k;
+      return -1;
+    };
+    for (let i = 0; i < n; i++) {
+      const cx = Math.min(gx - 1, Math.max(0, Math.floor(x[i] / cs))), cy = Math.min(gy - 1, Math.max(0, Math.floor(y[i] / cs)));
+      for (let yy = Math.max(0, cy - 1); yy <= Math.min(gy - 1, cy + 1); yy++) for (let xx = Math.max(0, cx - 1); xx <= Math.min(gx - 1, cx + 1); xx++) {
+        for (let j = head[yy * gx + xx]; j !== -1; j = next[j]) {
+          if (j <= i) continue;
+          const dx = x[j] - x[i], dy = y[j] - y[i], rr = R[sp[i]] + R[sp[j]], d2 = dx * dx + dy * dy;
+          if (d2 >= rr * rr || d2 < 1e-12) continue;
+          const si = stuck[i] > 0, sj = stuck[j] > 0;
+          if (si && sj) continue;
+          const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, ov = rr - d;
+          if (si) { x[j] += nx * ov; y[j] += ny * ov; } else if (sj) { x[i] -= nx * ov; y[i] -= ny * ov; } else { x[i] -= nx * ov / 2; y[i] -= ny * ov / 2; x[j] += nx * ov / 2; y[j] += ny * ov / 2; }
+          const vn = (vx[j] - vx[i]) * nx + (vy[j] - vy[i]) * ny;
+          if (vn >= 0) continue;
+          const mi = si ? Infinity : M[sp[i]], mj = sj ? Infinity : M[sp[j]];
+          const mu = si ? mj : sj ? mi : (mi * mj) / (mi + mj);
+          const En = 0.5 * mu * vn * vn;
+          s.coll++;
+          if (En >= s.measure) s.over++;
+          // Elastic bounce: the relative velocity along the line of centers reverses.
+          const J = -2 * vn * mu;
+          if (!si) { vx[i] -= (J / mi) * nx; vy[i] -= (J / mi) * ny; }
+          if (!sj) { vx[j] += (J / mj) * nx; vy[j] += (J / mj) * ny; }
+          if (busy[i] || busy[j]) continue;
+          // The products leave with En - dE of head-on energy instead of En.
+          const reshape = dE => {
+            const u = Math.sqrt(Math.max(0, (2 * (En - dE)) / mu)), J2 = (u + vn) * mu;
+            if (!si) { vx[i] -= (J2 / mi) * nx; vy[i] -= (J2 / mi) * ny; }
+            if (!sj) { vx[j] += (J2 / mj) * nx; vy[j] += (J2 / mj) * ny; }
+          };
+          for (const r of s.rules) {
+            if (r.any) {
+              const k = sp[i] === r.a ? i : sp[j] === r.a ? j : -1;
+              if (k < 0 || En < r.D) continue;
+              reshape(r.D);
+              busy[i] = busy[j] = 1;
+              const a = 2 * Math.PI * rand(s), off = R[r.split] * 1.02, ex = Math.cos(a), ey = Math.sin(a);
+              const kick = Math.sqrt(s.kT / M[r.split]) * 0.6;
+              spawn.push({ k: r.split, x: x[k] + ex * off, y: y[k] + ey * off, vx: vx[k] + ex * kick, vy: vy[k] + ey * kick });
+              x[k] -= ex * off; y[k] -= ey * off; vx[k] -= ex * kick; vy[k] -= ey * kick; sp[k] = r.split;
+              s.flash[k] = 0.6; s.back++;
+              break;
+            }
+            const fwd = sp[i] === r.a && sp[j] === r.b, rev = sp[i] === r.b && sp[j] === r.a;
+            if (!fwd && !rev) continue;
+            const onCat = (si || sj) && s.cat && s.cat.on;
+            if (En < (onCat ? s.cat.Ea : r.Ea)) continue;
+            if (r.merge != null) {
+              if (si || sj) continue;
+              const px = (x[i] + x[j]) / 2, py = (y[i] + y[j]) / 2, k = near(px, py, r.third, i, j);
+              if (k < 0) continue;
+              busy[i] = busy[j] = busy[k] = 1;
+              const m = mi + mj, Erel = 0.5 * mu * ((vx[j] - vx[i]) ** 2 + (vy[j] - vy[i]) ** 2);
+              x[i] = (mi * x[i] + mj * x[j]) / m; y[i] = (mi * y[i] + mj * y[j]) / m;
+              vx[i] = (mi * vx[i] + mj * vx[j]) / m; vy[i] = (mi * vy[i] + mj * vy[j]) / m;
+              sp[i] = r.merge; dead[j] = 1; s.flash[i] = 0.6; s.react++;
+              // The third molecule carries off the bond energy and the pair's relative motion.
+              const mk = M[sp[k]], ke = 0.5 * mk * (vx[k] ** 2 + vy[k] ** 2), sc = Math.sqrt((ke + r.D + Erel) / Math.max(ke, 1e-9));
+              if (ke > 1e-9) { vx[k] *= sc; vy[k] *= sc; } else { const a = 2 * Math.PI * rand(s), v = Math.sqrt((2 * (r.D + Erel)) / mk); vx[k] = v * Math.cos(a); vy[k] = v * Math.sin(a); }
+              break;
+            }
+            reshape(r.dE ?? 0);
+            const [ta, tb] = r.to;
+            if (fwd) { sp[i] = ta; sp[j] = tb; } else { sp[i] = tb; sp[j] = ta; }
+            s.flash[i] = s.flash[j] = 0.6;
+            if (si) release(s, i);
+            if (sj) release(s, j);
+            busy[i] = busy[j] = 1;
+            if (r.back) s.back++; else s.react++;
+            s.released -= r.dE ?? 0;
+            break;
+          }
+        }
+      }
+    }
+    // Remove merged molecules and add split fragments.
+    let w = 0;
+    for (let i = 0; i < n; i++) {
+      if (dead[i]) continue;
+      if (w !== i) { x[w] = x[i]; y[w] = y[i]; vx[w] = vx[i]; vy[w] = vy[i]; sp[w] = sp[i]; stuck[w] = stuck[i]; s.flash[w] = s.flash[i]; }
+      w++;
+    }
+    s.n = w;
+    for (const q of spawn) {
+      const i = add(s, q.k, Math.min(s.W - R[q.k], Math.max(R[q.k], q.x)), Math.min(s.H - R[q.k], Math.max(R[q.k], q.y)));
+      if (i >= 0) { vx[i] = q.vx; vy[i] = q.vy; s.flash[i] = 0.6; }
+    }
+  }
+
+
+  // Every velocity scaled so the box sits at exactly kT (a gas let in at that temperature).
+  function rescale(s, kT = s.kT) { const k = kTof(s); if (k <= 0) return; const f = Math.sqrt(kT / k); for (let i = 0; i < s.n; i++) { s.vx[i] *= f; s.vy[i] *= f; } }
+
+  // Draws a box of molecules into box = [x, y, w, h]. o.colors: a palette name per species, or
+  // o.fillOf(i) for a fill of your own. A molecule that just reacted wears an orange ring.
+  // Returns the world-to-pixel mapping.
+  function paint(g, s, box, o = {}) {
+    const P = g.fit(0, o.world?.[0] ?? s.W, 0, o.world?.[1] ?? s.H, { box, pad: o.pad ?? 6 });
+    const a = P([0, s.H]), b = P([s.W, 0]);
+    if (o.floor) o.floor(P);
+    for (let i = 0; i < s.n; i++) {
+      const k = s.sp[i], c = P([s.x[i], s.y[i]]), r = s.R[k] * P.sx;
+      const fill = o.fillOf ? o.fillOf(i, k) : g.mix("panel", (o.colors || [])[k] || "muted", o.tint ?? 0.6);
+      g.circle(c, r, { fill, stroke: "ink", width: r > 5 ? 1.1 : 0.8 });
+      if (s.flash[i] > 0 && o.flash !== false) g.circle(c, r + 2.5, { stroke: "orange", width: 2, alpha: Math.min(1, s.flash[i] * 2) });
+    }
+    g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], { stroke: "ink", width: 1.5 });
+    return P;
+  }
+
+  // Molecular speeds in 2D at kT: f(v) = (m v / kT) exp(-m v^2 / 2kT).
+  const speedPdf2 = (v, kT, m = 1) => ((m * v) / kT) * Math.exp((-m * v * v) / (2 * kT));
+  // Real gases in 3D: Maxwell-Boltzmann speeds (m/s) for molar mass Mg (g/mol) at T kelvin.
+  const mb3 = (v, T, Mg) => { const a = (Mg / 1000) / (2 * R * T); return 4 * Math.PI * (a / Math.PI) ** 1.5 * v * v * Math.exp(-a * v * v); };
+  // Share of molecules (3D) with kinetic energy above E0 (kJ/mol) at T.
+  const tail3 = (E0, T) => { const q = (E0 * 1000) / (R * T); return 2 * Math.sqrt(q / Math.PI) * Math.exp(-q) + erfc(Math.sqrt(q)); };
+  function erfc(z) { // Numerical Recipes, fractional error below 1.2e-7
+    const t = 1 / (1 + 0.5 * Math.abs(z));
+    const r = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+    return z >= 0 ? r : 2 - r;
+  }
+
+  // ---------- the H–H bond (Morse) ----------
+  // Constants for H2 from Huber and Herzberg: well depth 4.747 eV (458 kJ/mol), length 0.741 Å.
+  const H2 = { De: 458, re: 0.741, a: 1.942 };
+  const morse = r => H2.De * ((1 - Math.exp(-H2.a * (r - H2.re))) ** 2 - 1);
+  const morseF = r => -2 * H2.De * H2.a * (1 - Math.exp(-H2.a * (r - H2.re))) * Math.exp(-H2.a * (r - H2.re)); // -dE/dr
+
+  // ---------- H + H2 -> H2 + H on the collinear LEPS surface (Sato) ----------
+  // Energies in kJ/mol relative to H + H2 at rest, distances in Å. The Sato parameter is set so the
+  // barrier is 40 kJ/mol, close to the accurate value (9.6–9.8 kcal/mol, 40–41 kJ/mol).
+  const LEPS = (() => {
+    const De = 458, b = 1.942, re = 0.741;
+    let k = 0.18;
+    const QJ = r => { const e1 = Math.exp(-b * (r - re)), e2 = e1 * e1, c = De / (4 * (1 + k)); return [c * ((3 + k) * e2 - (2 + 6 * k) * e1), c * ((1 + 3 * k) * e2 - (6 + 2 * k) * e1)]; };
+    const E = (r1, r2) => {
+      const [q1, j1] = QJ(r1), [q2, j2] = QJ(r2), [q3, j3] = QJ(r1 + r2);
+      return q1 + q2 + q3 - Math.sqrt(Math.max(0, j1 * j1 + j2 * j2 + j3 * j3 - j1 * j2 - j2 * j3 - j1 * j3)) + De;
+    };
+    // The saddle sits on r1 = r2; find it, then tune k for a 40 kJ/mol barrier.
+    const saddle = () => { let lo = 0.6, hi = 1.4; for (let i = 0; i < 60; i++) { const m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3; if (E(m1, m1) < E(m2, m2)) hi = m2; else lo = m1; } const r = (lo + hi) / 2; return { r, E: E(r, r) }; };
+    let lo = 0.02, hi = 0.6;
+    for (let i = 0; i < 50; i++) { k = (lo + hi) / 2; if (saddle().E > 40) lo = k; else hi = k; }
+    const ts = saddle();
+    // Minimum-energy path: steepest descent from the saddle into each valley.
+    const grad = (r1, r2) => { const e = 1e-4; return [(E(r1 + e, r2) - E(r1 - e, r2)) / (2 * e), (E(r1, r2 + e) - E(r1, r2 - e)) / (2 * e)]; };
+    const half = sgn => {
+      let p = [ts.r + sgn * 0.01, ts.r - sgn * 0.01];
+      const pts = [];
+      for (let i = 0; i < 4000 && p[0] < 3.2 && p[1] < 3.2; i++) {
+        const g = grad(p[0], p[1]), L = Math.hypot(g[0], g[1]) || 1;
+        p = [p[0] - (0.004 * g[0]) / L, p[1] - (0.004 * g[1]) / L];
+        if (i % 4 === 0) pts.push(p);
+      }
+      return pts;
+    };
+    // Reactants (H2 made of atoms 1-2, r1 short; atom 3 far) over the saddle to products (r2 short).
+    const pathAt = [...half(-1).reverse(), [ts.r, ts.r], ...half(1)];
+    const L = [0];
+    for (let i = 1; i < pathAt.length; i++) L.push(L[i - 1] + Math.hypot(pathAt[i][0] - pathAt[i - 1][0], pathAt[i][1] - pathAt[i - 1][1]));
+    const at = u => { const t = u * L[L.length - 1]; let i = 1; while (i < L.length - 1 && L[i] < t) i++; const f = (t - L[i - 1]) / (L[i] - L[i - 1] || 1); const a = pathAt[i - 1], b2 = pathAt[i]; return [a[0] + (b2[0] - a[0]) * f, a[1] + (b2[1] - a[1]) * f]; };
+    return { E, ts, k, path: pathAt, at };
+  })();
+
+  // ---------- a burning match, along its length ----------
+  // Cells along a 46 mm stick; the first 5 mm are the head. Temperature in °C, fuel 1 -> 0.
+  // Heat spreads along the stick, leaks to the air, and is released by burning at an Arrhenius rate.
+  const MATCH = { n: 92, len: 46, head: 10, Ta: 12000, Th: 9000, Aw: 1.6e8, Ah: 1.1e7, Q: 1250, Qh: 1450, D: 0.55, loss: 0.9, air: 20 };
+  // q and qx add up the heat released (and heat times position, mm) since the figure last read them.
+  function match() { return { T: new Float64Array(MATCH.n).fill(MATCH.air), Y: new Float64Array(MATCH.n).fill(1), t: 0, struck: 0, q: 0, qx: 0, out: false }; }
+  function matchRate(m, i) { const head = i < MATCH.head, T = m.T[i] + 273; return m.Y[i] * (head ? MATCH.Ah * Math.exp(-MATCH.Th / T) : MATCH.Aw * Math.exp(-MATCH.Ta / T)); }
+  function matchStep(m, dt) {
+    const h = 0.004, dx = MATCH.len / MATCH.n, n = MATCH.n;
+    for (let t = 0; t < dt - 1e-9; t += h) {
+      const T = m.T, Y = m.Y, T2 = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        const l = T[Math.max(0, i - 1)], r = T[Math.min(n - 1, i + 1)];
+        // Burning is first order in the fuel left: integrate it exactly over the step, so a cell
+        // never releases more heat than its fuel holds, however hot it gets.
+        const k = m.Y[i] > 0 ? matchRate(m, i) / m.Y[i] : 0, burnt = Y[i] * (1 - Math.exp(-k * h * (m.out ? 0.15 : 1)));
+        const q = i < MATCH.head ? MATCH.Qh : MATCH.Q;
+        T2[i] = T[i] + h * ((MATCH.D * (l - 2 * T[i] + r)) / (dx * dx) - MATCH.loss * (T[i] - MATCH.air) * (m.out ? 4 : 1)) + q * burnt;
+        Y[i] -= burnt;
+        m.q += q * burnt; m.qx += q * burnt * (i + 0.5) * dx;
+      }
+      m.T = T2;
+    }
+    m.t += dt;
+  }
+  // A strike rubs the head hot: strength 0–1 raises it toward 50 + 450 · strength °C.
+  function strike(m, strength) { for (let i = 0; i < 4; i++) m.T[i] = Math.max(m.T[i], 40 + 440 * strength * (1 - i * 0.12)); m.struck = strength; }
+  const matchHeat = m => { let w = 0; for (let i = 0; i < MATCH.n; i++) w += matchRate(m, i) * (i < MATCH.head ? MATCH.Qh : MATCH.Q); return w; };
+
+  return { KJ, R, rand, gauss, create, add, fill, sameSpeed, kTof, count, step, rescale, paint, speedPdf2, mb3, tail3, erfc, H2, morse, morseF, LEPS, MATCH, match, matchStep, strike, matchHeat, matchRate };
+})();
+</script>
+
+<div class="abstract"><ul>
+  <li>A chemical reaction moves atoms to new partners: old bonds break, new ones form, and the difference in their energy comes out as heat or is taken in.</li>
+  <li>Molecules hit each other billions of times a second, and almost every hit does nothing: getting from the old bonds to the new takes a burst of energy, the activation energy.</li>
+  <li>Temperature sets how many hits carry that much energy. The share grows so steeply that many reactions run about twice as fast for every 10 °C.</li>
+  <li>A catalyst offers a route with a lower barrier. It speeds the reaction both ways and comes out unchanged.</li>
+  <li>Reactions that can run backward settle where both directions go at the same pace, and that balance shifts when you squeeze or heat the mixture.</li>
+</ul></div>
+
+<p class="lede">A match can sit in its box for years, surrounded by the oxygen in the air, and nothing happens to it. Drag its head across the strip on the box and it bursts into flame, and the flame creeps down the stick on its own. The wood and the air were touching all along. The strike added a little heat for a fraction of a second, and the flame gives back thousands of times more.</p>
+
+<p>Below is a simple model of a match: a stick of wood 46 mm long with a 5 mm head, cut into half-millimeter slices. Each slice burns faster the hotter it gets, gives off heat as it burns, warms its neighbors, and loses heat to the air. Choose how hot the strike makes the head, <span class="scrub" data-key="heat"></span>, press <button class="set" data-press="Strike">Strike</button>, and watch the <span class="c-orange">temperature</span> along the stick:</p>
+
+<figure class="demo" id="match" aria-label="A match lying on its side, with a plot of temperature along its length underneath. A slider sets how hot the strike makes the head; a button strikes a new match. A weak strike warms the head and it cools again; a strong one lights it, and a flame walks down the stick, leaving char behind."></figure>
+<script>
+{
+  const M = RX.MATCH, DX = M.len / M.n, FULL = 6500;      // FULL: heat released per second by a steady flame, model units
+  const WOOD = "#dcbd8e", HEAD = "#b5352b", CHAR = "#2b2521";
+  const fresh = () => ({ m: RX.match(), t: 1.4, power: 0, at: 0, armed: 0 });
+  const burn = (s, dt) => {
+    RX.matchStep(s.m, dt);
+    const q = s.m.q, x = q > 0 ? s.m.qx / q : s.at;
+    s.m.q = s.m.qx = 0;
+    s.power = Fx.follow(s.power, Math.min(1.2, q / dt / FULL), dt, 0.35);
+    if (q > 0) s.at = Fx.follow(s.at, x, dt, 0.25);
+  };
+  const state = () => {
+    const s = fresh();
+    RX.strike(s.m, (300 - 40) / 440);
+    for (let i = 0; i < 160; i++) burn(s, 0.02);
+    return s;
+  };
+  let Pm;
+
+  demo("match", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    caption: "A match in half-millimeter slices, with the temperature of each slice plotted beneath it. The plotted line drops back to room temperature after a weak strike; after a strong one a hot zone moves steadily down the stick, burning each slice it reaches.",
+    state,
+    controls: [
+      { key: "heat", label: "Strike heats the head to", min: 60, max: 480, step: 1, value: 300, unit: " °C", color: "orange", marks: [{ value: 230 }] },
+      { label: "Strike", type: "button", primary: true, action: (s, v, fig) => { Object.assign(s, fresh()); s.armed = 0.6; fig.play(); } },
+    ],
+    status: s => {
+      const m = s.m;
+      if (s.armed > 0) return "new match";
+      let left = 0;
+      for (let i = 0; i < M.n; i++) left += m.Y[i];
+      if (s.power > 0.15) return `burning, ${s.at.toFixed(0)} mm from the tip`;
+      if (left < M.n * 0.1) return "burnt out";
+      if (m.Y[0] > 0.9) return `head at ${Math.round(m.T[0])} °C${m.T[0] < 60 ? ", unlit" : ", cooling"}`;
+      return "gone out";
+    },
+    step(dt, s, v) {
+      s.t += dt;
+      if (s.armed > 0) { s.armed -= dt; if (s.armed <= 0) RX.strike(s.m, (v.heat - 40) / 440); return; }
+      burn(s, dt);
+    },
+    draw(g, s, v) {
+      const m = s.m, H = g.h, split = H * 0.44;
+      Pm = g.fit(-7, 48, -4.5, 14, { box: [0, 0, g.w, split], pad: 8 });
+      const y0 = Pm([0, 0])[1], k = Pm.sx;
+      // The stick, slice by slice: wood or head color, darkening to char as the slice burns.
+      for (let i = 0; i < M.n; i++) {
+        const head = i < M.head, th = head ? 3.4 : 2.2, a = Pm([i * DX, th / 2]), b = Pm([(i + 1) * DX, -th / 2]);
+        g.rect(a[0] - 0.4, a[1], b[0] - a[0] + 0.8, b[1] - a[1], { fill: g.mix(head ? HEAD : WOOD, CHAR, Math.min(1, (1 - m.Y[i]) * 1.15)) });
+      }
+      const outline = [Pm([0, 1.7]), Pm([M.head * DX, 1.7]), Pm([M.head * DX + 0.6, 1.1]), Pm([M.len, 1.1]), Pm([M.len, -1.1]), Pm([M.head * DX + 0.6, -1.1]), Pm([M.head * DX, -1.7]), Pm([0, -1.7])];
+      g.path(outline, { stroke: "ink", width: 1.4, close: true });
+      // Slices hotter than about 525 °C glow (the Draper point).
+      let i0 = -1, hot = 0;
+      for (let i = 0; i < M.n; i++) if (m.T[i] > 560) { if (i0 < 0) i0 = i; hot = Math.max(hot, m.T[i]); }
+      if (i0 >= 0) {
+        let i1 = i0;
+        for (let i = i0; i < M.n; i++) if (m.T[i] > 560) i1 = i;
+        g.fx.glow([0, 0, g.w, split], { path: [Pm([i0 * DX, 0]), Pm([(i1 + 1) * DX, 0])], width: 2 * k, temp: hot + 273, spread: 14 });
+      }
+      if (s.power > 0.02) {
+        const base = Pm([s.at, 1.0]);
+        g.fx.fire([0, 0, g.w, base[1] + 4], { t: s.t, power: Math.min(1, s.power), soot: 0.85, base, width: 5 * k, height: Math.min(13 * k, base[1] - 4), size: 0.01, smoke: 0.15 });
+      }
+      g.label("head", Pm([2.5, -4.2]), { color: "muted" });
+      g.label("wood", Pm([24, -4.2]), { color: "muted" });
+
+      // Temperature along the stick, on the same horizontal scale as the match.
+      const xa = Pm([0, 0])[0], xb = Pm([M.len, 0])[0];
+      const Pg = g.fit(0, M.len, 0, 1800, { box: [xa, split + 14, xb - xa, H - split - 56], pad: 0, uniform: false });
+      g.axes(Pg, { x: [0, M.len], y: [0, 1800], yLabel: "°C", yTicks: [0, 500, 1000, 1500], xTicks: [0, 10, 20, 30, 40] });
+      g.text("Distance from the tip (mm)", [(xa + xb) / 2, H - 10], { size: 12.5, color: "muted" });
+      // The strike the slider has ready: how hot it will make the head.
+      g.line(Pg([0, v.heat]), Pg([M.head * DX + 1.5, v.heat]), { stroke: "orange", width: 2 });
+      g.text(`next strike ${v.heat} °C`, Pg([M.head * DX + 2, v.heat + 70]), { size: 11.5, color: "orange", align: "left", halo: true });
+      g.line(Pg([M.head * DX, 320]), Pg([M.len, 320]), { stroke: "muted", width: 1, dash: [4, 4] });
+      g.text("wood catches near 320 °C", Pg([M.len, 320 + 120]), { size: 11.5, color: "muted", align: "right" });
+      const pts = [];
+      for (let i = 0; i < M.n; i++) pts.push(Pg([(i + 0.5) * DX, Math.min(1800, m.T[i])]));
+      g.path(pts, { stroke: "orange", width: 2.2 });
+    },
+  });
+}
+</script>
+
+<p>Strike gently, so the head reaches only <button class="set" data-set="heat=200" data-press="Strike">200 °C</button>, and the warmth leaks away within a couple of seconds. Strike a little harder, to <button class="set" data-set="heat=260" data-press="Strike">260 °C</button>, and the head flares past 1,000 °C, then the hot zone walks down the stick at about 3 mm a second with no more help. Between the two lies a sharp line, near 230 °C in this model<span class="sidenote">A real safety match crosses it with chemistry: friction turns a trace of red phosphorus on the striking strip into white phosphorus, which ignites in air at about 30 °C and sets off the potassium chlorate and sulfur in the head.</span>.</p>
+
+<p>Each burning slice heats the next until that one makes heat faster than it loses it, and then it burns too: the fire pays for its own next step. That leaves two questions. Why does the wood need the strike at all, when burning gives out so much heat? And why does a little more heat make such a sharp difference? The answers apply to every chemical reaction, from rusting to cooking to the chemistry in your cells.</p>
+
+<h2>Bonds</h2>
+
+<p>Wood is mostly cellulose, chains of carbon, hydrogen, and oxygen atoms, and when it burns those atoms end up in carbon dioxide and water. The atoms don't change; they swap partners. A <dfn data-def="A rearrangement of atoms in which some chemical bonds break and new ones form.">chemical reaction</dfn> is that swap, so first we need to know what holds two atoms together.</p>
+
+<p>The simplest bond is the one in a hydrogen molecule, H₂: two hydrogen atoms sharing two electrons. Drag the right-hand atom, or set the distance to <span class="scrub" data-key="r"></span>, and watch the <span class="c-orange">energy</span> of the pair; the plot's distance scale lines up with the atoms:</p>
+
+<figure class="demo" id="bond" aria-label="Two hydrogen atoms joined by a bond, above a plot of their energy against the distance between them. The right atom can be dragged. The curve dips to a minimum at 0.74 Å and rises steeply when the atoms are pushed together; pulled apart, it climbs and levels off at zero."></figure>
+<script>
+{
+  let P, A;
+  demo("bond", {
+    aspect: w => (w < 560 ? 0.9 : 1.5),
+    caption: "The energy of two hydrogen atoms against the distance between their centers, from a standard formula (the Morse curve) fitted to the measured H₂ molecule. The arrows show the force on each atom.",
+    controls: [{ key: "r", label: "Distance", min: 0.45, max: 3.2, step: 0.01, value: 1.3, unit: " Å", color: "ink", marks: [{ value: 0.74, label: "bond length" }] }],
+    status: (s, v) => {
+      const F = RX.morseF(v.r), E = RX.morse(v.r);
+      return `${E.toFixed(0)} kJ/mol, ${Math.abs(F) < 40 ? "no force" : F > 0 ? "pushed apart" : "pulled together"}`;
+    },
+    draw(g, s, v) {
+      const split = g.h * 0.3;
+      P = g.graph({ box: [0, split, g.w, g.h - split], x: [0, 3.3], y: [-500, 320], axes: "frame", xLabel: "Distance between the atoms (Å)", yLabel: "Energy (kJ/mol)", yTicks: [-400, -200, 0, 200] });
+      P.hline(0, { label: "atoms apart" });
+      P.fn(RX.morse, { color: "ink", width: 2.2, domain: [0.38, 3.3] });
+      P.segment([0.74, -458], [0.74, 0], { color: "orange", width: 1.4, dash: [3, 3] });
+      P.label("458 kJ/mol deep", [0.78, -110], { color: "orange", align: "left" });
+      P.marker(v.r, RX.morse(v.r), { color: "orange", drop: true });
+      // The atoms, on the plot's distance scale: one at 0, the other at the current distance.
+      const y = split * 0.55, x0 = P([0, 0])[0], x1 = P([v.r, 0])[0], ra = Math.max(10, P.sx * 0.2);
+      const order = clamp(Math.exp(-(v.r - 0.74) / 0.35), 0, 1);
+      if (order > 0.08) g.line([x0, y], [x1, y], { stroke: "ink", width: 1 + 4 * order, alpha: 0.35 + 0.65 * order });
+      g.atom([x0, y], "H", { r: ra });
+      A = g.atom([x1, y], "H", { r: ra });
+      const F = RX.morseF(v.r), L = clamp(F / 40, -60, 60);
+      if (Math.abs(L) > 4) { g.arrow([x1 + Math.sign(L) * (ra + 2), y], [x1 + Math.sign(L) * (ra + 2) + L, y], { stroke: "ink", width: 2 }); g.arrow([x0 - Math.sign(L) * (ra + 2), y], [x0 - Math.sign(L) * (ra + 2) - L, y], { stroke: "ink", width: 2 }); }
+      g.handle([x1, y - ra - 8], { color: "ink", r: 5 });
+    },
+    drag: {
+      hit: p => A && Math.hypot(p[0] - A.p[0], p[1] - A.p[1]) < A.r + 14,
+      move(p, s, v, d, fig) { fig.set("r", clamp(+P.inv(p)[0].toFixed(2), 0.45, 3.2)); },
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="r=0.74">0.74 Å</button> the curve bottoms out and there's no force: that's the bond's length<span class="sidenote">An ångström (Å) is 10⁻¹⁰ m, so a hydrogen molecule is about a ten-millionth of a millimeter long.</span>. Pull the atoms apart and they tug back, like the ends of a spring. Push them together and they shove apart far more steeply. Pull <button class="set" data-set="r=3.1">far enough</button> and the curve flattens: the atoms no longer feel each other, and the bond is gone.</p>
+
+<p>The well's depth, 458 kJ/mol, is what the bond is worth<a class="cite" href="#ref-huber"></a>. A kilojoule per mole (kJ/mol) counts energy for a mole of molecules, 6×10²³ of them, here about 2 grams of hydrogen. So a bond is a spring with a cliff at one end: stretch it hard enough and it doesn't pull back. To break it, something has to put that energy in.</p>
+
+<p>Atoms in a molecule never sit still at the bottom of the well; they shake. Give the bond <span class="scrub" data-key="E"></span> of vibration and watch the <span class="c-orange">energy line</span> and the atoms:</p>
+
+<figure class="demo" id="vibrate" aria-label="The same two hydrogen atoms and energy curve. A slider sets how much energy the bond holds; the atoms swing in and out between the two ends of an orange line across the well. Above 458 kJ/mol the line clears the top of the well and the atoms fly apart."></figure>
+<script>
+{
+  const MU = 0.504, ACC = 1e-4, H = 0.01, FS_PER_S = 5;   // reduced mass (g/mol); a in Å/fs² is ACC * F / MU; fs shown per second
+  const start = E => ({ r: RX.H2.re, u: Math.sqrt((2 * E) / (MU * 1e4)), gone: 0, t: 0 });
+  demo("vibrate", {
+    aspect: w => (w < 560 ? 0.9 : 1.5),
+    caption: "A vibrating hydrogen molecule, slowed down about 200 trillion times. The orange line marks the bond's energy; the atoms swing between the two places where it meets the curve.",
+    state: () => start(150),
+    controls: [{ key: "E", label: "Energy in the bond", min: 26, max: 560, step: 1, value: 150, unit: " kJ/mol", color: "orange", marks: [{ value: 26, label: "lowest" }, { value: 458, label: "free" }] }],
+    change(key, s, v) { Object.assign(s, start(v.E)); },
+    status: (s, v) => (v.E >= 458 ? (s.r > 2.5 ? "broken: the atoms fly apart" : "breaking") : `swings ${(v.E < 458 ? turn(v.E)[0] : 0).toFixed(2)}–${turn(v.E)[1].toFixed(2)} Å`),
+    step(dt, s, v) {
+      if (s.r > 3.35) { s.gone += dt; if (s.gone > 0.8) Object.assign(s, start(v.E)); return; }
+      const n = Math.round((dt * FS_PER_S) / H);
+      for (let i = 0; i < n; i++) {
+        s.u += 0.5 * H * ACC * RX.morseF(s.r) / MU;
+        s.r += H * s.u;
+        s.u += 0.5 * H * ACC * RX.morseF(s.r) / MU;
+      }
+    },
+    draw(g, s, v) {
+      const split = g.h * 0.3;
+      const P = g.graph({ box: [0, split, g.w, g.h - split], x: [0, 3.3], y: [-500, 320], axes: "frame", xLabel: "Distance between the atoms (Å)", yLabel: "Energy (kJ/mol)", yTicks: [-400, -200, 0, 200] });
+      P.hline(0);
+      P.fn(RX.morse, { color: "ink", width: 2.2, domain: [0.38, 3.3] });
+      const level = v.E - RX.H2.De, [a, b] = turn(v.E);
+      P.segment([a, level], [b, level], { color: "orange", width: 2.4 });
+      P.marker(s.r, RX.morse(s.r), { color: "orange" });
+      if (v.E >= 458) P.label("enough to break free", [2.2, level], { dy: -12, color: "orange" });
+      const y = split * 0.55, x0 = P([0, 0])[0], x1 = P([Math.min(s.r, 3.3), 0])[0], ra = Math.max(10, P.sx * 0.2);
+      const order = clamp(Math.exp(-(s.r - 0.74) / 0.35), 0, 1);
+      if (order > 0.08) g.line([x0, y], [x1, y], { stroke: "ink", width: 1 + 4 * order, alpha: 0.35 + 0.65 * order });
+      g.atom([x0, y], "H", { r: ra });
+      if (s.r < 3.4) g.atom([x1, y], "H", { r: ra });
+    },
+  });
+  // Where the bond's energy line meets the curve (the turning points), in Å.
+  function turn(E) {
+    const lv = E - RX.H2.De, f = r => RX.morse(r) - lv;
+    let lo = 0.3, hi = RX.H2.re;
+    for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2; if (f(m) > 0) lo = m; else hi = m; }
+    const a = (lo + hi) / 2;
+    if (lv >= 0) return [a, 3.3];
+    lo = RX.H2.re; hi = 6;
+    for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2; if (f(m) < 0) lo = m; else hi = m; }
+    return [a, Math.min(3.3, (lo + hi) / 2)];
+  }
+}
+</script>
+
+<p>With little energy the atoms swing over a short stretch, about 130 trillion times a second for real hydrogen. Add energy and the swing widens, mostly outward, because the inner wall is so steep. At <button class="set" data-set="E=458">458 kJ/mol</button> the line clears the top of the well, and the atoms fly apart on their first outward swing<span class="sidenote">The slider stops at 26 kJ/mol because quantum mechanics keeps every bond shaking with at least this much, the zero-point energy. So breaking H₂ from its lowest state takes 432 kJ/mol; tables quote 436 kJ/mol at room temperature.</span>.</p>
+
+<p>Every reaction is built from bonds breaking and forming. Natural gas is mostly methane, CH₄, and burning it with oxygen rearranges nine atoms. Drag the slider to run the swap, and turn the model to see the molecules' shapes:</p>
+
+<figure class="demo" id="atoms" aria-label="A 3D model of a methane molecule and two oxygen molecules. A slider moves the reaction along: the old bonds fade, the atoms move, and new bonds join them into a carbon dioxide molecule and two water molecules. The model can be turned."></figure>
+<script>
+{
+  const { v3, m4, mesh } = E3;
+  const t = 1.09 / Math.sqrt(3), wa = 0.958 * Math.cos(52.25 * Math.PI / 180), wb = 0.958 * Math.sin(52.25 * Math.PI / 180);
+  // Each atom's place before (methane + 2 O₂) and after (CO₂ + 2 H₂O), in Å.
+  const ATOMS = [
+    ["C", [0, 0, 0], [0, 0, 0]],
+    ["H", [-t, t, -t], [-3 - wa, -0.2 + wb, 0]], ["H", [-t, -t, t], [-3 - wa, -0.2 - wb, 0]],
+    ["H", [t, t, t], [3 + wa, 0.2 + wb, 0]], ["H", [t, -t, -t], [3 + wa, 0.2 - wb, 0]],
+    ["O", [-3.4, 0.6, 0], [0, 1.16, 0]], ["O", [-3.4, -0.6, 0], [-3, -0.2, 0]],
+    ["O", [3.4, 0.6, 0], [3, 0.2, 0]], ["O", [3.4, -0.6, 0], [0, -1.16, 0]],
+  ];
+  const BEFORE = [[0, 1, 1], [0, 2, 1], [0, 3, 1], [0, 4, 1], [5, 6, 2], [7, 8, 2]];
+  const AFTER = [[0, 5, 2], [0, 8, 2], [6, 1, 1], [6, 2, 1], [7, 3, 1], [7, 4, 1]];
+  const scene = E3.scene({ look: "diagram", shadow: { opacity: 0.1 } });
+  const balls = ATOMS.map(([el], i) => scene.add(mesh.sphere(Math.max(0.22, E3.ELEMENTS[el].cov * 0.42), { segments: 24 }), { color: E3.ELEMENTS[el].color, name: `${el}${i}` }));
+  const stick = mesh.cylinder(0.08, 1, { segments: 14 });
+  const sticks = list => list.map(([i, j, order]) => ({ i, j, order, nodes: Array.from({ length: order }, () => scene.add(stick, { name: "bond" })) }));
+  const before = sticks(BEFORE), after = sticks(AFTER);
+  const ease = (a, b, x) => smoothstep(a, b, x);
+  function place(bond, P, f) {
+    const a = P[bond.i], b = P[bond.j], d = v3.sub(b, a), len = v3.len(d);
+    const side = v3.scale(v3.norm(v3.cross(d, Math.abs(d[2]) < 0.9 * len ? [0, 0, 1] : [0, 1, 0])), 0.075);
+    bond.nodes.forEach((n, k) => {
+      const off = bond.order === 1 ? [0, 0, 0] : v3.scale(side, k ? 1 : -1);
+      n.visible = f > 0.04;
+      n.matrix = m4.multiply(m4.multiply(m4.translation(v3.add(v3.lerp(a, b, 0.5), off)), m4.alignY(d)), m4.scaling([f * (bond.order > 1 ? 0.75 : 1), len, f * (bond.order > 1 ? 0.75 : 1)]));
+    });
+  }
+  demo("atoms", {
+    aspect: w => (w < 560 ? 1 : 1.7),
+    caption: "Methane and oxygen become carbon dioxide and water. Carbon is dark grey, hydrogen white, oxygen red; double sticks are double bonds. No atom is made or lost; four C–H bonds and two O=O bonds break, and two C=O bonds and four O–H bonds form.",
+    orbit: { yaw: 0.35, pitch: 0.3 },
+    controls: [{ key: "u", label: "Reaction", min: 0, max: 1, step: 0.01, value: 0, color: "ink", format: x => (x < 0.15 ? "start" : x > 0.85 ? "done" : `${Math.round(x * 100)}%`) }],
+    status: (s, v) => (v.u < 0.15 ? "CH₄ + 2 O₂" : v.u > 0.85 ? "CO₂ + 2 H₂O" : "bonds breaking and forming"),
+    draw(g, s, v) {
+      const m = ease(0.25, 0.75, v.u), P = ATOMS.map(([, a, b]) => v3.lerp(a, b, m));
+      P.forEach((p, i) => (balls[i].position = p));
+      for (const b of before) place(b, P, 1 - ease(0.08, 0.4, v.u));
+      for (const b of after) place(b, P, ease(0.6, 0.92, v.u));
+      const view = g.render3d(scene, { ...s.view, fov: 26, target: [0, 0, 0] });
+      const items = v.u < 0.2
+        ? [{ at: view.project([0, -1.55, 0]), text: "methane, CH₄" }, { at: view.project([-3.4, -1.45, 0]), text: "oxygen, O₂" }, { at: view.project([3.4, -1.45, 0]), text: "oxygen, O₂" }]
+        : v.u > 0.8
+          ? [{ at: view.project([0, -1.95, 0]), text: "carbon dioxide, CO₂" }, { at: view.project([-3.3, -1.55, 0]), text: "water, H₂O" }, { at: view.project([3.3, -1.15, 0]), text: "water, H₂O" }]
+          : [];
+      for (const it of items) g.label(it.text, [it.at[0], it.at[1]]);
+    },
+  });
+}
+</script>
+
+<p>One carbon, four hydrogens, and four oxygens go in, and the same come out. Only the bonds change: four C–H and two O=O bonds break, and two C=O and four O–H bonds form. Yet methane and oxygen can sit mixed for years without a single swap, like the match and the air. Real reactions never break every bond at once, as the middle of the slider does; they go one small step at a time, and each step still has to pay for some bond-breaking before it gets anything back. That payment comes from heat.</p>
+
+<h2>Heat is motion</h2>
+
+<p>The molecules in a gas never stop moving. The nitrogen and oxygen in the air around you fly at about 470 m/s on average, faster than an airliner, and each molecule hits another about seven billion times a second<span class="sidenote">From the kinetic theory of gases: a nitrogen molecule about 0.37 nm across, moving at an average 475 m/s through 2.5×10²⁵ molecules per cubic meter (air at 25 °C), sweeps out enough room to hit about 7×10⁹ others a second, traveling roughly 70 nm between hits.</span>. What we feel as temperature is that motion. Here is a box of gas, drawn flat and slowed down enormously. Set the <span class="c-orange">temperature</span> of its walls to <span class="scrub" data-key="T"></span> and watch the molecules:</p>
+
+<figure class="demo" id="gas" aria-label="A box of gas molecules flying and bouncing off each other and the walls, with a thermometer beside it. A slider sets the walls' temperature. Each molecule trails a line showing its speed; the fastest ones are tinted orange."></figure>
+<script>
+{
+  const make = T => {
+    const s = RX.create({ W: 30, H: 20, kT: T / 300, rate: 5, seed: 7, species: [{ r: 0.5, m: 1 }] });
+    RX.fill(s, [60]);
+    return s;
+  };
+  demo("gas", {
+    aspect: w => (w < 560 ? 1.15 : 1.75),
+    caption: "A flat gas whose walls are held at a set temperature: a molecule that hits a wall leaves with a speed drawn from that temperature. The tail on each molecule shows how far it moves in a short moment; orange marks the fastest.",
+    state: () => ({ sim: make(300), Tm: 300 }),
+    controls: [{ key: "T", label: "Wall temperature", min: 100, max: 1200, step: 10, value: 300, unit: " K", color: "orange", marks: [{ value: 293, label: "room" }] }],
+    change(key, s, v) { s.sim.kT = v.T / 300; },
+    status: s => { const T = s.Tm; return `gas at ${Math.round(T)} K (${Math.round(T - 273)} °C), average ${(1.5 * 8.314 * T / 1000).toFixed(1)} kJ/mol of motion`; },
+    step(dt, s) { RX.step(s.sim, dt); s.Tm = Fx.follow(s.Tm, RX.kTof(s.sim) * 300, dt, 1.2); },
+    draw(g, s, v) {
+      const sim = s.sim, wide = g.w >= 560, tw = wide ? 90 : 64;
+      const P = RX.paint(g, sim, [0, 0, g.w - tw, g.h], {
+        fillOf: i => g.mix("panel", "orange", clamp((0.5 * (sim.vx[i] ** 2 + sim.vy[i] ** 2) - 0.6) / 3.4, 0, 1)),
+        floor: P => {
+          for (let i = 0; i < sim.n; i++) {
+            const a = P([sim.x[i], sim.y[i]]), b = P([sim.x[i] - sim.vx[i] * 0.35, sim.y[i] - sim.vy[i] * 0.35]);
+            g.line(a, b, { stroke: "muted", width: 1.5, alpha: 0.6 });
+          }
+        },
+      });
+      // Thermometer: the gas's measured temperature, with the walls' setting as a tick.
+      const x = g.w - tw / 2, top = 26, bot = g.h - 40, Tg = s.Tm, Y = T => bot - ((T - 0) / 1400) * (bot - top);
+      g.rect(x - 5, top, 10, bot - top, { stroke: "ink", width: 1.2, r: 5 });
+      g.rect(x - 3, Y(Tg), 6, bot - Y(Tg), { fill: "orange", r: 3 });
+      g.circle([x, bot + 9], 10, { fill: "orange", stroke: "ink", width: 1.2 });
+      g.line([x - 12, Y(v.T)], [x + 12, Y(v.T)], { stroke: "ink", width: 2 });
+      g.text("walls", [x + 14, Y(v.T)], { size: 11.5, align: "left", color: "muted" });
+      g.text(`${Math.round(Tg)} K`, [x, top - 12], { size: 12.5, weight: 600 });
+    },
+  });
+}
+</script>
+
+<p>Heat the walls to <button class="set" data-set="T=1200">1,200 K</button> and molecules bounce off them faster, so within a few seconds the whole box warms. The average speed grows as the square root of the absolute temperature: four times hotter, twice as fast. But the average hides a lot. At any moment a few molecules crawl and a few, the orange ones, move far faster than the rest, and every collision changes which ones those are.</p>
+
+<p>Before the next figure, a question about where that spread comes from.</p>
+
+<div class="quiz">
+  <p>Start every molecule in a sealed box at exactly the same speed, each in a random direction. Collisions never create or destroy energy. After many collisions, what do the speeds look like?</p>
+  <div class="choices"><button>Still all the same, since energy is shared fairly</button><button data-correct>Spread out: many slower than at the start, a few much faster</button><button>Half the molecules stopped, half twice as fast</button></div>
+  <p class="why">They spread out into a lopsided hump with a long tail of fast molecules, and stay that way. A glancing collision can hand most of two molecules' energy to one of them.</p>
+</div>
+
+<p>In this box the walls don't add or remove energy, so the total stays fixed. Every molecule starts at the same speed. Watch the <span class="c-orange">histogram</span> of speeds, and press <button class="set" data-press="Same speed again">same speed again</button> to rerun it:</p>
+
+<figure class="demo" id="spread" aria-label="A sealed box of gas next to a histogram of the molecules' speeds. Every molecule starts at one speed, so the histogram begins as a single spike; as they collide it spreads into a lopsided hump that settles onto a dashed curve."></figure>
+<script>
+{
+  const N = 150;
+  const make = () => {
+    const s = RX.create({ W: 30, H: 20, kT: 1, rate: 3, seed: 11, walls: "elastic", species: [{ r: 0.45, m: 1 }] });
+    RX.fill(s, [N]);
+    RX.sameSpeed(s, 1);
+    return s;
+  };
+  const speeds = sim => Array.from({ length: sim.n }, (_, i) => Math.hypot(sim.vx[i], sim.vy[i]));
+  demo("spread", {
+    aspect: w => (w < 560 ? 0.8 : 2),
+    caption: "A sealed box of 150 molecules that all start at one speed. The orange bars count molecules by speed; the dashed curve is the Maxwell–Boltzmann distribution for the same total energy (in the flat version that suits a flat box).",
+    state: () => ({ sim: make() }),
+    controls: [{ label: "Same speed again", type: "button", primary: true, action: s => { s.sim = make(); } }],
+    status: s => `${(2 * s.sim.coll / s.sim.n).toFixed(1)} collisions per molecule so far`,
+    step(dt, s) { RX.step(s.sim, dt); },
+    draw(g, s) {
+      const sim = s.sim, wide = g.w >= 560;
+      const boxA = wide ? [0, 10, g.w * 0.46, g.h - 20] : [0, 0, g.w, g.h * 0.45];
+      const boxB = wide ? [g.w * 0.5, 0, g.w * 0.5, g.h] : [0, g.h * 0.47, g.w, g.h * 0.53];
+      RX.paint(g, sim, boxA, { fillOf: i => g.mix("panel", "orange", clamp((0.5 * (sim.vx[i] ** 2 + sim.vy[i] ** 2) - 0.6) / 3.4, 0, 1)) });
+      const P = g.graph({ box: boxB, x: [0, 3.6], y: [0, 1.4], axes: "frame", xLabel: "Speed (average = 1.25)", yLabel: "Share of molecules", yTicks: false, xTicks: [0, 1, 2, 3] });
+      P.histogram(speeds(sim), { bins: 24, range: [0, 3.6], density: true, color: "orange" });
+      P.fn(v => RX.speedPdf2(v, 1, 1), { color: "ink", width: 1.8, dash: [5, 4], label: "Maxwell–Boltzmann", labelAt: 2.3 });
+    },
+  });
+}
+</script>
+
+<p>The spike melts within a few collisions per molecule. In a glancing hit one molecule can leave with most of the pair's energy and the other with little, and the speeds smear out until they match the dashed curve, the <dfn data-def="The spread of molecular speeds in a gas at a given temperature, the same whatever the speeds were before, once the molecules have collided a few times.">Maxwell–Boltzmann distribution</dfn><a class="cite" href="#ref-maxwell"></a>. From then on it holds steady. Collisions keep changing which molecules are fast, but the shape stays, and the same shape appears however the gas started. A gas at a temperature always has this spread.</p>
+
+<p>Those rare fast molecules are the ones that matter for chemistry. The next plot is the real distribution of energies in a gas, now in three dimensions, at <span class="scrub" data-key="T"></span>. The <span class="c-orange">orange line</span> marks <span class="scrub" data-key="E0"></span>, about what the first step of a typical reaction needs. The shaded tail beyond it is too thin to see, so switch to a <button class="set" data-set="log=true">logarithmic scale</button>, where each step up the axis is ten times more:</p>
+
+<figure class="demo" id="tail" aria-label="A plot of how a gas's molecules share out energy at a set temperature, with an orange line at a chosen energy and the tail beyond it shaded. A switch changes the vertical axis to a logarithmic scale, which shows the tiny tail; a dashed curve shows the gas 10 °C warmer."></figure>
+<script>
+{
+  const pdf = (E, T) => { const rt = (8.314 * (T + 273.15)) / 1000; return (2 / Math.sqrt(Math.PI)) * Math.sqrt(E / rt ** 3) * Math.exp(-E / rt); };
+  const share = (E0, T) => RX.tail3(E0, T + 273.15);
+  demo("tail", {
+    aspect: w => (w < 560 ? 0.95 : 1.7),
+    caption: "The share of molecules with each energy of motion in a real gas (the three-dimensional Maxwell–Boltzmann distribution). The shaded tail beyond the orange line is the share with at least that much energy; the dashed curve is the same gas 10 °C warmer.",
+    controls: [
+      { key: "T", label: "Temperature", min: -20, max: 200, step: 1, value: 20, unit: " °C", color: "ink", marks: [{ value: 20, label: "room" }] },
+      { key: "E0", label: "Energy needed", min: 10, max: 80, step: 1, value: 50, unit: " kJ/mol", color: "orange" },
+      { key: "log", label: "Logarithmic scale", type: "toggle", value: false },
+    ],
+    status: (s, v) => { const a = share(v.E0, v.T), b = share(v.E0, v.T + 10); return `1 in ${Num.fmt(1 / a, { digits: 2 })} above ${v.E0} kJ/mol; ${(b / a).toFixed(2)}× as many at ${v.T + 10} °C`; },
+    draw(g, s, v) {
+      const avg = (1.5 * 8.314 * (v.T + 273.15)) / 1000;
+      const P = v.log
+        ? g.graph({ x: [0, 85], y: [1e-15, 1], yScale: "log", axes: "frame", xLabel: "Energy of motion (kJ/mol)", yLabel: "Share per kJ/mol" })
+        : g.graph({ x: [0, 85], y: [0, 0.35], axes: "frame", xLabel: "Energy of motion (kJ/mol)", yLabel: "Share per kJ/mol", yTicks: [0, 0.1, 0.2, 0.3] });
+      const f = E => Math.max(1e-16, pdf(E, v.T));
+      P.area(f, v.E0, 85, { color: "orange", alpha: 0.3, to: v.log ? 1e-15 : 0 });
+      P.fn(E => Math.max(1e-16, pdf(E, v.T + 10)), { color: "muted", width: 1.4, dash: [5, 4] });
+      P.fn(f, { color: "ink", width: 2 });
+      P.vline(v.E0, { color: "orange", label: `${v.E0} kJ/mol` });
+      P.vline(avg, { color: "muted", label: `average ${avg.toFixed(1)}` });
+    },
+  });
+}
+</script>
+
+<p>At room temperature the average molecule carries 3.7 kJ/mol of energy of motion, and about one in 150 million carries 50 kJ/mol or more. On the log scale the tail is a line sloping steadily down: each extra kJ/mol makes a molecule rarer by the same factor. Now warm the gas by <button class="set" data-set="T=30 log=true">10 °C</button>. The average energy rises 3% and the average speed under 2%, yet the share above 50 kJ/mol nearly doubles, to 1 in 80 million.</p>
+
+<aside class="callout key"><p>Temperature barely changes the average molecule, but it changes the rare, energetic ones enormously. Reactions depend on the rare ones.</p></aside>
+
+<p>For energies well above the average, the share of molecules with at least energy <span class="tex">E</span> falls off roughly as <span class="tex">e^{-E/RT}</span>, called the <dfn data-def="The factor e^(−E/RT) by which having an energy E above the average makes a molecule rarer, at temperature T.">Boltzmann factor</dfn>, where <span class="tex">R</span> is the gas constant, 8.314 J/(mol·K), and <span class="tex">T</span> the absolute temperature<a class="cite" href="#ref-atkins"></a>. Raise the needed energy to <button class="set" data-set="E0=75 log=true">75 kJ/mol</button> and the doubling becomes nearly a tripling: the steeper the climb, the more a little warmth helps.</p>
+
+<details class="deeper"><summary>Where the Boltzmann factor comes from <span class="hint">3 min</span></summary>
+<p>Picture the gas's total energy as a pile of small, equal packets shared among a huge number of molecules. Every way of handing out the packets is equally likely, because collisions shuffle them without favoring anyone. Count the arrangements in which one particular molecule holds <span class="tex">E</span> of the energy: the other molecules must make do with the rest, and the number of ways they can share it shrinks by the same factor for every packet taken away. That gives a probability falling as <span class="tex">e^{-E/kT}</span> per molecule, where <span class="tex">k</span> is Boltzmann's constant; per mole, <span class="tex">kT</span> becomes <span class="tex">RT</span>, 2.44 kJ/mol at 20 °C.</p>
+<p>Two refinements turn this into the curve in the figure. A molecule moving in three dimensions can share its energy among three directions, and there are more ways to hold a high energy than a low one, so the curve rises as <span class="tex">\sqrt{E}</span> before the exponential takes over. Integrating the tail gives the exact share above <span class="tex">E_0</span>:</p>
+<div class="tex">\text{share}(E \ge E_0) = 2\sqrt{\frac{E_0}{\pi RT}}\, e^{-E_0/RT} + \operatorname{erfc}\sqrt{\frac{E_0}{RT}}</div>
+<p>For <span class="tex">E_0</span> many times <span class="tex">RT</span> the first term dominates, and the exponential sets almost everything. In the flat simulations on this page, the share of collisions with at least <span class="tex">E_0</span> of energy along the line of impact is exactly <span class="tex">e^{-E_0/kT}</span>, with nothing in front.</p>
+</details>
+
+<h2>Collisions</h2>
+
+<p>To react, two molecules have to meet, and in a gas that means colliding. At seven billion collisions a second, if every collision reacted, every reaction in air would be over in a nanosecond. Most are bounces, and the first reason is that a collision's energy depends on how squarely the molecules meet. Send a <span class="c-blue">blue</span> molecule at a <span class="c-red">red</span> one with an offset of <span class="scrub" data-key="b"></span> of their combined width, carrying <span class="scrub" data-key="E"></span>, and watch the <span class="c-orange">head-on part</span>:</p>
+
+<figure class="demo" id="collide" aria-label="Two molecules fly at each other and collide, seen from their shared center. Sliders set how far off-center they meet and how much energy they bring. An orange arrow along the line between their centers shows the part of their motion that goes into the impact; a bar compares its energy with the 40 kJ/mol the reaction needs. Hits squarely enough with enough energy turn the molecules green."></figure>
+<script>
+{
+  const NEED = 40, D = 2, LOOP = 2.6, TC = 0.42;
+  demo("collide", {
+    aspect: w => (w < 560 ? 1 : 1.9),
+    caption: "Two molecules colliding, seen from their shared center of mass. Only the motion along the line joining their centers at the moment of impact (orange) pushes them into each other; the sideways part carries on. The reaction here needs 40 kJ/mol of that head-on energy.",
+    state: () => ({ t: 0.3 }),
+    controls: [
+      { key: "b", label: "Offset", min: 0, max: 0.95, step: 0.01, value: 0.6, color: "ink", format: x => `${Math.round(x * 100)}%` },
+      { key: "E", label: "Energy", min: 10, max: 150, step: 1, value: 70, unit: " kJ/mol", color: "orange" },
+    ],
+    status: (s, v) => { const h = v.E * (1 - v.b * v.b); return `head-on ${h.toFixed(0)} of ${v.E} kJ/mol: ${h >= NEED ? "reacts" : "bounces"}`; },
+    step(dt, s) { s.t = (s.t + dt / LOOP) % 1; },
+    draw(g, s, v) {
+      const wide = g.w >= 560, plotW = wide ? g.w * 0.3 : 0;
+      const P = g.fit(-6.5, 6.5, -3.4, 3.4, { box: [0, 0, g.w - plotW, wide ? g.h : g.h * 0.72], pad: 8 });
+      const c = Math.sqrt(1 - v.b * v.b), n = [c, -v.b], u = 6 * Math.sqrt(v.E / 70) / LOOP;
+      const head = v.E * c * c, reacts = head >= NEED;
+      const yA = (v.b * D) / 2, xc = (c * D) / 2;
+      let A, B, after = s.t > TC;
+      if (!after) { const dx = u * (TC - s.t) * LOOP; A = [-xc - dx, yA]; B = [xc + dx, -yA]; }
+      else {
+        const vn = -2 * u * c, va = [u + vn * n[0], vn * n[1]], vb = [-u - vn * n[0], -vn * n[1]], tt = (s.t - TC) * LOOP;
+        A = [-xc + va[0] * tt, yA + va[1] * tt]; B = [xc + vb[0] * tt, -yA + vb[1] * tt];
+      }
+      // Paths before the impact, and the line of centers at the moment of impact.
+      g.line(P([-6.5, yA]), P([-xc, yA]), { stroke: "faint", width: 1, dash: [3, 4] });
+      g.line(P([6.5, -yA]), P([xc, -yA]), { stroke: "faint", width: 1, dash: [3, 4] });
+      const col = [after && reacts ? "green" : "blue", after && reacts ? "green" : "red"];
+      g.circle(P(A), P.sx, { fill: g.mix("panel", col[0], 0.6), stroke: "ink", width: 1.3 });
+      g.circle(P(B), P.sx, { fill: g.mix("panel", col[1], 0.6), stroke: "ink", width: 1.3 });
+      if (after && reacts && s.t < TC + 0.15) { g.circle(P(A), P.sx + 4, { stroke: "orange", width: 2 }); g.circle(P(B), P.sx + 4, { stroke: "orange", width: 2 }); }
+      // At the impact point: the approach split into its head-on part (orange) and sideways part.
+      const hit = [0, 0], L = 2.6;
+      g.line(P([-n[0] * 3, -n[1] * 3]), P([n[0] * 3, n[1] * 3]), { stroke: "muted", width: 1, dash: [5, 4] });
+      g.arrow(P([-L, 0]), P(hit), { stroke: "ink", width: 1.4, alpha: 0.5 });
+      g.arrow(P([-L * c * n[0], -L * c * n[1]]), P(hit), { stroke: "orange", width: 3 });
+      // Head-on energy against what the reaction needs.
+      const bx = wide ? [g.w - plotW + 70, 30, plotW - 90, g.h - 70] : [20, g.h * 0.8, g.w - 40, g.h * 0.12];
+      const Pb = wide ? g.fit(0, 1, 0, 150, { box: bx, uniform: false, pad: 0 }) : g.fit(0, 150, 0, 1, { box: bx, uniform: false, pad: 0 });
+      const at = (e, k) => (wide ? Pb([k, e]) : Pb([e, k]));
+      const r0 = at(0, 0.25), r1 = at(head, 0.75);
+      g.rect(Math.min(r0[0], r1[0]), Math.min(r0[1], r1[1]), Math.abs(r1[0] - r0[0]), Math.abs(r1[1] - r0[1]), { fill: g.rgba("orange", 0.55), stroke: "orange", width: 1.5 });
+      const t0 = at(v.E, 0.05), t1 = at(v.E, 0.95), n0 = at(NEED, 0), n1 = at(NEED, 1);
+      g.line(t0, t1, { stroke: "muted", width: 1.5, dash: [3, 3] });
+      g.line(n0, n1, { stroke: "ink", width: 2 });
+      g.text("needed 40", wide ? [n0[0] - 6, n0[1]] : [n1[0] + 4, n1[1] - 8], { size: 12, align: wide ? "right" : "left", color: "ink", halo: true });
+      g.text(`total ${v.E}`, wide ? [t0[0] - 6, t0[1]] : [t1[0] + 4, t1[1] + 9], { size: 12, align: wide ? "right" : "left", color: "muted", halo: true });
+      g.text(`head-on: ${head.toFixed(0)} kJ/mol`, wide ? [(bx[0] + bx[0] + bx[2]) / 2, g.h - 22] : [bx[0], bx[1] + bx[3] + 12], { size: 12.5, color: "orange", weight: 600, align: wide ? "center" : "left" });
+    },
+  });
+}
+</script>
+
+<p>A square hit, <button class="set" data-set="b=0">no offset</button>, puts all 70 kJ/mol into the impact. At a 60% offset only 45 kJ/mol goes in along the <span class="c-orange">line of centers</span>; the rest carries the molecules past each other. At <button class="set" data-set="b=0.8">80%</button> a third is left, too little, and they glance off. Only the head-on part can squeeze the molecules hard enough to start rearranging bonds. In a gas, collisions come at every offset and energy, and the share whose head-on energy reaches a threshold follows the Boltzmann factor exactly.</p>
+
+<p>Real molecules aren't smooth balls, so the direction they come from matters too. A textbook case is a hydroxide ion, OH⁻, swapping places with the chlorine in chloromethane, CH₃Cl. Turn the knob to send the hydroxide in from a different direction, starting <button class="set" data-set="phi=0">straight from the back</button>, opposite the chlorine:</p>
+
+<figure class="demo" id="orient" aria-label="A chloromethane molecule, a carbon with three hydrogens and a green chlorine, and a hydroxide ion that flies in from a direction set by a knob. Coming from the back, opposite the chlorine, it bonds to the carbon, the hydrogens flip over like an umbrella in the wind, and the chloride leaves. From other directions it bounces off."></figure>
+<script>
+{
+  const CONE = 35, LOOP = 3.2, D2R = Math.PI / 180;
+  // Geometry in Å: the carbon at the origin. Before, the hydrogens lean away from the chlorine (+x);
+  // at the transition state they're flat; after, they lean the other way.
+  const umbrella = k => [108.5 - 18.5 * k, -(108.5 - 18.5 * k)];   // angle from +x of the two drawn hydrogens, k: 0 before, 1 flat, 2 after
+  const atoms = (k, o) => {
+    const [a1, a2] = umbrella(k), back = 180 - 0;
+    return [
+      ["H", [1.09 * Math.cos(a1 * D2R), 1.09 * Math.sin(a1 * D2R)]],
+      ["H", [1.09 * Math.cos(a2 * D2R), 1.09 * Math.sin(a2 * D2R)]],
+      ["H", [k < 1 ? -0.36 : 0.36 * (k - 1), 0.0], 0.75],
+      ["C", [0, 0]],
+      ["Cl", [o.cl, 0]],
+    ];
+  };
+  demo("orient", {
+    aspect: w => (w < 560 ? 1.0 : 1.5),
+    caption: "A hydroxide ion meeting chloromethane, the reaction OH⁻ + CH₃Cl → CH₃OH + Cl⁻. Only an approach from behind the carbon, inside the orange wedge, lets the oxygen bond; the three hydrogens flip through flat to the other side as the chloride leaves. Wedge width chosen for illustration.",
+    state: () => ({ t: 0.05 }),
+    controls: [{ key: "phi", label: "Approach from", type: "knob", min: 0, max: 360, step: 1, value: 0, wrap: true, unit: "°", color: "blue" }],
+    status: (s, v) => { const a = Math.abs(((v.phi + 180) % 360) - 180); return a <= CONE ? `${a}° off the back: reacts` : `${a}° off the back: bounces`; },
+    step(dt, s) { s.t = (s.t + dt / LOOP) % 1; },
+    draw(g, s, v) {
+      const P = g.fit(-5.6, 5.6, -3.95, 3.95, { pad: 10 });
+      const off = Math.abs(((v.phi + 180) % 360) - 180), ok = off <= CONE, dir = [-Math.cos(v.phi * D2R), Math.sin(v.phi * D2R)];
+      // The wedge of approaches that work.
+      const wedge = [P([0, 0])];
+      for (let a = -CONE; a <= CONE; a += 5) wedge.push(P([-4.6 * Math.cos(a * D2R), 4.6 * Math.sin(a * D2R)]));
+      g.path(wedge, { fill: g.rgba("orange", 0.1), stroke: g.rgba("orange", 0.5), width: 1, close: true });
+      // Where the oxygen is, how far the swap has gone (k), and where the chlorine is.
+      const t = s.t, far = Math.min(5.2, 2.85 / Math.max(0.01, Math.abs(dir[1])));   // start inside the frame
+      let dO, k = 0, cl = 1.78, gone = false;
+      if (ok) {
+        if (t < 0.4) dO = far - (far - 2.0) * (t / 0.4);
+        else if (t < 0.6) { const f = (t - 0.4) / 0.2; dO = 2.0 - 0.57 * f; k = 2 * f; cl = 1.78 + 0.6 * f; }
+        else { const f = (t - 0.6) / 0.4; dO = 1.43 + 0.8 * f; k = 2; cl = 2.38 + 4 * f; gone = true; }
+      } else {
+        dO = t < 0.4 ? far - (far - 2.6) * (t / 0.4) : t < 0.48 ? 2.6 : 2.6 + (far - 2.6) * ((t - 0.48) / 0.52);
+      }
+      const shift = ok && t >= 0.6 ? -0.8 * ((t - 0.6) / 0.4) : 0;   // the new methanol drifts off to the left
+      const pos = p => P([p[0] + shift, p[1]]);
+      const list = atoms(k, { cl: cl - shift });
+      const O = [dir[0] * dO, dir[1] * dO], Hh = [O[0] + dir[0] * 0.96, O[1] + dir[1] * 0.96];
+      const r = el => P.sx * (el === "H" ? 0.3 : el === "Cl" ? 0.55 : 0.42);
+      // Bonds first, then atoms.
+      const C = pos([0, 0]);
+      for (const [el, p, sc] of list.slice(0, 3)) g.bond(C, pos(p), { r1: r("C"), r2: r(el) * (sc ?? 1), width: 2 });
+      const clBond = 1 - smoothstep(1.9, 2.5, cl);
+      if (clBond > 0.05) g.bond(C, pos([cl, 0]), { r1: r("C"), r2: r("Cl"), width: 2, alpha: clBond, style: cl > 1.9 ? "dashed" : undefined });
+      if (ok && dO < 2.3) g.bond(C, pos(O), { r1: r("C"), r2: r("O"), width: 2, style: dO > 1.6 ? "dashed" : undefined });
+      g.bond(pos(O), pos(Hh), { r1: r("O"), r2: r("H"), width: 2 });
+      for (const [el, p, sc] of list) g.atom(el === "Cl" ? P([cl, 0]) : pos(p), el, { r: r(el) * (sc ?? 1), charge: el === "Cl" && gone ? "−" : undefined });
+      g.atom(pos(O), "O", { r: r("O"), charge: k < 1.2 ? "−" : undefined });
+      g.atom(pos(Hh), "H", { r: r("H") });
+      g.label(ok ? (t > 0.62 ? "methanol + chloride" : t > 0.38 ? "the hydrogens flip" : "hydroxide arrives from behind") : t > 0.4 && t < 0.6 ? "blocked: bounces off" : "hydroxide", P([-5.4, -3.6]), { color: ok ? "ink" : "muted", align: "left" });
+    },
+  });
+}
+</script>
+
+<p>From behind, the oxygen's spare electrons reach the back of the carbon. As the C–O bond forms, the C–Cl bond stretches and breaks, and the hydrogens flip over like an umbrella blown inside out, a change called a Walden inversion. From the side or the chlorine's end, <button class="set" data-set="phi=120">say 120°</button>, the hydroxide runs into hydrogens or the chlorine and bounces away. For most reactions only some directions work, cutting the useful collisions further.</p>
+
+<p>Now put it all together in a box: 60 <span class="c-blue">blue</span> and 60 <span class="c-red">red</span> molecules that turn into two <span class="c-green">green</span> products when a blue and a red collide with enough head-on energy. The walls hold the gas at 300 K. Choose how much energy a reaction needs, <span class="scrub" data-key="Ea"></span>, and watch the count of blue molecules fall:</p>
+
+<figure class="demo" id="hits" aria-label="A box of blue and red molecules held at 300 K. When a blue and a red collide hard enough they turn green, flashing orange. A slider sets the energy needed; a plot underneath tracks how many blue molecules are left."></figure>
+<script>
+{
+  const make = Ea => {
+    const s = RX.create({ W: 30, H: 20, kT: 1, rate: 8, seed: 5, measure: Ea / RX.KJ, species: [{ r: 0.5, m: 1 }, { r: 0.5, m: 1 }, { r: 0.5, m: 1 }, { r: 0.5, m: 1 }], rules: [{ a: 0, b: 1, Ea: Ea / RX.KJ, to: [2, 3], dE: 0 }] });
+    RX.fill(s, [60, 60, 0, 0]);
+    return { sim: s, hist: [[0, 60]] };
+  };
+  demo("hits", {
+    aspect: w => (w < 560 ? 0.8 : 1.3),
+    caption: "A flat gas of blue and red molecules at 300 K. A blue and a red that collide with at least the chosen head-on energy react and turn green. The plot counts the blue molecules left. The energies are a few times smaller than in real reactions so that something happens while you watch.",
+    state: () => make(7.5),
+    controls: [{ key: "Ea", label: "Energy needed", min: 0, max: 15, step: 0.5, value: 7.5, unit: " kJ/mol", color: "orange" }],
+    change(key, s, v) { Object.assign(s, make(v.Ea)); },
+    status: (s, v) => { const sim = s.sim, f = sim.coll ? sim.over / sim.coll : 0; return sim.coll < 200 ? "starting" : `${sim.coll > 0 && f > 0 ? `1 in ${Math.round(1 / f)}` : "none"} of ${Num.fmt(sim.coll)} collisions had ${v.Ea} kJ/mol head-on; e^(−E/RT) predicts 1 in ${Math.round(Math.exp(v.Ea / 2.494))}`; },
+    step(dt, s) {
+      RX.step(s.sim, dt);
+      const t = s.sim.t / s.sim.rate, last = s.hist[s.hist.length - 1];
+      if (t - last[0] >= 0.25 && t <= 30) s.hist.push([t, RX.count(s.sim, 0)]);
+    },
+    draw(g, s) {
+      const split = g.h * 0.56;
+      RX.paint(g, s.sim, [0, 0, g.w, split], { colors: ["blue", "red", "green", "green"] });
+      const P = g.graph({ box: [0, split + 6, g.w, g.h - split - 6], x: [0, 30], y: [0, 65], axes: "frame", xLabel: "Time (s, as shown)", yLabel: "Blue left", yTicks: [0, 30, 60] });
+      P.series(s.hist, { color: "blue", width: 2 });
+    },
+  });
+}
+</script>
+
+<p>With no energy needed, every blue–red collision reacts, and the blue molecules are gone in a couple of seconds. At 7.5 kJ/mol only about one collision in 20 has enough head-on energy, and the count falls more slowly. At <button class="set" data-set="Ea=15">15 kJ/mol</button> it's about one in 400, and the reaction crawls. The readout compares the share the box measures with the Boltzmann factor, <span class="tex">e^{-E/RT}</span>, and they agree: doubling the energy needed squares the odds against it<span class="sidenote">I've used energies a few times smaller than real ones so the box reacts while you watch. At 50 kJ/mol, one collision in about 500 million would count.</span>.</p>
+
+<h2>The barrier</h2>
+
+<p>The energy a collision needs is called the <dfn data-def="The energy that colliding molecules need, beyond what they have on average, to get from the old bonds to the new ones: the height of the energy barrier between reactants and products.">activation energy</dfn>, and it comes from the bonds themselves. The simplest reaction there is shows where. A hydrogen atom hits a hydrogen molecule end-on and takes one of its atoms, setting the other free: H + H₂ → H₂ + H. Drag the slider to move the reaction along its easiest path and watch the two <span class="c-orange">distances</span> and the energy:</p>
+
+<figure class="demo" id="hill" aria-label="Three hydrogen atoms in a row above a plot of energy against reaction progress. A slider moves the reaction along: the incoming atom on the right closes in, the bond on the left stretches, and the energy rises to a peak of 40 kJ/mol where both distances are 0.93 Å, then falls as the left atom leaves."></figure>
+<script>
+{
+  const L = RX.LEPS, N = 240, prof = Array.from({ length: N + 1 }, (_, i) => { const p = L.at(i / N); return [i / N, L.E(p[0], p[1])]; });
+  demo("hill", {
+    aspect: w => (w < 560 ? 0.95 : 1.6),
+    caption: "H + H₂ → H₂ + H with the atoms in a line, along the path that climbs least, on a standard model energy surface tuned to the accurate barrier height. Bonds are drawn thicker the shorter they are.",
+    controls: [{ key: "u", label: "Reaction progress", min: 0, max: 1, step: 0.005, value: 0.3, color: "orange", format: x => `${Math.round(x * 100)}%` }],
+    status: (s, v) => { const [r1, r2] = L.at(v.u); return `${r1.toFixed(2)} Å and ${r2.toFixed(2)} Å, ${L.E(r1, r2).toFixed(1)} kJ/mol`; },
+    draw(g, s, v) {
+      const split = g.h * 0.36, [r1, r2] = L.at(v.u);
+      const A = g.fit(-3.6, 3.6, -0.9, 0.9, { box: [0, 0, g.w, split], pad: 8 });
+      const ra = Math.max(9, A.sx * 0.24), y = 0.15;
+      const pa = A([-r1, y]), pb = A([0, y]), pc = A([r2, y]);
+      for (const [p, q, r] of [[pa, pb, r1], [pb, pc, r2]]) {
+        const order = clamp(Math.exp(-(r - 0.741) / 0.3), 0, 1);
+        if (order > 0.06) g.line(p, q, { stroke: "ink", width: 0.8 + 4.5 * order, alpha: 0.3 + 0.7 * order });
+      }
+      g.atom(pa, "H", { r: ra }); g.atom(pb, "H", { r: ra }); g.atom(pc, "H", { r: ra });
+      g.dimension(A([-r1, -0.35]), A([0, -0.35]), `${r1.toFixed(2)} Å`, { color: "orange" });
+      g.dimension(A([0, -0.35]), A([r2, -0.35]), `${r2.toFixed(2)} Å`, { color: "orange" });
+      const P = g.graph({ box: [0, split + 4, g.w, g.h - split - 4], x: [0, 1], y: [-5, 52], axes: "frame", xLabel: "Reaction progress", yLabel: "Energy (kJ/mol)", xTicks: false, yTicks: [0, 20, 40] });
+      P.series(prof, { color: "ink", width: 2.2 });
+      P.hline(40, { color: "orange", label: "40 kJ/mol" });
+      P.label("H₂ + H", [0.02, 0], { dy: -12, align: "left" });
+      P.label("H + H₂", [0.98, 0], { dy: -12, align: "right" });
+      P.label("transition state", [0.5, 40], { dy: -12 });
+      P.marker(v.u, L.E(r1, r2), { color: "orange", drop: true });
+    },
+  });
+}
+</script>
+
+<p>The old bond has to stretch before the new one can form, and stretching costs energy. At the top of the hill both distances are 0.93 Å: the middle atom is half bonded to each neighbor. That arrangement is the <dfn data-def="The highest-energy arrangement on the easiest path from reactants to products, at the top of the barrier. It lasts about as long as one molecular vibration.">transition state</dfn>, and from there the new bond wins. Accurate quantum calculations put the barrier at 40 to 41 kJ/mol and the transition state at 0.93 Å<a class="cite" href="#ref-siegbahn"></a><a class="cite" href="#ref-truhlar"></a>, and the model surface I've used reproduces both<span class="sidenote">It's the London–Eyring–Polanyi–Sato surface<a class="cite" href="#ref-sato"></a>, a classic formula built from the H₂ bond curve, with its one adjustable constant set to give the 40 kJ/mol barrier.</span>.</p>
+
+<p>The atoms could take other paths, since both distances can be anything. Plot the energy for every pair of distances and you get a surface, like a map of hills and valleys. Turn it, and move the ball along the same path as before:</p>
+
+<figure class="demo" id="landscape" aria-label="A 3D landscape of energy over the two H–H distances, shaded from white (low) to orange (high). Two deep valleys, one for each way the molecule can be bonded, meet at a low pass; beyond them a high plateau where all three atoms are apart. A ball follows the easiest path from one valley over the pass to the other."></figure>
+<script>
+{
+  const { mesh } = E3, L = RX.LEPS, CAP = 160, SC = 1 / 80;
+  const f = (x, z) => Math.min(L.E(x, z), CAP) * SC;
+  const scene = E3.scene({ look: "diagram", shadow: false });
+  const { meshes } = mesh.surfaceBands(f, { x: [0.65, 2.8], z: [0.65, 2.8], n: 100, nz: 100, bands: 12 });
+  const bands = meshes.map((m, k) => scene.add(m, { name: "energy" }));
+  const path = L.path.filter(([a, b], i) => i % 3 === 0 && a >= 0.65 && b >= 0.65 && a <= 2.8 && b <= 2.8).map(([a, b]) => [a, f(a, b) + 0.03, b]);
+  scene.add(mesh.polyline(path, 0.024), { material: "graphite", name: "path" });
+  const ball = scene.add(mesh.sphere(0.085, { segments: 20 }), { material: "graphite", name: "ball" });
+  demo("landscape", {
+    aspect: w => (w < 560 ? 1 : 1.6),
+    caption: "The energy of three hydrogen atoms in a line for every pair of distances, as a relief map (heights above 160 kJ/mol cut off). Each valley is a molecule plus a free atom; the dark line is the easiest path between them, over the pass at 40 kJ/mol.",
+    orbit: { yaw: 2.39, pitch: 0.75, minPitch: 0.1, maxPitch: 1.45 },
+    controls: [{ key: "u", label: "Reaction progress", min: 0, max: 1, step: 0.005, value: 0.3, color: "orange", format: x => `${Math.round(x * 100)}%` }],
+    status: (s, v) => { const [a, b] = L.at(v.u); return `${L.E(a, b).toFixed(1)} kJ/mol`; },
+    draw(g, s, v) {
+      bands.forEach((n, k) => (n.color = E3.ramp(k / (bands.length - 1), ["porcelain", "orange"])));
+      const [a, b] = L.at(v.u).map(r => Math.min(r, 2.78));   // the surface stops at 2.8 Å
+      ball.position = [a, f(a, b) + 0.085, b];
+      const view = g.render3d(scene, { ...s.view, fov: 28, target: [1.6, 0.7, 1.6] });
+      g.callouts([
+        { at: view.project([0.74, f(0.74, 2.7), 2.7]), text: "H₂ + H" },
+        { at: view.project([2.7, f(2.7, 0.74), 0.74]), text: "H + H₂" },
+        { at: view.project([0.93, f(0.93, 0.93) + 0.05, 0.93]), text: "the pass, 40 kJ/mol", color: "orange" },
+        { at: view.project([2.6, CAP * SC, 2.6]), text: "toward three separate atoms" },
+      ]);
+    },
+  });
+}
+</script>
+
+<p>Each valley is a molecule with a far-off atom; its walls are the bond being squeezed or stretched. The plateau in the far corner is three separate atoms, 458 kJ/mol up, what breaking the old bond outright would cost. The easiest route between the valleys crosses the pass, less than a tenth as high, because the bonds trade off instead of breaking first. Every reaction has a surface like this, with more dimensions, and its activation energy is the height of its lowest pass.</p>
+
+<aside class="callout history"><p>In 1889 Svante Arrhenius noticed that the rates of many reactions rose with temperature far faster than any property of the molecules seemed to. He proposed that only "activated" molecules react and that their number grows with temperature like the Boltzmann factor<a class="cite" href="#ref-arrhenius"></a>. Henry Eyring, Michael Polanyi, and others later drew the energy landscapes that showed what the activation was<a class="cite" href="#ref-eyring"></a>.</p></aside>
+
+<p>Arrhenius's idea can be tested on our box of gas. The figure below measures, at one temperature after another, the share of collisions that arrive with at least the barrier's energy head-on, and plots it against the inverse of the temperature on a log scale. Choose a barrier and watch the <span class="c-orange">points</span> appear:</p>
+
+<figure class="demo" id="arrhenius" aria-label="Left, a box of gas being measured at one temperature after another, from 600 K down to 200 K. Right, a plot of the share of collisions energetic enough to cross a chosen barrier against 1000 divided by the temperature, on a log scale. The measured points fall along a straight line."></figure>
+<script>
+{
+  const TEMPS = [600, 500, 420, 360, 310, 270, 235, 205];
+  const run = (T, E0, k) => { const s = RX.create({ W: 24, H: 16, kT: T / 300, rate: 40, seed: 20 + k, measure: E0 / RX.KJ, species: [{ r: 0.5, m: 1 }] }); RX.fill(s, [140], T / 300); return s; };
+  const fresh = E0 => ({ i: 0, sim: run(TEMPS[0], E0, 0), pts: [] });
+  demo("arrhenius", {
+    aspect: w => (w < 560 ? 0.75 : 1.9),
+    caption: "Each point is measured in a fresh flat gas at that temperature: the share of all collisions whose head-on energy reaches the barrier, with error bars from counting. The line is the Boltzmann factor e^(−E/RT), straight on these axes; its slope is the barrier divided by R.",
+    state: () => fresh(7.5),
+    controls: [
+      { key: "E0", label: "Barrier", type: "choice", options: [{ value: 5, label: "5 kJ/mol" }, { value: 7.5, label: "7.5 kJ/mol" }, { value: 10, label: "10 kJ/mol" }], value: 7.5, color: "orange" },
+      { label: "Measure again", type: "button", action: (s, v) => Object.assign(s, fresh(v.E0)) },
+    ],
+    change(key, s, v) { Object.assign(s, fresh(v.E0)); },
+    status: (s, v) => {
+      if (s.pts.length < 3) return s.i < TEMPS.length ? `measuring at ${TEMPS[s.i]} K` : "";
+      const xs = s.pts.map(p => p[0]), ys = s.pts.map(p => Math.log(p[1])), mx = Num.mean(xs), my = Num.mean(ys);
+      const m = Num.sum(xs.map((x, i) => (x - mx) * (ys[i] - my))) / Num.sum(xs.map(x => (x - mx) ** 2));
+      return `${s.i < TEMPS.length ? `measuring at ${TEMPS[s.i]} K; ` : ""}slope gives a barrier of ${(-m * 8.314).toFixed(1)} kJ/mol`;
+    },
+    step(dt, s, v) {
+      if (s.i >= TEMPS.length) return;
+      RX.step(s.sim, dt);
+      const sim = s.sim;
+      if (sim.over >= 100 || sim.coll >= 24000) {
+        const T = TEMPS[s.i], f = sim.over / sim.coll;
+        s.pts.push([1000 / T, f, f / Math.sqrt(Math.max(1, sim.over))]);
+        s.i++;
+        if (s.i < TEMPS.length) s.sim = run(TEMPS[s.i], v.E0, s.i);
+      }
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const boxA = wide ? [0, 20, g.w * 0.36, g.h - 50] : [0, 0, g.w, g.h * 0.36];
+      const boxB = wide ? [g.w * 0.4, 0, g.w * 0.6, g.h] : [0, g.h * 0.39, g.w, g.h * 0.61];
+      const sim = s.sim, T = sim.kT * 300;
+      RX.paint(g, sim, boxA, { fillOf: i => g.mix("panel", "orange", clamp((0.5 * (sim.vx[i] ** 2 + sim.vy[i] ** 2) - 0.6) / 3.4, 0, 1)) });
+      g.text(s.i < TEMPS.length ? `${Math.round(T)} K` : "done", [boxA[0] + boxA[2] / 2, boxA[1] + boxA[3] + 14], { size: 12.5, weight: 600 });
+      const P = g.graph({ box: boxB, x: [1.5, 5.2], y: [1e-4, 1], yScale: "log", axes: "frame", xLabel: "1000 / temperature (1/K)", yLabel: "Share of collisions" });
+      P.fn(x => Math.exp((-v.E0 * x) / 8.314), { color: "ink", width: 1.6, dash: [5, 4], label: "$e^{-E/RT}$", labelAt: 2.4 });
+      P.errorbars(s.pts.map(([x, y, e]) => [x, y, e]), { color: "orange" });
+      P.points(s.pts.map(([x, y]) => [x, y]), { color: "orange", r: 4 });
+      for (const T of [600, 300, 200]) P.label(`${T} K`, [1000 / T, 1e-4], { dy: -10, color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>The points fall on a straight line whose slope is the barrier divided by the gas constant, so a chemist can measure a rate at a few temperatures, plot it this way, and read off the activation energy. Pick the <button class="set" data-set="E0=10">10 kJ/mol</button> barrier and the line tilts more steeply: a higher barrier makes a reaction more sensitive to temperature<span class="sidenote">The measured points run a few percent below the line, partly because in crowded moments the box counts some repeat contacts as extra gentle collisions.</span>. Written as a rate, this is the <dfn data-def="k = A e^(−Ea/RT): a reaction's rate constant k equals a prefactor A, set by how often molecules meet in a workable direction, times the share energetic enough to cross the barrier Ea.">Arrhenius equation</dfn>:</p>
+
+<div class="tex">k = A\, e^{-\orange{E_a}/RT}</div>
+
+<p>The rate constant <span class="tex">k</span> says how fast the reaction goes. <span class="tex">A</span> counts collisions that meet in a workable direction, and the exponential is the share energetic enough to cross the barrier <span class="tex">\orange{E_a}</span>. Warming makes collisions only a few percent more frequent; nearly all the effect is in the exponential.</p>
+
+<details class="deeper"><summary>From collisions to the Arrhenius equation <span class="hint">3 min</span></summary>
+<p>For two gases A and B, count collisions per second in a liter: the number of A molecules times the number of B molecules times how fast they sweep out room for each other, which is their target area <span class="tex">\sigma</span> times their average relative speed <span class="tex">\bar v</span>. Only collisions whose energy along the line of centers reaches <span class="tex">E_a</span> count, and for molecules in three dimensions that share is exactly <span class="tex">e^{-E_a/RT}</span><a class="cite" href="#ref-atkins"></a>. So the rate is</p>
+<div class="tex">\text{rate} = p\,\sigma\,\bar v\, e^{-E_a/RT}\,[\mathrm{A}][\mathrm{B}]</div>
+<p>where <span class="tex">p</span>, the steric factor, is the fraction of directions that work, as for the hydroxide. Everything in front of the exponential is <span class="tex">A</span>. Since <span class="tex">\bar v</span> grows only as <span class="tex">\sqrt{T}</span>, the prefactor barely changes over a few tens of degrees. Transition-state theory does better by treating the transition state as a short-lived molecule in balance with the reactants, and gives <span class="tex">A</span> roughly as <span class="tex">kT/h</span>, about 6×10¹² per second at room temperature, times a factor for how much freedom the molecules lose in getting there<a class="cite" href="#ref-eyring"></a>.</p>
+</details>
+
+<p>A common rule of thumb says many reactions run about twice as fast for every 10 °C. First, a prediction.</p>
+
+<div class="quiz">
+  <p>Warming air from 20 °C to 30 °C makes its molecules move about 2% faster on average. A reaction with a typical barrier of 50 kJ/mol runs in it. How much faster does the reaction go?</p>
+  <div class="choices"><button>About 2% faster</button><button>About 20% faster</button><button data-correct>About twice as fast</button></div>
+  <p class="why">About 1.9 times. The reaction depends on the molecules far out in the tail, whose share nearly doubles even though the average barely moves.</p>
+</div>
+
+<p>The plot shows a reaction's rate against temperature, relative to its rate at the colder temperature. Set the barrier, <span class="scrub" data-key="Ea"></span>, and compare <button class="set" data-set="Ea=50 T1=4 T2=22">a fridge and a kitchen counter</button>:</p>
+
+<figure class="demo" id="tenDegrees" aria-label="A plot of reaction rate against temperature from 0 to 100 °C on a log scale, relative to the rate at a chosen cold temperature. Sliders set the activation energy and the two temperatures; markers show how many times faster the warm one is."></figure>
+<script>
+{
+  const k = (Ea, C) => Math.exp((-Ea * 1000) / (8.314 * (C + 273.15)));
+  const times = r => `${r < 10 ? r.toFixed(r < 1 ? 2 : 1) : Num.fmt(r, { digits: 2 })}×`;
+  demo("tenDegrees", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    caption: "The Arrhenius equation: rate against temperature for a chosen activation energy, relative to the rate at the colder temperature. A steeper climb (larger barrier) makes the rate more sensitive to temperature.",
+    controls: [
+      { key: "Ea", label: "Activation energy", min: 10, max: 120, step: 1, value: 50, unit: " kJ/mol", color: "orange" },
+      { key: "T1", label: "Colder", min: -10, max: 60, step: 1, value: 20, unit: " °C", color: "ink" },
+      { key: "T2", label: "Warmer", min: 0, max: 100, step: 1, value: 30, unit: " °C", color: "ink" },
+    ],
+    presets: [{ label: "Ten degrees", set: { Ea: 50, T1: 20, T2: 30 } }, { label: "Fridge and counter", set: { Ea: 50, T1: 4, T2: 22 } }, { label: "Body and fever", set: { Ea: 50, T1: 37, T2: 40 } }],
+    status: (s, v) => `${v.T2} °C runs ${times(k(v.Ea, v.T2) / k(v.Ea, v.T1))} as fast as ${v.T1} °C`,
+    draw(g, s, v) {
+      const r = C => k(v.Ea, C) / k(v.Ea, v.T1);
+      const top = Math.max(10, r(100) * 2), bot = Math.min(0.1, r(-10) / 2);
+      const P = g.graph({ x: [-10, 100], y: [bot, top], yScale: "log", axes: "frame", xLabel: "Temperature (°C)", yLabel: "Rate, relative to the colder" });
+      P.fn(r, { color: "orange", width: 2.2 });
+      P.marker(v.T1, 1, { color: "ink", drop: true, label: `${v.T1} °C`, pos: "nw" });
+      P.marker(v.T2, r(v.T2), { color: "ink", drop: true, label: times(r(v.T2)), pos: "nw" });
+    },
+  });
+}
+</script>
+
+<p>With a 50 kJ/mol barrier, 10 °C warmer gives 1.9 times the rate, and the counter at 22 °C runs 3.8 times faster than the fridge at 4 °C, a large part of why food keeps longer cold. A <button class="set" data-set="Ea=20">20 kJ/mol</button> barrier gains only 30% from ten degrees; a <button class="set" data-set="Ea=100">100 kJ/mol</button> one, almost four times. "Twice as fast per 10 °C" is a rule for barriers near 50 kJ/mol, not a law. The same steepness explains the match: a few hundred degrees turns a hopeless barrier into an easy one.</p>
+
+<aside class="callout try"><p>Drop one glow stick into a glass of hot tap water and another into ice water. The warm one shines much brighter and fades within an hour or two; the cold one is dim but lasts many hours. The light comes from a chemical reaction, and you're watching its rate.</p></aside>
+
+<h2>Catalysts</h2>
+
+<p>Heating gets more molecules over a barrier. The other way is to find a lower pass. A <dfn data-def="A substance that speeds up a reaction by offering a route with a lower energy barrier, and comes out of the reaction unchanged.">catalyst</dfn> offers one: the reactants bond to it for a while, and while they're held their bonds are stretched and lined up, so less has to break at once. It comes out unchanged at the end. Lower the <span class="c-purple">catalyzed barrier</span> by <span class="scrub" data-key="dE"></span> and compare the two routes:</p>
+
+<figure class="demo" id="catalyzed" aria-label="An energy diagram with two routes from reactants to products. The plain route crosses one hill 100 kJ/mol high; the catalyzed route, in purple, crosses two lower hills with a dip between them where the reactants are held on the catalyst. A slider lowers the catalyzed hills and a readout gives how many times faster both directions go."></figure>
+<script>
+{
+  const EA = 100, DH = -50;
+  const curve = keys => t => {
+    for (let i = 0; i < keys.length - 1; i++) if (t <= keys[i + 1][0]) { const s = (t - keys[i][0]) / (keys[i + 1][0] - keys[i][0] || 1); return lerp(keys[i][1], keys[i + 1][1], (1 - Math.cos(Math.PI * s)) / 2); }
+    return keys[keys.length - 1][1];
+  };
+  const speedup = dE => Math.exp((dE * 1000) / (8.314 * 310.15));
+  const big = n => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} million` : n >= 1e3 ? Math.round(n).toLocaleString("en-US") : n.toFixed(n < 10 ? 1 : 0));
+  demo("catalyzed", {
+    aspect: w => (w < 560 ? 0.95 : 1.7),
+    caption: "Energy along the route from reactants to products, without a catalyst (grey) and with one (purple). The catalyst lowers the highest point by the same amount whichever way the reaction runs, so it speeds the forward and backward reactions by the same factor.",
+    controls: [{ key: "dE", label: "Barrier lowered by", min: 0, max: 60, step: 1, value: 40, unit: " kJ/mol", color: "purple" }],
+    status: (s, v) => `both directions ${big(speedup(v.dE))} times faster at 37 °C`,
+    draw(g, s, v) {
+      const top = EA - v.dE, dip = Math.min(top - 22, top * 0.45) - 8;
+      const plain = curve([[0, 0], [0.16, 0], [0.5, EA], [0.84, DH], [1, DH]]);
+      const cat = curve([[0, 0], [0.16, 0], [0.34, top], [0.5, dip], [0.66, top + DH * 0.25], [0.84, DH], [1, DH]]);
+      const P = g.graph({ x: [0, 1], y: [-75, 125], axes: "frame", xLabel: "Reaction progress", yLabel: "Energy (kJ/mol)", xTicks: false, yTicks: [-50, 0, 50, 100] });
+      P.fn(plain, { color: "muted", width: 2.2 });
+      P.fn(cat, { color: "purple", width: 2.2, dash: v.dE > 0 ? undefined : [5, 4] });
+      P.vector([0.5, 0], [0.5, EA], { color: "orange", width: 1.6 });
+      P.label(`${EA} kJ/mol`, [0.5, EA * 0.55], { dx: 8, color: "orange", align: "left" });
+      const hi = Math.max(top, top + DH * 0.25);
+      if (v.dE > 4) { P.vector([0.34, 0], [0.34, hi], { color: "purple", width: 1.6 }); P.label(`${hi.toFixed(0)}`, [0.34, hi * 0.5], { dx: -8, color: "purple", align: "right" }); }
+      P.label("reactants", [0.04, 0], { dy: -12, align: "left" });
+      P.label("products", [0.96, DH], { dy: -12, align: "right" });
+      if (v.dE > 15 && g.w >= 560) P.label("on the catalyst", [0.5, dip], { dx: -8, dy: 16, color: "purple", align: "right" });
+    },
+  });
+}
+</script>
+
+<p>Every kJ/mol taken off the barrier multiplies the rate by the same factor, so the gains compound. At body temperature, a barrier <button class="set" data-set="dE=10">10 kJ/mol</button> lower makes a reaction about 50 times faster; <button class="set" data-set="dE=40">40 kJ/mol</button> lower, about 5 million times. The reverse trip, from products back to reactants, climbs the same highest point, so it speeds up by exactly the same factor. A catalyst can't change where a reaction ends up, only how fast it gets there<a class="cite" href="#ref-atkins"></a>.</p>
+
+<p>Many catalysts are solid surfaces. A car's catalytic converter spreads a few grams of platinum, palladium, and rhodium over a ceramic honeycomb, and exhaust gases react on the metal far faster than in the gas<a class="cite" href="#ref-heck"></a>. Here are two boxes of <span class="c-blue">blue</span> and <span class="c-red">red</span> molecules needing 17.5 kJ/mol to react. On the right box's <span class="c-purple">catalyst patches</span> a blue molecule sticks for a while, and a red one hitting it there needs only <span class="scrub" data-key="Ec"></span>. Watch the <span class="c-green">products</span> pile up:</p>
+
+<figure class="demo" id="surface" aria-label="Two boxes of blue and red molecules side by side. The right box has purple catalyst patches on its floor, where blue molecules stick. Green products appear far faster in the right box; a plot below counts products in each box over time. A slider sets the barrier on the catalyst."></figure>
+<script>
+{
+  const SP = [{ r: 0.5, m: 1 }, { r: 0.5, m: 1 }, { r: 0.5, m: 1 }, { r: 0.5, m: 1 }];
+  const PATCH = [[1, 9], [10.5, 19.5], [21, 29]], GAS = 7;
+  const make = (on, Ec) => {
+    const s = RX.create({ W: 30, H: 20, kT: 1, rate: 10, seed: 4, species: SP, rules: [{ a: 0, b: 1, Ea: GAS, to: [2, 3] }], cat: on ? { on: true, patches: PATCH, adsorb: [0], tau: 16, Ea: Ec / RX.KJ } : null });
+    RX.fill(s, [60, 60, 0, 0]);
+    return s;
+  };
+  const fresh = Ec => ({ a: make(false), b: make(true, Ec), hist: [[0, 0, 0]] });
+  demo("surface", {
+    aspect: w => (w < 560 ? 0.62 : 1.45),
+    caption: "The same reaction in two flat boxes at 300 K, needing 17.5 kJ/mol in the gas. On the purple patches in the right box a blue molecule sticks for a while, and a red one that hits it there needs only the catalyst's barrier. The plot counts the green products in each box.",
+    state: () => fresh(1.25),
+    controls: [{ key: "Ec", label: "Barrier on the catalyst", min: 1.25, max: 17.5, step: 0.25, value: 1.25, unit: " kJ/mol", color: "purple" }],
+    change(key, s, v) { Object.assign(s, fresh(v.Ec)); },
+    status: s => `products: ${s.a.react} without the catalyst, ${s.b.react} with it`,
+    step(dt, s) {
+      RX.step(s.a, dt); RX.step(s.b, dt);
+      const t = s.a.t / s.a.rate, last = s.hist[s.hist.length - 1];
+      if (t - last[0] >= 0.25 && t <= 30) s.hist.push([t, s.a.react, s.b.react]);
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560, split = wide ? g.h * 0.55 : g.h * 0.66;
+      const colors = ["blue", "red", "green", "green"];
+      const boxA = wide ? [0, 16, g.w * 0.49, split - 16] : [0, 16, g.w, split / 2 - 22];
+      const boxB = wide ? [g.w * 0.51, 16, g.w * 0.49, split - 16] : [0, split / 2 + 12, g.w, split / 2 - 22];
+      RX.paint(g, s.a, boxA, { colors });
+      RX.paint(g, s.b, boxB, { colors, floor: P => { for (const [x0, x1] of PATCH) { const a = P([x0, 0.55]), b = P([x1, 0]); g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], { fill: g.rgba("purple", 0.5), stroke: "purple", width: 1 }); } } });
+      g.text("no catalyst", [boxA[0] + boxA[2] / 2, boxA[1] - 8], { size: 12.5, color: "muted" });
+      g.text(`catalyst on the floor, ${v.Ec} kJ/mol there`, [boxB[0] + boxB[2] / 2, boxB[1] - 8], { size: 12.5, color: "purple" });
+      const P = g.graph({ box: [0, split + 6, g.w, g.h - split - 6], x: [0, 30], y: [0, 62], axes: "frame", xLabel: "Time (s, as shown)", yLabel: "Products", yTicks: [0, 30, 60] });
+      P.series(s.hist.map(([t, a]) => [t, a]), { color: "muted", width: 2, label: "without" });
+      P.series(s.hist.map(([t, , b]) => [t, b]), { color: "purple", width: 2, label: "with" });
+    },
+  });
+}
+</script>
+
+<p>In the plain box a pair reacts a couple of times every ten seconds; on the catalyst, about seven times as often, until the blue molecules run low. Raise the catalyst's barrier to <button class="set" data-set="Ec=17.5">match the gas</button> and the advantage vanishes; the box even does a little worse, since the stuck molecules are out of the gas. Holding molecules doesn't help by itself: the lower barrier does the work. The patches are never used up. A real converter works only once its metal is a few hundred degrees hot, which is why a car pollutes most in its first minutes.</p>
+
+<aside class="callout mistake"><p>"A catalyst gets used up," or "a catalyst pushes a reaction further." Neither: it comes out of each cycle unchanged, and because it lowers the barrier for the reverse reaction by the same amount, the mixture ends up in exactly the same place, only sooner.</p></aside>
+
+<h2>Crowding</h2>
+
+<p>Your cells are full of catalysts called <dfn data-def="A protein that catalyzes a reaction in a living cell, holding its reactants in a pocket shaped to fit them.">enzymes</dfn>, proteins with a pocket shaped to hold one reaction's molecules. Carbonic anhydrase, which turns carbon dioxide into bicarbonate in your blood, handles about a million molecules a second<a class="cite" href="#ref-lindskog"></a>. Another enzyme does in milliseconds a step in making DNA's letters that would take 78 million years, on average, by itself in water<a class="cite" href="#ref-wolfenden"></a>. But a catalyst can only work on what reaches it, which brings us to crowding.</p>
+
+<p>In this box, each blue and red pair that reacts is swapped for a fresh pair, so the numbers stay fixed, like a reactor fed at a steady rate. Change the number of <span class="c-blue">blue</span> molecules, <span class="scrub" data-key="nA"></span>, and <span class="c-red">red</span> ones, <span class="scrub" data-key="nB"></span>, and watch the <span class="c-orange">measured rate</span>:</p>
+
+<figure class="demo" id="rate" aria-label="A box of blue and red molecules where reacting pairs flash orange and are replaced, so the numbers stay fixed. Steppers set how many of each; a plot of measured reactions per second against the number of blue times the number of red falls along a straight line."></figure>
+<script>
+{
+  const K = 3.15e-4;   // reactions per time unit per blue–red pair, measured in this box (runs of 300 units, ±15%)
+  const make = (a, b) => {
+    const s = RX.create({ W: 40, H: 26, kT: 1, rate: 16, seed: a * 7 + b, species: [{ r: 0.35, m: 1 }, { r: 0.35, m: 1 }], rules: [{ a: 0, b: 1, Ea: 2, to: [0, 1] }] });
+    RX.fill(s, [a, b]);
+    return s;
+  };
+  const fresh = (a, b, done = []) => ({ sim: make(a, b), done, t: 0 });
+  demo("rate", {
+    aspect: w => (w < 560 ? 0.8 : 1.9),
+    caption: "A flat gas held at 300 K in which a blue and a red molecule react when they collide with at least 5 kJ/mol head-on, and are replaced at once. The point is the rate measured so far at the current numbers; grey points are earlier settings, and the line is proportional to blue × red.",
+    state: () => fresh(40, 40),
+    controls: [
+      { key: "nA", label: "Blue", type: "stepper", min: 10, max: 80, step: 10, value: 40, color: "blue" },
+      { key: "nB", label: "Red", type: "stepper", min: 10, max: 80, step: 10, value: 40, color: "red" },
+    ],
+    change(key, s, v) {
+      const prev = s.t > 3 ? [...s.done.filter(p => p[0] !== s.sim.n0), [s.sim.n0, s.sim.react / s.t]] : s.done;
+      Object.assign(s, fresh(v.nA, v.nB, prev.slice(-8)));
+      s.sim.n0 = v.nA * v.nB;
+    },
+    status: (s, v) => (s.t < 1 ? "measuring" : `${(s.sim.react / s.t).toFixed(1)} reactions per second for ${v.nA} × ${v.nB} = ${v.nA * v.nB} pairs`),
+    step(dt, s, v) { s.sim.n0 = v.nA * v.nB; RX.step(s.sim, dt); s.t += dt; },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const boxA = wide ? [0, 6, g.w * 0.46, g.h - 12] : [0, 0, g.w, g.h * 0.42];
+      const boxB = wide ? [g.w * 0.5, 0, g.w * 0.5, g.h] : [0, g.h * 0.45, g.w, g.h * 0.55];
+      RX.paint(g, s.sim, boxA, { colors: ["blue", "red"] });
+      const per = K * s.sim.rate;
+      const P = g.graph({ box: boxB, x: [0, 6800], y: [0, 40], axes: "frame", xLabel: "Blue × red", yLabel: "Reactions per second", xTicks: [0, 2000, 4000, 6000] });
+      P.fn(x => per * x, { color: "ink", width: 1.4, dash: [5, 4] });
+      P.points(s.done.map(([x, y]) => [x, y]), { color: "muted", r: 3.5 });
+      if (s.t > 0.5) {
+        const r = s.sim.react / s.t, err = Math.sqrt(Math.max(1, s.sim.react)) / s.t;
+        P.errorbars([[v.nA * v.nB, r, err]], { color: "orange" });
+        P.points([[v.nA * v.nB, r]], { color: "orange", r: 4.5 });
+      }
+    },
+  });
+}
+</script>
+
+<p>Double the blue molecules and the rate doubles; double both and it quadruples<span class="sidenote">Each measurement wanders by 10 to 20% in a box this small, so let it run a while before comparing.</span>. Each blue molecule meets red ones at a rate set by how many red ones there are, so the rate follows blue × red. With concentrations in square brackets, <span class="tex">\text{rate} = k[\mathrm{A}][\mathrm{B}]</span> is a <dfn data-def="An equation giving a reaction's rate in terms of the concentrations of its reactants, such as rate = k[A][B].">rate law</dfn>, with the Arrhenius constant <span class="tex">k</span> in front. It's why a glowing splint bursts into flame in pure oxygen, nearly five times as concentrated as the oxygen in air.</p>
+
+<p>Enzymes add a twist: there are far fewer of them than molecules to work on, and each handles one at a time. Set the amount of <span class="c-blue">substrate</span>, the molecule the enzyme works on, to <span class="scrub" data-key="S"></span> and watch the six <span class="c-purple">enzymes</span>:</p>
+
+<figure class="demo" id="enzyme" aria-label="Six purple enzyme molecules with pockets, among blue substrate molecules drifting around. A filled pocket turns its substrate into a green product and lets it go. A slider sets how much substrate there is; a plot of the reaction rate against substrate rises steeply at first, then levels off when every pocket is always full."></figure>
+<script>
+{
+  const NE = 6, KCAT = 1.6, KM = 1;   // turnovers per second (as shown) and the half-full substrate level
+  const rng = Num.rng(12);
+  const E = Array.from({ length: NE }, (_, i) => ({ x: 1.6 + (i % 3) * 2.6 + (i > 2 ? 1.3 : 0), y: i > 2 ? 1.1 : 3.1 }));
+  const dots = Array.from({ length: 160 }, () => ({ x: rng() * 9, y: rng() * 4.2, a: rng() * TAU, p: 0 }));
+  demo("enzyme", {
+    aspect: w => (w < 560 ? 0.85 : 1.9),
+    caption: "A toy enzyme model: each pocket fills at a rate proportional to the amount of substrate and, once full, makes one product in 1/1.6 s on average. The curve is the Michaelis–Menten equation, rate = max × S / (K + S); the point is the rate counted in the animation.",
+    state: () => ({ busy: Array(NE).fill(0), age: Array(NE).fill(0), made: 0, t: 0, rec: [] }),
+    controls: [{ key: "S", label: "Substrate", min: 0, max: 10, step: 0.1, value: 1, color: "blue", format: x => `${x.toFixed(1)} × K` }],
+    change(key, s) { s.made = 0; s.t = 0; },
+    status: (s, v) => `${s.busy.filter(Boolean).length} of ${NE} pockets full; ${s.t > 2 ? (s.made / s.t / NE).toFixed(2) : "…"} products per second per enzyme`,
+    step(dt, s, v) {
+      s.t += dt;
+      for (let i = 0; i < NE; i++) {
+        if (!s.busy[i]) { if (rng() < 1 - Math.exp(-KCAT / KM * v.S * dt)) { s.busy[i] = 1; s.age[i] = 0; } }
+        else { s.age[i] += dt; if (rng() < 1 - Math.exp(-KCAT * dt)) { s.busy[i] = 0; s.made++; s.rec.push({ i, t: 0 }); } }
+      }
+      for (const r of s.rec) r.t += dt;
+      s.rec = s.rec.filter(r => r.t < 1.2);
+      for (const d of dots) { d.a += (rng() - 0.5) * 2 * dt * 3; d.x = (d.x + Math.cos(d.a) * dt * 0.6 + 9) % 9; d.y = (d.y + Math.sin(d.a) * dt * 0.6 + 4.2) % 4.2; }
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const boxA = wide ? [0, 0, g.w * 0.5, g.h] : [0, 0, g.w, g.h * 0.48];
+      const boxB = wide ? [g.w * 0.54, 0, g.w * 0.46, g.h] : [0, g.h * 0.5, g.w, g.h * 0.5];
+      const P = g.fit(0, 9, 0, 4.2, { box: boxA, pad: 6 });
+      const shown = Math.round(Math.min(160, v.S * 16));
+      for (let k = 0; k < shown; k++) g.circle(P([dots[k].x, dots[k].y]), Math.max(3, P.sx * 0.11), { fill: g.mix("panel", "blue", 0.6), stroke: "ink", width: 0.8 });
+      E.forEach((e, i) => {
+        const c = P([e.x, e.y]), r = P.sx * 0.62;
+        // A purple disc with a notch for its pocket; a filled pocket holds a blue substrate.
+        g.ctx.save();
+        g.ctx.beginPath();
+        g.ctx.arc(c[0], c[1], r, -2.4, 2.4);
+        g.ctx.lineTo(c[0] + r * 0.15, c[1]);
+        g.ctx.closePath();
+        g.ctx.fillStyle = g.mix("panel", "purple", 0.55); g.ctx.fill();
+        g.ctx.strokeStyle = g.color("ink"); g.ctx.lineWidth = 1.3; g.ctx.stroke();
+        g.ctx.restore();
+        if (s.busy[i]) g.circle([c[0] - r * 0.55, c[1]], r * 0.24, { fill: g.mix("panel", "blue", 0.6), stroke: "ink", width: 1 });
+      });
+      for (const rr of s.rec) { const e = E[rr.i], c = P([e.x - 0.9 - rr.t * 0.8, e.y + rr.t * 0.4]); g.circle(c, P.sx * 0.15, { fill: g.mix("panel", "green", 0.65), stroke: "ink", width: 0.8, alpha: 1 - rr.t / 1.2 }); }
+      const G = g.graph({ box: boxB, x: [0, 10], y: [0, 1.15], axes: "frame", xLabel: "Substrate (× K)", yLabel: "Rate (share of max)", yTicks: [0, 0.5, 1] });
+      G.hline(1, { label: "every pocket always full" });
+      G.fn(S => S / (KM + S), { color: "purple", width: 2.2 });
+      G.marker(v.S, v.S / (KM + v.S), { color: "purple", drop: true });
+      if (s.t > 2) G.points([[v.S, s.made / s.t / NE / KCAT]], { color: "orange", r: 4.5 });
+    },
+  });
+}
+</script>
+
+<p>With little substrate the pockets sit empty most of the time, and the rate rises in step with the substrate, like any collision. With <button class="set" data-set="S=10">ten times more</button>, almost every pocket is full whenever you look, and more substrate can't help. The level that fills half the pockets is called <span class="tex">K</span>, and the curve is the <dfn data-def="rate = max × [S] / (K + [S]): how an enzyme's rate rises with the amount of substrate and levels off when the enzyme is saturated.">Michaelis–Menten equation</dfn>, first measured in 1913<a class="cite" href="#ref-michaelis"></a>.</p>
+
+<h2>Halfway</h2>
+
+<p>So far every reaction has run one way. But the hydrogen surface looked the same from either valley: a collision that pushes atoms over the pass one way can push them back. Many reactions stop partway for this reason. Nitrogen dioxide, NO₂, is a brown gas; two NO₂ molecules can join into one colorless N₂O₄, which can split again. Here are two boxes at 300 K, one started with only <span class="c-muted">N₂O₄</span>, the other with only <span class="c-brass">NO₂</span>. Watch the share of <span class="c-brass">NO₂</span> in each:</p>
+
+<figure class="demo" id="equilibrium" aria-label="Two boxes of gas at 300 K. The left starts with only grey N2O4 molecules, the right with only brown NO2. Molecules split and join; a plot of the share of nitrogen held as NO2 shows the left box rising and the right box falling until both level off at the same value."></figure>
+<script>
+{
+  const SP = [{ r: 0.5, m: 1 }, { r: 0.68, m: 2 }], RULES = [{ a: 1, any: true, split: 0, D: 2.8 }, { a: 0, b: 0, Ea: 0, merge: 1, third: 1.3, D: 2.8 }];
+  const make = (no2, n2o4, seed) => { const s = RX.create({ W: 30, H: 20, kT: 1, rate: 12, seed, cap: 300, species: SP, rules: RULES }); RX.fill(s, [no2, n2o4]); return s; };
+  const share = s => { const a = RX.count(s, 0), b = RX.count(s, 1); return a / (a + 2 * b); };
+  const fresh = () => ({ a: make(0, 70, 3), b: make(140, 0, 8), hist: [[0, 0, 1]], split: 0, join: 0, seen: [0, 0] });
+  demo("equilibrium", {
+    aspect: w => (w < 560 ? 0.62 : 1.45),
+    caption: "Two flat gases at 300 K with the same atoms, one started as N₂O₄ (grey, colorless) and one as NO₂ (brown). Molecules split when hit hard enough and join when two NO₂ meet with a third molecule nearby to carry off the energy. Both boxes end at the same mix.",
+    state: fresh,
+    controls: [{ label: "Start again", type: "button", action: s => Object.assign(s, fresh()) }],
+    status: s => `left box: ${s.split.toFixed(0)} splits and ${s.join.toFixed(0)} joins per second`,
+    step(dt, s) {
+      RX.step(s.a, dt); RX.step(s.b, dt);
+      const t = s.a.t / s.a.rate, last = s.hist[s.hist.length - 1];
+      // Splits and joins per second in the left box, averaged over about two seconds.
+      s.split = Fx.follow(s.split, (s.a.back - s.seen[0]) / dt, dt, 2);
+      s.join = Fx.follow(s.join, (s.a.react - s.seen[1]) / dt, dt, 2);
+      s.seen = [s.a.back, s.a.react];
+      if (t - last[0] >= 0.2 && t <= 20) s.hist.push([t, share(s.a), share(s.b)]);
+    },
+    draw(g, s) {
+      const wide = g.w >= 560, split = wide ? g.h * 0.55 : g.h * 0.66;
+      const colors = ["brass", "muted"];
+      const boxA = wide ? [0, 16, g.w * 0.49, split - 16] : [0, 16, g.w, split / 2 - 22];
+      const boxB = wide ? [g.w * 0.51, 16, g.w * 0.49, split - 16] : [0, split / 2 + 12, g.w, split / 2 - 22];
+      RX.paint(g, s.a, boxA, { colors, tint: 0.7 });
+      RX.paint(g, s.b, boxB, { colors, tint: 0.7 });
+      g.text("started as N₂O₄", [boxA[0] + boxA[2] / 2, boxA[1] - 8], { size: 12.5, color: "muted" });
+      g.text("started as NO₂", [boxB[0] + boxB[2] / 2, boxB[1] - 8], { size: 12.5, color: "brass" });
+      const P = g.graph({ box: [0, split + 6, g.w, g.h - split - 6], x: [0, 20], y: [0, 1], axes: "frame", xLabel: "Time (s, as shown)", yLabel: "Share as NO₂", yTicks: [0, 0.5, 1], yFormat: y => `${Math.round(y * 100)}%` });
+      P.series(s.hist.map(([t, a]) => [t, a]), { color: "brass", width: 2, label: "from N₂O₄" });
+      P.series(s.hist.map(([t, , b]) => [t, b]), { color: "brass", width: 2, dash: [5, 4], label: "from NO₂" });
+    },
+  });
+}
+</script>
+
+<p>The boxes start at opposite ends and meet in the middle, each holding a bit under half its nitrogen as NO₂. The reactions don't stop: molecules keep splitting and joining about twenty times a second each way, at the same pace. That balance is <dfn data-def="The state a reversible reaction settles into, where the forward and backward reactions run at the same rate, so the amounts stop changing.">chemical equilibrium</dfn>. With too much N₂O₄, splitting outpaces joining; with too much NO₂, joining wins, until the two rates match. The flat model's bond is weak, a few kJ/mol; in real N₂O₄ it's about 57 kJ/mol, and at room conditions about a fifth of the molecules are split.</p>
+
+<p>Squeeze the box and something interesting happens. Before trying it, a prediction.</p>
+
+<div class="quiz">
+  <p>A syringe holds brown NO₂ in balance with colorless N₂O₄. You push the plunger and halve the volume. What happens to the brown color, looking through the gas?</p>
+  <div class="choices"><button>It fades, because the gas turns into N₂O₄</button><button>It doubles, because the same gas is packed into half the space</button><button data-correct>It darkens at once, then fades partway back</button></div>
+  <p class="why">Both happen, one after the other. Squeezing packs the NO₂ closer, so the color deepens instantly; then, with molecules closer together, joining outpaces splitting and some NO₂ pairs up, until a new balance is reached that is still darker than before.</p>
+</div>
+
+<p>The box below starts at equilibrium. Squeeze it to <span class="scrub" data-key="W"></span> of its width and watch the <span class="c-brass">brown</span> of the gas, plotted as the amount of NO₂ per unit of space:</p>
+
+<figure class="demo" id="squeeze" aria-label="A box of NO2 and N2O4 at equilibrium, tinted brown by the NO2 in it, with a plunger on its right. A slider squeezes the box; a plot of NO2 per unit of space jumps up when the box shrinks, then settles partway back down."></figure>
+<script>
+{
+  const SP = [{ r: 0.5, m: 1 }, { r: 0.68, m: 2 }], RULES = [{ a: 1, any: true, split: 0, D: 2.8 }, { a: 0, b: 0, Ea: 0, merge: 1, third: 1.3, D: 2.8 }];
+  const W0 = 30, H0 = 20, BASE = 0.46 * 140 / (W0 * H0);   // NO₂ per unit area at the start
+  const fresh = () => {
+    const s = RX.create({ W: W0, H: H0, kT: 1, rate: 12, seed: 21, cap: 300, species: SP, rules: RULES });
+    RX.fill(s, [0, 70]);
+    while (s.t < 90) RX.step(s, 1 / 60);
+    s.t = 0;
+    return { sim: s, w: 1, hist: [[0, dens(s)]] };
+  };
+  function dens(s) { return RX.count(s, 0) / (s.W * s.H) / BASE; }
+  const setW = (sim, frac) => {
+    // The piston moves in small steps while the figure plays, so spreading the molecules evenly into the
+    // new width is what they'd do anyway within a few collisions.
+    const k = (W0 * frac) / sim.W;
+    sim.W = W0 * frac;
+    for (let i = 0; i < sim.n; i++) { const r = sim.R[sim.sp[i]]; sim.x[i] = clamp(sim.x[i] * k, r, sim.W - r); }
+  };
+  demo("squeeze", {
+    aspect: w => (w < 560 ? 0.8 : 1.6),
+    caption: "A flat gas of NO₂ and N₂O₄ at 300 K whose box can be squeezed; the tint shows how much NO₂ there is per unit of space. Squeezing raises it at once, then joining pulls it partway back down.",
+    state: fresh,
+    controls: [{ key: "W", label: "Box width", min: 0.4, max: 1, step: 0.01, value: 1, color: "brass", format: x => `${Math.round(x * 100)}%` }],
+    reset: true,
+    change(key, s, v, fig) { if (!fig.playing) { s.w = v.W; setW(s.sim, s.w); } },
+    status: s => { const a = RX.count(s.sim, 0), b = RX.count(s.sim, 1); return `${Math.round((100 * a) / (a + 2 * b))}% of the nitrogen as NO₂`; },
+    step(dt, s, v) {
+      s.w = Fx.follow(s.w, v.W, dt, 0.25);
+      setW(s.sim, s.w);
+      RX.step(s.sim, dt);
+      const t = s.sim.t / s.sim.rate, last = s.hist[s.hist.length - 1];
+      if (t - last[0] >= 0.2) { s.hist.push([t, dens(s.sim)]); if (s.hist.length > 150) s.hist.shift(); }
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560, sim = s.sim;
+      const boxA = wide ? [0, 8, g.w * 0.48, g.h - 16] : [0, 0, g.w, g.h * 0.48];
+      const boxB = wide ? [g.w * 0.52, 0, g.w * 0.48, g.h] : [0, g.h * 0.5, g.w, g.h * 0.5];
+      const P = g.fit(0, W0 + 2, 0, H0, { box: boxA, pad: 6 });
+      const a = P([0, H0]), b = P([sim.W, 0]);
+      g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], { fill: g.rgba("brass", clamp(0.12 * dens(sim), 0, 0.6)) });
+      RX.paint(g, sim, boxA, { colors: ["brass", "muted"], tint: 0.7, pad: 6, world: [W0 + 2, H0] });
+      // The box outline drawn by paint() uses the current width; add the plunger.
+      const pl = P([sim.W, H0 / 2]);
+      g.rect(pl[0], P([0, H0])[1], 6, P([0, 0])[1] - P([0, H0])[1], { fill: "panel", stroke: "ink", width: 1.5 });
+      g.line([pl[0] + 6, pl[1]], [P([W0 + 2, 0])[0], pl[1]], { stroke: "ink", width: 3 });
+      const t1 = s.hist[s.hist.length - 1][0];
+      const G = g.graph({ box: boxB, x: [Math.max(0, t1 - 25), Math.max(25, t1)], y: [0, 2.6], axes: "frame", xLabel: "Time (s, as shown)", yLabel: "NO₂ per unit space", yTicks: [0, 1, 2], yFormat: y => `${y}×` });
+      G.hline(1, { color: "muted" });
+      G.series(s.hist, { color: "brass", width: 2.2 });
+    },
+  });
+}
+</script>
+
+<p>Squeeze the box to <button class="set" data-set="W=0.5">half its width</button> and the brown jumps to twice as dark, then fades over a few seconds to about 1.4 times the original, as the NO₂ share drops from about 46% to 33%. Crowded together, NO₂ molecules meet more often, so joining outpaces splitting, and joining turns two molecules into one, which eases the crowding. Henry Le Chatelier stated the general rule in 1884: disturb a mixture at equilibrium and it shifts to partly undo the disturbance<a class="cite" href="#ref-lechatelier"></a>.</p>
+
+<p>Temperature shifts the balance too. Splitting N₂O₄ takes in about 57 kJ/mol, and joining gives it back<a class="cite" href="#ref-janaf"></a>, so a sealed tube of the gas is pale in ice water and dark brown in boiling water. Set the tube's temperature, <span class="scrub" data-key="T"></span>:</p>
+
+<figure class="demo" id="warm" aria-label="A sealed glass tube of NO2 and N2O4 tinted by how much brown NO2 it holds, beside a plot of the share of N2O4 split into NO2 against temperature from −10 to 150 °C, from measured thermodynamic data. A slider sets the temperature."></figure>
+<script>
+{
+  const DH = 57.12, DS = 0.1757, C0 = 0.0339;   // kJ/mol and kJ/(mol·K) for N₂O₄ → 2 NO₂ (NIST-JANAF); mol/L of N₂O₄ sealed in
+  const alpha = C => { const T = C + 273.15, Kp = Math.exp(-(DH - T * DS) / (0.008314 * T)), Kc = Kp / (0.08314 * T); return (-Kc + Math.sqrt(Kc * Kc + 16 * C0 * Kc)) / (8 * C0); };
+  demo("warm", {
+    aspect: w => (w < 560 ? 0.9 : 1.8),
+    caption: "A sealed tube holding 0.034 mol of N₂O₄ per liter (about 1 bar at room temperature), with its split share computed from measured enthalpy and entropy. The tint is proportional to the NO₂ in the tube.",
+    controls: [{ key: "T", label: "Temperature", min: -10, max: 150, step: 1, value: 25, unit: " °C", color: "orange", marks: [{ value: 0, label: "ice" }, { value: 100, label: "boiling" }] }],
+    presets: [{ label: "Ice water", set: { T: 0 } }, { label: "Room", set: { T: 25 } }, { label: "Boiling water", set: { T: 100 } }],
+    status: (s, v) => { const a = alpha(v.T); return `${Math.round(a * 100)}% split; ${(2 * a * C0 * 1000).toFixed(1)} mmol of NO₂ per liter`; },
+    draw(g, s, v) {
+      const wide = g.w >= 560, a = alpha(v.T), no2 = 2 * a * C0;
+      const tw = wide ? g.w * 0.3 : g.w * 0.3;
+      // The tube: a rounded glass vial, tinted by its NO₂.
+      const x = tw * 0.5, w = Math.min(52, tw * 0.4), top = 26, bot = g.h - 34;
+      g.rect(x - w / 2, top, w, bot - top, { fill: g.rgba("brass", clamp(no2 / 0.058, 0, 1) * 0.95), r: w / 2 });
+      g.rect(x - w / 2, top, w, bot - top, { stroke: "ink", width: 1.6, r: w / 2 });
+      g.line([x - w / 2 + 7, top + w / 2], [x - w / 2 + 7, bot - w / 2], { stroke: "panel", width: 3, alpha: 0.7 });
+      g.text(`${v.T} °C`, [x, bot + 18], { size: 13, weight: 600 });
+      const P = g.graph({ box: [tw, 0, g.w - tw, g.h], x: [-10, 150], y: [0, 1], axes: "frame", xLabel: "Temperature (°C)", yLabel: "Share of N₂O₄ split into NO₂", yTicks: [0, 0.25, 0.5, 0.75, 1], yFormat: y => `${Math.round(y * 100)}%` });
+      P.fn(alpha, { color: "brass", width: 2.2 });
+      P.marker(v.T, a, { color: "orange", drop: true });
+    },
+  });
+}
+</script>
+
+<p>In ice water only about 7% of the N₂O₄ is split; at room temperature, 19%; in boiling water, 82%, with eleven times as much NO₂ as in ice water. Heat favors the direction that takes heat in, Le Chatelier's rule again. Underneath is the Arrhenius equation: splitting has the higher barrier, higher than joining's by the 57 kJ/mol it takes in, so warming speeds it up more.</p>
+
+<details class="deeper"><summary>The equilibrium constant <span class="hint">3 min</span></summary>
+<p>At equilibrium the forward and backward rates are equal. Splitting goes as <span class="tex">k_f[\mathrm{N_2O_4}]</span> and joining as <span class="tex">k_b[\mathrm{NO_2}]^2</span>, since two NO₂ have to meet. Setting them equal gives</p>
+<div class="tex">K = \frac{[\mathrm{NO_2}]^2}{[\mathrm{N_2O_4}]} = \frac{k_f}{k_b}</div>
+<p>a number fixed at each temperature, whatever the amounts you start with. Squeezing doubles both concentrations at once, which doubles the top of the fraction twice and the bottom once, so the mixture has to make less NO₂ to bring the fraction back to <span class="tex">K</span>. Because each rate constant follows Arrhenius, their ratio goes as <span class="tex">e^{-\Delta H/RT}</span>, where <span class="tex">\Delta H</span> is the difference between the two barriers: the heat the reaction takes in. That's the van 't Hoff equation, and with the measured <span class="tex">\Delta H</span> of 57 kJ/mol and the entropy gained by splitting one molecule into two, it gives the curve in the figure. A catalyst lowers both barriers equally, so it leaves <span class="tex">K</span> alone.</p>
+</details>
+
+<h2>Heat out, heat in</h2>
+
+<p>Now, where the match's heat comes from. Breaking bonds costs energy and forming them releases it, and which side wins decides whether a reaction gives out heat or takes it in. Choose a reaction and compare the energy to break every bond in the <span class="c-orange">reactants</span> with what the <span class="c-green">products'</span> bonds give back:</p>
+
+<figure class="demo" id="ledger" aria-label="An energy staircase for a chosen reaction: a column of orange blocks climbing from the reactants to separate atoms, one block per bond broken, and a column of green blocks dropping from the atoms to the products, one per bond formed. The gap between where it starts and ends is the heat the reaction gives out or takes in."></figure>
+<script>
+{
+  const RXNS = {
+    methane: { name: "CH₄ + 2 O₂ → CO₂ + 2 H₂O", br: [["C–H", 413, 4], ["O=O", 498, 2]], fm: [["C=O", 799, 2], ["O–H", 463, 4]], measured: -802 },
+    hydrogen: { name: "2 H₂ + O₂ → 2 H₂O", br: [["H–H", 436, 2], ["O=O", 498, 1]], fm: [["O–H", 463, 4]], measured: -484 },
+    nitrogen: { name: "N₂ + O₂ → 2 NO", br: [["N≡N", 945, 1], ["O=O", 498, 1]], fm: [["N=O", 631, 2]], measured: 181 },
+  };
+  demo("ledger", {
+    aspect: w => (w < 560 ? 0.8 : 1.6),
+    caption: "Breaking every bond of the reactants (orange blocks, one per bond) and forming every bond of the products (green blocks), using average bond energies. The difference is the heat of the reaction; the measured value is for the gases at 25 °C.",
+    controls: [{ key: "rx", label: "Reaction", type: "choice", options: [{ value: "methane", label: "Burning methane" }, { value: "hydrogen", label: "Burning hydrogen" }, { value: "nitrogen", label: "Nitrogen + oxygen" }], value: "methane" }],
+    status: (s, v) => { const r = RXNS[v.rx], b = r.br.reduce((a, [, e, n]) => a + e * n, 0), f = r.fm.reduce((a, [, e, n]) => a + e * n, 0); return `${b - f > 0 ? "+" : "−"}${Math.abs(b - f)} kJ/mol from the bonds; measured ${r.measured > 0 ? "+" : "−"}${Math.abs(r.measured)}`; },
+    draw(g, s, v) {
+      const r = RXNS[v.rx], B = r.br.reduce((a, [, e, n]) => a + e * n, 0), F = r.fm.reduce((a, [, e, n]) => a + e * n, 0), net = B - F;
+      const wide = g.w >= 560, lo = Math.min(0, net) - 300, hi = B + 250;
+      const P = g.fit(0, 4, lo, hi, { pad: 14, uniform: false, box: [wide ? 30 : 6, 40, g.w - (wide ? 30 : 6), g.h - 46] });
+      const col = (x, y0, list, sign, color) => {
+        let y = y0;
+        for (const [label, e, n] of list) for (let k = 0; k < n; k++) {
+          const y1 = y + sign * e, a = P([x - 0.42, Math.max(y, y1)]), b = P([x + 0.42, Math.min(y, y1)]);
+          g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], { fill: g.rgba(color, 0.35), stroke: color, width: 1.2 });
+          if (b[1] - a[1] > 15) g.text(`${label} ${e}`, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], { size: wide ? 12 : 10.5, color: "ink" });
+          y = y1;
+        }
+      };
+      const lvl = (x0, x1, y, label, color = "ink", above = false) => { g.line(P([x0, y]), P([x1, y]), { stroke: color, width: 2.4 }); g.text(label, [P([(x0 + x1) / 2, y])[0], P([0, y])[1] + (above ? -11 : 15)], { size: 12.5, color, weight: 600, halo: true }); };
+      lvl(0.1, 0.9, 0, "reactants");
+      col(1.5, 0, r.br, 1, "orange");
+      lvl(1.0, 3.0, B, `separate atoms, ${B} kJ/mol up`, "muted", true);
+      col(2.5, B, r.fm, -1, "green");
+      lvl(3.1, 3.9, net, "products");
+      g.line(P([0.9, 0]), P([3.95, 0]), { stroke: "muted", width: 1, dash: [4, 4] });
+      g.arrow(P([3.5, 0]), P([3.5, net]), { stroke: "ink", width: 2.2 });
+      g.text(`${net > 0 ? "takes in" : "gives out"} ${Math.abs(net)} kJ/mol`, [P([3.5, 0])[0], P([0, net / 2])[1]], { size: 12.5, weight: 600, halo: true, align: "center" });
+      g.text(r.name, [g.w / 2, 10], { size: 13.5, weight: 600 });
+    },
+  });
+}
+</script>
+
+<p>Burning a mole of methane breaks bonds worth 2,648 kJ and forms bonds worth 3,450 kJ. The 802 kJ difference leaves as heat, matching the measured 802 kJ per mole, about 50 kJ per gram<a class="cite" href="#ref-nist"></a>. The C=O and O–H bonds in carbon dioxide and water are among the strongest that carbon, hydrogen, and oxygen can form, which is why burning wood pays so well. For <button class="set" data-set="rx=nitrogen">nitrogen and oxygen</button>, N₂'s triple bond is so strong that making nitric oxide takes in 181 kJ/mol, so it happens only in very hot places like lightning and engines<span class="sidenote">The bond energies are averages over many molecules, except for the diatomic molecules, whose bonds are measured directly. They don't always land this close to the measured heats, but they're rarely far off.</span>. This heat is the reaction's <dfn data-def="The heat a reaction gives out (negative) or takes in (positive) at constant pressure, per mole: ΔH.">enthalpy change</dfn>, <span class="tex">\Delta H</span>.</p>
+
+<p>That heat shows up as faster molecules. In this insulated box, a <span class="c-blue">blue</span> and a <span class="c-red">red</span> molecule react when they hit with at least 7.5 kJ/mol head-on, and the <span class="c-green">products</span> leave with more energy than the pair brought, or less. Choose which, and watch the <span class="c-orange">thermometer</span>:</p>
+
+<figure class="demo" id="exoendo" aria-label="An insulated box of blue and red molecules that react into green products, beside a thermometer and a plot of temperature over time. A choice switches between a reaction that gives out heat, which warms the box and speeds up as it warms, and one that takes heat in, which cools the box and slows to a crawl."></figure>
+<script>
+{
+  const SP = [{ r: 0.5, m: 1 }, { r: 0.5, m: 1 }, { r: 0.5, m: 1 }, { r: 0.5, m: 1 }];
+  const make = kind => {
+    const rule = kind === "exo" ? { a: 0, b: 1, Ea: 3, to: [2, 3], dE: -2.5 } : { a: 0, b: 1, Ea: 3, to: [2, 3], dE: 1.2 };
+    const s = RX.create({ W: 30, H: 20, kT: 1, rate: 5, seed: 6, walls: "elastic", species: SP, rules: [rule] });
+    RX.fill(s, [70, 70, 0, 0]);
+    RX.rescale(s, 1);
+    return { sim: s, hist: [[0, 300, 0]], Tm: 300 };
+  };
+  demo("exoendo", {
+    aspect: w => (w < 560 ? 0.8 : 1.75),
+    caption: "A flat gas in an insulated box. When a blue and a red react, the green products carry off 6 kJ/mol more energy of motion than the pair brought (gives out heat) or 3 kJ/mol less (takes it in). The temperature is measured from the molecules' speeds; the dashed line counts how much has reacted.",
+    state: () => make("exo"),
+    controls: [{ key: "kind", label: "The reaction", type: "choice", options: [{ value: "exo", label: "Gives out heat" }, { value: "endo", label: "Takes in heat" }], value: "exo", color: "orange" }],
+    change(key, s, v) { Object.assign(s, make(v.kind)); },
+    status: s => `${Math.round(s.Tm)} K, ${Math.round((100 * s.sim.react) / 70)}% reacted`,
+    step(dt, s) {
+      RX.step(s.sim, dt);
+      s.Tm = Fx.follow(s.Tm, RX.kTof(s.sim) * 300, dt, 0.8);
+      const t = s.sim.t / s.sim.rate, last = s.hist[s.hist.length - 1];
+      if (t - last[0] >= 0.25 && t <= 40) s.hist.push([t, s.Tm, s.sim.react / 70]);
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560, sim = s.sim;
+      const boxA = wide ? [0, 22, g.w * 0.42, g.h - 30] : [0, 18, g.w - 60, g.h * 0.45 - 18];
+      RX.paint(g, sim, boxA, { colors: ["blue", "red", "green", "green"] });
+      g.text(v.kind === "exo" ? "products leave 6 kJ/mol faster" : "products leave 3 kJ/mol slower", [boxA[0] + boxA[2] / 2, 9], { size: 12.5, color: v.kind === "exo" ? "orange" : "muted" });
+      // Thermometer.
+      const x = wide ? g.w * 0.46 : g.w - 30, top = wide ? 30 : 18, bot = wide ? g.h - 40 : g.h * 0.45 - 22, Y = T => bot - (T / 700) * (bot - top);
+      g.rect(x - 5, top, 10, bot - top, { stroke: "ink", width: 1.2, r: 5 });
+      g.rect(x - 3, Y(clamp(s.Tm, 0, 700)), 6, bot - Y(clamp(s.Tm, 0, 700)), { fill: "orange", r: 3 });
+      g.circle([x, bot + 9], 10, { fill: "orange", stroke: "ink", width: 1.2 });
+      const P = g.graph({ box: wide ? [g.w * 0.52, 0, g.w * 0.48, g.h] : [0, g.h * 0.5, g.w, g.h * 0.5], x: [0, 40], y: [0, 700], axes: "frame", xLabel: "Time (s, as shown)", yLabel: "Temperature (K)", yTicks: [0, 300, 600] });
+      P.hline(300, { color: "muted" });
+      P.series(s.hist.map(([t, T]) => [t, T]), { color: "orange", width: 2.2 });
+      P.series(s.hist.map(([t, , f]) => [t, f * 700]), { color: "green", width: 1.5, dash: [5, 4], label: "reacted" });
+    },
+  });
+}
+</script>
+
+<p>The reaction that gives out heat warms the box to about 650 K, and the warming feeds back: more reacts in the third and fourth seconds than in the first two, though fewer molecules are left to meet. That self-acceleration is the match's secret. <button class="set" data-set="kind=endo">The other reaction</button> takes energy from the molecules' motion, so the box cools below 200 K, and the colder it gets the fewer collisions clear the barrier. It crawls with about 40% left, which is why cooking needs a stove.</p>
+
+<h2>Back to the match</h2>
+
+<p>Now every piece of the match is in place. Burning gives out heat, heat speeds burning steeply, and the wood loses heat to the air roughly in proportion to how much hotter it is. In 1928 Nikolay Semenov put the two on one plot, and the comparison explains ignition<a class="cite" href="#ref-semenov"></a>. Set the strike's temperature, press <button class="set" data-press="Strike">Strike</button>, and watch the <span class="c-orange">dot</span> on the temperature axis:</p>
+
+<figure class="demo" id="runaway" aria-label="A plot against temperature of the heat a piece of wood makes by burning, an orange S-shaped curve, and the heat it loses to the air, a straight line. A dot on the temperature axis moves right where the curve is above the line and left where it's below. Sliders set the starting temperature and how strongly the air cools the wood."></figure>
+<script>
+{
+  const TA = 12000, TM = 620, T0 = 293.15, GMAX = 100, RATE = 14;   // K, K, K, model heat units, K per second per unit
+  const G = T => { const r = Math.exp(TA * (1 / TM - 1 / T)); return (GMAX * r) / (1 + r); };
+  const L = (T, h) => h * (T - T0);
+  const crossings = h => { const out = []; let prev = G(T0 + 1) - L(T0 + 1, h); for (let T = T0 + 2; T < 1800; T += 1) { const d = G(T) - L(T, h); if (Math.sign(d) !== Math.sign(prev)) out.push({ T, rising: d > prev }); prev = d; } return out; };
+  demo("runaway", {
+    aspect: w => (w < 560 ? 0.9 : 1.7),
+    caption: "Semenov's picture of ignition, for a model of burning wood: heat made by the reaction (orange) levels off once it's limited by how fast air reaches the fuel; heat lost to the air (grey line) grows with temperature. Where they cross, the temperature stays put: the open circle is an unstable balance, the ignition point, and the filled circles are stable.",
+    state: () => ({ T: 673.15 }),
+    controls: [
+      { key: "strike", label: "Strike heats it to", min: 20, max: 700, step: 5, value: 400, unit: " °C", color: "orange" },
+      { key: "h", label: "Cooling by the air", min: 0.03, max: 0.3, step: 0.005, value: 0.095, color: "ink", marks: [{ value: 0.095, label: "still air" }] },
+      { label: "Strike", type: "button", primary: true, action: (s, v, fig) => { s.T = v.strike + 273.15; fig.play(); } },
+    ],
+    status: (s, v) => {
+      const d = G(s.T) - L(s.T, v.h), c = s.T - 273.15;
+      if (Math.abs(d) < 0.6) return c > 200 ? `burning steadily at ${Math.round(c)} °C` : `at ${Math.round(c)} °C, unlit`;
+      return d > 0 ? `heating up, ${Math.round(c)} °C` : `cooling, ${Math.round(c)} °C`;
+    },
+    step(dt, s, v) {
+      for (let i = 0; i < 10; i++) s.T = clamp(s.T + (G(s.T) - L(s.T, v.h)) * RATE * (dt / 10), T0, 1800);
+    },
+    draw(g, s, v) {
+      const C = T => T - 273.15;
+      const P = g.graph({ x: [0, 1400], y: [0, 125], axes: "frame", xLabel: "Temperature of the wood (°C)", yLabel: "Heat per second", yTicks: false });
+      P.fn(c => L(c + 273.15, v.h), { color: "muted", width: 2.2, label: "lost to the air", labelAt: v.h > 0.15 ? 450 : 1150 });
+      P.fn(c => G(c + 273.15), { color: "orange", width: 2.4, label: "made by burning", labelAt: 900, labelOffset: [0, -12] });
+      for (const x of crossings(v.h)) {
+        const p = [C(x.T), G(x.T)];
+        if (x.rising) { P.points([p], { color: "panel", r: 5.5 }); g.circle(P(p), 5.5, { stroke: "ink", width: 1.8 }); P.label(`ignition, ${Math.round(C(x.T))} °C`, p, { dx: -10, dy: -14, align: "right", color: "ink" }); }
+        else P.points([p], { color: "ink", r: 5 });
+      }
+      const sk = P([v.strike, 0]);
+      g.line([sk[0], sk[1]], [sk[0], sk[1] - 22], { stroke: "orange", width: 1.5, dash: [3, 3] });
+      g.text("strike", [sk[0], sk[1] - 30], { size: 11.5, color: "orange", halo: true });
+      // The dot on the axis, with an arrow showing which way it's moving.
+      const d = G(s.T) - L(s.T, v.h), at = P([C(s.T), 0]);
+      g.circle(at, 7, { fill: "orange", stroke: "ink", width: 1.3 });
+      if (Math.abs(d) > 0.6) g.arrow([at[0] + Math.sign(d) * 10, at[1] - 14], [at[0] + Math.sign(d) * 34, at[1] - 14], { stroke: "orange", width: 2.2 });
+      P.vline(C(s.T), { color: "orange" });
+    },
+  });
+}
+</script>
+
+<p>Where the <span class="c-orange">orange curve</span> is above the grey line the wood warms, and where it's below it cools, so the dot runs to the nearest crossing. Near room temperature they cross at once, which is why a match keeps for years. The middle crossing, near 320 °C, is the <dfn data-def="The temperature above which a fuel makes heat by burning faster than it loses it, so it heats itself the rest of the way.">ignition point</dfn>, a knife edge: strike to <button class="set" data-set="strike=300" data-press="Strike">300 °C</button> and the dot slides back, strike to <button class="set" data-set="strike=330" data-press="Strike">330 °C</button> and it runs away to steady burning above 1,000 °C. That's the sharp line from the first figure.</p>
+
+<p>Blowing steepens the grey line. Push the cooling to <button class="set" data-set="h=0.25">0.25</button> and the upper crossing vanishes: no temperature makes heat as fast as the wind removes it, so the flame dies. A gentle breeze can feed a fire more air than it cools it, which this simple picture leaves out.</p>
+
+<p>Last, the real thing. A match flame isn't burning wood: the flame's heat splits the wood into gases, and the gases burn where they mix with air. Turn the burning match, then <button class="set" data-press="Blow out">blow it out</button>:</p>
+
+<figure class="demo" id="flame" aria-label="A 3D burning match, upright, with a flickering flame and a thin wisp of smoke, on a dark background. It can be turned. Blowing it out leaves a glowing head and a rising plume of white smoke; striking it again relights it."></figure>
+<script>
+{
+  const { mesh } = E3;
+  const scene = E3.scene({ look: "studio" });
+  // A match 46 mm long, in centimeters, standing on its end; the top of the wood is charred.
+  scene.add(mesh.box(0.22, 3.6, 0.22, { round: 0.02 }), { material: { color: "#d8b88a", roughness: 0.75 }, position: [0, 1.8, 0], name: "wood" });
+  const charred = scene.add(mesh.box(0.21, 0.6, 0.21, { round: 0.03 }), { material: { color: "#2a221d", roughness: 0.9 }, position: [0, 3.9, 0], name: "charred wood" });
+  const head = scene.add(mesh.ellipsoid(0.17, 0.32, 0.17, { segments: 24 }), { material: { color: "#2b211c", roughness: 0.8 }, position: [0, 4.38, 0], name: "head" });
+  // Physical presets in centimeters. A match flame burns its gas within a few centimeters of the
+  // head, so the flame gas lives only a few hundredths of a second; it's stepped finely to match.
+  // Its glowing soot is near 1,700 K. The smoke is a thin wisp in still room air: it leaves the ember
+  // at about 420 K and mixes with the air within a centimeter or two, so it's held back far more than a
+  // bonfire's broad plume (rising at about 0.25 m/s), and its eddies are its own, about 3 cm across.
+  const WISP = { drag: 12, turbulence: { strength: 16, scale: 3, speed: 0.6 } };
+  const fire = scene.add(E3.particles({
+    matter: "fire", units: "cm", count: 1200, seed: 5, life: [0.035, 0.08], step: 1 / 240, size: [0.34, 0.12], temperature: [1700, 1000], volume: true,
+    emitter: { shape: "sphere", radius: 0.15, position: [0, 4.5, 0], speed: [20, 45], spread: 0.2, direction: [0, 1, 0] },
+  }));
+  const wisp = scene.add(E3.particles({
+    matter: "smoke", units: "cm", count: 500, seed: 6, life: [0.5, 1.0], step: 1 / 120, size: [0.06, 0.6], opacity: 0.25, glow: 0.4, color: "#8a8580", forces: WISP,
+    emitter: { shape: "disk", radius: 0.06, position: [0, 6.6, 0], speed: [40, 70], spread: 0.15 },
+  }));
+  const smoke = scene.add(E3.particles({
+    matter: "smoke", units: "cm", count: 1200, seed: 7, life: [0.8, 1.6], step: 1 / 120, size: [0.08, 0.9], opacity: 0.6, temperature: [420, 300], color: "#e6e3dd", forces: WISP,
+    emitter: { shape: "sphere", radius: 0.12, position: [0, 4.5, 0], speed: [10, 30], spread: 0.35 },
+  }));
+  demo("flame", {
+    aspect: w => (w < 560 ? 0.8 : 1.15),
+    caption: "A burning match. The flame is gas, given off by the hot wood and burning where it meets the air; a thin wisp of soot rises from its tip. Blown out, the head keeps glowing for a moment and the wood keeps giving off gas, now unburnt, as white smoke.",
+    orbit: { yaw: 0.4, pitch: 0.12, minPitch: -0.3, maxPitch: 0.8 },
+    state: () => ({ t: 2, lit: true, since: 5, fire: 1, smoke: 0 }),
+    controls: [
+      { label: "Strike", type: "button", primary: true, action: s => { s.lit = true; s.since = 0; } },
+      { label: "Blow out", type: "button", action: s => { if (s.lit) { s.lit = false; s.since = 0; } } },
+    ],
+    status: s => (s.lit ? (s.since < 0.6 ? "catching" : "burning") : s.since < 3.5 ? "out: unburnt wood gas rising as smoke" : "out"),
+    step(dt, s) {
+      s.t += dt; s.since += dt;
+      s.fire = Fx.follow(s.fire, s.lit ? 1 : 0, dt, s.lit ? 0.35 : 0.08);
+      s.smoke = s.lit ? Fx.follow(s.smoke, 0, dt, 0.3) : Math.exp(-s.since / 2.2);
+    },
+    draw(g, s) {
+      g.rect(0, 0, g.w, g.h, { fill: "#0f0d0c" });
+      scene.time = s.t;
+      fire.density = s.fire;
+      wisp.density = s.fire * 0.6;
+      smoke.density = s.smoke;
+      const glowT = s.lit ? 1150 : 1150 - Math.min(1, s.since / 2.5) * 700;
+      head.temperature = Math.max(300, glowT);
+      scene.lights = [{ position: [0, 5.1, 0.3], color: "#ffb35c", intensity: 2.2 * s.fire, range: 6 }];
+      scene.exposure = 1.5;
+      const view = g.render3d(scene, { ...s.view, fov: 30, target: [0, 5.0, 0], distance: 9.5 });
+      // Labels in light ink, since the scene is dark on either page.
+      const label = (p, text, dx) => { const a = view.project(p), b = [a[0] + dx, a[1]]; g.line(a, b, { stroke: "#9a938a", width: 1 }); g.text(text, [b[0] + (dx > 0 ? 6 : -6), b[1]], { size: 12.5, color: "#ece6dc", align: dx > 0 ? "left" : "right" }); };
+      label([0.11, 3.3, 0], "wood", 70);
+      label([0.17, 4.38, 0], "head", 70);
+      if (s.fire > 0.4) label([-0.25, 5.5, 0], "burning gas", -80);
+      if (s.smoke > 0.3) label([-0.3, 6.4, 0], "unburnt gas, as smoke", -80);
+    },
+  });
+}
+</script>
+
+<p>The flame stands clear of the wood because the solid never burns. Heat breaks the cellulose into carbon monoxide, hydrogen, methane, and heavier vapors, which flow out and burn in the air. The flame's heat makes more gas and the gas makes more heat: the loop that kept the dot at the top of Semenov's plot. Blown out, the wood still gives off gas for a few seconds, unburnt, as white smoke. Hold another flame in that smoke and it can catch and run back down to the wood; it's easiest to see with a candle.</p>
+
+<p>The same few ideas set how long food keeps, how much a fever speeds your metabolism, why a car's exhaust needs a hot catalyst, and why iron rusts faster in warm, wet air. What they don't do is predict a barrier from scratch. That means solving quantum mechanics for every electron along the reaction's path, which is possible for three hydrogen atoms and still hard for most reactions chemists care about.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-huber">K. P. Huber and G. Herzberg, <em>Molecular Spectra and Molecular Structure IV: Constants of Diatomic Molecules</em>, Van Nostrand Reinhold (1979). The H₂ bond length and well depth behind the bond figures.</li>
+  <li id="ref-maxwell">J. C. Maxwell, “Illustrations of the dynamical theory of gases,” <em>Philosophical Magazine</em> 19 (1860), 19–32. The distribution of molecular speeds.</li>
+  <li id="ref-atkins">P. Atkins, J. de Paula, and J. Keeler, <em>Atkins' Physical Chemistry</em>, 11th edition, Oxford University Press (2018). Collision theory, the Arrhenius equation, catalysis, and equilibrium.</li>
+  <li id="ref-siegbahn">P. Siegbahn and B. Liu, “An accurate three-dimensional potential energy surface for H₃,” <em>Journal of Chemical Physics</em> 68 (1978), 2457–2465. The barrier and transition state of H + H₂.</li>
+  <li id="ref-truhlar">D. G. Truhlar and C. J. Horowitz, “Functional representation of Liu and Siegbahn's accurate ab initio potential energy calculations for H + H₂,” <em>Journal of Chemical Physics</em> 68 (1978), 2466–2476.</li>
+  <li id="ref-sato">S. Sato, “On a new method of drawing the potential energy surface,” <em>Journal of Chemical Physics</em> 23 (1955), 592. The LEPS surface used in the barrier figures.</li>
+  <li id="ref-arrhenius">S. Arrhenius, “Über die Reaktionsgeschwindigkeit bei der Inversion von Rohrzucker durch Säuren,” <em>Zeitschrift für physikalische Chemie</em> 4 (1889), 226–248. doi:10.1515/zpch-1889-0116.</li>
+  <li id="ref-eyring">H. Eyring, “The activated complex in chemical reactions,” <em>Journal of Chemical Physics</em> 3 (1935), 107–115. doi:10.1063/1.1749604.</li>
+  <li id="ref-heck">R. M. Heck and R. J. Farrauto, “Automobile exhaust catalysts,” <em>Applied Catalysis A: General</em> 221 (2001), 443–457. doi:10.1016/S0926-860X(01)00818-3.</li>
+  <li id="ref-lindskog">S. Lindskog and J. E. Coleman, “The catalytic mechanism of carbonic anhydrase,” <em>Proceedings of the National Academy of Sciences</em> 70 (1973), 2505–2508. doi:10.1073/pnas.70.9.2505.</li>
+  <li id="ref-wolfenden">R. Wolfenden and M. J. Snider, “The depth of chemical time and the power of enzymes as catalysts,” <em>Accounts of Chemical Research</em> 34 (2001), 938–945. doi:10.1021/ar000058i.</li>
+  <li id="ref-michaelis">L. Michaelis and M. L. Menten, “Die Kinetik der Invertinwirkung,” <em>Biochemische Zeitschrift</em> 49 (1913), 333–369. English translation by K. A. Johnson and R. S. Goody, <em>Biochemistry</em> 50 (2011), 8264–8269.</li>
+  <li id="ref-lechatelier">H. Le Chatelier, “Sur un énoncé général des lois des équilibres chimiques,” <em>Comptes rendus de l'Académie des sciences</em> 99 (1884), 786–789.</li>
+  <li id="ref-janaf">M. W. Chase, Jr., <em>NIST-JANAF Thermochemical Tables</em>, 4th edition, Journal of Physical and Chemical Reference Data, Monograph 9 (1998). Enthalpies and entropies of NO₂ and N₂O₄.</li>
+  <li id="ref-nist">P. J. Linstrom and W. G. Mallard, editors, <em>NIST Chemistry WebBook</em>, NIST Standard Reference Database 69, National Institute of Standards and Technology. Heats of formation and combustion used for the measured values.</li>
+  <li id="ref-semenov">N. N. Semenov, “Some problems relating to chain reactions and to the theory of combustion,” Nobel Lecture, 11 December 1956.</li>
+</ol>
