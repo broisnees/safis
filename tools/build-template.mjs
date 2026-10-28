@@ -21,7 +21,7 @@ const optional = f => (!skip.has(f) && existsSync(path.join(root, f)) ? read(f) 
 
 // Order matters: fonts before the theme, the engine and extensions before the runtime.
 const STYLES = ["src/fonts.css", "src/theme.css", "src/tex.css", "src/plot.css", "src/sim.css", "src/article.css", "src/code.css"];
-const SCRIPTS = ["src/engine3d.js", "src/parts3d.js", "src/tex.js", "src/plot.js", "src/sim.js", "src/geo.js", "src/optics.js", "src/sound.js", "src/image.js", "src/effects.js", "src/iso.js", "src/runtime.js"];
+const SCRIPTS = ["src/engine3d.js", "src/parts3d.js", "src/bio3d.js", "src/tex.js", "src/plot.js", "src/sim.js", "src/geo.js", "src/optics.js", "src/sound.js", "src/image.js", "src/effects.js", "src/iso.js", "src/runtime.js"];
 const [styles, scripts, page] = await Promise.all([
   Promise.all(STYLES.map(optional)),
   Promise.all(SCRIPTS.map(optional)),

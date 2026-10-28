@@ -80,7 +80,7 @@ export const demo = mount;
 export function enhance(root) { if (browser) start().enhance(root ?? document); }
 /** Typesets .tex elements under root as MathML. */
 export function typeset(root) { if (!browser) return 0; start(); return window.SafisTeX ? window.SafisTeX.typeset(root ?? document.body) : 0; }
-/** TeX source to a MathML string (browser; use "safis/tex" on a server). */
+/** TeX source to a MathML string (browser; use "@safis/core/tex" on a server). */
 export function toMathML(src, options) { start(); return window.SafisTeX ? window.SafisTeX.toMathML(src, options) : String(src); }
 /** "light" or "dark" forces a theme (remembered for the reader); "auto" follows their system setting. */
 export function setTheme(mode) {
