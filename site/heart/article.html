@@ -1,0 +1,1791 @@
+<div class="abstract"><ul>
+<li>The heart is two pumps in one muscle. The right side pushes blood through the lungs, the left side through the rest of the body, and each beat they move the same 70 mL or so, because a pump that fills more pushes harder.</li>
+<li>Four valves make each pump work. They have no muscles of their own: blood pressure opens them and shuts them, so they only ever let blood go one way.</li>
+<li>An electrical wave times every beat. It starts in a few thousand pacemaker cells, waits a tenth of a second at the gate between atria and ventricles, then races through the ventricles in under a tenth of a second. An ECG is that wave, seen from the skin.</li>
+<li>The heart feeds itself through its own small arteries. A heart attack is what happens when one of them is suddenly blocked: the muscle downstream starts dying within half an hour, from the inside out, and every minute it stays blocked costs more of it.</li>
+</ul></div>
+
+<p class="lede">Press two fingers against the inside of your wrist, below the thumb, and wait. Each soft knock you feel is a wave of pressure that left your chest a fraction of a second earlier, when a fist-sized muscle squeezed about 70 milliliters of blood, a little under a third of a cup, into an artery already full of it. It will do this roughly a hundred thousand times today, two and a half billion times in a lifetime, and it never rests for longer than about half a second.</p>
+
+<p>That muscle is two pumps in one body, with four one-way doors and its own electrical clock. This page takes it apart: how it fills and empties, what times each beat, and what goes wrong when the arteries that feed it clog. Here is a real-sized model, beating at a third of its resting speed. Turn it, and cut it open:</p>
+
+<script>
+// Shared models for every figure on this page.
+//   HEART.cycle(params): the left ventricle and the arteries over one beat, simulated.
+//   HEART.activation(): the electrical wave on a map of the heart, and the ECG it makes.
+//   HEART3D: one anatomical heart model (E3.bio.heart), shared by the 3D figures.
+window.HEART = (() => {
+  // ---- One heartbeat: a ventricle whose stiffness rises and falls (time-varying elastance,
+  // Suga and Sagawa), an elastic atrium filled by the pulmonary veins that stiffens briefly
+  // when it contracts, a mitral valve, an aortic valve with the inertia of the blood in it,
+  // and the arteries as a three-element windkessel (a short stiff tube, an elastic
+  // reservoir, and the resistance of the small vessels). Units: mL, mmHg, seconds.
+  const BASE = { hr: 75, emax: 2.6, A: 0.3, B: 0.032, v0: 10, ppv: 11, rpv: 0.025, ela: 0.25, elak: 0.3, vla0: 20, ta: 0.1, rmv: 0.005, rav: 0.003, lav: 0.0005, qback: 60, zc: 0.035, rp: 1.1, c: 1.4 };
+  // Exercise, effort 0 (rest) to 1 (flat out): faster, stronger, filled harder, and the
+  // muscles' arterioles open.
+  const exercise = e => ({ hr: 70 + 115 * e, emax: 2.6 * (1 + 1.1 * e), ppv: 11 + 8 * e, rpv: 0.025 * (1 - 0.8 * e), rmv: 0.005 * (1 - 0.6 * e), rp: 1.1 * (0.28 + 0.72 * Math.pow(1 - e, 1.8)), elak: 0.3 + 0.15 * e });
+  const cache = new Map();
+  function cycle(over = {}) {
+    const p = { ...BASE, ...over };
+    const key = JSON.stringify(p);
+    if (cache.has(key)) return cache.get(key);
+    const T = 60 / p.hr;
+    const tV = 0.10 + 0.05 * Math.min(1, T / 0.8);                 // ventricular activation (the PR interval)
+    const ts = 0.8 * Math.sqrt(T / 0.8);                            // systole shortens as the rate rises, less than diastole
+    const t1 = 0.269 * ts, t2 = 0.452 * ts, m1 = 1.32, m2 = 21.9;
+    const eraw = tc => { const a = Math.pow(tc / t1, m1), b = Math.pow(tc / t2, m2); return (a / (1 + a)) / (1 + b); };
+    let emx = 0; for (let i = 1; i < 400; i++) emx = Math.max(emx, eraw((i / 400) * T));
+    const dt = 0.0002, beats = 10, N = Math.round(T / dt);
+    let V = 120, Q = 0, Pc = 85, open = false, Vla = 50;
+    const rec = [];
+    for (let k = 0; k < beats * N; k++) {
+      const tt = (k % N) * dt;
+      let tc = tt - tV; if (tc < 0) tc += T;
+      const e = eraw(tc) / emx;
+      const Pdia = p.A * (Math.exp(p.B * (V - p.v0)) - 1);          // the relaxed wall stiffens as it fills
+      const Plv = e * p.emax * (V - p.v0) + (1 - e) * Pdia;
+      const aw = tt < p.ta ? Math.sin((Math.PI * tt) / p.ta) ** 2 : 0;
+      const Pla = (p.ela + p.elak * aw) * (Vla - p.vla0);           // the atrium's kick: it stiffens for 0.1 s
+      const Qm = Pla > Plv ? (Pla - Plv) / p.rmv : 0;
+      const Qpv = (p.ppv - Pla) / p.rpv;
+      if (!open && Plv > Pc + p.zc * Q) open = true;
+      if (open) { Q += ((Plv - Pc - (p.zc + p.rav) * Q) / p.lav) * dt; if (Q < -p.qback) { Q = 0; open = false; } }
+      const Pao = Pc + p.zc * Q;
+      Pc += ((Q - Pc / p.rp) / p.c) * dt;
+      V += (Qm - Q) * dt; Vla += (Qpv - Qm) * dt;
+      if (k >= (beats - 1) * N && k % 4 === 0) rec.push({ t: tt, plv: Plv, pao: Pao, pla: Pla, v: V, q: Q, qm: Qm, e });
+    }
+    const n = rec.length;
+    const at = f => { for (let i = 0; i < n; i++) if (f(rec[i], i)) return rec[i].t; return null; };
+    const avo = at(r => r.q > 0.5);
+    const avc = at((r, i) => i > 0 && r.t > avo && r.q === 0 && rec[i - 1].q !== 0) ?? at(r => r.t > avo + 0.05 && r.q <= 0);
+    const mvc = at(r => r.t >= tV && r.plv > r.pla + 3);             // the ventricle starts to squeeze
+    const mvo = at(r => r.t > avc && r.qm > 0);
+    let edv = 0, esv = 1e9, sbp = 0, dbp = 1e9, map = 0, pmax = 0;
+    for (const r of rec) { edv = Math.max(edv, r.v); esv = Math.min(esv, r.v); sbp = Math.max(sbp, r.pao); dbp = Math.min(dbp, r.pao); map += r.pao / n; pmax = Math.max(pmax, r.plv); }
+    // Stroke work: the area inside the pressure-volume loop (mmHg·mL).
+    let sw = 0; for (let i = 0; i < n; i++) { const a = rec[i], b = rec[(i + 1) % n]; sw += (a.v * b.plv - b.v * a.plv) / 2; }
+    const out = { p, T, tV, rec, events: { mvc, avo, avc, mvo }, edv, esv, sv: edv - esv, ef: (edv - esv) / edv, sbp, dbp, map, pmax, co: ((edv - esv) * p.hr) / 1000, sw: Math.abs(sw) };
+    // The value of any recorded quantity at time t (seconds into the beat).
+    out.at = (t, key) => { const u = ((t % T) + T) % T, f = (u / T) * n, i = Math.floor(f) % n, j = (i + 1) % n, w = f - Math.floor(f); return rec[i][key] * (1 - w) + rec[j][key] * w; };
+    // Where the anatomical model (E3.bio.heart) should be in its own cycle at time t: its valves
+    // open and shut at the same moments as the simulation's.
+    out.phase = t => {
+      const u = ((t % T) + T) % T, E = out.events;
+      const knots = [[0, 0], [E.mvc, 0.12], [E.avo, 0.16], [E.avc, 0.44], [E.mvo, 0.5], [T, 1]];
+      for (let i = 1; i < knots.length; i++) if (u <= knots[i][0]) { const [a0, b0] = knots[i - 1], [a1, b1] = knots[i]; return b0 + ((u - a0) / Math.max(a1 - a0, 1e-6)) * (b1 - b0); }
+      return 0;
+    };
+    out.stage = t => { const u = ((t % T) + T) % T, E = out.events; return u < p.ta ? "the atria contract" : u < E.mvc ? "the signal crosses to the ventricles" : u < E.avo ? "the ventricles squeeze, all valves shut" : u < E.avc ? "ejection" : u < E.mvo ? "the ventricles relax, all valves shut" : "filling"; };
+    // The ECG (lead II) on the beat's clock: the P wave starts 30 ms before the atria squeeze.
+    out.ecg = (t, deg = 60) => { const A = activation(), L = A.lead(deg), u = ((((t + 0.03) % T) + T) % T); if (u > 0.598) return 0; const f = u / 0.002, i = Math.floor(f), w = f - i; return L[i] * (1 - w) + L[Math.min(L.length - 1, i + 1)] * w; };
+    if (cache.size > 60) cache.clear();
+    cache.set(key, out);
+    return out;
+  }
+
+  // ---- The electrical wave: a frontal section of the heart on a 2 mm grid. Activation spreads
+  // from the sinus node through the atria (and across Bachmann's bundle), waits in the AV node,
+  // runs down the His bundle and the Purkinje fibers lining the ventricles, then crawls through
+  // the muscle. Each cell's voltage rises at its activation time and falls after its action
+  // potential, which is shorter where activation arrives later, so repolarization runs backward.
+  // The heart vector is the sum of minus the voltage gradient; a lead reads its projection.
+  let ACT = null;
+  function activation() {
+    if (ACT) return ACT;
+    const h = 2, W = 64, H = 74;
+    const ell = (cx, cy, rx, ry) => (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
+    const RA = ell(36, 40, 21, 19), LA = ell(85, 35, 23, 16);
+    const RVo = ell(44, 92, 29, 33), RVc = ell(38, 89, 21, 26), LVo = ell(81, 100, 35, 46), LVc = ell(86, 96, 16, 31);
+    const N = W * H, kind = new Int8Array(N); // 1 atrium, 2 ventricle, 3 Purkinje, 4 His, 6 Bachmann
+    const X = i => (i % W) * h + h / 2, Y = i => Math.floor(i / W) * h + h / 2;
+    for (let i = 0; i < N; i++) {
+      const x = X(i), y = Y(i);
+      const bach = y > 21 && y < 29 && x > 50 && x < 70;
+      if (y < 55 && (RA(x, y) || LA(x, y) || bach)) kind[i] = bach && !RA(x, y) && !LA(x, y) ? 6 : 1;
+      else if (y > 61 && (RVo(x, y) || LVo(x, y)) && !RVc(x, y) && !LVc(x, y)) kind[i] = 2;
+    }
+    const idx = (x, y) => Math.floor(y / h) * W + Math.floor(x / h);
+    const his = [], hisPath = [[50, 55], [53, 58], [56, 61], [59, 64], [62, 68], [63, 72]];
+    for (let k = 0; k + 1 < hisPath.length; k++) for (let u = 0; u < 1; u += 0.2) { const x = hisPath[k][0] + (hisPath[k + 1][0] - hisPath[k][0]) * u, y = hisPath[k][1] + (hisPath[k + 1][1] - hisPath[k][1]) * u, i = idx(x, y); if (kind[i] !== 1 && !his.includes(i)) { kind[i] = 4; his.push(i); } }
+    const nearCav = i => { const x = X(i), y = Y(i); for (const [dx, dy] of [[h, 0], [-h, 0], [0, h], [0, -h], [h, h], [-h, h], [h, -h], [-h, -h]]) if (RVc(x + dx, y + dy) || LVc(x + dx, y + dy)) return true; return false; };
+    for (let i = 0; i < N; i++) if (kind[i] === 2 && Y(i) > 84 && nearCav(i)) kind[i] = 3;
+    const speed = [0, 750, 500, 2500, 2000, 50, 1600]; // mm/s
+    const atrial = k => k === 1 || k === 6;
+    const act = new Float64Array(N).fill(Infinity);
+    const heap = [];
+    const push = (t, i) => { heap.push([t, i]); let k = heap.length - 1; while (k > 0) { const q = (k - 1) >> 1; if (heap[q][0] <= heap[k][0]) break; [heap[q], heap[k]] = [heap[k], heap[q]]; k = q; } };
+    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let k = 0; for (;;) { const l = 2 * k + 1, r = l + 1; let m = k; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === k) break; [heap[m], heap[k]] = [heap[k], heap[m]]; k = m; } } return top; };
+    const sa = idx(28, 24), av = his[0], AVDELAY = 0.085;
+    act[sa] = 0; push(0, sa);
+    while (heap.length) {
+      const [t, i] = pop();
+      if (t > act[i]) continue;
+      const x = i % W, y = (i / W) | 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const j = ny * W + nx; if (!kind[j]) continue;
+        // The fibrous ring insulates the ventricles from the atria; the only way through is the AV node.
+        if (atrial(kind[i]) !== atrial(kind[j]) && !(atrial(kind[i]) && j === av)) continue;
+        const d = Math.hypot(dx, dy) * h;
+        const nt = j === av && atrial(kind[i]) ? t + d / 750 + AVDELAY : t + d / ((speed[kind[i]] + speed[kind[j]]) / 2);
+        if (nt < act[j]) { act[j] = nt; push(nt, j); }
+      }
+    }
+    for (let i = 0; i < N; i++) if (kind[i] && !isFinite(act[i])) kind[i] = 0;
+    // Depth through the ventricular wall (0 at the cavity, 1 outside), for the action potentials.
+    const distFrom = test => {
+      const d = new Float64Array(N).fill(Infinity), q = [];
+      for (let i = 0; i < N; i++) if (kind[i] >= 2 && kind[i] <= 4) { const x = i % W, y = (i / W) | 0; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue; if (test(ny * W + nx)) { d[i] = 1; q.push(i); break; } } }
+      for (let k = 0; k < q.length; k++) { const i = q[k], x = i % W, y = (i / W) | 0; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue; const j = ny * W + nx; if (kind[j] >= 2 && kind[j] <= 4 && d[j] > d[i] + 1) { d[j] = d[i] + 1; q.push(j); } } }
+      return d;
+    };
+    const cav = j => !kind[j] && (RVc(X(j), Y(j)) || LVc(X(j), Y(j)));
+    const dc = distFrom(cav), dout = distFrom(j => !kind[j] && !cav(j));
+    let vmin = Infinity, vmax = 0;
+    for (let i = 0; i < N; i++) if (kind[i] >= 2 && kind[i] <= 4) { vmin = Math.min(vmin, act[i]); vmax = Math.max(vmax, act[i]); }
+    const apd = new Float64Array(N), amp = new Float64Array(N), depthOf = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+      if (!kind[i]) continue;
+      if (atrial(kind[i])) { apd[i] = 0.11; amp[i] = 0.22; continue; }
+      const depth = isFinite(dc[i]) && isFinite(dout[i]) ? dc[i] / (dc[i] + dout[i]) : 0.5;
+      depthOf[i] = depth;
+      apd[i] = 0.33 - 0.03 * depth - 1.1 * (act[i] - vmin); amp[i] = 1;
+    }
+    const sig = x => 1 / (1 + Math.exp(-x));
+    const vm = (i, t) => -85 + 95 * amp[i] * sig((t - act[i]) / 0.0015) * (1 - sig((t - act[i] - apd[i]) / 0.014));
+    // The heart vector every 2 ms over 0.6 s.
+    const times = [], vec = [], V = new Float64Array(N);
+    for (let t = 0; t <= 0.6 + 1e-9; t += 0.002) {
+      for (let i = 0; i < N; i++) V[i] = kind[i] ? vm(i, t) : 0;
+      let px = 0, py = 0;
+      for (let i = 0; i < N; i++) {
+        if (!kind[i]) continue;
+        const x = i % W, y = (i / W) | 0;
+        const nb = (dx, dy) => { const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) return V[i]; const j = ny * W + nx; return kind[j] ? V[j] : V[i]; };
+        px -= (nb(1, 0) - nb(-1, 0)) / 2; py -= (nb(0, 1) - nb(0, -1)) / 2;
+      }
+      times.push(t); vec.push([px, py]);
+    }
+    // Smooth over 5 ms: a real wavefront is a curved sheet in 3D, so its start and end are
+    // spread out in time more than in this flat section.
+    function smoothVec(src) {
+      const sg = 2.5, K = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5].map(k => [k, Math.exp(-(k * k) / (2 * sg * sg))]);
+      return src.map((_, i) => { let x = 0, y = 0, w = 0; for (const [k, c] of K) { const j = i + k; if (j < 0 || j >= src.length) continue; x += src[j][0] * c; y += src[j][1] * c; w += c; } return [x / w, y / w]; });
+    }
+    const smoothed = smoothVec(vec);
+    for (let i = 0; i < vec.length; i++) vec[i] = smoothed[i];
+    // Scale so the R wave in lead II is about 1.1 mV.
+    const lead2 = vec.map(([x, y]) => x * 0.5 + y * 0.866);
+    const kScale = 1.1 / Math.max(...lead2.map(Math.abs));
+    for (const v of vec) { v[0] *= kScale; v[1] *= kScale; }
+    // Lead at angle deg (0 = toward the left arm, +60 = lead II, +90 = toward the feet).
+    const leads = new Map();
+    const lead = deg => { if (!leads.has(deg)) { const a = (deg * Math.PI) / 180, ux = Math.cos(a), uy = Math.sin(a); leads.set(deg, vec.map(([x, y]) => x * ux + y * uy)); } return leads.get(deg); };
+    const vecAt = t => { const f = Math.max(0, Math.min(times.length - 1, t / 0.002)), i = Math.floor(f), j = Math.min(times.length - 1, i + 1), w = f - i; return [vec[i][0] * (1 - w) + vec[j][0] * w, vec[i][1] * (1 - w) + vec[j][1] * w]; };
+    const firstV = vmin;
+    // The heart vector again with some cells changed: mod(i) returns null, or { dead } for
+    // cells that no longer fire (electrically silent), or { rest, amp, apd } for injured ones
+    // (resting voltage, plateau height, and action potential length as factors). Returned
+    // leads are measured from the flat stretch after the T wave, as an ECG machine does.
+    const modCache = new Map();
+    function vectorWith(mod, key) {
+      if (key && modCache.has(key)) return modCache.get(key);
+      const R = new Float64Array(N).fill(-85), AM = Float64Array.from(amp), AP = Float64Array.from(apd), live = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        if (!kind[i]) continue;
+        const m = mod(i); live[i] = 1;
+        if (!m) continue;
+        if (m.dead) { live[i] = 0; continue; }
+        R[i] = m.rest ?? -85; AM[i] *= m.amp ?? 1; AP[i] *= m.apd ?? 1;
+      }
+      const V2 = new Float64Array(N), out = [];
+      for (const t of times) {
+        for (let i = 0; i < N; i++) { if (!live[i]) continue; const top = -85 + 95 * AM[i]; V2[i] = R[i] + (top - R[i]) * sig((t - act[i]) / 0.0015) * (1 - sig((t - act[i] - AP[i]) / 0.014)); }
+        let px = 0, py = 0;
+        for (let i = 0; i < N; i++) {
+          if (!live[i]) continue;
+          const x = i % W, y = (i / W) | 0;
+          const nb = (dx, dy) => { const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) return V2[i]; const j = ny * W + nx; return live[j] ? V2[j] : V2[i]; };
+          px -= (nb(1, 0) - nb(-1, 0)) / 2; py -= (nb(0, 1) - nb(0, -1)) / 2;
+        }
+        out.push([px * kScale, py * kScale]);
+      }
+      const sm = smoothVec(out);
+      const res = { vec: sm, lead: deg => { const a = (deg * Math.PI) / 180, ux = Math.cos(a), uy = Math.sin(a), L = sm.map(([x, y]) => x * ux + y * uy), base = L[L.length - 1]; return L.map(v => v - base); } };
+      if (key) { if (modCache.size > 30) modCache.clear(); modCache.set(key, res); }
+      return res;
+    }
+    ACT = { W, H, h, N, kind, act, apd, depth: depthOf, vectorWith, vm, X, Y, RA, LA, RVo, RVc, LVo, LVc, his, sa, av, times, vec, lead, vecAt, firstV, lastV: vmax, size: [W * h, H * h] };
+    return ACT;
+  }
+
+  return { BASE, exercise, cycle, activation };
+})();
+
+// One anatomical heart (E3.bio.heart: real dimensions, beating valves, a frontal section),
+// shared by every 3D figure. Each figure's draw moves it into its own scene and poses it.
+window.HEART3D = (() => {
+  let H = null;
+  const get = () => H || (H = E3.bio.heart());
+  const nameOf = node => { const h = get(); for (let n = node; n; n = n.parent) if (n.name && h.notes[n.name]) return n.name; return null; };
+  function use(scene, { cut = false, phase = 0.7, lit = [] } = {}) {
+    const h = get();
+    scene.add(h);
+    h.cutaway(cut).explode(0).pose({ phase });
+    h.traverse(n => { if (n !== h) n.highlight = false; });
+    for (const [name, color] of lit) { const p = h.parts[name]; if (p) p.traverse(n => { n.highlight = color; }); }
+    return h;
+  }
+  // Whether a label's part is what the eye meets at the label's point (so labels on the far
+  // side of the heart, or inside it, are dropped as it turns).
+  const seen = (view, l) => { const [x, y] = view.project(l.at), hit = view.pick([x, y]); if (!hit) return false; if (nameOf(hit.node) === l.node.name) return true; const p = hit.point; return !!p && Math.hypot(p[0] - l.at[0], p[1] - l.at[1], p[2] - l.at[2]) < 8; };
+  return { get, use, nameOf, seen };
+})();
+</script>
+
+<figure class="demo wide" id="hero" aria-label="A human heart in 3D, beating at a third of its resting speed. A switch cuts it open from the front to show the four chambers and the valves opening and closing."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const C = HEART.cycle();
+  demo("hero", {
+    aspect: w => (w < 560 ? 0.9 : 1.45),
+    orbit: { yaw: 0.25, pitch: 0.12, minPitch: -0.4, maxPitch: 0.9 },
+    state: () => ({ t: 0.25 }),
+    controls: [{ key: "cut", label: "Cut it open", type: "toggle", value: false, color: "red" }],
+    presets: [{ label: "Outside", set: { cut: false } }, { label: "Inside", set: { cut: true } }],
+    caption: "A human heart, 12 cm from base to tip, beating at a third of its resting speed (one beat every 2.4 s instead of 0.8 s). The dimensions are an average adult's; the cut is a frontal section.",
+    status: s => { const t = (s.t % 1) * C.T; return `${C.stage(t)} · left ventricle ${C.at(t, "v").toFixed(0)} mL`; },
+    step(dt, s) { s.t += dt / C.T / 3; },
+    draw(g, s, v) {
+      const t = (s.t % 1) * C.T;
+      const H = HEART3D.use(scene, { cut: v.cut, phase: C.phase(t) });
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      const want = v.cut ? /atrium|ventricle|septum|valve/ : /aorta|pulmonary trunk|superior vena cava|left ventricle|right ventricle|atrium/;
+      g.callouts(H.labels().filter(l => want.test(l.text) && (v.cut ? view.kept(l.at) : HEART3D.seen(view, l))).slice(0, 8).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>Inside are four hollow chambers: two thin-walled <em>atria</em> on top that collect blood, and two thick-walled <em>ventricles</em> below that push it out. The wall on the left of the picture, the patient's right, is thin. The wall on the patient's left is almost three times thicker. That difference is the first clue to how the whole thing works.</p>
+
+<h2>Two pumps</h2>
+
+<p>Blood makes two journeys, and each has its own pump. The <span class="c-blue" data-part="right">right side</span> of the heart sends it through the lungs, where it drops carbon dioxide and picks up oxygen, and back to the <span class="c-red" data-part="left">left side</span>, which sends it out to everything else and back to the right. Change the heart rate <span class="scrub" data-key="hr"></span> and watch how much blood moves each minute:</p>
+
+<figure class="demo" id="loop" aria-label="A diagram of the circulation: the right heart pumps blood up through the lungs, it returns to the left heart, which pumps it down through the body and back. Dots are blood, blue before the lungs and red after. A slider sets the heart rate."></figure>
+<script>
+{
+  const SV = 70; // mL per beat
+  const N = 90;
+  // A closed path through the right heart, lungs, left heart, and body, in a 0..1 box.
+  const PATH = [[0.38, 0.52], [0.3, 0.38], [0.3, 0.16], [0.5, 0.1], [0.7, 0.16], [0.7, 0.38], [0.62, 0.52], [0.7, 0.66], [0.7, 0.86], [0.5, 0.92], [0.3, 0.86], [0.3, 0.66]];
+  const seg = []; let L = 0;
+  for (let i = 0; i < PATH.length; i++) { const a = PATH[i], b = PATH[(i + 1) % PATH.length], l = Math.hypot(b[0] - a[0], b[1] - a[1]); seg.push([a, b, L, l]); L += l; }
+  const along = u => { const d = (((u % 1) + 1) % 1) * L; for (const [a, b, s0, l] of seg) if (d <= s0 + l) { const f = (d - s0) / l; return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]; } return PATH[0]; };
+  // Oxygenated (red) from the lungs (u ~ 0.25) to the body (u ~ 0.75).
+  const red = u => { const x = ((u % 1) + 1) % 1; return x > 0.25 && x < 0.75; };
+  demo("loop", {
+    aspect: w => (w < 560 ? 0.95 : 1.5),
+    state: () => ({ t: 0, cells: Array.from({ length: N }, (_, i) => i / N) }),
+    controls: [{ key: "hr", label: "Heart rate", min: 40, max: 180, step: 1, value: 72, unit: " /min", color: "red", marks: [{ value: 72, label: "rest" }, { value: 160, label: "running" }] }],
+    presets: [{ label: "Asleep", set: { hr: 55 } }, { label: "Resting", set: { hr: 72 } }, { label: "Running", set: { hr: 160 } }],
+    caption: "The circulation as one loop with two pumps in it, sped up 18 times. Blue blood is on its way to the lungs, red blood on its way to the body. The flow surges with each beat because the heart pushes in pulses.",
+    status: (s, v) => `${SV} mL × ${v.hr} beats = ${((SV * v.hr) / 1000).toFixed(1)} L/min · a full lap in about ${(5 / ((SV * v.hr) / 1000)).toFixed(1)} min`,
+    step(dt, s, v) {
+      s.t += dt;
+      const beat = 60 / v.hr, ph = (s.t % beat) / beat;
+      // The loop is drawn as one tube of even width, so by continuity every dot moves at the
+      // same speed at each instant: a surge while the ventricles eject, a slower drift between
+      // beats (normalized so the average gives the real lap time).
+      const surge = (ph < 0.35 ? 2.2 * Math.sin((ph / 0.35) * Math.PI) ** 2 : 0.15) / 0.4825;
+      const lapTime = 5 / ((SV * v.hr) / 1000) * 60; // seconds per lap
+      const du = (dt / lapTime) * surge * 18; // sped up 18 times so a lap is visible
+      s.cells = s.cells.map(u => (u + du) % 1);
+    },
+    draw(g, s, v) {
+      const pad = 14, w = g.w - 2 * pad, h = g.h - 2 * pad;
+      const P = ([x, y]) => [pad + x * w, pad + y * h];
+      // Organs: lungs above, body below.
+      const organ = (cx, cy, rw, rh, label) => {
+        g.rect(pad + (cx - rw) * w, pad + (cy - rh) * h, 2 * rw * w, 2 * rh * h, { r: 14, fill: g.rgba("muted", 0.06), stroke: "faint", width: 1 });
+        for (let k = 0; k < 7; k++) { const x = pad + (cx - rw + 0.03 + (k / 6) * (2 * rw - 0.06)) * w; g.line([x, pad + (cy - rh * 0.55) * h], [x, pad + (cy + rh * 0.55) * h], { stroke: "faint", width: 1 }); }
+        g.label(label, [pad + cx * w, pad + (cy - rh) * h - 4], { align: "center", baseline: "bottom" });
+      };
+      organ(0.5, 0.13, 0.22, 0.07, "lungs");
+      organ(0.5, 0.89, 0.22, 0.07, "rest of the body");
+      // Vessels.
+      const half = (a, b) => PATH.slice(a, b + 1).map(P);
+      g.path(half(0, 3), { stroke: g.mix("blue", "panel", 0.35), width: 9 });
+      g.path([...half(3, 6)], { stroke: g.mix("red", "panel", 0.35), width: 9 });
+      g.path(half(6, 9), { stroke: g.mix("red", "panel", 0.35), width: 9 });
+      g.path([...half(9, 11), P(PATH[0])], { stroke: g.mix("blue", "panel", 0.35), width: 9 });
+      // The two pumps.
+      const beat = 60 / v.hr, ph = (s.t % beat) / beat, squeeze = ph < 0.35 ? Math.sin((ph / 0.35) * Math.PI) : 0;
+      const pump = (cx, color, label, part) => {
+        const r = Math.min(w, h) * (0.075 - 0.012 * squeeze), c = P([cx, 0.52]);
+        g.circle(c, r, { fill: g.rgba(color, g.lit(part) ? 0.45 : 0.25), stroke: color, width: g.lit(part) ? 3 : 2 });
+        const out = cx < 0.5 ? -1 : 1;
+        g.label(label, [c[0] + out * (r + 8), c[1]], { align: out < 0 ? "right" : "left", baseline: "middle", color });
+      };
+      pump(0.38, "blue", "right heart", "right");
+      pump(0.62, "red", "left heart", "left");
+      for (const u of s.cells) g.circle(P(along(u)), 3.2, { fill: red(u) ? "red" : "blue" });
+    },
+  });
+}
+</script>
+
+<p>At rest the heart moves about 5 liters a minute, close to all the blood in an adult body, so a red cell gets back to where it started about once a minute <a class="cite" href="#ref-guyton"></a>.</p>
+
+<p>Because the loop is closed, the pumps are in <em>series</em>: every drop the right side sends into the lungs has to come out through the left. Over any stretch of minutes they must move exactly the same amount. How exactly?</p>
+
+<div class="quiz">
+<p>Suppose the right ventricle pushed out just 1% more blood per beat than the left, 0.7 mL extra at a resting 75 beats a minute. How long before the lungs were in trouble?</p>
+<div class="choices"><button>Years: 1% is nothing</button><button>A few days</button><button data-correct>Less than an hour</button></div>
+<p class="why">0.7 mL × 75 beats is about 50 mL a minute, 3 liters an hour, piling up in lungs that normally hold about half a liter of blood. Within minutes the pressure in them would climb and fluid would start seeping into the air sacs.</p>
+</div>
+
+<p>Nothing wires the two pumps together, yet they match to a fraction of a percent. The trick is that each pump pushes harder when it is filled more. Model the circulation as two reservoirs, the body's veins and the lungs, with a pump moving blood from each to the other. Weaken the <span class="c-red">left pump</span> to <span class="scrub" data-key="left"></span> and watch the lungs:</p>
+
+<figure class="demo" id="balance" aria-label="Two reservoirs, the body's veins and the lungs, connected by two pumps. The left pump's strength is a slider. When it weakens, blood backs up into the lungs until their pressure is high enough for the weak pump to keep up; past about 20 mmHg the lungs start to leak fluid."></figure>
+<script>
+{
+  // Two-compartment circulation: stressed volumes and compliances of the systemic veins
+  // and the pulmonary circulation, and pumps whose output rises with their filling pressure.
+  const Cs = 100, Cp = 15, kr = 20.8, kl0 = 10.4; // mL/mmHg, mL/s per mmHg
+  const Vtot = Cs * 4 + Cp * 8;
+  const relax = s => { s.vs = Cs * 4; s.vp = Cp * 8; s.hist = []; };
+  demo("balance", {
+    aspect: w => (w < 560 ? 0.95 : 1.6),
+    state: () => { const s = { t: 0 }; relax(s); s.hist = Array(360).fill(8); return s; },
+    controls: [{ key: "left", label: "Left pump strength", min: 20, max: 120, step: 1, value: 100, unit: "%", color: "red", marks: [{ value: 100, label: "normal" }] }],
+    presets: [{ label: "Healthy", set: { left: 100 } }, { label: "Weak left heart", set: { left: 55 } }, { label: "Failing", set: { left: 30 } }],
+    caption: "A two-reservoir model of the circulation: blood moves from the body's veins through the right pump into the lungs, and back through the left pump. Each pump's output is proportional to the pressure filling it, which is what keeps the two in step.",
+    status: s => { const Pp = s.vp / Cp, Ql = ((kl0 * s.k) * Pp * 60) / 1000; return `lung pressure ${Pp.toFixed(1)} mmHg · output ${Ql.toFixed(1)} L/min${Pp > 20 ? " · fluid leaking into the lungs" : ""}`; },
+    step(dt, s, v) {
+      s.k = v.left / 100;
+      for (let i = 0; i < 20; i++) {
+        const h = dt / 20, Ps = s.vs / Cs, Pp = s.vp / Cp, Qr = kr * Ps, Ql = kl0 * s.k * Pp;
+        s.vs += (Ql - Qr) * h; s.vp += (Qr - Ql) * h;
+      }
+      s.t += dt;
+      s.hist.push(s.vp / Cp); if (s.hist.length > 360) s.hist.shift();
+    },
+    draw(g, s, v) {
+      s.k = v.left / 100;
+      const Ps = s.vs / Cs, Pp = s.vp / Cp, Qr = kr * Ps, Ql = kl0 * s.k * Pp;
+      const wide = g.w >= 560, boxW = wide ? g.w * 0.6 : g.w, plotBox = wide ? [g.w * 0.63, 10, g.w * 0.37 - 4, g.h - 20] : null;
+      // Two tanks, their levels showing pressure.
+      const tank = (x, y, w, hh, p, pmax, color, label) => {
+        g.rect(x, y, w, hh, { stroke: "ink", width: 1.5, r: 6 });
+        const lvl = Math.min(1, p / pmax);
+        g.rect(x + 2, y + hh - 2 - lvl * (hh - 4), w - 4, lvl * (hh - 4), { fill: g.rgba(color, 0.35), r: 4 });
+        g.label(label, [x + w / 2, y - 4], { align: "center", baseline: "bottom" });
+        g.text(`${p.toFixed(1)} mmHg`, [x + w / 2, y + hh / 2], { align: "center", size: 13, weight: 600, font: "mono" });
+      };
+      const tw = boxW * 0.32, th = g.h * 0.5;
+      tank(boxW * 0.06, g.h * 0.3, tw, th, Ps, 15, "blue", "veins of the body");
+      tank(boxW * 0.62, g.h * 0.3, tw, th, Pp, 30, Pp > 20 ? "purple" : "red", "lungs");
+      // Leak line at 20 mmHg on the lungs tank.
+      const yLeak = g.h * 0.3 + th - 2 - (20 / 30) * (th - 4);
+      g.line([boxW * 0.62, yLeak], [boxW * 0.62 + tw, yLeak], { stroke: "purple", dash: [4, 4], width: 1 });
+      g.label("leaks above here", [boxW * 0.62 + tw / 2, yLeak - 3], { align: "center", baseline: "bottom", color: "purple", size: 11 });
+      if (Pp > 20) for (let k = 0; k < 5; k++) { const x = boxW * 0.62 + tw * (0.15 + 0.17 * k), y = g.h * 0.3 + th + 6 + ((s.t * 40 + k * 13) % 26); g.circle([x, y], 2.5, { fill: "purple" }); }
+      // Pumps: arrows whose width shows flow.
+      const arrow = (y, toRight, q, color, label) => {
+        const x0 = boxW * 0.06 + tw + 6, x1 = boxW * 0.62 - 6;
+        g.arrow(toRight ? [x0, y] : [x1, y], toRight ? [x1, y] : [x0, y], { stroke: color, width: 1 + q / 12, head: 10 });
+        g.label(`${label} ${((q * 60) / 1000).toFixed(1)} L/min`, [(x0 + x1) / 2, y - 6 - q / 24], { align: "center", baseline: "bottom", color, size: 11.5 });
+      };
+      arrow(g.h * 0.42, true, Qr, "blue", "right pump");
+      arrow(g.h * 0.7, false, Ql, "red", "left pump");
+      // Blood moving along each pump's arrow, faster when the flow is larger.
+      const x0 = boxW * 0.06 + tw + 10, x1 = boxW * 0.62 - 16;
+      for (let k = 0; k < 4; k++) {
+        const ur = ((s.t * Qr) / 160 + k / 4) % 1, ul = ((s.t * Ql) / 160 + k / 4) % 1;
+        g.circle([x0 + (x1 - x0) * ur, g.h * 0.42], 3, { fill: "blue" });
+        g.circle([x1 - (x1 - x0) * ul, g.h * 0.7], 3, { fill: "red" });
+      }
+      if (plotBox) {
+        const P = g.graph({ box: plotBox, x: [0, 12], y: [0, 30], axes: "frame", xLabel: "seconds", yLabel: "lung pressure (mmHg)", xTicks: 4, yTicks: 10 });
+        P.hline(20, { color: "purple", label: "edema" });
+        const n = s.hist.length;
+        if (n > 1) P.series(s.hist.map((p, i) => [12 - (n - 1 - i) / 30, p]), { color: Pp > 20 ? "purple" : "red" });
+      }
+    },
+  });
+}
+</script>
+
+<p>For a few seconds the weak left pump falls behind, and blood comes into the lungs faster than it leaves. Their pressure rises, which fills the weak pump more, so it pushes harder, and within seconds the outputs match again, at a lower flow and a higher lung pressure. Nothing measured anything. This is the <dfn data-def="The more a ventricle is filled before it contracts, the more forcefully it contracts and the more blood it ejects.">Frank–Starling law</dfn>, named for Otto Frank, who saw it in frog hearts, and Ernest Starling, whose group measured it in dog hearts in 1914 <a class="cite" href="#ref-starling"></a>.</p>
+
+<p>Push it down to <button class="set" data-set="left=30">30%</button> and the lung pressure needed to keep up passes about 20 mmHg, where fluid is forced out of the capillaries into the air sacs. That is the breathlessness of left heart failure, and it starts with nothing more than this arithmetic.</p>
+
+<aside class="callout key"><p>The two sides of the heart never measure each other. Each one simply pumps out what fills it, and that alone keeps them in step.</p></aside>
+
+<h2>Four rooms, four doors</h2>
+
+<p>The real heart packs both pumps into one muscle, sharing a wall. Turn it and point at anything to name it; each name here lights its part. The <span class="c-blue" data-part="superior vena cava">superior</span> and <span class="c-blue" data-part="inferior vena cava">inferior vena cava</span> bring blood from the body into the <span class="c-blue" data-part="right atrium">right atrium</span>, then the <span class="c-blue" data-part="right ventricle">right ventricle</span> sends it up the <span class="c-blue" data-part="pulmonary trunk">pulmonary trunk</span> to the lungs. The <span class="c-red" data-part="pulmonary veins">pulmonary veins</span> bring it back to the <span class="c-red" data-part="left atrium">left atrium</span>, and the <span class="c-red" data-part="left ventricle">left ventricle</span> pushes it out through the <span class="c-red" data-part="aorta">aorta</span>:</p>
+
+<figure class="demo" id="parts" aria-label="The heart from the outside in 3D. Point at a part to name it; names in the text light their parts."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const C = HEART.cycle();
+  let view = null;
+  const PARTS = ["superior vena cava", "inferior vena cava", "right atrium", "right ventricle", "pulmonary trunk", "pulmonary veins", "left atrium", "left ventricle", "aorta"];
+  const BLUE = new Set(["superior vena cava", "inferior vena cava", "right atrium", "right ventricle", "pulmonary trunk"]);
+  demo("parts", {
+    aspect: w => (w < 560 ? 0.95 : 1.4),
+    orbit: { yaw: -0.15, pitch: 0.15, zoom: 1.3 },
+    state: () => ({ hover: null }),
+    caption: "The heart from the front, in an adult's real proportions. The right heart (blue words) sits in front and to the right; the left ventricle forms the left side and the tip. The red vessels on its surface are the coronary arteries, which come later.",
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? HEART3D.nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    status: s => (s.hover ? `${s.hover}: ${HEART3D.get().notes[s.hover]}` : "Point at a part to name it."),
+    draw(g, s) {
+      const lit = PARTS.filter(n => g.lit(n) || s.hover === n).map(n => [n, BLUE.has(n) ? "blue" : "red"]);
+      if (s.hover && !PARTS.includes(s.hover)) lit.push([s.hover, "orange"]);
+      HEART3D.use(scene, { cut: false, phase: C.phase(0.55), lit });
+      view = g.render3d(scene, { ...s.view, fov: 26 });
+      if (s.hover) { const l = HEART3D.get().labels().find(q => q.text === s.hover || q.node.name === s.hover); if (l) g.callouts([{ at: view.project(l.at), text: s.hover }]); }
+    },
+  });
+}
+</script>
+
+<p>It isn't laid out left and right as you might draw it. The right ventricle wraps around the front of the left one like a crescent, and the left ventricle makes the left side and the pointed tip, the <em>apex</em>, which points down, forward, and to the left. That is why you feel the beat just left of the breastbone. Now cut it open and compare the two ventricles' walls:</p>
+
+<figure class="demo" id="section" aria-label="The heart cut open from the front, showing the four chambers, the thick left ventricle wall, the thin right ventricle wall, and the septum between them. A switch draws the path of blood through each side."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const C = HEART.cycle();
+  let view = null;
+  // Waypoints by label: the blood's route through each side.
+  const ROUTES = [
+    { color: "blue", stops: ["superior vena cava", "right atrium", "tricuspid valve", "right ventricle", "pulmonary valve", "pulmonary trunk"] },
+    { color: "red", stops: ["pulmonary veins", "left atrium", "mitral valve", "left ventricle", "aortic valve", "aorta"] },
+  ];
+  demo("section", {
+    aspect: w => (w < 560 ? 0.95 : 1.35),
+    orbit: { yaw: 0.2, pitch: 0.1, minYaw: -0.9, maxYaw: 1.2, zoom: 1.2 },
+    state: () => ({ hover: null }),
+    controls: [{ key: "path", label: "Show the blood's path", type: "toggle", value: true, color: "red" }],
+    caption: "A frontal section through the four chambers. The left ventricle's wall is about 11 mm thick, the right's about 4 mm; the wall between them, the septum, belongs mostly to the left. The arrows trace the blood's path through each side.",
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? HEART3D.nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    status: s => (s.hover ? `${s.hover}: ${HEART3D.get().notes[s.hover]}` : "Point at a part to name it."),
+    draw(g, s, v) {
+      const lit = [];
+      for (const n of ["left ventricle", "right ventricle", "interventricular septum", "left atrium", "right atrium"]) if (g.lit(n)) lit.push([n, n.startsWith("left") || n.includes("septum") ? "red" : "blue"]);
+      if (s.hover) lit.push([s.hover, "orange"]);
+      const H = HEART3D.use(scene, { cut: true, phase: C.phase(0.55), lit });
+      view = g.render3d(scene, { ...s.view, fov: 26 });
+      const labs = new Map(H.labels().map(l => [l.text, l]));
+      if (v.path) for (const r of ROUTES) {
+        const pts = r.stops.map(n => labs.get(n)).filter(Boolean).map(l => view.project(l.at));
+        if (pts.length < 2) continue;
+        g.spline(pts.map(p => [p[0], p[1]]), { stroke: g.rgba(r.color, 0.85), width: 3, dash: [9, 6] });
+        const a = pts[pts.length - 2], b = pts[pts.length - 1];
+        g.arrow([a[0] + (b[0] - a[0]) * 0.7, a[1] + (b[1] - a[1]) * 0.7], [b[0], b[1]], { stroke: r.color, width: 3, head: 11 });
+      }
+      g.callouts(H.labels().filter(l => /atrium|ventricle|septum/.test(l.text) && view.kept(l.at)).map(l => ({ at: view.project(l.at), text: l.text, color: /left|septum/.test(l.text) ? "red" : "blue" })));
+    },
+  });
+}
+</script>
+
+<p>Both sides move the same 70 mL per beat, but not against the same resistance. The lungs are close and their vessels wide, so the <span class="c-blue" data-part="right ventricle">right ventricle</span> only reaches about 25 mmHg. The <span class="c-red" data-part="left ventricle">left ventricle</span> has to reach about 120, nearly five times as much <a class="cite" href="#ref-guyton"></a>. Muscle grows to match its work, so the left wall is about a centimeter thick and the right only 3 to 5 mm.</p>
+
+<p>The four valves are rings of tissue with two or three thin flaps, the <em>leaflets</em>. A valve has no muscle and no nerve. It opens when the blood behind it is at a higher pressure than the blood in front, and shuts the instant that reverses. Here is the mitral valve, between the left atrium and ventricle. Drag the pressure difference <span class="scrub" data-key="dp"></span> across it:</p>
+
+<figure class="demo" id="valve" aria-label="A section through the mitral valve: the left atrium above, the left ventricle below, two leaflets between them tethered by cords to muscles in the ventricle wall. A slider sets the pressure difference across the valve; a switch cuts one leaflet's cords."></figure>
+<script>
+{
+  const LA = 10; // left atrial pressure, mmHg
+  const hash = k => { const x = Math.sin(k * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+  // Target leaflet angles (radians below horizontal) for a pressure difference.
+  const target = v => { const open = v.dp > 0 ? Math.min(1, v.dp / 3) : 0; return [open > 0 ? 1.2 * open : -0.1, open > 0 ? 1.2 * open : v.torn ? -1.2 : -0.1]; };
+  demo("valve", {
+    aspect: w => (w < 560 ? 0.95 : 1.5),
+    state: () => ({ aL: 1.2, aR: 1.2, t: 0, vol: 0 }),
+    controls: [
+      { key: "dp", label: "Atrium minus ventricle", min: -110, max: 10, step: 1, value: 5, unit: " mmHg", color: "purple", marks: [{ value: -110, label: "squeezing" }, { value: 0 }, { value: 5, label: "filling" }] },
+      { key: "torn", label: "Tear one leaflet's cords", type: "toggle", value: false, color: "orange" },
+    ],
+    presets: [{ label: "Filling", set: { dp: 5, torn: false } }, { label: "Squeezing", set: { dp: -110, torn: false } }, { label: "Torn cords", set: { dp: -110, torn: true } }],
+    caption: "A simplified section through the mitral valve, between the left atrium (above) and the left ventricle (below). The leaflets move only because the blood pushes them; the cords (chordae tendineae) stop them at the closed position.",
+    status: (s, v) => (v.dp > 0 ? "open: blood flows down into the ventricle" : v.dp === 0 ? "no pressure difference: the leaflets float" : v.torn ? "leaking: one leaflet has flipped into the atrium" : "shut: the leaflet edges meet and seal"),
+    step(dt, s, v) {
+      s.t += dt;
+      const [tL, tR] = target(v), k = 1 - Math.exp(-dt * 12);
+      s.aL += (tL - s.aL) * k; s.aR += (tR - s.aR) * k;
+      // Volume through the valve this frame, in the drawing's units (an orifice: flow grows
+      // with the square root of the pressure difference).
+      s.vol += (v.dp > 0 ? 7 * Math.sqrt(v.dp) : v.torn && s.aR < -0.6 ? 2.2 * Math.sqrt(-v.dp) : 0) * dt;
+    },
+    change(key, s, v, f) { if (!f.playing) [s.aL, s.aR] = target(v); },
+    draw(g, s, v) {
+      const P = g.fit(-10, 10, -8, 6.4, { pad: 8 });
+      const open = v.dp > 0, leak = v.dp < 0 && v.torn;
+      // Ventricle: a thick U-shaped wall; atrium: a thin dome.
+      // Smooth outlines (Catmull-Rom through the points), mirrored left to right.
+      const smooth = pts => { const out = []; for (let i = 0; i + 1 < pts.length; i++) { const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)]; for (let k = 0; k < 8; k++) { const t = k / 8, t2 = t * t, t3 = t2 * t; out.push([0, 1].map(d => 0.5 * (2 * p1[d] + (-p0[d] + p2[d]) * t + (2 * p0[d] - 5 * p1[d] + 4 * p2[d] - p3[d]) * t2 + (-p0[d] + 3 * p1[d] - 3 * p2[d] + p3[d]) * t3))); } } out.push(pts[pts.length - 1]); return out; };
+      const inner = smooth([[3.5, 0], [6, -0.8], [6.5, -3.4], [5, -6], [2.2, -7.1], [0, -7.3]]);
+      const outer = smooth([[3.6, 0.6], [7.7, -0.2], [8.3, -3.8], [6.4, -7.2], [2.8, -8.3], [0, -8.5]]);
+      const both = pts => [...pts.map(([x, y]) => [-x, y]), ...pts.slice(0, -1).reverse()];
+      const vin = both(inner), vout = both(outer);
+      g.path([...vout.map(P), ...vin.slice().reverse().map(P)], { fill: g.rgba("red", 0.22), stroke: "red", width: 1.5, close: true });
+      const ain = smooth([[3.5, 0.2], [6.2, 1.2], [6.6, 4.2], [5.4, 6.4]]), aout = smooth([[3.7, 0.6], [6.9, 1.4], [7.3, 4.3], [6.2, 6.4]]);
+      for (const sg of [-1, 1]) g.path([...ain.map(([x, y]) => P([sg * x, y])), ...aout.slice().reverse().map(([x, y]) => P([sg * x, y]))], { fill: g.rgba("red", 0.15), stroke: "red", width: 1.2, close: true });
+      // Papillary muscles rising from the ventricle wall.
+      const papTip = [[-3.9, -3.6], [3.9, -3.6]];
+      for (const [sg, tip] of [[-1, papTip[0]], [1, papTip[1]]]) g.spline([P([sg * 6.2, -4.4]), P([sg * 4.7, -3.9]), P(tip), P([sg * 4.4, -5.0]), P([sg * 5.4, -6.2])], { fill: g.rgba("red", 0.38), stroke: "red", width: 1.2, close: true });
+      // Leaflets hinged at the annulus.
+      const len = 3.5, hinge = [[-3.5, 0.1], [3.5, 0.1]];
+      const tip = [[hinge[0][0] + len * Math.cos(s.aL), hinge[0][1] - len * Math.sin(s.aL)], [hinge[1][0] - len * Math.cos(s.aR), hinge[1][1] - len * Math.sin(s.aR)]];
+      for (let i = 0; i < 2; i++) {
+        const torn = v.torn && i === 1;
+        for (const f of [0.55, 1]) {
+          const at = [hinge[i][0] + (tip[i][0] - hinge[i][0]) * f, hinge[i][1] + (tip[i][1] - hinge[i][1]) * f];
+          if (torn) { if (f === 1) g.line(P(papTip[i]), P([papTip[i][0] + 0.2, papTip[i][1] + 1.1]), { stroke: "orange", width: 1.3 }); continue; }
+          const d = Math.hypot(at[0] - papTip[i][0], at[1] - papTip[i][1]), sag = Math.max(0, 4.1 - d) * 0.35;
+          g.spline([P(at), P([(at[0] + papTip[i][0]) / 2 + (i ? sag : -sag), (at[1] + papTip[i][1]) / 2]), P(papTip[i])], { stroke: g.mix("ink", "panel", 0.35), width: 1.1 });
+        }
+      }
+      for (let i = 0; i < 2; i++) { g.line(P(hinge[i]), P(tip[i]), { stroke: v.torn && i === 1 ? "orange" : "purple", width: 6 }); g.circle(P(hinge[i]), 3.2, { fill: "ink" }); }
+      // Blood fills both chambers. Where it crosses the valve, dots follow the flow by
+      // continuity: a dot's place is set by the volume that has passed since it entered, so
+      // dots speed up in the narrow opening and slow down where the channel widens.
+      g.path([P([3.5, -0.02]), ...ain.map(([x, y]) => P([x, y])), ...ain.slice().reverse().map(([x, y]) => P([-x, y])), P([-3.5, -0.02])], { fill: g.rgba("red", 0.07), close: true });
+      g.path(vin.map(P), { fill: g.rgba("red", 0.07), close: true });
+      const leakOn = leak && s.aR < -0.6;
+      if (open || leakOn) {
+        const interp = (pts, y) => { for (let i = 0; i + 1 < pts.length; i++) { const [x0, y0] = pts[i], [x1, y1] = pts[i + 1]; if ((y - y0) * (y - y1) <= 0) return x0 + ((x1 - x0) * (y - y0)) / (y1 - y0 || 1); } return pts[pts.length - 1][0]; };
+        const gap = Math.abs(tip[1][0] - tip[0][0]) / 2, tipY = Math.min(tip[0][1], tip[1][1]);
+        // Half-width of the stream and its center, top (y = 5.6) to bottom (y = -6.6).
+        const stream = y => open
+          ? [0, y > 0.2 ? interp(ain, y) - 0.3 : y > tipY ? 3.4 + (gap - 3.4) * ((0.2 - y) / (0.2 - tipY)) : Math.min(interp(inner, Math.max(-7, y)) - 0.3, gap + (tipY - y) * 0.9)]
+          : [1.75, y < -0.5 ? 2.6 : y < 0.3 ? 1.5 : Math.min(4, 1.5 + (y - 0.3) * 0.7)];
+        const N = 160, ys = [], cum = [0];
+        for (let i = 0; i <= N; i++) ys.push(open ? 5.6 - (12.2 * i) / N : -3.6 + (9.2 * i) / N);
+        for (let i = 1; i <= N; i++) cum.push(cum[i - 1] + stream((ys[i] + ys[i - 1]) / 2)[1] * Math.abs(ys[i] - ys[i - 1]));
+        const total = cum[N];
+        for (let k = 0; k < 44; k++) {
+          const c = (((hash(k) * total + s.vol) % total) + total) % total;
+          let lo = 0, hi = N; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= c) lo = m; else hi = m; }
+          const y = ys[lo] + ((ys[hi] - ys[lo]) * (c - cum[lo])) / (cum[hi] - cum[lo] || 1), [cx, hw] = stream(y);
+          const f = c / total, fade = Math.min(1, f * 8, (1 - f) * 8);
+          g.circle(P([cx + (hash(k + 31) * 2 - 1) * hw * 0.85, y]), 2.4, { fill: open ? "red" : "orange", alpha: 0.8 * fade });
+        }
+      }
+      const plv = LA - v.dp;
+      g.label(`left atrium ${LA} mmHg`, P([0, 5.6]), { align: "center", color: "purple" });
+      g.label(`left ventricle ${plv} mmHg`, P([0, -6.3]), { align: "center", color: "red" });
+      g.label("papillary muscle", P([-5.2, -6.9]), { align: "center", size: 11 });
+      g.label("chordae", P([-5.6, -1.9]), { align: "center", size: 11 });
+    },
+  });
+}
+</script>
+
+<p>With the atrium even 2 or 3 mmHg higher, the leaflets swing open and blood pours through. Once the ventricle's pressure climbs past the atrium's, the same blood pushes them shut. Unheld, they would blow through like an umbrella turning inside out; the <em>chordae tendineae</em>, cords tied to the <span class="c-red">papillary muscles</span>, stop them just as they meet.</p>
+
+<p>Now <button class="set" data-set="dp=-110 torn=true">tear the cords</button> on one leaflet. It flips back, and every squeeze sends a jet the wrong way. A ruptured cord, one complication of a heart attack, can flood the lungs this way.</p>
+
+<aside class="callout mistake"><p>Heart valves don't open because the heart tells them to. They are passive flaps; the pressure on either side decides everything. That is why a valve's timing tells you so much about the pressures around it.</p></aside>
+
+<h2>One heartbeat, slowed down</h2>
+
+<p>Every beat runs through the same sequence, and the valves split it into parts. Here is the heart cut open again with a clock and the <span class="c-green">volume of the left ventricle</span>. A resting beat lasts 0.8 seconds. Move <span class="scrub" data-key="t"></span> into it and watch which valves are open:</p>
+
+<figure class="demo wide" id="beat" aria-label="The heart cut open from the front beside a timeline of one beat: the left ventricle's volume rises and falls, and bars show when the mitral and aortic valves are open. A slider moves through the beat."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const C = HEART.cycle();
+  const E = C.events;
+  demo("beat", {
+    aspect: w => (w < 560 ? 0.62 : 1.7),
+    orbit: { yaw: 0.15, pitch: 0.08, minYaw: -0.9, maxYaw: 1.1 },
+    controls: [{ key: "t", label: "Time in the beat", min: 0, max: 0.799, step: 0.001, value: 0.3, unit: " s", color: "green" }],
+    presets: [{ label: "Atria squeeze", set: { t: 0.05 } }, { label: "Valves all shut", set: { t: 0.18 } }, { label: "Ejection", set: { t: 0.33 } }, { label: "Filling", set: { t: 0.62 } }],
+    caption: "The beat at rest (75 per minute), from a model of the left ventricle and arteries that is described further down. The 3D heart moves through the same beat, with its valves opening and shutting at the model's times; it is slowed three times when playing.",
+    status: (s, v) => `${C.stage(v.t)} · left ventricle ${C.at(v.t, "v").toFixed(0)} mL`,
+    step(dt, s, v, fig) { fig.set("t", (v.t + dt / 3) % 0.799); },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const box3 = wide ? [0, 0, g.w * 0.56, g.h] : [0, 0, g.w, g.h * 0.6];
+      const boxP = wide ? [g.w * 0.58, 8, g.w * 0.42 - 6, g.h - 16] : [0, g.h * 0.6 + 4, g.w, g.h * 0.4 - 8];
+      const mOpen = C.at(v.t, "qm") > 0.5, aOpen = C.at(v.t, "q") > 0.5;
+      const H = HEART3D.use(scene, { cut: true, phase: C.phase(v.t) });
+      const view = g.render3d(scene, { ...s.view, fov: 25 }, { box: box3 });
+      const open = { "mitral valve": mOpen, "tricuspid valve": mOpen, "aortic valve": aOpen, "pulmonary valve": aOpen };
+      g.callouts(H.labels().filter(l => l.text in open).map(l => ({ at: view.project(l.at), text: `${l.text.replace(" valve", "")}: ${open[l.text] ? "open" : "shut"}`, color: open[l.text] ? (/mitral|aortic/.test(l.text) ? "red" : "blue") : "muted", side: wide ? "left" : undefined })), { split: box3[0] + box3[2] / 2 });
+      // Timeline: volume on top, valve bars beneath.
+      const [bx, by, bw, bh] = boxP, barH = 34;
+      const P = g.graph({ box: [bx, by, bw, bh - barH - 6], x: [0, 0.8], y: [40, 140], axes: "frame", xTicks: 0.2, yTicks: 25, xLabel: wide ? "time (s)" : "", yLabel: "volume (mL)" });
+      P.series(C.rec.map(r => [r.t, r.v]), { color: "green", width: 2.5 });
+      P.vline(v.t, { color: "ink" });
+      P.marker(v.t, C.at(v.t, "v"), { color: "green" });
+      // Valve bars, each labeled in a gap of its own row.
+      const bar = (y, a, b, color, on) => { const x0 = P.xpx(a), x1 = P.xpx(b); g.rect(x0, y, Math.max(2, x1 - x0), 12, { fill: g.rgba(color, on ? 0.75 : 0.35), r: 3 }); };
+      const y0 = by + bh - barH + 2;
+      bar(y0, 0, E.mvc, "red", mOpen); bar(y0, E.mvo, 0.8, "red", mOpen);
+      bar(y0 + 17, E.avo, E.avc, "red", aOpen);
+      g.text("mitral open", [P.xpx((E.mvo + 0.8) / 2), y0 + 6.5], { size: 10.5, color: "ink", align: "center", baseline: "middle", weight: 600 });
+      g.text("aortic open", [P.xpx((E.avo + E.avc) / 2), y0 + 23.5], { size: 10.5, color: mOpen || aOpen ? "ink" : "ink", align: "center", baseline: "middle", weight: 600 });
+      g.line([P.xpx(v.t), y0 - 2], [P.xpx(v.t), y0 + 31], { stroke: "ink", width: 1.5 });
+    },
+  });
+}
+</script>
+
+<p>The <em>atria</em> contract first, adding the last fifth or so to ventricles that are already mostly full. Then the ventricles squeeze, and for about 50 milliseconds all four valves are shut: the inlets because the ventricle's pressure is now above the atrium's, the outlets because it is still below the artery's. The ventricle squeezes a sealed bag, and its pressure climbs from about 10 to 80 mmHg with no change in volume. This is <dfn data-def="The first part of systole, when the ventricles contract with all four valves shut, so pressure rises but volume stays the same.">isovolumic contraction</dfn>.</p>
+
+<p>When the pressure passes the aorta's, the <span class="c-red">aortic valve</span> opens and blood leaves for about 0.28 seconds: <button class="set" data-set="t=0.33">ejection</button>, 70 of the 123 mL. Then the muscle relaxes with every valve shut until its pressure drops below the atrium's, the mitral valve opens, and the ventricle refills, fast at first, as the relaxing wall almost sucks blood in<span class="sidenote">The right side runs the same sequence at about a fifth of the pressure, its valves moving a few hundredths of a second out of step with the left's.</span>.</p>
+
+<p>Draw the pressures on one time axis and the whole beat fits on one chart, a Wiggers diagram<span class="sidenote">Named after the American physiologist Carl Wiggers, who recorded these pressures in the early twentieth century.</span>. First, a question about the moment the aortic valve shuts.</p>
+
+<div class="quiz">
+<p>At the instant the aortic valve snaps shut, which pressure is higher: the ventricle's or the aorta's?</p>
+<div class="choices"><button>The ventricle's, since it is still pushing</button><button>Neither, they are exactly equal</button><button data-correct>The aorta's</button></div>
+<p class="why">The ventricle starts relaxing while the blood is still coasting forward. Its pressure falls below the aorta's for a few hundredths of a second, the flow reverses, and the backflow catches the cusps and slams them shut. That reversal leaves a notch in the aortic pressure.</p>
+</div>
+
+<figure class="demo" id="wiggers" aria-label="A Wiggers diagram: pressures in the left ventricle, aorta, and left atrium, the left ventricle's volume, and the ECG over one beat, with the five stages shaded. Drag across it to read the values at any moment."></figure>
+<script>
+{
+  const C = HEART.cycle();
+  const E = C.events;
+  let PP;
+  const STAGES = [[0, 0.1, "atria"], [E.mvc, E.avo, "squeeze, shut"], [E.avo, E.avc, "ejection"], [E.avc, E.mvo, "relax, shut"], [E.mvo, 0.8, "filling"]];
+  demo("wiggers", {
+    aspect: w => (w < 560 ? 0.6 : 1.05),
+    state: () => ({ t: E.avc + 0.004 }),
+    drag: { hit: () => true, start(p, s) { if (PP) s.t = clamp(PP.inv(p)[0], 0, 0.799); }, move(p, s) { if (PP) s.t = clamp(PP.inv(p)[0], 0, 0.799); } },
+    hints: [["Drag", "across the chart"]],
+    caption: "One beat at rest from this page's model, in the classic Wiggers layout. Red is the left ventricle, brass the aorta, purple the left atrium; green is the ventricle's volume and orange the ECG. The shaded bands are the stages of the beat.",
+    status: s => `${s.t.toFixed(3)} s · ventricle ${C.at(s.t, "plv").toFixed(0)}, aorta ${C.at(s.t, "pao").toFixed(0)}, atrium ${C.at(s.t, "pla").toFixed(0)} mmHg · ${C.at(s.t, "v").toFixed(0)} mL`,
+    draw(g, s) {
+      const L = 46, top = 22, hP = g.h * 0.5, hV = g.h * 0.2, hE = g.h * 0.16, gap = 8;
+      const PP0 = g.graph({ box: [0, top, g.w, hP], x: [0, 0.8], y: [0, 135], axes: "frame", xTicks: false, yTicks: 40, yLabel: "pressure (mmHg)" });
+      PP = PP0;
+      // Stage bands across all three panels.
+      for (const [a, b, name] of STAGES) {
+        const x0 = PP0.xpx(a), x1 = PP0.xpx(b), sel = s.t >= a && s.t < b;
+        if (name === "squeeze, shut" || name === "relax, shut") g.rect(x0, top, x1 - x0, g.h - top - 18, { fill: g.rgba("brass", sel ? 0.16 : 0.08) });
+        if (g.w >= 560 || name === "ejection" || name === "filling") g.text(name, [(x0 + x1) / 2, top - 6], { size: 11, align: "center", color: sel ? "ink" : "muted", weight: sel ? 600 : 500 });
+      }
+      PP0.series(C.rec.map(r => [r.t, r.pao]), { color: "brass", width: 2.5, label: "aorta" });
+      PP0.series(C.rec.map(r => [r.t, r.plv]), { color: "red", width: 2.5 });
+      PP0.series(C.rec.map(r => [r.t, r.pla]), { color: "purple", width: 2 });
+      PP0.label("left ventricle", [0.33, 124], { color: "red", align: "center" });
+      PP0.label("left atrium", [0.7, 20], { color: "purple", align: "center" });
+      PP0.label("notch", [E.avc + 0.03, C.at(E.avc, "pao") + 9], { color: "brass", align: "left" });
+      const PV = g.graph({ box: [0, top + hP + gap, g.w, hV], x: [0, 0.8], y: [40, 140], axes: "frame", xTicks: false, yTicks: 50, yLabel: "mL" });
+      PV.series(C.rec.map(r => [r.t, r.v]), { color: "green", width: 2.5 });
+      PV.label("volume", [0.74, 115], { color: "green", align: "center" });
+      const PE = g.graph({ box: [0, top + hP + hV + 2 * gap, g.w, hE + 18], x: [0, 0.8], y: [-0.4, 1.2], axes: "frame", xTicks: 0.1, yTicks: false, xLabel: "time (s)" });
+      const ecg = []; for (let t = 0; t <= 0.8; t += 0.002) ecg.push([t, C.ecg(t)]);
+      PE.series(ecg, { color: "orange", width: 2 });
+      PE.label("P", [0.04, 0.32], { color: "orange" }); PE.label("QRS", [0.19, 1.15], { color: "orange" }); PE.label("T", [0.42, 0.62], { color: "orange" });
+      // Cursor through every panel.
+      const x = PP0.xpx(s.t);
+      g.line([x, top], [x, g.h - 18], { stroke: "ink", width: 1.2 });
+      PP0.marker(s.t, C.at(s.t, "plv"), { color: "red" }); PP0.marker(s.t, C.at(s.t, "pao"), { color: "brass" });
+      PV.marker(s.t, C.at(s.t, "v"), { color: "green" });
+      g.handle([x, top + hP + hV / 2 + gap], { color: "ink" });
+    },
+  });
+}
+</script>
+
+<p>Every event on the chart is a crossing of two curves. The <span class="c-red">ventricle</span> rising through the <span class="c-purple">atrium</span> shuts the mitral valve, and rising through the <span class="c-brass">aorta</span> opens the aortic valve; falling back reverses them. The atrium's pressure has two humps: its own squeeze, then a rise while the mitral valve is shut and the lungs keep pouring blood in.</p>
+
+<p>The aorta's pressure only sags from about 120 to 80 mmHg between beats, with a small notch where the valve caught the backflow. And the <span class="c-orange">ECG</span> at the bottom runs ahead of the mechanics: the QRS comes a few hundredths of a second before the ventricle's pressure starts to rise.</p>
+
+<h2>Why the pressure never drops to zero</h2>
+
+<p>The ventricle pushes for only a third of each beat, yet blood flows through your organs all the time. The reason is the aorta, an elastic tube thick with stretchy elastin. During ejection it balloons out and stores about half of the stroke volume, and between beats it recoils and pushes it on<span class="sidenote">Engineers call this a <em>windkessel</em>, German for "air chamber", after the air-filled domes on old fire pumps that smoothed the strokes into a steady jet <a class="cite" href="#ref-westerhof"></a>.</span>. Change how stretchy the arteries are, <span class="scrub" data-key="c"></span>, and watch the two numbers of a blood pressure reading:</p>
+
+<figure class="demo" id="aorta" aria-label="A segment of aorta that swells with each beat, beside a graph of aortic pressure over two beats. A slider sets how stretchy the arteries are; stiff arteries give a higher top number and a lower bottom number."></figure>
+<script>
+{
+  const ref = HEART.cycle();
+  demo("aorta", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    state: () => ({ t: 0.25, inVol: 0, pp: Array.from({ length: 14 }, (_, k) => ({ u: k / 14, lane: ((k * 7) % 5 - 2) / 2.4, wait: false })) }),
+    controls: [{ key: "c", label: "Artery stretchiness", min: 0.2, max: 2.2, step: 0.05, value: 1.4, unit: " mL/mmHg", color: "brass", marks: [{ value: 0.5, label: "stiff" }, { value: 1.4, label: "healthy" }, { value: 2.0, label: "young" }] }],
+    presets: [{ label: "Age 20", set: { c: 2.0 } }, { label: "Age 50", set: { c: 1.4 } }, { label: "Age 80", set: { c: 0.55 } }, { label: "Rigid pipes", set: { c: 0.2 } }],
+    caption: "The left ventricle pumping into arteries of different stretchiness (their compliance), with everything else held fixed. The faint curve is the healthy case. The windkessel model behind it ignores pressure waves reflecting back from the legs and body, which make real stiff arteries raise the top number even more.",
+    status: (s, v) => { const C = HEART.cycle({ c: v.c }); return `${C.sbp.toFixed(0)}/${C.dbp.toFixed(0)} mmHg · pulse pressure ${(C.sbp - C.dbp).toFixed(0)}`; },
+    step(dt, s, v) {
+      // Blood in the segment moves by continuity: the flow falls from what enters at the heart
+      // end to what leaves at the far end (the difference is stored in the stretch), and the
+      // speed is that flow over the local width.
+      const C = HEART.cycle({ c: v.c }), dtm = (dt / 2) * C.T;
+      s.t += dt / 2;
+      const t = (s.t % 1) * C.T, p = C.at(t, "pao"), qin = Math.max(0, C.at(t, "q")), qout = (p - C.p.zc * C.at(t, "q")) / C.p.rp;
+      const bulge = 0.9 * Math.max(0, (v.c * (p - 40)) / 160);
+      // Each dot is a parcel of about 3.2 units of the segment's 45: parcels leave at the far
+      // end with the outflow and wait to re-enter with the next inflow, so the segment holds
+      // more of them while it is stretched.
+      s.inVol += qin * dtm;
+      for (const d of s.pp) {
+        if (d.wait) { if (s.inVol >= 3.2) { s.inVol -= 3.2; d.wait = false; d.u = Math.random() * 0.03; d.lane = Math.random() * 1.6 - 0.8; } continue; }
+        const Q = qin + (qout - qin) * d.u, w = 1 + bulge * Math.sin(Math.PI * d.u);
+        d.u += (Math.max(0, Q) / (w * 45)) * dtm;
+        if (d.u > 1) d.wait = true;
+      }
+      if (s.pp.every(d => !d.wait)) s.inVol = 0;
+    },
+    draw(g, s, v) {
+      const C = HEART.cycle({ c: v.c });
+      const wide = g.w >= 560;
+      const boxA = wide ? [0, 0, g.w * 0.34, g.h] : [0, 0, g.w, g.h * 0.36];
+      const boxP = wide ? [g.w * 0.37, 6, g.w * 0.63 - 4, g.h - 12] : [0, g.h * 0.38, g.w, g.h * 0.62 - 6];
+      const t = (s.t % 1) * C.T, p = C.at(t, "pao");
+      // The aorta: an elastic segment that bulges with the volume it stores (compliance × pressure).
+      // Blood comes in from the heart in spurts (bottom or left) and leaves for the body steadily.
+      const [ax, ay, aw, ah] = boxA, horiz = !wide;
+      const len = (horiz ? aw : ah) * 0.6, c0 = horiz ? [ax + aw / 2, ay + ah / 2 + 4] : [ax + aw / 2, ay + ah / 2];
+      const rEnd = Math.min(aw, ah) * (horiz ? 0.13 : 0.1), bulge = rEnd * 0.9 * Math.max(0, (v.c * (p - 40)) / 160);
+      // u runs along the vessel from the heart end (0) to the body end (1).
+      const at = (u, side) => { const r = rEnd + bulge * Math.sin(Math.PI * u), a = -len / 2 + u * len; return horiz ? [c0[0] + a, c0[1] + side * r] : [c0[0] + side * r, c0[1] - a]; };
+      const us = Array.from({ length: 25 }, (_, i) => i / 24);
+      const wall = side => us.map(u => at(u, side));
+      g.path([...wall(-1), ...wall(1).reverse()], { fill: g.rgba("red", 0.3), close: true });
+      for (const sd of [-1, 1]) g.spline(wall(sd), { stroke: "brass", width: 4 });
+      const q = Math.max(0, C.at(t, "q")), out = (C.at(t, "pao") - C.p.zc * C.at(t, "q")) / C.p.rp;
+      for (const d of s.pp) if (!d.wait) g.circle(at(d.u, d.lane), 3, { fill: "red" });
+      // In and out arrows, their widths set by the flow.
+      const arrowAt = (u0, u1, flow, color, text) => {
+        const a = at(u0, 0), b = at(u1, 0);
+        g.arrow(a, b, { stroke: color, width: 1.5 + flow / 45, head: 10 });
+        g.label(text, horiz ? [(a[0] + b[0]) / 2, a[1] + rEnd + 14] : [a[0] + rEnd + 6, (a[1] + b[1]) / 2], { align: horiz ? "center" : "left", color, size: 11.5 });
+      };
+      arrowAt(-0.32, -0.04, q, "red", `in ${q.toFixed(0)} mL/s`);
+      arrowAt(1.04, 1.32, out, "red", `out ${out.toFixed(0)} mL/s`);
+      g.label(`aorta, ${p.toFixed(0)} mmHg`, horiz ? [c0[0], c0[1] - rEnd - bulge - 10] : [c0[0] + rEnd * 1.9 + 10, c0[1]], { align: horiz ? "center" : "left", baseline: horiz ? "bottom" : "middle", color: "brass" });
+      const P = g.graph({ box: boxP, x: [0, 2 * C.T], y: [0, 160], axes: "frame", xTicks: 0.4, yTicks: 40, xLabel: "time (s)", yLabel: "aortic pressure (mmHg)" });
+      const two = (R, key) => [...R.rec.map(r => [r.t, r[key]]), ...R.rec.map(r => [r.t + R.T, r[key]])];
+      P.series(two(ref, "pao"), { color: g.rgba("muted", 0.5), width: 1.5 });
+      P.series(two(C, "pao"), { color: "brass", width: 2.5 });
+      P.hline(C.sbp, { color: "red", label: `${C.sbp.toFixed(0)} systolic` });
+      P.hline(C.dbp, { color: "blue", label: `${C.dbp.toFixed(0)} diastolic` });
+      P.marker(t, p, { color: "brass" });
+    },
+  });
+}
+</script>
+
+<p>With <button class="set" data-set="c=2.0">young arteries</button> the pressure barely swings. Make them <button class="set" data-set="c=0.55">stiff, as they become with age</button>, and the same heart gives about 130 over 50: the aorta can't absorb the surge, so the top number rises, and it can't push between beats, so the bottom number falls. With <button class="set" data-set="c=0.2">rigid pipes</button> the flow would nearly stop between beats. The bottom number matters: as we'll see, the heart's own muscle is fed mostly between beats.</p>
+
+<h2>A beat as a loop</h2>
+
+<p>Plot the ventricle's <span class="c-red">pressure</span> against its <span class="c-green">volume</span> instead of against time, and the beat becomes a loop it goes around once per beat, counterclockwise. Watch the dot:</p>
+
+<figure class="demo" id="pvloop" aria-label="The left ventricle's pressure plotted against its volume over one beat: a loop with four sides, filling along the bottom, a vertical climb, ejection across the top, and a vertical fall. A dot travels around it."></figure>
+<script>
+{
+  const C = HEART.cycle();
+  const E = C.events;
+  const SIDES = [[E.mvo, 0.8 + 1e-9, "filling"], [0, E.mvc, "atria top up"], [E.mvc, E.avo, "squeeze with valves shut"], [E.avo, E.avc, "ejection"], [E.avc, E.mvo, "relax with valves shut"]];
+  demo("pvloop", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    state: () => ({ t: 0.3 }),
+    controls: [{ key: "work", label: "Shade the work done", type: "toggle", value: false, color: "red" }],
+    caption: "The pressure-volume loop of the same resting beat. Its width is the stroke volume; the area inside it is the work the ventricle does on the blood each beat, about one joule.",
+    status: s => `${C.stage(s.t)} · ${C.at(s.t, "v").toFixed(0)} mL at ${C.at(s.t, "plv").toFixed(0)} mmHg`,
+    step(dt, s) { s.t = (s.t + dt / 3) % C.T; },
+    draw(g, s, v) {
+      const P = g.graph({ x: [0, 160], y: [0, 135], axes: "frame", xTicks: 20, yTicks: 20, xLabel: "volume of the left ventricle (mL)", yLabel: "pressure (mmHg)" });
+      const loop = C.rec.map(r => [r.v, r.plv]);
+      if (v.work) P.polyline(loop, { close: true, fill: g.rgba("red", 0.18), color: g.rgba("red", 0) });
+      // Each side drawn bold while the dot is on it.
+      for (const [a, b] of SIDES) { const on = s.t >= a && s.t < b; P.series(C.rec.filter(r => r.t >= a && r.t <= b + 0.002).map(r => [r.v, r.plv]), { color: on ? "red" : g.rgba("red", 0.45), width: on ? 3.5 : 2 }); }
+      const pt = t => [C.at(t, "v"), C.at(t, "plv")];
+      const lab = (t, text, dx, dy) => { const [x, y] = pt(t); P.label(text, [x, y], { dx, dy, color: "ink", align: dx < 0 ? "right" : "left" }); P.points([[x, y]], { r: 3.5, color: "ink" }); };
+      lab(E.mvc, "mitral shuts", 8, 14); lab(E.avo, "aortic opens", 8, 4); lab(E.avc, "aortic shuts", -8, -6); lab(E.mvo, "mitral opens", -8, 12);
+      P.label("ejection", [(C.edv + C.esv) / 2, C.pmax + 6], { align: "center", color: "red" });
+      P.label("filling", [(C.edv + C.esv) / 2, 2], { align: "center", color: "red", dy: -14 });
+      // Stroke volume as a dimension under the loop.
+      const y0 = 30;
+      P.segment([C.esv, y0], [C.edv, y0], { color: "green", width: 1.5 });
+      P.label(`stroke volume ${C.sv.toFixed(0)} mL`, [(C.edv + C.esv) / 2, y0], { align: "center", color: "green", dy: -10 });
+      P.vline(C.esv, { color: "green" }); P.vline(C.edv, { color: "green" });
+      if (v.work) P.label(`work ≈ ${((C.sw * 133.3) / 1e6).toFixed(1)} J`, [(C.edv + C.esv) / 2, 70], { align: "center", color: "red" });
+      P.marker(...pt(s.t), { color: "red" });
+    },
+  });
+}
+</script>
+
+<p>Along the bottom the ventricle fills at low pressure; up the right side it squeezes sealed; across the top it ejects; down the left side it relaxes, sealed again. The loop's width is the <span class="c-green">stroke volume</span>, and divided by the volume at the start of the squeeze it is the <dfn data-def="The fraction of the blood in the left ventricle at the end of filling that is pushed out in one beat: stroke volume divided by end-diastolic volume.">ejection fraction</dfn>, the number on most heart scan reports: 57% here, and usually between about 55% and 75% in healthy hearts <a class="cite" href="#ref-maceira"></a>. <button class="set" data-set="work=true">Shade the loop</button>: its area is the work done on the blood each beat, about one joule.</p>
+
+<p>Three different things change the loop. <em>Preload</em> is how much the ventricle is filled before it squeezes. <em>Afterload</em> is what it pushes against, mostly the resistance of the small arteries. <em>Contractility</em> is how hard the muscle squeezes from a given filling, raised by adrenaline and lost when muscle dies. Fill harder <span class="scrub" data-key="ppv"></span>, raise the resistance <span class="scrub" data-key="rp"></span>, or change the strength <span class="scrub" data-key="emax"></span>:</p>
+
+<figure class="demo" id="pvlab" aria-label="A pressure-volume loop with the normal loop shown faintly behind it. Three sliders change the filling pressure, the arterial resistance, and the muscle's strength. Two boundary curves show where the loop's corners must lie."></figure>
+<script>
+{
+  const base = HEART.cycle();
+  demo("pvlab", {
+    aspect: w => (w < 560 ? 0.9 : 1.55),
+    controls: [
+      { key: "ppv", label: "Filling pressure", min: 5, max: 26, step: 0.5, value: 11, unit: " mmHg", color: "purple" },
+      { key: "rp", label: "Arterial resistance", min: 0.5, max: 2.4, step: 0.05, value: 1.1, format: x => `${(x / 1.1 * 100).toFixed(0)}%`, color: "brass" },
+      { key: "emax", label: "Muscle strength", min: 0.8, max: 5, step: 0.05, value: 2.6, format: x => `${(x / 2.6 * 100).toFixed(0)}%`, color: "red" },
+    ],
+    presets: [
+      { label: "Normal", set: { ppv: 11, rp: 1.1, emax: 2.6 } },
+      { label: "Filled more", set: { ppv: 18, rp: 1.1, emax: 2.6 } },
+      { label: "High resistance", set: { ppv: 11, rp: 2, emax: 2.6 } },
+      { label: "Adrenaline", set: { ppv: 11, rp: 1.1, emax: 4.2 } },
+      { label: "Weak muscle", set: { ppv: 11, rp: 1.1, emax: 1.1 } },
+      { label: "Weak, compensated", set: { ppv: 22, rp: 1.25, emax: 1.1 } },
+    ],
+    caption: "The same model with one property changed at a time. The red line through the loops' top left corners is the end-systolic pressure-volume relation: its slope measures how strong the muscle is, whatever the load. The purple curve along the bottom is the relaxed ventricle's own stiffness.",
+    status: (s, v) => { const C = HEART.cycle({ ppv: v.ppv, rp: v.rp, emax: v.emax }); return `stroke volume ${C.sv.toFixed(0)} mL · EF ${(C.ef * 100).toFixed(0)}% · ${C.sbp.toFixed(0)}/${C.dbp.toFixed(0)} mmHg`; },
+    draw(g, s, v) {
+      const C = HEART.cycle({ ppv: v.ppv, rp: v.rp, emax: v.emax });
+      const p = C.p;
+      const P = g.graph({ x: [0, 200], y: [0, 200], axes: "frame", xTicks: 25, yTicks: 25, xLabel: "volume (mL)", yLabel: "pressure (mmHg)" });
+      P.fn(V => p.A * (Math.exp(p.B * (V - p.v0)) - 1), { color: "purple", width: 1.5, dash: [5, 4], domain: [p.v0, 190], label: "relaxed wall", labelAt: 170 });
+      P.fn(V => p.emax * (V - p.v0), { color: "red", width: 1.5, dash: [5, 4], domain: [p.v0, 190], label: "end of squeeze", labelAt: Math.min(70, 10 + 170 / p.emax) });
+      P.polyline(base.rec.map(r => [r.v, r.plv]), { close: true, color: g.rgba("muted", 0.45), width: 1.5 });
+      P.polyline(C.rec.map(r => [r.v, r.plv]), { close: true, color: "red", width: 3, fill: g.rgba("red", 0.08) });
+      P.segment([C.esv, 12], [C.edv, 12], { color: "green", width: 3 });
+      P.label(`${C.sv.toFixed(0)} mL`, [(C.edv + C.esv) / 2, 12], { align: "center", color: "green", dy: -9 });
+    },
+  });
+}
+</script>
+
+<p><button class="set" data-set="ppv=18 rp=1.1 emax=2.6">Fill it more</button> and the loop stretches right: the ventricle starts bigger and ejects more. This is Frank–Starling from inside: stretched muscle fibers pull harder <a class="cite" href="#ref-starling"></a>. <button class="set" data-set="ppv=11 rp=2 emax=2.6">Raise the resistance</button> and the loop grows taller and narrower. <button class="set" data-set="ppv=11 rp=1.1 emax=4.2">Adrenaline</button> steepens the red line and the ventricle empties further.</p>
+
+<p>Whatever the filling and resistance, the loop's top left corner lands on the same red line, and only the muscle's strength moves it. Suga and Sagawa found this in dog hearts in 1973 <a class="cite" href="#ref-suga"></a>: the ventricle behaves like an elastic chamber whose stiffness rises and falls through the beat. Every heart figure on this page runs on that idea.</p>
+
+<p>Now <button class="set" data-set="ppv=11 rp=1.1 emax=1.1">weaken the muscle</button>, as a large heart attack does, and the stroke volume and pressure fall by a third. The body answers by retaining salt and water, which raises the filling: <button class="set" data-set="ppv=22 rp=1.25 emax=1.1">weak but compensated</button>. Some stroke volume comes back, at a filling pressure above 20 mmHg that the lungs pay for.</p>
+
+<details class="deeper">
+<summary>The model behind these figures <span class="hint">4 min</span></summary>
+<p>The left ventricle's pressure is its stiffness, or <em>elastance</em>, times how far its volume is above a dead volume <span class="tex">V_0</span> of 10 mL. The stiffness rises from the relaxed wall's to a peak <span class="tex">\red{E_{max}}</span> and back during each beat:</p>
+<div class="tex">P_{lv}(t) = e(t)\,\red{E_{max}}\,(V - V_0) + \bigl(1 - e(t)\bigr)\,\purple{A\left(e^{B(V - V_0)} - 1\right)}</div>
+<p>Here <span class="tex">e(t)</span> runs from 0 to 1 and back, with a shape fitted to measured human hearts (a "double Hill" curve, scaled so that systole shortens less than diastole as the rate rises) <a class="cite" href="#ref-stergiopulos"></a>. The second term is the relaxed wall, which stiffens steeply as it fills. Blood leaves through an aortic valve that carries the inertia of the moving blood, so the flow reverses briefly before the valve shuts, and enters a three-element windkessel: a short stiff segment, an elastic reservoir of compliance <span class="tex">\brass{C}</span>, and the resistance of the small arteries <span class="tex">R</span> <a class="cite" href="#ref-westerhof"></a>. The left atrium is a smaller elastic chamber filled from the lungs that stiffens for 0.1 s when it contracts.</p>
+<p>The page integrates these equations in steps of 0.2 milliseconds for ten beats and keeps the last one. With <span class="tex">\red{E_{max}} = 2.6</span> mmHg/mL, <span class="tex">R = 1.1</span> mmHg·s/mL and <span class="tex">\brass{C} = 1.4</span> mL/mmHg it gives 118/78 mmHg, 123 mL filled, 70 mL ejected, and 5.3 L/min at 75 beats a minute. The model has no right heart, no reflected pressure waves, and no nerves: everything the body adjusts by itself is a slider here.</p>
+</details>
+
+<h2>The spark that times each beat</h2>
+
+<p>A heart lifted out of the body keeps beating for a while with no nerves attached. Its rhythm comes from a few thousand cells in the right atrium's wall, the <span class="c-orange">sinus node</span>. They never rest at a steady voltage: after each beat, positive ions leak in until the voltage creeps up to a threshold, the cell fires, and the creep starts again. Turn up <span class="c-red">adrenaline</span> <span class="scrub" data-key="sym"></span> or the <span class="c-blue">vagus nerve</span> <span class="scrub" data-key="vag"></span> and watch the slope of the creep:</p>
+
+<figure class="demo" id="pacemaker" aria-label="Two voltage traces scrolling in time: a sinus node cell that slowly depolarizes and fires, and a ventricular muscle cell that fires a long action potential after each sinus beat. Sliders set the adrenaline and vagal nerve activity."></figure>
+<script>
+{
+  const W = 4; // seconds shown
+  const params = v => ({ slope: 50 * (1 + 1.6 * v.sym) * (1 - 0.5 * v.vag), mdp: -60 - 6 * v.vag, apd: 0.2 * (1 - 0.25 * v.sym) });
+  const rate = v => { const q = params(v); return 60 / ((-40 - q.mdp) / q.slope + q.apd); };
+  // Sinus node action potential after firing at time 0 (u seconds since threshold).
+  const saAP = (u, q) => { const up = 0.02; if (u < up) return -40 + 50 * (u / up); const r = (u - up) / (q.apd - up); return q.mdp + (10 - q.mdp) * Math.max(0, 1 - r) ** 1.6; };
+  // Ventricular muscle: fast upstroke, plateau, repolarization; about 0.3 s long.
+  function stepSA(dt, s, v) {
+    const q = params(v);
+    s.t += dt;
+    if (s.firing >= 0) { const u = s.t - s.firing; s.V = saAP(u, q); if (u >= q.apd) { s.firing = -1; s.V = q.mdp; } }
+    else { s.V = Math.max(s.V, q.mdp - 4) + q.slope * dt; if (s.V >= -40) { s.firing = s.t; s.beats.push(s.t); } }
+    s.beats = s.beats.filter(b => b > s.t - W - 1);
+    s.hist.push([s.t, s.V]); while (s.hist.length && s.hist[0][0] < s.t - W) s.hist.shift();
+  }
+  const vAP = (u, d) => u < 0 ? -85 : u < 0.003 ? -85 + 115 * (u / 0.003) : u < 0.02 ? 30 - 30 * ((u - 0.003) / 0.017) : u < d ? 0 - 12 * ((u - 0.02) / (d - 0.02)) ** 3 - 3 : Math.max(-85, -15 - 70 * ((u - d) / 0.07));
+  demo("pacemaker", {
+    aspect: w => (w < 560 ? 0.95 : 1.7),
+    state: () => { const s = { t: 0, V: -50, firing: -1, beats: [], hist: [] }; for (let i = 0; i < W * 120; i++) stepSA(1 / 120, s, { sym: 0, vag: 0.5 }); return s; },
+    controls: [
+      { key: "sym", label: "Adrenaline (sympathetic)", min: 0, max: 1, step: 0.01, value: 0, format: x => `${Math.round(x * 100)}%`, color: "red" },
+      { key: "vag", label: "Vagus nerve", min: 0, max: 1, step: 0.01, value: 0.5, format: x => `${Math.round(x * 100)}%`, color: "blue" },
+    ],
+    presets: [{ label: "Asleep", set: { sym: 0, vag: 0.95 } }, { label: "Resting", set: { sym: 0, vag: 0.5 } }, { label: "No nerves", set: { sym: 0, vag: 0 } }, { label: "Sprinting", set: { sym: 1, vag: 0 } }],
+    caption: "A simplified sinus node cell (top) and a ventricular muscle cell (bottom), on the same clock. The muscle cell fires 0.15 s after each sinus beat, the time the wave takes to cross the atria and the AV node. The voltages and timings are typical values, not a model of the ion channels.",
+    status: (s, v) => `${rate(v).toFixed(0)} beats per minute`,
+    step: (dt, s, v) => stepSA(dt, s, v),
+    draw(g, s, v) {
+      const q = params(v), t0 = s.t - W;
+      const top = g.graph({ box: [0, 4, g.w, g.h * 0.46], x: [t0, s.t], y: [-75, 25], axes: "frame", xTicks: false, yTicks: 25, yLabel: "sinus node (mV)" });
+      top.hline(-40, { color: "orange", label: "threshold" });
+      top.series(s.hist, { color: "orange", width: 2.5 });
+      const bot = g.graph({ box: [0, g.h * 0.52, g.w, g.h * 0.46], x: [t0, s.t], y: [-100, 45], axes: "frame", xTicks: { values: [], format: () => "" }, yTicks: 50, yLabel: "ventricle (mV)" });
+      const d = 0.3 * Math.sqrt(60 / rate(v) / 0.8) * 0.95;
+      const pts = []; for (let i = 0; i <= 400; i++) { const t = t0 + (i / 400) * W; let V = -85; for (const b of s.beats) { const u = t - (b + 0.15); if (u >= 0 && u < d + 0.1) V = vAP(u, d); } pts.push([t, V]); }
+      bot.series(pts, { color: "red", width: 2.5 });
+      const lb = s.beats.filter(b => b + 0.15 + d < s.t - 0.25 && b > t0).pop();
+      if (lb !== undefined) bot.label("plateau", [lb + 0.15 + d / 2, 12], { color: "red", align: "center" });
+    },
+  });
+}
+</script>
+
+<p>With <button class="set" data-set="sym=0 vag=0">no nerve input</button> the node fires about 100 times a minute in a young adult<span class="sidenote">Measured by blocking both sets of nerves with drugs; the rate falls with age <a class="cite" href="#ref-jose"></a>.</span>. At rest the vagus nerve brakes it to 60 or 70; adrenaline steepens the creep and can push it past 180. The sinus node only sets the tempo.</p>
+
+<p>Beneath it, a ventricular cell's action potential has a long flat <em>plateau</em>, about a quarter of a second, while calcium flows in and the cell contracts. Until it ends, the cell can't fire again, so heart muscle can't be held in a cramp: every squeeze is followed by a forced relaxation long enough to refill.</p>
+
+<p>From the sinus node the wave must reach billions of muscle cells in the right order: the atria, a deliberate pause, then the ventricles from the inside out and from the tip up. Here it is on a section of the heart, slowed ten times. Move through the first <span class="scrub" data-key="t"></span>:</p>
+
+<script>
+// Draws the activation model as a smooth picture: the 2 mm grid is resampled at 0.5 mm, with
+// tissue edges from the same shapes the grid was built from and activation times interpolated
+// between grid cells. Depolarized tissue is orange, the wavefront brightest. Shared by the
+// next two figures and the ischemia figure.
+window.HEARTMAP = (() => {
+  const F = 4; // fine pixels per grid cell
+  let fine = null, cvs = null, img = null, cache = {};
+  const rgb = css => { const c = document.createElement("canvas").getContext("2d"); c.fillStyle = css; c.fillRect(0, 0, 1, 1); return c.getImageData(0, 0, 1, 1).data; };
+  // Distance outside an ellipse's edge (approximate), and to the His bundle's path.
+  const edge = (x, y, cx, cy, rx, ry) => { const u = (x - cx) / rx, v = (y - cy) / ry, f = u * u + v * v, gx = (2 * u) / rx, gy = (2 * v) / ry; return Math.abs(f - 1) / (Math.hypot(gx, gy) || 1); };
+  const HIS = [[50, 55], [53, 58], [56, 61], [59, 64], [62, 68], [63, 72]];
+  const segDist = (x, y) => { let d = Infinity; for (let i = 0; i + 1 < HIS.length; i++) { const [ax, ay] = HIS[i], [bx, by] = HIS[i + 1], dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy))); d = Math.min(d, Math.hypot(x - ax - t * dx, y - ay - t * dy)); } return d; };
+  function build() {
+    const A = HEART.activation(), FW = A.W * F, FH = A.H * F, n = FW * FH;
+    const kind = new Int8Array(n), act = new Float32Array(n), apd = new Float32Array(n), pos = new Float32Array(n * 2);
+    for (let j = 0; j < FH; j++) for (let i = 0; i < FW; i++) {
+      const x = ((i + 0.5) / F) * A.h, y = ((j + 0.5) / F) * A.h, q = j * FW + i;
+      const gx = x / A.h - 0.5, gy = y / A.h - 0.5, i0 = Math.floor(gx), j0 = Math.floor(gy);
+      let ws = 0, ta = 0, tp = 0, best = 0, bk = 0;
+      for (const [di, dj] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+        const ci = i0 + di, cj = j0 + dj; if (ci < 0 || cj < 0 || ci >= A.W || cj >= A.H) continue;
+        const c = cj * A.W + ci; if (!A.kind[c]) continue;
+        const w = (1 - Math.abs(gx - ci)) * (1 - Math.abs(gy - cj));
+        ws += w; ta += A.act[c] * w; tp += A.apd[c] * w; if (w > best) { best = w; bk = A.kind[c]; }
+      }
+      if (!ws) continue;
+      const near = A.kind[Math.min(A.H - 1, Math.max(0, Math.round(gy))) * A.W + Math.min(A.W - 1, Math.max(0, Math.round(gx)))];
+      const atrial = y < 55 && (A.RA(x, y) || A.LA(x, y) || (y > 21 && y < 29 && x > 50 && x < 70));
+      const vent = y > 61 && (A.RVo(x, y) || A.LVo(x, y)) && !A.RVc(x, y) && !A.LVc(x, y);
+      // The conduction system, drawn from geometry so it is smooth: the His bundle along its
+      // path, the Purkinje fibers as a thin lining of the lower ventricles.
+      const his = segDist(x, y) < 1.3 && y > 53 && y < 74;
+      if (!atrial && !vent && !his) continue;
+      const lining = vent && y > 84 && Math.min(edge(x, y, 38, 89, 21, 26), edge(x, y, 86, 96, 16, 31)) < 1.3;
+      kind[q] = his ? 4 : atrial ? (A.RA(x, y) || A.LA(x, y) ? 1 : 6) : lining ? 3 : 2;
+      act[q] = ta / ws; apd[q] = tp / ws;
+    }
+    return { FW, FH, kind, act, apd };
+  }
+  function draw(g, box, t, o = {}) {
+    const A = HEART.activation(), [bx, by, bw, bh] = box;
+    if (!fine) fine = build();
+    const k = Math.min(bw / A.size[0], bh / A.size[1]), ox = bx + (bw - A.size[0] * k) / 2, oy = by + (bh - A.size[1] * k) / 2;
+    const P = ([x, y]) => [ox + x * k, oy + y * k];
+    if (!cvs) { cvs = document.createElement("canvas"); cvs.width = fine.FW; cvs.height = fine.FH; img = cvs.getContext("2d").createImageData(fine.FW, fine.FH); }
+    const key = [g.color("panel"), g.color("red"), g.color("orange"), g.color("brass"), g.color("ink"), g.color("blue")].join();
+    if (cache.key !== key) cache = { key, atr: rgb(g.mix("red", "panel", 0.7)), ven: rgb(g.mix("red", "panel", 0.5)), sys: rgb(g.mix("brass", "panel", 0.1)), on: rgb(g.color("orange")), front: rgb(g.mix("orange", "ink", 0.45)), inj: rgb(g.mix("blue", "panel", 0.3)), dead: rgb(g.mix("purple", "muted", 0.5)) };
+    const d = img.data, FK = fine.kind;
+    for (let q = 0; q < FK.length; q++) {
+      const kd = FK[q], j = q * 4;
+      if (!kd) { d[j + 3] = 0; continue; }
+      let base = kd === 3 || kd === 4 || kd === 6 ? cache.sys : kd === 1 ? cache.atr : cache.ven;
+      const since = t - fine.act[q], on = since >= 0 && since < fine.apd[q];
+      let c = base;
+      if (on) { const f = Math.min(1, 0.55 + 0.45 * Math.exp(-since / 0.05)); c = since < 0.005 ? cache.front : [base[0] + (cache.on[0] - base[0]) * f, base[1] + (cache.on[1] - base[1]) * f, base[2] + (cache.on[2] - base[2]) * f]; }
+      // o.zone(x, y) marks injured (1) and dead (2) muscle.
+      const z = o.zone ? o.zone(((q % fine.FW) + 0.5) / F * A.h, (Math.floor(q / fine.FW) + 0.5) / F * A.h) : 0;
+      if (z) { const zc = z === 2 ? cache.dead : cache.inj, w = z === 2 ? 0.85 : 0.6; c = [c[0] * (1 - w) + zc[0] * w, c[1] * (1 - w) + zc[1] * w, c[2] * (1 - w) + zc[2] * w]; }
+      d[j] = c[0]; d[j + 1] = c[1]; d[j + 2] = c[2]; d[j + 3] = 255;
+    }
+    cvs.getContext("2d").putImageData(img, 0, 0);
+    const ctx = g.ctx; ctx.save(); ctx.imageSmoothingEnabled = true; ctx.drawImage(cvs, ox, oy, A.size[0] * k, A.size[1] * k); ctx.restore();
+    // The fibrous ring between atria and ventricles: the wave can't cross it.
+    g.line(P([12, 58]), P([46, 58]), { stroke: "muted", width: 2, dash: [3, 3] });
+    g.line(P([66, 58]), P([112, 58]), { stroke: "muted", width: 2, dash: [3, 3] });
+    return { P, k, center: [66, 96] };
+  }
+  return { draw };
+})();
+</script>
+
+<figure class="demo" id="spread" aria-label="A frontal section of the heart drawn as a grid of tissue. An orange wave of activation starts at the sinus node, spreads across both atria, pauses at the AV node, runs down the His bundle and Purkinje fibers, and sweeps through the ventricles. A slider moves through time."></figure>
+<script>
+{
+  const NAMES = [["sinus node", [28, 24], "orange"], ["Bachmann's bundle", [60, 18], "brass"], ["AV node", [50, 55], "brass"], ["His bundle", [61, 66], "brass"], ["Purkinje fibers", [86, 132], "brass"], ["right atrium", [30, 44], "muted"], ["left atrium", [92, 38], "muted"], ["right ventricle", [36, 96], "muted"], ["left ventricle", [88, 92], "muted"]];
+  const stage = t => { const A = HEART.activation(); return t < 0.1 ? "the wave spreads across the atria" : t < A.firstV - 0.01 ? "the wave is held in the AV node" : t < A.firstV ? "the wave runs down the His bundle" : t < A.lastV ? "the ventricles are activated" : t < 0.45 ? "the ventricles hold their charge (the plateau)" : "the ventricles recover"; };
+  demo("spread", {
+    aspect: w => (w < 560 ? 0.85 : 1.35),
+    controls: [{ key: "t", label: "Time since the sinus node fired", min: 0, max: 0.45, step: 0.001, value: 0.06, unit: " s", color: "orange" }],
+    presets: [{ label: "Atria", set: { t: 0.06 } }, { label: "AV pause", set: { t: 0.12 } }, { label: "Ventricles", set: { t: 0.19 } }, { label: "All charged", set: { t: 0.3 } }],
+    caption: "A two-dimensional model of activation on a frontal section of the heart, slowed ten times. Its conduction speeds are tuned to give typical timings: the atria in 0.1 s, a pause of about 0.09 s in the AV node, and the ventricles in about 0.1 s. A real heart's wave is a curved sheet in three dimensions.",
+    status: (s, v) => stage(v.t),
+    step(dt, s, v, fig) { fig.set("t", (v.t + dt / 10) % 0.45); },
+    draw(g, s, v) {
+      const M = HEARTMAP.draw(g, [0, 0, g.w, g.h], v.t);
+      g.labels(NAMES.map(([text, at, color]) => ({ at: M.P(at), text, color, r: 2, size: color === "muted" ? 11 : 12 })));
+      g.circle(M.P([28, 24]), 5, { stroke: "orange", width: 2 });
+    },
+  });
+}
+</script>
+
+<p>The wave crosses both atria in about a tenth of a second<span class="sidenote">A fast band, Bachmann's bundle, carries it across to the left atrium.</span>. Then it hits a ring of fibrous tissue that doesn't conduct at all. The only way through is the <span class="c-brass">AV node</span>, which is deliberately slow, about 5 centimeters a second <a class="cite" href="#ref-guyton"></a>. The wave waits there for <button class="set" data-set="t=0.12">nearly a tenth of a second</button> while the atria finish emptying.</p>
+
+<p>Past the node it runs fast down the His bundle in the septum and through the <span class="c-brass">Purkinje fibers</span> lining both ventricles, at 2 to 4 meters a second, so the ventricles light from the inside of the tip and the wave crawls outward through the wall. In isolated human hearts the inner left ventricle lit at several spots within milliseconds, and the base near the valves came last <a class="cite" href="#ref-durrer"></a>. That order squeezes blood up toward the exits, like toothpaste from the bottom of the tube.</p>
+
+<h2>Reading the wave from the skin</h2>
+
+<p>An ECG picks up this wave from electrodes on the arms and legs. At any instant, the wavefront between fired cells and resting ones carries current, like a battery. Add up every little battery and you get one arrow, the <span class="c-orange">heart vector</span>, which swings as the wave moves; a pair of electrodes reads how much it points along the line between them. Move through the beat, <span class="scrub" data-key="t"></span>, and watch it trace lead II, right arm to left leg:</p>
+
+<figure class="demo" id="vector" aria-label="The activation map of the heart with an orange arrow, the heart vector, at its center. The arrow's shadow on the lead II line sets the height of an ECG trace being drawn beside it. A slider moves through the beat."></figure>
+<script>
+{
+  const ANGLE = 60;
+  demo("vector", {
+    aspect: w => (w < 560 ? 0.75 : 1.75),
+    controls: [{ key: "t", label: "Time since the sinus node fired", min: 0, max: 0.6, step: 0.001, value: 0.205, unit: " s", color: "orange" }],
+    presets: [{ label: "P wave", set: { t: 0.04 } }, { label: "QRS", set: { t: 0.205 } }, { label: "ST segment", set: { t: 0.3 } }, { label: "T wave", set: { t: 0.44 } }],
+    caption: "The heart vector computed from the model: the sum, over the whole section, of the voltage difference between neighboring cells. Lead II reads its component along the line from the right arm to the left leg, 60 degrees below horizontal. Arrow lengths are drawn larger during the small P and T waves.",
+    status: (s, v) => { const A = HEART.activation(), [x, y] = A.vecAt(v.t); const a = (Math.cos(ANGLE * Math.PI / 180) * x + Math.sin(ANGLE * Math.PI / 180) * y); return `lead II ${a.toFixed(2)} mV`; },
+    step(dt, s, v, fig) { fig.set("t", (v.t + dt / 10) % 0.6); },
+    draw(g, s, v) {
+      const A = HEART.activation(), wide = g.w >= 560;
+      const boxM = wide ? [0, 0, g.w * 0.42, g.h] : [0, 0, g.w, g.h * 0.55];
+      const boxE = wide ? [g.w * 0.45, 10, g.w * 0.55 - 4, g.h - 20] : [0, g.h * 0.58, g.w, g.h * 0.42 - 6];
+      const M = HEARTMAP.draw(g, boxM, v.t);
+      const c = M.P(M.center), [vx, vy] = A.vecAt(v.t), mag = Math.hypot(vx, vy);
+      const boost = mag < 0.3 ? 3 : 1, sc = Math.min(boxM[2], boxM[3]) * 0.28 * boost;
+      const ua = [Math.cos(ANGLE * Math.PI / 180), Math.sin(ANGLE * Math.PI / 180)];
+      const L = Math.min(boxM[2], boxM[3]) * 0.46;
+      g.line([c[0] - ua[0] * L, c[1] - ua[1] * L], [c[0] + ua[0] * L, c[1] + ua[1] * L], { stroke: "muted", width: 1.2, dash: [5, 4] });
+      g.label("lead II +", [c[0] + ua[0] * L, c[1] + ua[1] * L + 4], { align: "left", baseline: "top", color: "muted" });
+      if (mag > 0.004) {
+        const tip = [c[0] + vx * sc, c[1] + vy * sc], proj = vx * ua[0] + vy * ua[1], foot = [c[0] + ua[0] * proj * sc, c[1] + ua[1] * proj * sc];
+        g.line(tip, foot, { stroke: "orange", width: 1, dash: [3, 3] });
+        g.line(c, foot, { stroke: g.mix("orange", "ink", 0.3), width: 5, alpha: 0.6 });
+        g.arrow(c, tip, { stroke: "orange", width: 3.5, head: 11 });
+      }
+      g.circle(c, 3.5, { fill: "ink" });
+      const P = g.graph({ box: boxE, x: [0, 0.6], y: [-0.5, 1.3], axes: "frame", xTicks: 0.1, yTicks: 0.5, xLabel: "time (s)", yLabel: "lead II (mV)" });
+      const L2 = A.lead(ANGLE);
+      P.series(A.times.map((t, i) => [t, L2[i]]), { color: g.rgba("orange", 0.25), width: 1.5 });
+      P.series(A.times.filter(t => t <= v.t).map((t, i) => [t, L2[i]]), { color: "orange", width: 2.5 });
+      P.marker(v.t, L2[Math.min(L2.length - 1, Math.round(v.t / 0.002))], { color: "orange" });
+    },
+  });
+}
+</script>
+
+<p>The small first bump, the <em>P wave</em>, is the atria. The flat stretch is the wave <button class="set" data-set="t=0.12">held in the AV node</button>, too few cells to register. The tall <em>QRS complex</em> is the ventricles, the arrow pointing down and left toward the thick left ventricle. During the <button class="set" data-set="t=0.3">plateau</button> every cell is charged, there is no boundary, and the trace sits flat: the ST segment. Remember that flat line; it is where a heart attack shows itself.</p>
+
+<p>Then the <span class="c-orange">T wave</span>, as the ventricles recover. It points the same way as the QRS because the cells activated last recover first: recovery runs back the other way, and two reversals cancel.</p>
+
+<p>A standard ECG looks at the arrow from twelve directions, six of them in this section's plane. Choose one, <span class="scrub" data-key="ang"></span>:</p>
+
+<figure class="demo" id="leads" aria-label="A wheel of the six limb lead directions around the loops traced by the heart vector during the P wave, QRS, and T wave, beside the ECG seen from the chosen direction. A knob turns the viewing direction."></figure>
+<script>
+{
+  const LEADS = [["I", 0], ["II", 60], ["III", 120], ["aVF", 90], ["aVL", -30], ["aVR", -150]];
+  demo("leads", {
+    aspect: w => (w < 560 ? 0.8 : 1.75),
+    controls: [{ key: "ang", label: "Lead direction", type: "knob", min: -180, max: 180, step: 1, value: 60, unit: "°", wrap: true, color: "orange" }],
+    presets: LEADS.map(([name, a]) => ({ label: name, set: { ang: a } })),
+    caption: "The heart vector's loops from the model, seen in the frontal plane (left), and the trace a lead pointing in the chosen direction records (right). Lead I looks from the left arm, aVF from the feet, aVR from the right shoulder. Real limb leads are only approximately these clean projections.",
+    status: (s, v) => { const n = LEADS.find(([, a]) => a === v.ang); return n ? `lead ${n[0]}, ${v.ang}°` : `${v.ang}°`; },
+    draw(g, s, v) {
+      const A = HEART.activation(), wide = g.w >= 560;
+      const boxW = wide ? [0, 0, g.w * 0.42, g.h] : [0, 0, g.w, g.h * 0.52];
+      const boxE = wide ? [g.w * 0.45, 10, g.w * 0.55 - 4, g.h - 20] : [0, g.h * 0.55, g.w, g.h * 0.45 - 6];
+      const c = [boxW[0] + boxW[2] / 2, boxW[1] + boxW[3] / 2], R = Math.min(boxW[2], boxW[3]) * 0.4;
+      g.circle(c, R, { stroke: "faint", width: 1 });
+      for (const [name, a] of LEADS) {
+        const u = [Math.cos(a * Math.PI / 180), Math.sin(a * Math.PI / 180)];
+        g.line([c[0] - u[0] * R, c[1] - u[1] * R], [c[0] + u[0] * R, c[1] + u[1] * R], { stroke: "grid", width: 1 });
+        g.text(name, [c[0] + u[0] * (R + 13), c[1] + u[1] * (R + 13)], { size: 11.5, color: "muted", align: "center", baseline: "middle" });
+      }
+      const u = [Math.cos(v.ang * Math.PI / 180), Math.sin(v.ang * Math.PI / 180)];
+      g.arrow([c[0] - u[0] * R, c[1] - u[1] * R], [c[0] + u[0] * R, c[1] + u[1] * R], { stroke: "ink", width: 2, head: 10 });
+      // The loops: QRS large; P and T scaled up 3 times so they show.
+      const loop = (t0, t1, k, color, w) => { const pts = []; for (let t = t0; t <= t1; t += 0.002) { const [x, y] = A.vecAt(t); pts.push([c[0] + x * k, c[1] + y * k]); } g.path(pts, { stroke: color, width: w }); };
+      const k = R * 0.75;
+      loop(0, 0.11, k * 3, g.rgba("orange", 0.55), 1.5);
+      loop(A.firstV - 0.005, A.lastV + 0.01, k, "orange", 2.5);
+      loop(0.3, 0.56, k * 3, g.mix("orange", "red", 0.4), 2);
+      g.label("QRS", [c[0] + R * 0.55, c[1] + R * 0.62], { color: "orange" });
+      g.label("T ×3", [c[0] + R * 0.95, c[1] + R * 0.15], { color: g.mix("orange", "red", 0.4) });
+      const P = g.graph({ box: boxE, x: [0, 0.6], y: [-1.3, 1.3], axes: "frame", xTicks: 0.1, yTicks: 0.5, xLabel: "time (s)", yLabel: "mV" });
+      const L = A.lead(v.ang);
+      P.series(A.times.map((t, i) => [t, L[i]]), { color: "orange", width: 2.5 });
+    },
+  });
+}
+</script>
+
+<p>From the left leg's side, <button class="set" data-set="ang=60">lead II</button>, the QRS is tall. From the <button class="set" data-set="ang=-150">right shoulder, aVR</button>, everything is upside down. Read together, the leads tell which way the arrow swings, which is how an ECG can say roughly where a heart attack is happening.</p>
+
+<h2>Keeping up with a sprint</h2>
+
+<p>A fit young adult running flat out needs three or four times the resting 5 liters a minute. Every lever pulls at once: adrenaline speeds the sinus node and strengthens the squeeze, working leg muscles pump blood back so the heart fills harder, and the muscles' arterioles open wide. Push the effort, <span class="scrub" data-key="e"></span>:</p>
+
+<figure class="demo" id="exercise" aria-label="The left ventricle's pressure-volume loop at rest (faint) and at the chosen effort, beside bars for heart rate, stroke volume, and cardiac output. A slider sets the effort from rest to a sprint."></figure>
+<script>
+{
+  const rest = HEART.cycle(HEART.exercise(0));
+  demo("exercise", {
+    aspect: w => (w < 560 ? 0.85 : 1.75),
+    controls: [{ key: "e", label: "Effort", min: 0, max: 1, step: 0.01, value: 0.5, format: x => `${Math.round(x * 100)}%`, color: "red" }],
+    presets: [{ label: "Rest", set: { e: 0 } }, { label: "Walk", set: { e: 0.2 } }, { label: "Jog", set: { e: 0.5 } }, { label: "Run", set: { e: 0.75 } }, { label: "Sprint", set: { e: 1 } }],
+    caption: "The page's heart model with the changes exercise brings, scaled together from rest to a maximal effort for an untrained young adult: heart rate from 70 to 185 per minute, a stronger squeeze, higher filling pressure, and wider arterioles. The faint loop is the resting one.",
+    status: (s, v) => { const C = HEART.cycle(HEART.exercise(v.e)); return `${C.co.toFixed(1)} L/min · ${C.sbp.toFixed(0)}/${C.dbp.toFixed(0)} mmHg`; },
+    draw(g, s, v) {
+      const C = HEART.cycle(HEART.exercise(v.e)), wide = g.w >= 560;
+      const boxL = wide ? [0, 6, g.w * 0.5, g.h - 12] : [0, 4, g.w, g.h * 0.56];
+      const boxB = wide ? [g.w * 0.56, 14, g.w * 0.44 - 8, g.h - 28] : [0, g.h * 0.62, g.w, g.h * 0.38 - 6];
+      const P = g.graph({ box: boxL, x: [0, 160], y: [0, 180], axes: "frame", xTicks: 40, yTicks: 40, xLabel: "volume (mL)", yLabel: "pressure (mmHg)" });
+      P.polyline(rest.rec.map(r => [r.v, r.plv]), { close: true, color: g.rgba("muted", 0.5), width: 1.5 });
+      P.polyline(C.rec.map(r => [r.v, r.plv]), { close: true, color: "red", width: 3, fill: g.rgba("red", 0.1) });
+      const bars = [["heart rate", C.p.hr, 200, "/min", "orange"], ["stroke volume", C.sv, 120, "mL", "green"], ["output", C.co, 20, "L/min", "red"]];
+      const [bx, by, bw, bh] = boxB, rowH = bh / 3;
+      bars.forEach(([name, val, max, unit, color], i) => {
+        const y = by + i * rowH;
+        g.text(name, [bx, y + 12], { size: 12.5, color: "muted" });
+        g.meter(bx, y + 22, bw, Math.min(16, rowH * 0.3), val / max, { color });
+        const r0 = [rest.p.hr, rest.sv, rest.co][i];
+        const xr = bx + bw * (r0 / max);
+        g.line([xr, y + 18], [xr, y + 42], { stroke: "ink", width: 1.5 });
+        g.text(`${val.toFixed(i === 2 ? 1 : 0)} ${unit}`, [bx + bw, y + 12], { size: 12.5, align: "right", weight: 600 });
+      });
+    },
+  });
+}
+</script>
+
+<p>Most of the gain comes from the rate, which nearly triples, while the stroke volume rises by a third: 5 to almost 18 liters a minute in this model. Endurance athletes go much further, mostly with bigger ventricles<span class="sidenote">Swedish champions in a classic study averaged 36 liters a minute at peak, with stroke volumes near 190 mL <a class="cite" href="#ref-ekblom"></a>.</span>, which is also why their resting rate is low.</p>
+
+<h2>The heart's own blood supply</h2>
+
+<p>The heart is half a percent of body weight but uses about a tenth of its oxygen at rest, and it already pulls about three quarters of the oxygen out of the blood passing through it, so the only way to get more is more flow <a class="cite" href="#ref-duncker"></a>. The wall is far too thick to be fed from the blood inside. It has its own arteries, the <dfn data-def="The arteries that supply the heart muscle itself. They branch from the aorta just above the aortic valve and run over the heart's surface.">coronary arteries</dfn>, which leave the aorta just above the aortic valve and run over its surface like a crown:</p>
+
+<figure class="demo" id="coronary" aria-label="The heart in 3D with its coronary arteries highlighted: the right coronary artery, the left anterior descending artery, and the circumflex artery. Point at a vessel to name it; presets turn the heart to show the front and the back."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const C = HEART.cycle();
+  let view = null;
+  const ART = { "right coronary artery": "blue", "left anterior descending artery": "red", "circumflex artery": "orange", "coronary branches": "red" };
+  let cxAt = null;
+  demo("coronary", {
+    aspect: w => (w < 560 ? 0.95 : 1.45),
+    orbit: { yaw: -0.2, pitch: 0.2, zoom: 1.3 },
+    state: () => ({ hover: null }),
+    controls: [{ key: "dim", label: "See through the muscle", type: "toggle", value: false, color: "red" }],
+    caption: "The coronary arteries on the model heart. The left main artery splits almost at once into the left anterior descending artery, down the front, and the circumflex, round the left side; the right coronary artery runs round the right side in the groove between atrium and ventricle. Real branching patterns vary a lot from person to person.",
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? HEART3D.nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    status: s => (s.hover ? `${s.hover}: ${HEART3D.get().notes[s.hover] ?? ""}` : "Point at a vessel to name it."),
+    draw(g, s, v) {
+      const lit = Object.entries(ART).filter(([n]) => g.lit(n) || s.hover === n || (n === "left anterior descending artery" && s.hover === "coronary branches")).map(([n, c]) => [n, c]);
+      const H = HEART3D.use(scene, { cut: false, phase: C.phase(0.6), lit });
+      H.traverse(n => { if (n.mesh && !Object.keys(ART).includes(HEART3D.nameOf(n)) && HEART3D.nameOf(n) !== "coronary veins") n.opacity = v.dim ? 0.55 : 1; });
+      view = g.render3d(scene, { ...s.view, fov: 26 });
+      H.traverse(n => { if (n.mesh) n.opacity = 1; });
+      const want = { "right coronary artery": "right coronary artery", "left anterior descending": "left anterior descending artery" };
+      const items = H.labels().filter(l => l.text in want && HEART3D.seen(view, l)).map(l => ({ at: view.project(l.at), text: l.text, color: ART[want[l.text]] }));
+      // An anchor on the circumflex itself: its mesh vertex nearest the left groove.
+      if (!cxAt) { let best = Infinity; H.parts["circumflex artery"].traverse(n => { const m = n.mesh; if (!m || !m.positions || cxAt) return; for (let i = 0; i < m.positions.length; i += 3) { const d = Math.hypot(m.positions[i] - 36, m.positions[i + 1] - 2, m.positions[i + 2] - 10); if (d < best) { best = d; cxAt = [n, [m.positions[i], m.positions[i + 1], m.positions[i + 2]]]; } } }); }
+      const cx = { at: cxAt ? cxAt[0].toWorld(cxAt[1]) : H.parts["circumflex artery"].toWorld([30, 2, 14]), node: H.parts["circumflex artery"] };
+      if (HEART3D.seen(view, cx)) items.push({ at: view.project(cx.at), text: "circumflex", color: "orange" });
+      g.callouts(items);
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-red" data-part="left anterior descending artery">left anterior descending artery</span> feeds the front of the left ventricle and most of the septum, more muscle than any other. The <span class="c-orange" data-part="circumflex artery">circumflex</span> wraps round the left side, and the <span class="c-blue" data-part="right coronary artery">right coronary artery</span> round the right and the back. Each is 3 to 4 mm wide, and together they carry about 225 mL a minute at rest, 4 to 5% of the output <a class="cite" href="#ref-guyton"></a>.</p>
+
+<p>There is a catch. When the ventricle squeezes, the pressure inside its wall is as high as in the arteries feeding it, highest in the inner layers, and the squeeze pinches the branches shut. So the left ventricle is fed mainly between beats. Speed up the heart, <span class="scrub" data-key="hr"></span>:</p>
+
+<figure class="demo" id="coronaryflow" aria-label="Aortic and left ventricular pressure over two beats, and below them the flow in the left coronary artery, which drops during each squeeze and surges between beats. A slider sets the heart rate; the time between beats shrinks faster than the beat."></figure>
+<script>
+{
+  // Flow into the left ventricle's wall: driven by aortic pressure, opposed by the pressure
+  // in the squeezing wall (taken as 0.6 of the ventricle's) and a zero-flow pressure of 15 mmHg.
+  const K = 0.6, PZF = 15, RC = 14.45;
+  const flow = r => Math.max(0, r.pao - K * r.plv - PZF) / RC;
+  demo("coronaryflow", {
+    aspect: w => (w < 560 ? 0.85 : 1.6),
+    controls: [{ key: "hr", label: "Heart rate", min: 50, max: 180, step: 1, value: 75, unit: " /min", color: "orange" }],
+    presets: [{ label: "Resting", set: { hr: 75 } }, { label: "Brisk walk", set: { hr: 110 } }, { label: "Hard run", set: { hr: 170 } }],
+    caption: "A simple model of flow into the left ventricle's wall, driven by the aortic pressure and squeezed by the pressure in the contracting wall, using the page's heart model at each rate. Real coronary flow also adjusts its resistance to demand, which this figure holds fixed.",
+    status: (s, v) => { const C = HEART.cycle({ hr: v.hr }), E = C.events; let a = 0, b = 0; for (const r of C.rec) { const f = flow(r); b += f; if (r.t >= E.mvc && r.t < E.avc) a += f; } return `between beats: ${Math.round((1 - (E.avc - E.mvc) / C.T) * 100)}% of the time, ${Math.round((1 - a / b) * 100)}% of the flow`; },
+    draw(g, s, v) {
+      const C = HEART.cycle({ hr: v.hr }), E = C.events, span = 2.4;
+      const reps = Math.ceil(span / C.T);
+      const series = f => { const out = []; for (let k = 0; k < reps; k++) for (const r of C.rec) { const t = r.t + k * C.T; if (t <= span) out.push([t, f(r)]); } return out; };
+      const top = g.graph({ box: [0, 4, g.w, g.h * 0.48], x: [0, span], y: [0, 160], axes: "frame", xTicks: false, yTicks: 50, yLabel: "pressure (mmHg)" });
+      const bot = g.graph({ box: [0, g.h * 0.53, g.w, g.h * 0.47 - 4], x: [0, span], y: [0, 9], axes: "frame", xTicks: 0.4, yTicks: 3, xLabel: "time (s)", yLabel: "coronary flow (mL/s)" });
+      for (let k = 0; k < reps; k++) {
+        const a = k * C.T + E.mvc, b = k * C.T + E.avc;
+        for (const P of [top, bot]) P.clip(() => g.rect(P.xpx(a), P.box[1], P.xpx(b) - P.xpx(a), P.box[3], { fill: g.rgba("red", 0.08) }));
+      }
+      top.series(series(r => r.pao), { color: "brass", width: 2.5 });
+      top.series(series(r => r.plv), { color: "red", width: 2 });
+      top.label("aorta", [0.05 + E.mvo, C.at(E.mvo, "pao") + 10], { color: "brass" });
+      top.label("ventricle", [E.avo + 0.02, 140], { color: "red" });
+      bot.series(series(flow), { color: "green", width: 2.5, fill: g.rgba("green", 0.15) });
+      bot.label("squeeze", [(E.mvc + E.avc) / 2, 8.2], { color: "red", align: "center" });
+    },
+  });
+}
+</script>
+
+<p>At rest the heart is relaxed nearly 60% of each beat, and about three quarters of the flow arrives then. At <button class="set" data-set="hr=170">170 beats a minute</button> each squeeze is a third shorter, but the gaps shrink to under a third of their resting length. The heart works hardest exactly when its feeding window is shortest. A healthy artery copes by widening its small branches, raising flow four to five times <a class="cite" href="#ref-duncker"></a>. A narrowed one can't.</p>
+
+<h2>How an artery clogs</h2>
+
+<p><dfn data-def="The slow build-up of fatty, inflamed plaque inside the wall of an artery.">Atherosclerosis</dfn> starts decades before anyone notices. Where an artery's lining is irritated, cholesterol-carrying particles slip into the wall and get stuck. White blood cells move in to clear them, gorge on the fat, and die there, and the debris collects into a soft <span class="c-orange">core</span> under a <span class="c-brass">fibrous cap</span> of scar tissue <a class="cite" href="#ref-libby"></a>. Grow a plaque, <span class="scrub" data-key="b"></span> of the wall's area, in a 3.5 mm coronary artery:</p>
+
+<script>
+// A coronary artery with a plaque, and the flow through a narrowing. Lengths in mm.
+window.ARTERY = (() => {
+  const R0 = 1.75, INT = 0.12, MED = 0.25, ADV = 0.4, R0i = R0 + INT, LEN = 12;
+  // At axial position x, for a plaque burden b at the lesion's center (plaque area over the
+  // area inside the elastic lamina): the vessel first grows outward to keep its channel
+  // (Glagov), up to a burden of about 40%; past that the channel shrinks.
+  function at(b0, x, open = 0) {
+    const b = b0 * Math.exp(-(x * x) / (2 * 3.6 * 3.6));
+    const Ri = R0i / Math.sqrt(1 - Math.min(b, 0.4)), yi = Ri - R0i;
+    let rl = R0 * Math.sqrt(Math.min(1, (1 - b) / 0.6));
+    rl = rl + (R0 * 0.97 - rl) * open * Math.exp(-(x * x) / (2 * 6 * 6)); // a stent pushes the channel open
+    const yl = -R0 + rl;
+    return { b, Ri, yi, rl, yl, top: yl + rl, iel: yi + Ri };
+  }
+  // A closed solid between two circles swept along x (each circle: center height c, radius r),
+  // kept on the back half (z <= 0) or whole, with flat faces where it is cut.
+  function annulus(inner, outer, { half = true, nx = 48, nf = 40, x0 = -LEN, x1 = LEN } = {}) {
+    const pos = [], idx = [], f0 = half ? Math.PI : 0, f1 = 2 * Math.PI, nfs = nf;
+    const O = [], I = [];
+    for (let i = 0; i <= nx; i++) {
+      const x = x0 + ((x1 - x0) * i) / nx, ci = inner(x), co = outer(x), ro = [], ri = [];
+      for (let j = 0; j <= nfs; j++) {
+        if (!half && j === nfs) { ro.push(ro[0]); ri.push(ri[0]); continue; }
+        const f = f0 + ((f1 - f0) * j) / nfs;
+        ro.push(pos.push([x, co.c + co.r * Math.cos(f), co.r * Math.sin(f)]) - 1);
+        ri.push(pos.push([x, ci.c + ci.r * Math.cos(f), ci.r * Math.sin(f)]) - 1);
+      }
+      O.push(ro); I.push(ri);
+    }
+    const tri = (a, b, c) => idx.push(a, b, c);
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nfs; j++) {
+      tri(O[i][j], O[i][j + 1], O[i + 1][j]); tri(O[i][j + 1], O[i + 1][j + 1], O[i + 1][j]);
+      tri(I[i][j], I[i + 1][j], I[i][j + 1]); tri(I[i][j + 1], I[i + 1][j], I[i + 1][j + 1]);
+    }
+    for (let j = 0; j < nfs; j++) {
+      tri(O[nx][j], O[nx][j + 1], I[nx][j]); tri(O[nx][j + 1], I[nx][j + 1], I[nx][j]);
+      tri(O[0][j], I[0][j], O[0][j + 1]); tri(O[0][j + 1], I[0][j], I[0][j + 1]);
+    }
+    if (half) for (let i = 0; i < nx; i++) for (const j of [0, nfs]) {
+      if (j === 0) { tri(I[i][j], O[i][j], I[i + 1][j]); tri(I[i + 1][j], O[i][j], O[i + 1][j]); }
+      else { tri(I[i][j], I[i + 1][j], O[i][j]); tri(I[i + 1][j], O[i + 1][j], O[i][j]); }
+    }
+    return orient(pos, idx);
+  }
+  // Flips a closed triangle list if it came out inside out (negative signed volume).
+  function orient(pos, idx) {
+    let vol = 0;
+    for (let k = 0; k < idx.length; k += 3) { const [a, b, c] = [pos[idx[k]], pos[idx[k + 1]], pos[idx[k + 2]]]; vol += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]); }
+    if (vol < 0) for (let k = 0; k < idx.length; k += 3) { const t = idx[k + 1]; idx[k + 1] = idx[k + 2]; idx[k + 2] = t; }
+    return E3.mesh.custom(pos, idx, { crease: 50 });
+  }
+  // Half an ellipsoid (z <= 0) closed by a flat face just in front of the cut plane.
+  function halfEllipsoid(c, [ax, ay, az], n = 28) {
+    const pos = [], idx = [], G = [];
+    for (let i = 0; i <= n; i++) { const th = (Math.PI * i) / n, row = []; for (let j = 0; j <= n; j++) { const f = Math.PI + (Math.PI * j) / n; row.push(pos.push([c[0] + ax * Math.cos(th), c[1] - ay * Math.sin(th) * Math.cos(f), Math.min(0.004, az * Math.sin(th) * Math.sin(f))]) - 1); } G.push(row); }
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { idx.push(G[i][j], G[i + 1][j], G[i][j + 1], G[i][j + 1], G[i + 1][j], G[i + 1][j + 1]); }
+    const mid = pos.push([c[0], c[1], 0.004]) - 1;
+    for (let i = 0; i < n; i++) { idx.push(G[i + 1][0], G[i][0], mid); idx.push(G[i][n], G[i + 1][n], mid); }
+    return orient(pos, idx);
+  }
+  const mat = {
+    plaque: E3.bio.tissue("tissue", { color: "#ecd3b8" }),
+    media: E3.bio.tissue("muscle", { color: "#b4574c" }),
+    adventitia: E3.bio.tissue("tissue", { color: "#e2ad98" }),
+    core: E3.bio.tissue("fat", { color: "#efc24a" }),
+  };
+  // The artery's layers for a burden b (and a stent's opening 0..1): back half by default.
+  const cache = new Map();
+  function meshes(b, open = 0, half = true) {
+    const key = `${b.toFixed(3)}|${open.toFixed(3)}|${half}`;
+    if (cache.has(key)) return cache.get(key);
+    const g = x => at(b, x, open);
+    const lum = x => { const q = g(x); return { c: q.yl, r: q.rl }; }, iel = x => { const q = g(x); return { c: q.yi, r: q.Ri }; };
+    const eel = x => { const q = g(x); return { c: q.yi, r: q.Ri + MED }; }, out = x => { const q = g(x); return { c: q.yi, r: q.Ri + MED + ADV }; };
+    const m = { plaque: annulus(lum, iel, { half }), media: annulus(iel, eel, { half }), adventitia: annulus(eel, out, { half }), core: null };
+    const q = g(0), T = q.iel - q.top;
+    if (b > 0.3 && T > 0.3) {
+      const grow = Math.min(1, (b - 0.3) / 0.35), h = T * 0.5 * grow, cap = Math.max(0.12, T * 0.25 * (1 - 0.6 * open));
+      m.core = halfEllipsoid([0.4, q.top + cap + h / 2, 0], [1.2 + 3.2 * grow, h / 2, Math.min(q.Ri * 0.9, 0.6 + 1.2 * grow)]);
+    }
+    if (cache.size > 40) cache.clear();
+    cache.set(key, m);
+    return m;
+  }
+  // Flow through a narrowing (Gould): pressure lost to friction plus to the jet's turbulence,
+  // with the downstream bed fully opened (maximal flow) or adjusting to hold a resting flow.
+  const MU = 0.0035, RHO = 1060, L = 0.004, KX = 1.2, AN = Math.PI * (R0 / 1000) ** 2, MMHG = 133.322;
+  const dP = (Q, ds) => { const As = Math.PI * ((R0 / 1000) * (1 - ds)) ** 2, q = Q * 1e-6; return ((8 * Math.PI * MU * L) / (As * As) * q + KX * (RHO / 2) * (1 / As - 1 / AN) ** 2 * q * q) / MMHG; };
+  const PAO = 93, PBACK = 15, QREST = 1.2, QMAX = 5.4, RMIN = (PAO - PBACK) / QMAX;
+  const maxFlow = ds => { let lo = 0, hi = 12; for (let i = 0; i < 50; i++) { const Q = (lo + hi) / 2; if (PAO - dP(Q, ds) - PBACK - RMIN * Q > 0) lo = Q; else hi = Q; } return lo; };
+  return { R0, LEN, at, meshes, mat, dP, maxFlow, QREST, QMAX, PAO };
+})();
+</script>
+
+<figure class="demo wide" id="plaque" aria-label="A coronary artery cut in half along its length, in 3D, with a plaque growing in its wall: a yellow fatty core under a pale fibrous cap. A slider sets the plaque's size; an inset shows the cross-section at the plaque's center compared with a normal artery."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const A = ARTERY;
+  const nodes = {};
+  for (const k of ["adventitia", "media", "plaque", "core"]) nodes[k] = scene.add(null, { name: k, material: A.mat[k] });
+  let view = null;
+  const NOTE = { adventitia: "the outer coat of connective tissue", media: "smooth muscle that tightens and relaxes the artery", plaque: "the inner lining, thickened by plaque", core: "a soft core of fat, cholesterol, and dead white cells" };
+  demo("plaque", {
+    aspect: w => (w < 560 ? 0.85 : 1.9),
+    orbit: { yaw: 0.35, pitch: 0.25, zoom: 1.15 },
+    state: () => ({ hover: null }),
+    controls: [{ key: "b", label: "Plaque burden", min: 0, max: 0.92, step: 0.01, value: 0.55, format: x => `${Math.round(x * 100)}%`, color: "orange", marks: [{ value: 0.4, label: "40%" }] }],
+    presets: [{ label: "Age 20", set: { b: 0.05 } }, { label: "Age 45", set: { b: 0.35 } }, { label: "Age 60", set: { b: 0.65 } }, { label: "Severe", set: { b: 0.88 } }],
+    caption: "A 24 mm stretch of a 3.5 mm coronary artery, cut along its length, with a plaque on one side. The artery grows outward to keep its channel open until the plaque takes up about 40% of the area inside the wall, as Glagov and colleagues found in human coronary arteries; after that the channel narrows. The ages are only illustrations: plaques grow at very different rates in different people.",
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? hit.node.name : null; if (name === s.hover) return false; s.hover = name; return true; },
+    status: (s, v) => { const q = A.at(v.b, 0); return s.hover ? `${s.hover}: ${NOTE[s.hover]}` : `channel ${Math.round((q.rl / A.R0) ** 2 * 100)}% of normal area · narrowed ${Math.round((1 - q.rl / A.R0) * 100)}% in diameter`; },
+    draw(g, s, v) {
+      const m = A.meshes(v.b);
+      for (const k in nodes) { nodes[k].mesh = m[k]; nodes[k].visible = !!m[k]; nodes[k].highlight = s.hover === k || (k === "core" && g.lit("core")) || (k === "plaque" && g.lit("cap")) ? "orange" : false; }
+      const wide = g.w >= 560, inset = wide ? Math.min(g.h * 0.42, 150) : Math.min(g.w * 0.36, 120);
+      view = g.render3d(scene, { ...s.view, fov: 24 });
+      // Inset: the cross-section at the plaque's center against a normal artery.
+      const q = A.at(v.b, 0), cx = g.w - inset / 2 - 10, cy = inset / 2 + 10, k = (inset * 0.44) / (A.R0 + 0.77 + 0.6);
+      const C = (y, r, o) => g.circle([cx, cy - (y - 0.3) * k], r * k, o);
+      g.rect(cx - inset / 2, cy - inset / 2, inset, inset, { fill: g.rgba("panel", 0.85), stroke: "faint", r: 8 });
+      C(q.yi, q.Ri + 0.65, { fill: g.mix("red", "panel", 0.65) });
+      C(q.yi, q.Ri + 0.25, { fill: g.mix("red", "panel", 0.3) });
+      C(q.yi, q.Ri, { fill: g.mix("brass", "panel", 0.55) });
+      if (m.core) { const T = q.iel - q.top, h = T * 0.5 * Math.min(1, (v.b - 0.3) / 0.35); g.ctx.save(); g.ctx.beginPath(); g.ctx.ellipse(cx, cy - (q.top + Math.max(0.12, T * 0.25) + h / 2 - 0.3) * k, Math.min(q.Ri * 0.9, 0.6 + 1.2 * Math.min(1, (v.b - 0.3) / 0.35)) * k, (h / 2) * k, 0, 0, TAU); g.ctx.fillStyle = g.color("orange"); g.ctx.globalAlpha = 0.85; g.ctx.fill(); g.ctx.restore(); }
+      C(q.yl, q.rl, { fill: g.rgba("red", 0.85) });
+      C(0, A.R0 + 0.77, { stroke: "muted", width: 1, dash: [3, 3] });
+      g.text("cross-section", [cx, cy + inset / 2 - 8], { size: 11, align: "center", color: "muted" });
+      g.callouts([
+        { at: view.project([7, -A.R0 - 0.3, 0.05]), text: "media (muscle)", color: "red" },
+        ...(m.core ? [{ at: view.project([0.4, q.top + Math.max(0.12, (q.iel - q.top) * 0.25) + 0.3, 0.05]), text: "fatty core", color: "orange" }, { at: view.project([-1.5, q.top + 0.05, 0.05]), text: "fibrous cap", color: "brass" }] : []),
+        { at: view.project([-8, 0, -0.5]), text: "channel (lumen)", color: "muted" },
+      ], { split: g.w * 0.5 });
+    },
+  });
+}
+</script>
+
+<p>For a long time nothing seems to happen. The wall grows outward around the plaque, so the channel keeps its size and an angiogram, which shows only the channel, looks normal. Glagov's group found the channel holds until the plaque fills about 40% of the area inside the wall <a class="cite" href="#ref-glagov"></a>. <button class="set" data-set="b=0.65">Past that</button>, the plaque takes the channel itself.</p>
+
+<p>Flow through a tight spot loses pressure twice: to friction in the narrow channel, and to the turbulent jet beyond it. At rest the small vessels downstream open wider to make up for it. Narrow the artery, <span class="scrub" data-key="ds"></span>, and compare the flow at rest with the most it can deliver:</p>
+
+<figure class="demo" id="stenosis" aria-label="A narrowed artery drawn above a graph of flow against narrowing. Resting flow stays level until the artery is about 80% narrowed; the maximum flow the artery can deliver during exercise starts falling at about 50%. A slider sets the narrowing."></figure>
+<script>
+{
+  const A = ARTERY;
+  const curve = f => { const pts = []; for (let d = 0; d <= 0.95; d += 0.005) pts.push([d * 100, f(d)]); return pts; };
+  const maxC = curve(d => A.maxFlow(d) * 60), restC = curve(d => Math.min(A.QREST, A.maxFlow(d)) * 60);
+  demo("stenosis", {
+    aspect: w => (w < 560 ? 0.8 : 1.45),
+    state: () => ({ t: 0, vol: 0 }),
+    controls: [{ key: "ds", label: "Narrowing (diameter)", min: 0, max: 0.95, step: 0.01, value: 0.6, format: x => `${Math.round(x * 100)}%`, color: "orange", marks: [{ value: 0.5, label: "50%" }, { value: 0.7, label: "70%" }] }],
+    presets: [{ label: "None", set: { ds: 0 } }, { label: "50%", set: { ds: 0.5 } }, { label: "70%", set: { ds: 0.7 } }, { label: "90%", set: { ds: 0.9 } }],
+    caption: "Flow down a 3.5 mm coronary artery with a 4 mm long narrowing, from Gould's pressure-loss equation, with an aortic pressure of 93 mmHg. At rest the vessels downstream adjust to hold 72 mL/min for as long as they can; at maximal effort they are fully open and the flow is whatever the narrowing allows.",
+    status: (s, v) => { const mx = A.maxFlow(v.ds), rest = Math.min(A.QREST, mx); return `rest ${Math.round(rest * 60)} mL/min · maximum ${Math.round(mx * 60)} mL/min · reserve ${(mx / A.QREST).toFixed(1)}×`; },
+    // The resting flow through the tube pulses like coronary flow, strongest between beats
+    // (the waveform from the coronary flow figure, normalized to its mean).
+    step(dt, s, v) {
+      s.t += dt;
+      const C = HEART.cycle(), f = r => Math.max(0, r.pao - 0.6 * r.plv - 15);
+      const mean = C.rec.reduce((a, r) => a + f(r), 0) / C.rec.length, t = ((s.t / 2.5) % 1) * C.T;
+      const r = { pao: C.at(t, "pao"), plv: C.at(t, "plv") };
+      s.vol += 0.1 * (Math.min(A.QREST, A.maxFlow(v.ds)) / A.QREST) * (f(r) / mean) * dt;
+    },
+    draw(g, s, v) {
+      const tubeH = Math.min(70, g.h * 0.2), y0 = 8;
+      // The narrowed tube, with blood moving through faster at the throat.
+      const L = g.w - 20, cx = 10, mid = y0 + tubeH / 2, r = tubeH * 0.38, rs = r * (1 - v.ds);
+      const rad = x => { const u = (x - cx) / L - 0.5; return r - (r - rs) * Math.exp(-(u * u) / (2 * 0.06 * 0.06)); };
+      const top = [], bot = [];
+      for (let i = 0; i <= 60; i++) { const x = cx + (L * i) / 60; top.push([x, mid - rad(x)]); bot.push([x, mid + rad(x)]); }
+      g.path([...top, ...bot.slice().reverse()], { fill: g.rgba("red", 0.25), close: true });
+      g.path(top, { stroke: "brass", width: 3 }); g.path(bot, { stroke: "brass", width: 3 });
+      // Dots placed by the volume that has passed (continuity): where the tube is narrow the
+      // same volume takes less length, so the dots race through the throat.
+      const N = 120, cum = [0];
+      for (let i = 1; i <= N; i++) cum.push(cum[i - 1] + rad(cx + (L * (i - 0.5)) / N) / r);
+      for (let k = 0; k < 30; k++) {
+        const c = ((k / 30 + s.vol) % 1) * cum[N];
+        let lo = 0, hi = N; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= c) lo = m; else hi = m; }
+        const x = cx + (L * (lo + (c - cum[lo]) / (cum[hi] - cum[lo] || 1))) / N, lane = ((k * 7) % 5 - 2) / 2.5;
+        g.circle([x, mid + lane * rad(x) * 0.75], 2.6, { fill: "red" });
+      }
+      const P = g.graph({ box: [0, y0 + tubeH + 10, g.w, g.h - tubeH - y0 - 14], x: [0, 100], y: [0, 360], axes: "frame", xTicks: 10, yTicks: 60, xLabel: "narrowing of the diameter (%)", yLabel: "flow (mL/min)" });
+      P.series(maxC, { color: "red", width: 2.5 });
+      P.label("maximum, during exercise", [8, maxC[16][1]], { color: "red", dy: -10 });
+      P.series(restC, { color: "blue", width: 2.5 });
+      P.label("at rest", [20, A.QREST * 60], { color: "blue", dy: -10 });
+      P.vline(v.ds * 100, { color: "orange" });
+      P.marker(v.ds * 100, A.maxFlow(v.ds) * 60, { color: "red" });
+      P.marker(v.ds * 100, Math.min(A.QREST, A.maxFlow(v.ds)) * 60, { color: "blue" });
+    },
+  });
+}
+</script>
+
+<p>Resting flow holds until the artery is about 80% narrowed in this model, but the maximum starts falling at around 50%, and by <button class="set" data-set="ds=0.75">75%</button> there is almost no reserve. Gould found the same pattern in dogs <a class="cite" href="#ref-gould"></a>. This is <em>stable angina</em>: chest pain on exertion, when the muscle asks for more than the artery can bring, fading within minutes of rest. A warning, not yet damage.</p>
+
+<p>Most heart attacks don't come from the tightest narrowing slowly closing. They come from a plaque that breaks. Only the <span class="c-brass" data-part="cap">fibrous cap</span> separates the blood from the <span class="c-orange" data-part="core">fatty core</span>, and inflammation can thin it from beneath; caps that ruptured were mostly under 65 micrometers, thinner than a hair <a class="cite" href="#ref-virmani"></a>. Thin the cap, <span class="scrub" data-key="cap"></span>, and let the pulse pound on it:</p>
+
+<figure class="demo" id="rupture" aria-label="A coronary artery cut along its length with a plaque on its upper wall. When the fibrous cap is thinner than about 65 micrometers it tears at the shoulder, and a dark red clot grows from the tear across the channel until the blood stops. A slider sets the cap's thickness and a switch adds aspirin."></figure>
+<script>
+{
+  const A = ARTERY, B = 0.75, T = 0.8;
+  const hash = k => { const x = Math.sin(k * 91.7 + 13.1) * 43758.5453; return x - Math.floor(x); };
+  const fresh = () => ({ t: 0, torn: null, clot: 0, beats: 0, flow: 1, parts: Array.from({ length: 70 }, (_, k) => [hash(k) * 24 - 12, hash(k + 50) * 2 - 1]) });
+  const flowOf = clot => { const q = A.at(B, 0), ds = 1 - (q.rl / A.R0) * (1 - clot); return Math.min(A.QREST, A.maxFlow(Math.min(0.99, ds))) / A.QREST; };
+  // The open channel at x: from the bottom wall up to the plaque, or to the clot hanging from it.
+  const TX = 3.6;
+  const clotDepth = (x, clot) => { const q = A.at(B, x); return x < -4 || x > 9 ? 0 : q.rl * 2 * clot * Math.exp(-((x - TX + 0.8) ** 2) / (2 * (1 + 2.2 * clot) ** 2)); };
+  const chan = (x, clot) => { const q = A.at(B, x); return [q.yl - q.rl, q.top - clotDepth(x, clot)]; };
+  // Coronary flow pulses, strongest between beats (the waveform from the coronary flow figure).
+  const C = HEART.cycle(), cf = r => Math.max(0, r.pao - 0.6 * r.plv - 15);
+  const cmean = C.rec.reduce((a, r) => a + cf(r), 0) / C.rec.length;
+  const pulse = t => { const u = ((t % T) / T) * C.T; return cf({ pao: C.at(u, "pao"), plv: C.at(u, "plv") }) / cmean; };
+  let P;
+  demo("rupture", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    state: fresh,
+    controls: [
+      { key: "cap", label: "Cap thickness", min: 20, max: 250, step: 1, value: 150, unit: " µm", color: "brass", marks: [{ value: 65, label: "65 µm" }] },
+      { key: "asp", label: "Aspirin", type: "toggle", value: false, color: "blue" },
+    ],
+    presets: [{ label: "Thick cap", set: { cap: 150, asp: false } }, { label: "Thin cap", set: { cap: 45, asp: false } }, { label: "Thin cap, aspirin", set: { cap: 45, asp: true } }],
+    reset: true,
+    caption: "A cartoon of plaque rupture and clotting in a coronary artery with a plaque that fills 75% of its wall, not to scale (the cap is drawn several times thicker than life). Time runs about 240 times faster after the tear. The flow comes from the narrowing model above; the clot's growth rate is illustrative.",
+    change(key, s) { if (key === "cap") Object.assign(s, fresh()); },
+    status: (s, v) => s.torn === null ? (v.cap < 65 ? "the cap is about to tear" : `cap intact · flow ${Math.round(s.flow * 100)}% of normal`) : `${Math.round((s.t - s.torn) * 4)} min after the tear · clot fills ${Math.round(s.clot * 100)}% of the channel · flow ${Math.round(s.flow * 100)}%`,
+    step(dt, s, v) {
+      s.t += dt;
+      const ph = (s.t % T) / T;
+      if (s.torn === null && v.cap < 65 && ph > 0.3 && ph < 0.4 && s.t > 1.2) s.torn = s.t;
+      if (s.torn !== null) { const max = v.asp ? 0.8 : 1, rate = v.asp ? 0.16 : 0.45; s.clot = Math.min(max, s.clot + rate * dt * (1.04 - s.clot / max) * (0.4 + s.clot)); }
+      s.flow = flowOf(s.clot);
+      // Each dot moves at the flow over the open height where it is (continuity), so it speeds
+      // through the gap beside a growing clot and stops when the channel is sealed.
+      const Q = 13.6 * s.flow * pulse(s.t);
+      for (const p of s.parts) {
+        const [lo, hi] = chan(p[0], s.clot);
+        p[0] += (Q / Math.max(0.05, hi - lo)) * dt;
+        if (p[0] > 12) { p[0] -= 24; p[1] = Math.random() * 2 - 1; }
+      }
+    },
+    draw(g, s, v) {
+      P = g.fit(-12, 12, -3.1, 4.2, { pad: 6, uniform: false });
+      const xs = Array.from({ length: 97 }, (_, i) => -12 + i / 4);
+      const Q = xs.map(x => A.at(B, x));
+      const capMM = 0.1 + (v.cap / 250) * 0.5;
+      const yTop = q => q.top, wall = (f, g2) => xs.map((x, i) => [x, f(Q[i])]);
+      const band = (lo, hi, o) => g.path([...wall(lo).map(P), ...wall(hi).reverse().map(P)], { ...o, close: true });
+      // Lower wall: intima, media, adventitia.
+      band(q => -A.R0, q => -A.R0 - 0.12, { fill: g.mix("brass", "panel", 0.55) });
+      band(q => -A.R0 - 0.12, q => -A.R0 - 0.37, { fill: g.mix("red", "panel", 0.3) });
+      band(q => -A.R0 - 0.37, q => -A.R0 - 0.77, { fill: g.mix("red", "panel", 0.65) });
+      // Upper wall: plaque, media, adventitia.
+      band(q => q.top, q => q.iel, { fill: g.mix("brass", "panel", g.lit("cap") ? 0.25 : 0.5) });
+      band(q => q.iel, q => q.iel + 0.25, { fill: g.mix("red", "panel", 0.3) });
+      band(q => q.iel + 0.25, q => q.iel + 0.65, { fill: g.mix("red", "panel", 0.65) });
+      // Fatty core under the cap.
+      // Fatty core: inside the plaque, under a cap of the chosen thickness, where the plaque is thick enough.
+      const q0 = A.at(B, 0), coreTop = q0.iel - 0.25, coreBot = q0.top + capMM;
+      const span = xs.filter(x => Math.abs(x) <= 4.6);
+      const lowC = x => { const q = A.at(B, x); return q.top + capMM; };
+      const highC = x => { const q = A.at(B, x), room = Math.max(0, q.iel - 0.12 * (q.iel - q.top) - lowC(x)); return lowC(x) + room * Math.sqrt(Math.max(0, 1 - (x / 4.6) ** 2)); };
+      g.path([...span.map(x => P([x, lowC(x)])), ...span.slice().reverse().map(x => P([x, Math.max(lowC(x), highC(x))]))], { fill: g.mix("orange", "panel", g.lit("core") ? 0 : 0.25), close: true });
+      for (let k = 0; k < 12; k++) { const x = span[0] + hash(k) * (span[span.length - 1] - span[0]), lo2 = lowC(x), hi2 = Math.max(lo2, highC(x)); g.circle(P([x, lo2 + 0.1 + hash(k + 9) * Math.max(0, hi2 - lo2 - 0.2)]), 2.2, { fill: g.mix("orange", "ink", 0.35), alpha: 0.6 }); }
+      g.path([...xs.map(x => P([x, chan(x, s.clot)[0]])), ...xs.slice().reverse().map(x => P([x, chan(x, 0)[1]]))], { fill: g.rgba("red", 0.07), close: true });
+      // Blood, then the clot over it.
+      for (const p of s.parts) { const [lo, hi] = chan(p[0], s.clot); g.circle(P([p[0], (lo + hi) / 2 + p[1] * (hi - lo) * 0.42]), 2.4, { fill: "red", alpha: 0.85 }); }
+      if (s.torn !== null) {
+        // The tear at the downstream shoulder, and core material spilling out.
+        const tx = TX, qt = A.at(B, tx);
+        g.line(P([tx - 0.2, qt.top]), P([tx + 0.25, qt.top + capMM + 0.1]), { stroke: "ink", width: 2 });
+        const top = [], bot = [];
+        for (let i = 0; i <= 48; i++) { const x = -4 + (i / 48) * 13, q = A.at(B, x); top.push([x, q.top]); bot.push([x, q.top - clotDepth(x, s.clot)]); }
+        g.path([...top.map(P), ...bot.reverse().map(P)], { fill: g.mix("red", "ink", 0.45), close: true });
+        for (let k = 0; k < 18 * s.clot; k++) { const x = tx - 3 + hash(k + 3) * 5, q = A.at(B, x); g.line(P([x, q.top - 0.05]), P([x + 0.8 * (hash(k) - 0.5), q.top - q.rl * 1.6 * s.clot * hash(k + 1)]), { stroke: g.mix("brass", "panel", 0.2), width: 1 }); }
+      }
+      g.label("fibrous cap", P([-3.2, q0.top + 0.35]), { color: "brass" });
+      g.label("fatty core", P([0.5, (coreTop + coreBot) / 2]), { color: g.mix("orange", "ink", 0.5), align: "center" });
+      g.label(`flow ${Math.round(s.flow * 100)}%`, P([-11.6, -0.2]), { color: "red", align: "left" });
+      if (s.torn !== null) g.label(s.clot > 0.95 ? "blocked" : "clot", P([4.6, A.at(B, 4.6).top - A.at(B, 4.6).rl * 1.4 * s.clot - 0.25]), { color: g.mix("red", "ink", 0.3) });
+    },
+  });
+}
+</script>
+
+<p>A <button class="set" data-set="cap=150 asp=false">thick cap</button> takes the pounding indefinitely. A <button class="set" data-set="cap=45 asp=false">thin one</button> splits at the shoulder, where the stress is highest, and the blood meets the core, the body's strongest trigger for clotting. Platelets stick within seconds, fibrin knits them together, and the clot grows until it seals the channel. A plaque that narrowed the artery by a third has blocked it in minutes.</p>
+
+<p>In men who died suddenly with a fresh coronary clot, about two thirds of the clots sat on a ruptured plaque and the rest on a plaque whose surface had worn away <a class="cite" href="#ref-burke"></a>. <button class="set" data-set="cap=45 asp=true">Aspirin</button> makes platelets less sticky, so the clot grows more slowly and may not close the artery. That is why it is given at once for a suspected heart attack<span class="sidenote">In a trial of 17,187 patients, a month of aspirin started on the first day cut deaths from heart and vessel disease over five weeks from 11.8% to 9.4% <a class="cite" href="#ref-isis2"></a>.</span>.</p>
+
+<h2>A heart attack, minute by minute</h2>
+
+<p>When a clot seals a coronary artery, the muscle downstream stops squeezing within seconds and burns through its oxygen within a minute or so. For about the first 20 minutes the damage is reversible. After that cells start to die, and the death spreads as a <em>wavefront</em>, which Reimer and Jennings mapped by tying off coronary arteries in dogs for different times <a class="cite" href="#ref-reimer"></a>. Choose when the artery is reopened, <span class="scrub" data-key="lt"></span> after it closed:</p>
+
+<figure class="demo" id="infarct" aria-label="A slice across the left ventricle seen from below, with the region fed by the blocked artery shaded blue. Dead muscle, shaded purple, starts at the inner wall at the center of the region and spreads outward as time passes. A slider sets how long the artery stays closed."></figure>
+<script>
+{
+  // Fraction of the muscle at risk that dies, against minutes of occlusion (dogs; Reimer 1977).
+  const DATA = [[20, 0], [40, 0.38], [180, 0.57], [360, 0.71], [1440, 0.85]];
+  const lost = m => { if (m <= DATA[0][0]) return 0; for (let i = 1; i < DATA.length; i++) if (m <= DATA[i][0]) { const [a, fa] = DATA[i - 1], [b, fb] = DATA[i], u = Math.log(m / a) / Math.log(b / a); return fa + (fb - fa) * u; } return 0.85; };
+  window.REIMER = { DATA, lost };
+  const RIN = 16, ROUT = 27, TC = 2.3, HALF = 1.15; // mm; risk region centered on the front wall, radians
+  // Cells of the slice (polar grid) and their "lateness" in the wavefront: deep inner wall at the
+  // center of the region dies first, the outer wall and the edges last.
+  const cells = [];
+  for (let i = 0; i < 14; i++) for (let j = 0; j < 160; j++) {
+    const r = RIN + ((ROUT - RIN) * (i + 0.5)) / 14, th = (TAU * (j + 0.5)) / 160;
+    let d = Math.abs(((th - TC + Math.PI) % TAU + TAU) % TAU - Math.PI) / HALF;
+    const risk = d < 1, depth = (r - RIN) / (ROUT - RIN);
+    cells.push({ i, j, r, th, risk, late: risk ? 0.7 * depth + 0.45 * d ** 2 : 9, area: r });
+  }
+  const riskArea = cells.filter(c => c.risk).reduce((a, c) => a + c.area, 0);
+  const sorted = cells.filter(c => c.risk).sort((a, b) => a.late - b.late);
+  const threshold = f => { let acc = 0; for (const c of sorted) { acc += c.area; if (acc / riskArea >= f) return c.late; } return 9; };
+  const fmt = m => (m < 90 ? `${Math.round(m)} min` : `${(m / 60).toFixed(m < 600 ? 1 : 0)} h`);
+  demo("infarct", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    controls: [{ key: "lt", label: "Artery reopened after", min: 1, max: Math.log10(1440), step: 0.01, value: Math.log10(180), format: x => fmt(10 ** x), color: "purple", marks: [{ value: Math.log10(20), label: "20 min" }, { value: Math.log10(120), label: "2 h" }, { value: Math.log10(360), label: "6 h" }] }],
+    presets: [{ label: "20 min", set: { lt: Math.log10(20) } }, { label: "40 min", set: { lt: Math.log10(40) } }, { label: "90 min", set: { lt: Math.log10(90) } }, { label: "3 h", set: { lt: Math.log10(180) } }, { label: "6 h", set: { lt: Math.log10(360) } }, { label: "Never", set: { lt: Math.log10(1440) } }],
+    caption: "A cross-section of the left ventricle, front wall up and septum to the left, after a block in the left anterior descending artery. The fraction of the region at risk that dies follows Reimer and Jennings's measurements in dogs (38% at 40 minutes, 57% at 3 hours, 71% at 6 hours, 85% by 24 hours); its shape, spreading from the inner wall at the center outward, is drawn to match their description.",
+    status: (s, v) => { const m = 10 ** v.lt, f = lost(m); return `${fmt(m)}: ${Math.round(f * 100)}% of the muscle at risk has died, ${Math.round((1 - f) * 100)}% saved`; },
+    draw(g, s, v) {
+      const m = 10 ** v.lt, f = lost(m), th0 = f > 0 ? threshold(f) : -1;
+      const c = [g.w * 0.5, g.h * 0.5], k = Math.min(g.w, g.h) / 2 / (ROUT + 16);
+      const at = (r, th) => [c[0] + Math.cos(th) * r * k, c[1] - Math.sin(th) * r * k];
+      // The right ventricle: a thin crescent on the septal side.
+      const rv = []; for (let a = 2.0; a <= 4.35; a += 0.05) rv.push(at(ROUT + 8 * Math.sin(((a - 2.0) / 2.35) * Math.PI) ** 0.7, a));
+      for (let a = 4.35; a >= 2.0; a -= 0.05) rv.push(at(ROUT, a));
+      g.path(rv, { fill: g.mix("red", "panel", 0.75), stroke: g.mix("red", "panel", 0.4), width: 1, close: true });
+      g.text("right ventricle", at(ROUT + 6, Math.PI), { size: 11, color: "muted", align: "center", baseline: "middle" });
+      for (const cl of cells) {
+        const a0 = (TAU * cl.j) / 160, a1 = (TAU * (cl.j + 1)) / 160, r0 = RIN + ((ROUT - RIN) * cl.i) / 14, r1 = RIN + ((ROUT - RIN) * (cl.i + 1)) / 14;
+        const dead = cl.risk && cl.late <= th0;
+        const fill = dead ? g.mix("purple", "ink", 0.1) : cl.risk ? g.mix("blue", "panel", 0.45) : g.mix("red", "panel", 0.35);
+        g.path([at(r0 - 0.1, a0 - 0.004), at(r1 + 0.1, a0 - 0.004), at(r1 + 0.1, a1 + 0.006), at(r0 - 0.1, a1 + 0.006)], { fill, close: true });
+      }
+      g.circle(c, RIN * k, { stroke: "ink", width: 1 }); g.circle(c, ROUT * k, { stroke: "ink", width: 1 });
+      g.text("cavity", c, { size: 11.5, color: "muted", align: "center", baseline: "middle" });
+      // The blocked artery on the surface, in the groove at the front of the septum.
+      const art = at(ROUT + 3, TC + 0.45);
+      g.circle(art, 5, { fill: g.mix("red", "ink", 0.4) });
+      g.label("blocked artery", [art[0] - 8, art[1] - 8], { align: "right", color: "red" });
+      g.labels([{ at: at((RIN + ROUT) / 2, TC - HALF - 0.25), text: "healthy muscle", color: "red" }, { at: at(ROUT - 2, TC - 0.75), text: "at risk, still alive", color: "blue" }, ...(f > 0.05 ? [{ at: at(RIN + 2, TC), text: "dead", color: "purple" }] : [])]);
+    },
+  });
+}
+</script>
+
+<p>The inner layer dies first: it is squeezed hardest, sits at the end of the supply, and relies most on flow between beats. From there death advances outward and sideways over hours. At <button class="set" data-set="lt=1.602">40 minutes</button> a little over a third of the muscle at risk was dead; at <button class="set" data-set="lt=2.255">3 hours</button>, more than half; by a day, most of it. Cardiologists say it in three words: <em>time is muscle</em>.</p>
+
+<p>The ECG sees this in the first minutes. Injured cells can't hold their resting voltage, so current leaks between them and healthy muscle, and the flat ST segment lifts off the baseline. Run the electrical model with an injured region at the tip of the left ventricle, and move through time since the artery closed, <span class="scrub" data-key="lt"></span>:</p>
+
+<figure class="demo" id="stemi" aria-label="The heart section map with an injured region at the tip of the left ventricle, shaded blue while injured and purple where the muscle has died, beside two ECG leads: one looking at the injury, whose ST segment rises and whose R wave later shrinks and T wave inverts, and one looking from the other side. A slider moves through time from minutes to two weeks."></figure>
+<script>
+{
+  const fmt = m => (m < 90 ? `${Math.round(m)} min` : m < 2880 ? `${(m / 60).toFixed(m < 600 ? 1 : 0)} h` : `${Math.round(m / 1440)} days`);
+  const ramp = (m, a, b) => Math.max(0, Math.min(1, Math.log(m / a) / Math.log(b / a)));
+  // The course of an untreated occlusion: injury current from a few minutes until it fades over
+  // days, a brief hyperacute stage, death advancing through the wall (Reimer's numbers), and
+  // the surviving rim's longer action potentials later.
+  const course = m => ({ inj: ramp(m, 2, 15) * (1 - ramp(m, 600, 7 * 1440)), hyper: ramp(m, 2, 6) * (1 - ramp(m, 20, 60)), dead: REIMER.lost(m), tinv: ramp(m, 720, 3 * 1440) });
+  const vectorAt = m => {
+    const A = HEART.activation(), c = course(m), key = [c.inj, c.hyper, c.dead, c.tinv].map(x => x.toFixed(2)).join();
+    const zone = i => (A.kind[i] === 2 || A.kind[i] === 3) && Math.floor(i / A.W) * A.h + 1 > 105 && (i % A.W) * A.h + 1 > 46;
+    // Dead inner muscle changes the surface ECG little (it is lit almost at once from the
+    // Purkinje fibers), so cells fall silent only as the death reaches through the wall.
+    const silent = Math.max(0, (c.dead - 0.5) / 0.35) * 0.95;
+    return { c, zone, r: A.vectorWith(i => !zone(i) ? null : A.depth[i] < silent ? { dead: true } : { rest: -85 + 25 * c.inj, amp: 1 - 0.25 * c.inj, apd: (1 - 0.15 * c.inj - 0.18 * c.hyper) * (1 + 0.3 * c.tinv) }, key) };
+  };
+  const STAGE = m => m < 2 ? "normal" : m < 30 ? "tall, peaked T waves" : m < 600 ? "ST elevation" : m < 4 * 1440 ? "R wave lost, T wave inverting" : "ST back to baseline, scar remains";
+  demo("stemi", {
+    aspect: w => (w < 560 ? 0.72 : 1.75),
+    controls: [{ key: "lt", label: "Time since the artery closed", min: 0, max: Math.log10(14 * 1440), step: 0.01, value: Math.log10(60), format: x => fmt(10 ** x), color: "blue", marks: [{ value: Math.log10(20), label: "20 min" }, { value: Math.log10(1440), label: "1 day" }] }],
+    presets: [{ label: "Before", set: { lt: 0 } }, { label: "10 min", set: { lt: 1 } }, { label: "1 hour", set: { lt: Math.log10(60) } }, { label: "1 day", set: { lt: Math.log10(1440) } }, { label: "2 weeks", set: { lt: Math.log10(14 * 1440) } }],
+    caption: "The page's two-dimensional electrical model with an occlusion that is never reopened; the faint traces are the healthy heart. Injured cells (blue) rest up to 25 mV above normal with a lower plateau. Dead muscle (purple) follows the dog data of the figure above, but falls electrically silent only as the death reaches through most of the wall, since a dead inner layer barely changes the surface ECG. Stage timings are typical, not exact. A real anterior heart attack shows most clearly in the chest leads, which this flat model doesn't have.",
+    status: (s, v) => { const m = 10 ** v.lt, { r } = vectorAt(m), L = r.lead(90); return `${STAGE(m)} · ST ${(L[150] * 10).toFixed(1)} mm in aVF`; },
+    draw(g, s, v) {
+      const m = 10 ** v.lt, A = HEART.activation(), wide = g.w >= 560, { c, zone, r } = vectorAt(m);
+      const boxM = wide ? [0, 0, g.w * 0.36, g.h] : [0, 0, g.w, g.h * 0.42];
+      HEARTMAP.draw(g, boxM, -1, { zone: (x, y) => { const i = Math.min(A.H - 1, Math.floor(y / A.h)) * A.W + Math.min(A.W - 1, Math.floor(x / A.h)); return !zone(i) ? 0 : A.depth[i] < c.dead * 0.88 ? 2 : c.inj > 0.05 || c.hyper > 0.05 ? 1 : 0; } });
+      const boxE = wide ? [g.w * 0.4, 0, g.w * 0.6, g.h] : [0, g.h * 0.44, g.w, g.h * 0.56];
+      const normal = A.vectorWith(() => null, "normal");
+      const leads = [["aVF, facing the injury", 90, "blue"], ["aVL, from the other side", -30, "muted"]];
+      leads.forEach(([name, deg, color], k) => {
+        const hb = boxE[3] / 2;
+        const P = g.graph({ box: [boxE[0], boxE[1] + k * hb + 4, boxE[2], hb - 8], x: [0, 0.6], y: [-0.8, 1.3], axes: "frame", grid: "minor", xTicks: k ? 0.1 : false, yTicks: 0.5, xLabel: k ? "time (s)" : "", yLabel: "mV" });
+        const L0 = normal.lead(deg), L = r.lead(deg);
+        P.series(A.times.map((t, i) => [t, L0[i]]), { color: g.rgba("muted", 0.4), width: 1.5 });
+        P.series(A.times.map((t, i) => [t, L[i]]), { color, width: 2.5 });
+        P.label(name, [0.59, 1.15], { align: "right", color });
+        P.hline(0, { color: "faint" });
+      });
+    },
+  });
+}
+</script>
+
+<p>Within minutes the T wave grows tall and peaked. Then <button class="set" data-set="lt=1.78">the ST segment lifts</button> in the lead facing the injury. ST elevation of at least 1 mm in two neighboring leads, a little more in some chest leads, marks a <em>STEMI</em>: the artery is fully closed and every minute counts <a class="cite" href="#ref-thygesen"></a>. Over <button class="set" data-set="lt=3.16">the next day</button> the dead muscle falls silent, the R wave shrinks (in a real heart often leaving a deep Q wave), and the T wave inverts. Weeks later the ST segment is flat again, but the lost R wave stays.</p>
+
+<h2>Opening the artery</h2>
+
+<p>So open the artery as early as possible. Clot-dissolving drugs, given into a vein, switch on the body's own enzyme for breaking up fibrin. Or a cardiologist threads a wire from the wrist or groin into the blocked artery and pushes the clot and plaque aside with a balloon<span class="sidenote">Andreas Grüntzig first did this in a coronary artery in 1977 <a class="cite" href="#ref-gruentzig"></a>. Stents followed a decade later <a class="cite" href="#ref-sigwart"></a>.</span>, which today carries a <em>stent</em>, a metal mesh tube that stays as scaffolding. Deploy one, <span class="scrub" data-key="d"></span>:</p>
+
+<figure class="demo wide" id="stent" aria-label="The narrowed coronary artery cut in half along its length, in 3D. A guide wire and a balloon catheter carrying a crimped metal stent slide into the narrowing; the balloon inflates, expanding the stent and pressing the plaque into the wall; then the balloon deflates and is withdrawn, leaving the stent. A slider moves through the procedure."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const A = ARTERY, B = 0.85, RS = A.R0 * 0.95, CRIMP = 0.55;
+  const nodes = {};
+  for (const k of ["adventitia", "media", "plaque", "core"]) nodes[k] = scene.add(null, { name: k, material: A.mat[k] });
+  const wire = scene.add(null, { name: "guide wire", material: "steel" });
+  const shaft = scene.add(null, { name: "catheter", material: { base: "plastic", color: "#dfe6ee" } });
+  const balloon = scene.add(null, { name: "balloon", material: { base: "plastic", color: "#8db3e2", opacity: 0.55 } });
+  const stent = scene.add(null, { name: "stent", material: "steel" });
+  // The procedure: 0-0.15 slide in, 0.15-0.5 inflate, 0.5-0.7 deflate, 0.7-1 withdraw.
+  const stage = d => { const c = (a, b) => Math.max(0, Math.min(1, (d - a) / (b - a))); return { inS: 1 - c(0, 0.15), e: c(0.15, 0.5), bal: c(0.15, 0.5) * (1 - c(0.5, 0.7)), out: c(0.7, 1) }; };
+  const center = (x, e) => { const q = A.at(B, x, e); return q.yl; };
+  const tubeAlong = (x0, x1, r, e, n = 60) => { const pts = []; for (let i = 0; i <= n; i++) { const x = x0 + ((x1 - x0) * i) / n; pts.push([x, center(x, e), 0]); } return E3.mesh.tube(pts, r, { segments: 12 }); };
+  const cache = new Map();
+  function stentMesh(e, shift) {
+    const key = `${e.toFixed(2)}|${shift.toFixed(2)}`;
+    if (cache.has(key)) return cache.get(key);
+    const rings = [], rad = CRIMP + (RS - CRIMP) * e, NR = 8, CROWNS = 8;
+    for (let k = 0; k < NR; k++) {
+      const xc = -6.6 + (13.2 * k) / (NR - 1) + shift, pts = [];
+      for (let i = 0; i <= 160; i++) {
+        const f = (TAU * i) / 160, x = xc + 0.62 * Math.asin(Math.sin(CROWNS * f)) / (Math.PI / 2);
+        const r = Math.min(rad, A.at(B, x, e).rl * 0.97);
+        pts.push([x, center(x, e) + r * Math.cos(f), r * Math.sin(f)]);
+      }
+      rings.push(E3.mesh.tube(pts, 0.05, { segments: 6 }));
+      if (k + 1 < NR) for (const f of [0.3, 2.4, 4.5]) {
+        const xa = xc + 0.62, xb = xc + 13.2 / (NR - 1) - 0.62, ra = Math.min(rad, A.at(B, xa, e).rl * 0.97), rb = Math.min(rad, A.at(B, xb, e).rl * 0.97);
+        rings.push(E3.mesh.tube([[xa, center(xa, e) + ra * Math.cos(f), ra * Math.sin(f)], [xb, center(xb, e) + rb * Math.cos(f), rb * Math.sin(f)]], 0.04, { segments: 6 }));
+      }
+    }
+    const m = E3.mesh.merge(...rings);
+    if (cache.size > 80) cache.clear();
+    cache.set(key, m);
+    return m;
+  }
+  const balloonMesh = (e, b, shift) => E3.mesh.parametric((u, v) => {
+    const x = -8.4 + 16.8 * u + shift, end = Math.min(1, Math.min(u, 1 - u) / 0.07);
+    const full = Math.min(CRIMP + (RS - CRIMP) * e, A.at(B, x - shift * 0, e).rl * 0.95) - 0.06;
+    const r = 0.36 + (Math.max(0.36, full * b + 0.45 * (1 - b)) - 0.36) * Math.sin((end * Math.PI) / 2);
+    const a = v * TAU;
+    return [x, center(x, e) + r * Math.cos(a), r * Math.sin(a)];
+  }, { u: [0, 1], v: [0, 1], nu: 60, nv: 28, wrapV: true });
+  let view = null;
+  demo("stent", {
+    aspect: w => (w < 560 ? 0.85 : 1.9),
+    orbit: { yaw: 0.45, pitch: 0.3, zoom: 1.15 },
+    state: () => ({ hover: null }),
+    controls: [{ key: "d", label: "Procedure", min: 0, max: 1, step: 0.005, value: 0.15, format: x => `${Math.round(x * 100)}%`, color: "blue" }],
+    presets: [{ label: "Wire across", set: { d: 0.15 } }, { label: "Balloon inflated", set: { d: 0.5 } }, { label: "Balloon deflated", set: { d: 0.7 } }, { label: "Stent left behind", set: { d: 1 } }],
+    caption: "Stenting a 3.5 mm coronary artery with a plaque that fills 85% of its wall, cut in half along its length. Real stents are cut from a tube of cobalt-chromium or steel, with struts about 0.06 to 0.1 mm thick, and are usually coated with a drug that stops scar tissue from growing back through the mesh. Blood and clot are left out so the parts show.",
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? hit.node.name : null; if (name === s.hover) return false; s.hover = name; return true; },
+    status: (s, v) => { const st = stage(v.d), q = A.at(B, 0, st.e), ds = 1 - q.rl / A.R0; const what = v.d <= 0.15 ? "the catheter slides in over the wire" : v.d < 0.5 ? "the balloon inflates to about 10 atmospheres, opening the stent" : v.d < 0.7 ? "the balloon deflates; the stent stays open" : v.d < 1 ? "the catheter and wire come out" : "the stent stays for good"; return `${s.hover ? s.hover + " · " : ""}${what} · narrowing ${Math.round(ds * 100)}%`; },
+    draw(g, s, v) {
+      const st = stage(v.d), m = A.meshes(B, st.e);
+      for (const k in nodes) { nodes[k].mesh = m[k]; nodes[k].visible = !!m[k]; }
+      const shift = -22 * st.inS - 26 * st.out;
+      wire.mesh = tubeAlong(-12, 12 - 24 * Math.max(0, st.out - 0.6) / 0.4, 0.09, st.e); wire.visible = st.out < 1;
+      shaft.mesh = tubeAlong(-12, Math.min(12, -8.4 + shift), 0.36, st.e); shaft.visible = -8.4 + shift > -12;
+      balloon.mesh = balloonMesh(st.e, st.bal, shift); balloon.visible = st.out < 0.95;
+      stent.mesh = stentMesh(st.e, v.d < 0.15 ? shift : 0);
+      for (const n of [wire, shaft, balloon, stent, ...Object.values(nodes)]) n.highlight = s.hover === n.name ? "orange" : false;
+      view = g.render3d(scene, { ...s.view, fov: 24 });
+      const q = A.at(B, 0, st.e);
+      g.callouts([
+        { at: view.project([-4.5, q.yl + Math.min(CRIMP + (RS - CRIMP) * st.e, q.rl * 0.97), 0.3]), text: "stent", color: "blue" },
+        { at: view.project([0.4, q.iel - 0.2, 0.02]), text: "plaque, pressed into the wall", color: "orange" },
+      ], { split: g.w * 0.5 });
+    },
+  });
+}
+</script>
+
+<p>The balloon, at around ten atmospheres, doesn't remove the plaque: it crushes it into the wall, and the stent holds it there<span class="sidenote">Most stents release a drug for months that stops scar tissue growing back through the mesh. When several arteries are badly diseased, surgeons may instead bypass the blockages with a leg vein or a chest-wall artery.</span>.</p>
+
+<p>How much timing matters shows in 22 trials of clot-dissolving drugs with about 50,000 patients <a class="cite" href="#ref-boersma"></a>. Move the delay from the first symptom, <span class="scrub" data-key="h"></span>:</p>
+
+<figure class="demo" id="timing" aria-label="A bar chart of lives saved per thousand patients treated with clot-dissolving drugs, by hours from symptom onset: 65 within the first hour, 37 in the second, 26 in the third, and 29 between three and six hours. Lines mark the guideline targets for opening the artery with a balloon. A slider sets the delay."></figure>
+<script>
+{
+  const BARS = [[0, 1, 65, 14], [1, 2, 37, 9], [2, 3, 26, 6], [3, 6, 29, 5]];
+  demo("timing", {
+    aspect: w => (w < 560 ? 0.9 : 1.75),
+    controls: [{ key: "h", label: "Hours from first symptom", min: 0.25, max: 6, step: 0.05, value: 0.75, format: x => (x < 1 ? `${Math.round(x * 60)} min` : `${x.toFixed(1)} h`), color: "purple" }],
+    presets: [{ label: "45 min", set: { h: 0.75 } }, { label: "90 min", set: { h: 1.5 } }, { label: "4 hours", set: { h: 4 } }],
+    caption: "Lives saved per 1,000 patients given clot-dissolving drugs rather than none, by delay from symptom onset, with one standard deviation (Boersma and colleagues, 1996). The purple curve is the share of muscle at risk still alive if the artery opened at that moment, from Reimer's dog data above. The dashed lines are guideline targets for balloon treatment.",
+    status: (s, v) => { const b = BARS.find(([a, c]) => v.h >= a && v.h < c) ?? BARS[3]; return `treated at ${v.h < 1 ? Math.round(v.h * 60) + " min" : v.h.toFixed(1) + " h"}: about ${b[2]} lives saved per 1,000 treated · ${Math.round((1 - REIMER.lost(v.h * 60)) * 100)}% of the muscle at risk still alive`; },
+    draw(g, s, v) {
+      const P = g.graph({ x: [0, 6], y: [0, 100], axes: "frame", xTicks: 1, yTicks: 20, xLabel: "hours from first symptom to treatment", yLabel: "lives saved per 1,000 / % alive" });
+      for (const [a, b, n, sd] of BARS) {
+        const on = v.h >= a && v.h < b;
+        P.polyline([[a + 0.06, 0], [a + 0.06, n], [b - 0.06, n], [b - 0.06, 0]], { close: true, fill: g.rgba("red", on ? 0.55 : 0.22), color: g.rgba("red", on ? 1 : 0.5), width: 1.5 });
+        P.segment([(a + b) / 2, n - sd], [(a + b) / 2, n + sd], { color: "ink", width: 1.2 });
+        P.label(`${n}`, [a + 0.16, n], { align: "left", dy: 10, color: "ink" });
+      }
+      P.fn(hh => 100 * (1 - REIMER.lost(hh * 60)), { color: "purple", width: 2.5, domain: [0, 6], label: "muscle at risk alive (dogs)", labelAt: 4.6, labelOffset: [0, -12] });
+      P.vline(1.5, { color: "blue", label: "90 min" });
+      P.vline(2, { color: "blue", label: "120 min" });
+      P.vline(v.h, { color: "purple" });
+    },
+  });
+}
+</script>
+
+<p>The first hour is worth twice the second, and after about three hours the benefit levels off, because most of the muscle that could be saved is already dead. Where a catheter lab is near, a balloon beats drugs, with targets of 90 minutes from first medical contact in the United States <a class="cite" href="#ref-ogara"></a> and 120 minutes from diagnosis in Europe <a class="cite" href="#ref-byrne"></a>. The longest delay is usually the first: the time before someone calls for help.</p>
+
+<h2>What to take away</h2>
+
+<p>The heart is two pumps kept in step by their own filling, with valves that obey pressure and a wave that pauses at the AV node, then lights the ventricles from the inside out. It feeds itself between beats through arteries that can collect plaque for decades unseen. Most heart attacks come when a thin cap tears and a clot seals the channel; then the muscle dies in a wave, and how much is saved depends on how fast the artery is opened.</p>
+
+<p>So if you or someone near you has chest pain or pressure lasting more than a few minutes, especially with breathlessness, sweating, nausea, or pain spreading to the arm, jaw, or back, call your local emergency number at once. Don't drive yourself, and don't wait to see if it passes.</p>
+
+<aside class="callout note" data-label="About this page"><p>This page is for learning, not medical advice. Its models are deliberately simplified, and several numbers come from dog experiments. For questions about your own heart, ask a doctor.</p></aside>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+<li id="ref-guyton">J. E. Hall and M. E. Hall, <em>Guyton and Hall Textbook of Medical Physiology</em>, 14th ed., Elsevier (2021).</li>
+<li id="ref-starling">S. W. Patterson and E. H. Starling, “On the mechanical factors which determine the output of the ventricles”, <em>Journal of Physiology</em> 48 (1914), 357–379.</li>
+<li id="ref-maceira">A. M. Maceira, S. K. Prasad, M. Khan, and D. J. Pennell, “Normalized left ventricular systolic and diastolic function by steady state free precession cardiovascular magnetic resonance”, <em>Journal of Cardiovascular Magnetic Resonance</em> 8 (2006), 417–426.</li>
+<li id="ref-westerhof">N. Westerhof, J.-W. Lankhaar, and B. E. Westerhof, “The arterial Windkessel”, <em>Medical &amp; Biological Engineering &amp; Computing</em> 47 (2009), 131–141.</li>
+<li id="ref-suga">H. Suga, K. Sagawa, and A. A. Shoukas, “Load independence of the instantaneous pressure-volume ratio of the canine left ventricle and effects of epinephrine and heart rate on the ratio”, <em>Circulation Research</em> 32 (1973), 314–322.</li>
+<li id="ref-stergiopulos">N. Stergiopulos, J.-J. Meister, and N. Westerhof, “Determinants of stroke volume and systolic and diastolic aortic pressure”, <em>American Journal of Physiology</em> 270 (1996), H2050–H2059.</li>
+<li id="ref-jose">A. D. Jose and D. Collison, “The normal range and determinants of the intrinsic heart rate in man”, <em>Cardiovascular Research</em> 4 (1970), 160–167.</li>
+<li id="ref-durrer">D. Durrer, R. T. van Dam, G. E. Freud, M. J. Janse, F. L. Meijler, and R. C. Arzbaecher, “Total excitation of the isolated human heart”, <em>Circulation</em> 41 (1970), 899–912.</li>
+<li id="ref-ekblom">B. Ekblom and L. Hermansen, “Cardiac output in athletes”, <em>Journal of Applied Physiology</em> 25 (1968), 619–625.</li>
+<li id="ref-duncker">D. J. Duncker and R. J. Bache, “Regulation of coronary blood flow during exercise”, <em>Physiological Reviews</em> 88 (2008), 1009–1086.</li>
+<li id="ref-libby">P. Libby, J. E. Buring, L. Badimon, et al., “Atherosclerosis”, <em>Nature Reviews Disease Primers</em> 5 (2019), 56.</li>
+<li id="ref-glagov">S. Glagov, E. Weisenberg, C. K. Zarins, R. Stankunavicius, and G. J. Kolettis, “Compensatory enlargement of human atherosclerotic coronary arteries”, <em>New England Journal of Medicine</em> 316 (1987), 1371–1375.</li>
+<li id="ref-gould">K. L. Gould, K. Lipscomb, and G. W. Hamilton, “Physiologic basis for assessing critical coronary stenosis”, <em>American Journal of Cardiology</em> 33 (1974), 87–94.</li>
+<li id="ref-virmani">R. Virmani, A. P. Burke, A. Farb, and F. D. Kolodgie, “Pathology of the vulnerable plaque”, <em>Journal of the American College of Cardiology</em> 47 (2006), C13–C18.</li>
+<li id="ref-burke">A. P. Burke, A. Farb, G. T. Malcom, Y. H. Liang, J. Smialek, and R. Virmani, “Coronary risk factors and plaque morphology in men with coronary disease who died suddenly”, <em>New England Journal of Medicine</em> 336 (1997), 1276–1282.</li>
+<li id="ref-isis2">ISIS-2 Collaborative Group, “Randomised trial of intravenous streptokinase, oral aspirin, both, or neither among 17,187 cases of suspected acute myocardial infarction: ISIS-2”, <em>Lancet</em> 2 (1988), 349–360.</li>
+<li id="ref-reimer">K. A. Reimer, J. E. Lowe, M. M. Rasmussen, and R. B. Jennings, “The wavefront phenomenon of ischemic cell death. 1. Myocardial infarct size vs duration of coronary occlusion in dogs”, <em>Circulation</em> 56 (1977), 786–794.</li>
+<li id="ref-thygesen">K. Thygesen, J. S. Alpert, A. S. Jaffe, et al., “Fourth universal definition of myocardial infarction (2018)”, <em>European Heart Journal</em> 40 (2019), 237–269.</li>
+<li id="ref-gruentzig">A. R. Grüntzig, Å. Senning, and W. E. Siegenthaler, “Nonoperative dilatation of coronary-artery stenosis: percutaneous transluminal coronary angioplasty”, <em>New England Journal of Medicine</em> 301 (1979), 61–68.</li>
+<li id="ref-sigwart">U. Sigwart, J. Puel, V. Mirkovitch, F. Joffre, and L. Kappenberger, “Intravascular stents to prevent occlusion and restenosis after transluminal angioplasty”, <em>New England Journal of Medicine</em> 316 (1987), 701–706.</li>
+<li id="ref-boersma">E. Boersma, A. C. P. Maas, J. W. Deckers, and M. L. Simoons, “Early thrombolytic treatment in acute myocardial infarction: reappraisal of the golden hour”, <em>Lancet</em> 348 (1996), 771–775.</li>
+<li id="ref-ogara">P. T. O'Gara, F. G. Kushner, D. D. Ascheim, et al., “2013 ACCF/AHA guideline for the management of ST-elevation myocardial infarction”, <em>Circulation</em> 127 (2013), e362–e425.</li>
+<li id="ref-byrne">R. A. Byrne, X. Rossello, J. J. Coughlan, et al., “2023 ESC Guidelines for the management of acute coronary syndromes”, <em>European Heart Journal</em> 44 (2023), 3720–3826.</li>
+</ol>
