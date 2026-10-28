@@ -5,7 +5,8 @@
 // files so the site also works straight from disk.
 //
 // Usage: node site.mjs <root> [--title "Explainers"] [--intro "..."] [--thumbs] [--shared | --inline] [--home <template.html>]
-// --thumbs screenshots each page's first figure at 2x as thumb.webp (needs Chrome, like verify.mjs).
+// --thumbs screenshots each page's first figure at 2x as thumb.webp, and in dark mode as
+// thumb-dark.webp (needs Chrome, like verify.mjs).
 // --shared writes one copy of the runtime to <root>/safis.css and <root>/safis.js
 // and links every page to it instead of carrying its own; the site still opens
 // from disk. --inline puts the runtime back in each page. The choice is kept in
@@ -100,9 +101,12 @@ if (opt.thumbs && pages.length) {
   const { openBrowser } = await import("./lib/chrome.mjs");
   const b = await openBrowser({ viewport: { width: 1280, height: 1000, deviceScaleFactor: 2, mobile: false } });
   try {
-    await b.setMedia("light");
+    // Reduced motion: a thumbnail is a still, and an animated 3D figure redrawing in software
+    // WebGL can keep a heavy page from ever finishing its load.
+    await b.setMedia("light", "reduce");
     for (const p of pages) {
-      await b.goto(pathToFileURL(p.file).href);
+      // Heavy 3D pages render slowly in headless Chrome's software WebGL at 2x; give them time.
+      await b.goto(pathToFileURL(p.file).href, 180000);
       const box = await b.evaluate(`(() => {
         document.documentElement.classList.add("safis-checking");
         const s = document.querySelector("figure.demo .stage");
@@ -115,7 +119,13 @@ if (opt.thumbs && pages.length) {
       await b.settle(400);
       await writeFile(path.join(root, p.slug, "thumb.webp"), await b.screenshot(box, { format: "webp", quality: 84 }));
       await rm(path.join(root, p.slug, "thumb.png"), { force: true });
-      console.log(`thumbnail: ${p.slug}/thumb.webp`);
+      // The same figure in dark mode, for cards on a dark page. The runtime redraws every
+      // figure when the color scheme changes; give a heavy 3D figure time to finish.
+      await b.setMedia("dark", "reduce");
+      await b.settle(900);
+      await writeFile(path.join(root, p.slug, "thumb-dark.webp"), await b.screenshot(box, { format: "webp", quality: 84 }));
+      await b.setMedia("light", "reduce");
+      console.log(`thumbnail: ${p.slug}/thumb.webp, thumb-dark.webp`);
     }
   } finally {
     await b.close();
@@ -143,7 +153,9 @@ for (const p of pages) {
 // Home page: the theme CSS from the template, then cards grouped by category.
 const card = p => {
   const file = ["thumb.webp", "thumb.png"].find(f => existsSync(path.join(root, p.slug, f)));
-  const thumb = file ? `<img src="${p.slug}/${file}" alt="" loading="lazy" decoding="async">` : `<span class="noimg"></span>`;
+  const dark = existsSync(path.join(root, p.slug, "thumb-dark.webp"));
+  // Both images are lazy and the hidden one has no box, so a reader downloads only one.
+  const thumb = file ? `<img class="thumb-light" src="${p.slug}/${file}" alt="" loading="lazy" decoding="async">${dark ? `<img class="thumb-dark" src="${p.slug}/thumb-dark.webp" alt="" loading="lazy" decoding="async">` : ""}` : `<span class="noimg"></span>`;
   return `<a class="card" href="${p.slug}/index.html"><span class="thumb">${thumb}</span><span class="card-title">${esc(p.title)}</span><span class="card-dek">${esc(p.dek)}</span><span class="card-meta">${p.figures} figure${p.figures === 1 ? "" : "s"} · ${p.minutes} min read</span></a>`;
 };
 const homePage = theme => `<!doctype html>

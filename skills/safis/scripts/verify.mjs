@@ -5,7 +5,9 @@
 // figure, and saves a screenshot of every
 // figure (desktop light, desktop dark, phone) for a visual pass.
 //
-// Usage: node verify.mjs <page.html> [--out <dir>]
+// Usage: node verify.mjs <page.html | http(s)://url> [--out <dir>] [--timeout <seconds, 600>]
+// A URL checks a served page (a built site, or the live one); requests to its own origin count
+// as part of the page, anything else as external.
 // Needs Node 22+ and Chrome, Chromium, or Edge (set CHROME_PATH if it isn't found).
 // Exit code: 0 = no errors, 1 = errors found, 2 = couldn't run the check.
 
@@ -21,7 +23,7 @@ const PHONE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true };
 
 function usage(msg) {
   if (msg) console.error(msg);
-  console.error("usage: node verify.mjs <page.html> [--out <dir>]");
+  console.error("usage: node verify.mjs <page.html | http(s)://url> [--out <dir>] [--timeout <seconds>]");
   process.exit(2);
 }
 
@@ -30,13 +32,19 @@ let pagePath = null;
 let outDir = null;
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--out") outDir = argv[++i];
+  else if (argv[i] === "--timeout") i++;
   else if (argv[i].startsWith("-")) usage(`unknown option ${argv[i]}`);
   else pagePath = argv[i];
 }
 if (!pagePath) usage();
-pagePath = path.resolve(pagePath);
-if (!existsSync(pagePath)) usage(`no such file: ${pagePath}`);
-outDir = path.resolve(outDir ?? path.join(os.tmpdir(), "explainer-check", path.basename(path.dirname(pagePath))));
+const isUrl = /^https?:\/\//.test(pagePath);
+if (!isUrl) {
+  pagePath = path.resolve(pagePath);
+  if (!existsSync(pagePath)) usage(`no such file: ${pagePath}`);
+}
+const origin = isUrl ? new URL(pagePath).origin : null;
+const slugOf = () => (isUrl ? new URL(pagePath).pathname.split("/").filter(Boolean).pop() || "home" : path.basename(path.dirname(pagePath)));
+outDir = path.resolve(outDir ?? path.join(os.tmpdir(), "explainer-check", slugOf()));
 
 async function main() {
   let b;
@@ -58,12 +66,16 @@ async function main() {
       } else if (msg.method === "Log.entryAdded" && p.entry.level === "error") {
         consoleErrors.push(p.entry.text + (p.entry.url ? ` (${p.entry.url})` : ""));
       } else if (msg.method === "Network.requestWillBeSent") {
-        if (!/^(file|data|blob|about):/.test(p.request.url)) external.add(p.request.url);
+        const u = p.request.url;
+        if (!/^(file|data|blob|about):/.test(u) && !(origin && u.startsWith(origin + "/"))) external.add(u);
       }
     });
 
     await b.setMedia("light");
-    await b.goto(pathToFileURL(pagePath).href);
+    await b.goto(isUrl ? pagePath : pathToFileURL(pagePath).href);
+    // A hosted site may load the runtime as a module after the page itself; give it a moment.
+    await b.evaluate(`new Promise(r => { const t0 = performance.now(); (function poll() { if (window.__explainer || performance.now() - t0 > 20000) r(); else setTimeout(poll, 50); })(); })`);
+    await b.settle();
 
     await rm(outDir, { recursive: true, force: true });
     await mkdir(path.join(outDir, "dark"), { recursive: true });
@@ -178,6 +190,8 @@ async function main() {
   }
 }
 
-const watchdog = setTimeout(() => { console.error("verify.mjs timed out after 240s"); process.exit(2); }, 240000);
+// A watchdog so a hung browser can't stall a pipeline; heavy 3D pages on a busy machine need minutes.
+const limit = +(argv.includes("--timeout") ? argv[argv.indexOf("--timeout") + 1] : process.env.SAFIS_VERIFY_TIMEOUT ?? 600);
+const watchdog = setTimeout(() => { console.error(`verify.mjs timed out after ${limit}s`); process.exit(2); }, limit * 1000);
 watchdog.unref();
 main().then(code => process.exit(code), err => { console.error(`verify.mjs couldn't finish: ${err.message}`); process.exit(2); });

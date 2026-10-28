@@ -69,8 +69,10 @@ function connect(url) {
   };
 }
 
-// Starts Chrome and opens one tab. Returns helpers bound to that tab.
-export async function openBrowser({ viewport }) {
+// Starts Chrome and opens one tab. Returns helpers bound to that tab. WebGL runs on the
+// SwiftShader software renderer, so screenshots match everywhere; gpu: true uses the machine's
+// GPU instead (for timing frames as a reader would see them).
+export async function openBrowser({ viewport, gpu = false }) {
   if (typeof WebSocket === "undefined") throw new Error("needs Node 22 or newer (it uses the built-in WebSocket)");
   const bin = findChrome();
   if (!bin) throw new Error("couldn't find Chrome, Chromium, or Edge; install one or set CHROME_PATH");
@@ -84,12 +86,16 @@ export async function openBrowser({ viewport }) {
     "--hide-scrollbars", "--disable-accelerated-2d-canvas",
     "--mute-audio",
     "--force-color-profile=srgb",
-    // WebGL in headless mode runs on the SwiftShader software renderer.
-    "--enable-unsafe-swiftshader",
-    "--use-angle=swiftshader",
+    // WebGL in headless mode runs on the SwiftShader software renderer unless gpu is set.
+    ...(gpu ? ["--enable-gpu", "--use-gl=angle"] : ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"]),
     "--ignore-gpu-blocklist",
     "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] });
+  // If the script ends without close() (an error, a timeout, Ctrl-C), take Chrome down with it,
+  // so no headless browser is left running.
+  const reap = () => { try { if (proc.exitCode === null) proc.kill("SIGKILL"); } catch {} };
+  process.once("exit", reap);
+  for (const sig of ["SIGINT", "SIGTERM"]) process.once(sig, () => { reap(); process.exit(130); });
   const wsUrl = await new Promise((resolve, reject) => {
     let log = "";
     const timer = setTimeout(() => reject(new Error(`Chrome didn't start within 20s:\n${log}`)), 20000);
@@ -156,6 +162,7 @@ export async function openBrowser({ viewport }) {
   }
 
   async function close() {
+    process.removeListener("exit", reap);
     cdp.close();
     if (proc.exitCode === null) {
       const exited = new Promise(r => proc.once("exit", r));
