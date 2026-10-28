@@ -22,7 +22,8 @@ check("steel is a physical metal", m({ material: "steel" }).physical && m({ mate
 check("legacy { color, metal: true } is a metal", m({ material: { color: "#888888", metal: true } }).metal === 1);
 check("glass without opacity refracts", m({ material: "glass" }).kind === "glass");
 check("glass with node opacity stays a ghost", m({ material: "glass", opacity: 0.3 }).kind === "ghost");
-check("water stays a ghost", m({ material: "water" }).kind === "ghost");
+check("water refracts like glass, with ripples", m({ material: "water" }).kind === "glass" && !!m({ material: "water" }).water);
+check("water with an opacity stays a ghost (tides page)", m({ material: "water", opacity: 0.45 }).kind === "ghost");
 check("object form with base", m({ material: { base: "steel", roughness: 0.1 } }).roughness === 0.1);
 check("inconel with temperature heat-tints", m({ material: "inconel", temperature: 700 }).heatShift === 150);
 check("hot glows", m({ material: "hot" }).glow);
@@ -55,6 +56,28 @@ const bounce = E3.particles({ count: 200, life: 3, cpu: true, emitter: { shape: 
 bounce.simulate(4);
 check("floor collider keeps particles above y = 0", bounce.alive().every(p => p.position[1] >= -1e-6));
 
+// Matter: each kind of particle moves as what it is made of says (turbulence off to measure).
+const drop = (matter, t, o = {}) => {
+  const s = E3.particles({ matter, count: 1, life: 30, prewarm: false, cpu: true, emitter: { speed: 0 }, ...o, forces: { turbulence: null, ...(o.forces || {}) } });
+  s.simulate(t);
+  return s.alive()[0]?.position[1] ?? NaN;
+};
+const vtFall = (vt, t) => -vt * (t - (1 - Math.exp(-(9.81 / vt) * t)) / (9.81 / vt));
+check("dust settles at its terminal speed, 0.3 m/s", Math.abs(drop("dust", 5) - vtFall(0.3, 5)) < 0.02, drop("dust", 5).toFixed(3));
+check("a water drop falls slower than free fall, as drag says", Math.abs(drop("water", 1) - vtFall(5.5, 1)) < 0.05, drop("water", 1).toFixed(2));
+check("units: dust in millimeters falls 1000 times the number", Math.abs(drop("dust", 5, { units: "mm" }) / drop("dust", 5) - 1000) < 1);
+check("hot smoke rises", drop("smoke", 2, { life: 8 }) > 2, drop("smoke", 2, { life: 8 }).toFixed(2));
+check("steam rises, slower than smoke", drop("steam", 1, { life: 3 }) > 0.2 && drop("steam", 1, { life: 3 }) < drop("smoke", 1, { life: 8 }));
+check("a bubble rises at about 0.25 m/s", Math.abs(drop("bubble", 4) - 1) < 0.03, drop("bubble", 4).toFixed(3));
+check("drag is stable when stiff (dust at a 1/30 s step)", Number.isFinite(drop("dust", 20)) && drop("dust", 20) < 0);
+const landed = drop("water", 3, { emitter: { speed: 0, position: [0, 1, 0] }, ground: 0 });
+check("ground: water lands and stays on it", landed >= -1e-6 && landed < 0.01, landed.toFixed(4));
+const sp = E3.particles({ matter: "spark", colliders: [{ plane: [0, 1, 0, 0] }] });
+check("colliders take the matter's bounce", sp.colliders[0].bounce === E3.matter.spark.bounce);
+check("explicit forces win over the preset", E3.particles({ matter: "smoke", forces: { drag: 9 } }).forces.drag === 9);
+let threw = false; try { E3.particles({ matter: "plasma" }); } catch { threw = true; }
+check("unknown matter is an error", threw);
+
 // Ideal gas: pressure from wall hits matches N k T / V (k T = m sigma^2, m = 1)
 const N = 400, sigma = 1.5, side = 1, H = 1.2;
 const gas = E3.particles({
@@ -79,6 +102,20 @@ check("inside the wing has no velocity", wing.velocity([0, 0.02, 0]) === null);
 
 // Quality tiers
 check("three tiers", ["low", "medium", "high"].every(k => E3.quality.tiers[k]));
+const sc = E3.scene();
+check("a still frame never runs as moving", !_.qualityFor(sc, { still: true }, 2, 1000).moving && !_.qualityFor(sc, { still: true }, 1, 1010).moving);
+check("a frame in a stream runs as moving", _.qualityFor(sc, {}, 2, 1020).moving);
+
+// Plume: expansion follows the throttle; two lights
+const pl = E3.plume({ radius: 0.5, length: 6, throttle: 1 });
+check("plume defaults to a slightly over-expanded jet", Math.abs(pl.expansionNow - 0.8) < 1e-9);
+pl.throttle = 0.5;
+check("throttling down runs more over-expanded", pl.expansionNow < 0.8 && pl.lengthNow < 6);
+check("plume lights: one at the nozzle, one down the jet", pl.glowLights().length === 2 && pl.glowLights()[0].position[1] > pl.glowLights()[1].position[1]);
+pl.throttle = 0;
+check("no lights when off", pl.glowLights().length === 0);
+check("paint is neutral by default", m({ material: "paint" }).rgb.every(v => v > 0.85) && Math.abs(m({ material: "paint" }).rgb[0] - m({ material: "paint" }).rgb[2]) < 0.1);
+check("smoke defaults: no glow, segments unset", E3.particles({}).glow === 0 && E3.particles({}).segments === null);
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

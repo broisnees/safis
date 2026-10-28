@@ -731,13 +731,23 @@
     concrete: { color: "#bdb8ae", metal: 0, roughness: 0.92 },
     carbon: { color: "#2b2c30", metal: 0, roughness: 0.32, clearcoat: 1, weave: true },
     rubber: { color: "#2c2c2e", metal: 0, roughness: 0.9 },
-    paint: { color: "#b8322a", metal: 0, roughness: 0.45, clearcoat: 1 },
-    glass: { color: "#eef4f4", glass: true, ior: 1.5, roughness: 0.03 },
-    water: { color: "#a8cbe6", opacity: 0.45 },
+    paint: { color: "#e6e3dc", metal: 0, roughness: 0.45, clearcoat: 1 },
+    glass: { color: "#eef4f4", glass: true, ior: 1.5, roughness: 0.03, dispersion: 0.008 },
+    frosted: { color: "#f1f4f4", glass: true, ior: 1.5, roughness: 0.35, dispersion: 0.004 },
+    water: { color: "#9cc9d8", glass: true, ior: 1.333, roughness: 0.02, dispersion: 0.002, water: true },
     ghost: { color: "#f1efe9", opacity: 0.3 },
     hot: { color: "#3b3634", metal: 0, roughness: 0.6, temperature: 1400 },
   };
   const ACCENTS = ["red", "orange", "green", "blue", "purple"];
+  // In the "anatomy" look the anatomy names shade as tissue (other looks keep the diagram look,
+  // so simple teaching figures stay simple). An object material can tune any of these.
+  const TISSUE = {
+    bone: { sss: 0.22, sssColor: "#c79a6a", wet: 0.08 }, enamel: { sss: 0.4, sssColor: "#d7d2c0", wet: 0.35 },
+    cartilage: { sss: 0.75, sssColor: "#8fb1c4", wet: 0.65 }, muscle: { sss: 0.55, sssColor: "#9c2a22", wet: 0.45, sheen: 0.15 },
+    tendon: { sss: 0.3, sssColor: "#c9a77a", wet: 0.35, sheen: 0.6 }, tissue: { sss: 0.6, sssColor: "#c9533f", wet: 0.5 },
+    fat: { sss: 0.8, sssColor: "#e0a640", wet: 0.35 }, nerve: { sss: 0.45, sssColor: "#b8902d", wet: 0.35, sheen: 0.3 },
+    artery: { sss: 0.5, sssColor: "#8a1c16", wet: 0.55 }, vein: { sss: 0.5, sssColor: "#2c3f7a", wet: 0.55 },
+  };
 
   // A display color for a material color: an accent name, a material name, #hex, rgb(), or a
   // palette name. Accents on diagram materials are the pale tints of the page's subject
@@ -765,11 +775,20 @@
   };
 
   // Everything the renderer needs to know about how a node looks.
-  function resolveMaterial(node) {
+  function resolveMaterial(node, look) {
     let m = node.material, name = null;
-    if (typeof m === "string") { name = m; m = MATERIALS[m] ?? { color: m }; }
-    else if (m && m.base) m = { ...(MATERIALS[m.base] || {}), ...m };
+    const tissueOf = n => (look === "anatomy" && TISSUE[n] ? TISSUE[n] : {});
+    if (typeof m === "string") { name = m; m = { ...(MATERIALS[m] ?? { color: m }), ...tissueOf(m) }; }
+    else if (m && m.base) m = { ...(MATERIALS[m.base] || {}), ...tissueOf(m.base), ...m };
     m = { ...(m || {}) };
+    // Tissue only shades as tissue in the anatomy look; elsewhere it's the diagram color.
+    const tissue = look === "anatomy" && (m.sss != null || m.wet != null || m.sheen != null);
+    if (tissue) {
+      const wet = clamp01(m.wet ?? 0.3);
+      m.roughness ??= 0.72 - 0.4 * wet;
+      m.clearcoat ??= wet * 0.85;
+      m.metal ??= 0;
+    }
     if (m.color == null) m.color = MATERIALS.porcelain.color;
     const temp = tempField(node.temperature ?? m.temperature);
     const physical = (m.metal != null && m.metal !== false) || m.roughness != null || !!m.glass || m.emissive != null || !!temp;
@@ -792,8 +811,11 @@
       clearcoat: clamp01(m.clearcoat ?? 0),
       weave: !!m.weave,
       heatShift: metal && temp ? (m.heatShift ?? 0) : null,
-      ior: m.ior ?? 1.5, dispersion: m.dispersion ?? 0.012, thickness: m.thickness ?? null,
+      ior: m.ior ?? 1.5, dispersion: m.dispersion ?? 0.008, thickness: m.thickness ?? null,
+      water: m.water ? { ripples: m.ripples ?? 0.35, wavelength: m.wavelength ?? null, depth: m.depthColor ?? 0.5 } : null,
       glow: !!temp || emissive.some(v => v > 0),
+      sss: tissue ? clamp01(m.sss ?? 0.4) : 0, sssColor: tissue ? colorOf(m.sssColor ?? "#b5463d", true) : [0, 0, 0],
+      sheen: tissue ? clamp01(m.sheen ?? 0) : 0, fibers: tissue && m.fibers ? v3.norm(m.fibers === true ? [0, 1, 0] : m.fibers) : null,
     };
   }
 
@@ -809,6 +831,8 @@
     diagram: { env: 0, key: 2.2, fill: 0.6, rim: 0.7, diffuse: 1.15, specular: 0.85, ink: 1, parts: 0.3, ground: 0.36, soft: 1.5, bloom: 0.6, exposure: 1.05, keyColor: [1, 0.98, 0.95], fillColor: [0.92, 0.95, 1] },
     night: { env: 1, key: 1.1, fill: 0.15, rim: 2.6, diffuse: 0.5, specular: 1, ink: 0.55, parts: 0.7, ground: 0.6, soft: 0.8, bloom: 1.4, exposure: 1, keyColor: [0.72, 0.8, 1], fillColor: [0.6, 0.7, 1] },
     outdoor: { env: 2, key: 3.4, fill: 0.55, rim: 0.4, diffuse: 0.9, specular: 1, ink: 0.65, parts: 0.65, ground: 0.6, soft: 0.45, bloom: 0.7, exposure: 0.95, keyColor: [1, 0.94, 0.84], fillColor: [0.72, 0.84, 1] },
+    // Anatomy: a soft surgical studio; anatomy materials shade as tissue, light ink.
+    anatomy: { env: 0, key: 2.3, fill: 0.8, rim: 0.9, diffuse: 1.05, specular: 0.9, ink: 0.45, parts: 0.55, ground: 0.45, soft: 1.3, bloom: 0.45, exposure: 1.05, keyColor: [1, 0.96, 0.92], fillColor: [0.92, 0.95, 1] },
   };
   const lookOf = scene => LOOKS[scene.look] || LOOKS.studio;
   // Whether the page is dark, from the palette's background.
@@ -822,11 +846,12 @@
   // Three tiers. While the view moves or an animation plays, the engine watches the time
   // between frames and steps down a tier when frames run long, back up when they're quick.
   // Still frames (and the page checker) always get the full shadow and volume quality;
-  // particle counts follow the tier so a paused figure doesn't change its smoke.
+  // particle counts follow the tier so a paused figure doesn't change its smoke. Systems
+  // that measure, run on the CPU, or hold a fixed population (gas molecules) keep every slot.
   const TIERS = {
-    low: { rank: 0, ss: 1, scale: 0.75, msaa: 4, shadow: 1024, particles: 0.35, steps: 22, bloom: true },
-    medium: { rank: 1, ss: 2, scale: 1, msaa: 4, shadow: 1536, particles: 0.6, steps: 32, bloom: true },
-    high: { rank: 2, ss: 3, scale: 1, msaa: 4, shadow: 2048, particles: 1, steps: 48, bloom: true },
+    low: { rank: 0, ss: 1, scale: 0.75, msaa: 4, shadow: 1024, particles: 0.35, steps: 22, bloom: true, vsteps: 36, vscale: 0.33 },
+    medium: { rank: 1, ss: 2, scale: 1, msaa: 4, shadow: 1536, particles: 0.6, steps: 32, bloom: true, vsteps: 56, vscale: 0.5 },
+    high: { rank: 2, ss: 3, scale: 1, msaa: 4, shadow: 2048, particles: 1, steps: 48, bloom: true, vsteps: 88, vscale: 0.5 },
   };
   const TIER_NAMES = ["low", "medium", "high"];
   const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null };
@@ -839,19 +864,23 @@
   }
   const checking = () => typeof document !== "undefined" && document.documentElement.classList.contains("safis-checking");
   // Picks the tier for this frame. `moving` frames come in a stream (< 250 ms apart) or at
-  // ss 1, which the page asks for while the reader drags on a dense screen.
+  // ss 1, which the page asks for while the reader drags on a dense screen. A caller that
+  // knows better passes `cam.still` (the runtime does: true for the frame after a drag),
+  // so the settled frame always comes back at full quality.
   function qualityFor(scene, cam, ss, now) {
     const force = cam.quality ?? scene.quality ?? Q.forced;
     const dt = now - (scene._lastFrame ?? -1e9);
     scene._lastFrame = now;
-    const moving = dt < 250 || ss < 2;
+    const moving = cam.still != null ? !cam.still : dt < 250 || ss < 2;
     if (Q.rank == null) Q.rank = startRank();
     if (checking()) return { ...TIERS.high, name: "high", ss, moving: false };
     if (TIERS[force]) {
       const t = TIERS[force];
       return { ...t, name: force, ss: moving ? Math.min(ss, t.ss) : ss, scale: moving ? t.scale : 1, moving };
     }
-    if (moving && dt < 250) {
+    const hitch = typeof R !== "undefined" && R && R.hitch;
+    if (hitch) R.hitch = false;
+    if (moving && dt < 250 && !hitch) {
       Q.ema = Q.ema * 0.9 + Math.min(dt, 250) * 0.1;
       if (Q.ema > 30 && Q.rank > 0 && now - Q.downAt > 800) { Q.rank--; Q.downAt = now; Q.ema = 20; Q.quickSince = now; }
       else if (Q.ema < 18) {
@@ -860,7 +889,7 @@
       } else Q.quickSince = 0;
     }
     const name = TIER_NAMES[Q.rank], t = TIERS[name];
-    if (!moving) return { ...t, name, ss, scale: 1, shadow: TIERS.high.shadow, steps: TIERS.high.steps, moving };
+    if (!moving) return { ...t, name, ss, scale: 1, shadow: TIERS.high.shadow, steps: TIERS.high.steps, vsteps: TIERS.high.vsteps, vscale: TIERS.high.vscale, moving };
     return { ...t, name, ss: Math.min(ss, t.ss), moving };
   }
 
@@ -961,7 +990,38 @@
     div: (a, b) => { const d = b[0] * b[0] + b[1] * b[1] || 1e-30; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; },
     sqrt: a => { const r = Math.hypot(a[0], a[1]), t = Math.atan2(a[1], a[0]) / 2, s = Math.sqrt(r); return [s * Math.cos(t), s * Math.sin(t)]; },
   };
+  // A tube flow: axisymmetric stream layers between surfaces of revolution, sampled along the
+  // axis (local y) at n stations from y0 every dy. Each station row is the five boundary radii
+  // [c0, c1, b0, b1, x0]: core layer c0..c1, bypass b0..b1 (walls where c1 < b0 or b1 < x0), and
+  // the outside air from x0 out (an optional sixth value scales the core's volume flow, for
+  // gas that expands as it's heated). Each inner layer carries a fixed flux (q, as Q / pi); within a
+  // layer the stream function is linear in r², so the axial speed is q / (b² - a²) and the
+  // streamlines follow both walls exactly. matrix places the flow's frame in the world.
+  function tubeSpec(o) {
+    const rows = o.rows, n = rows.length, M = o.matrix ? Float32Array.from(o.matrix) : m4.identity();
+    const data = new Float32Array(n * 2 * 4);
+    rows.forEach((r, i) => { data.set([r[0], r[1], r[2], r[3]], i * 4); data.set([r[4], r[5] ?? 1, 0, 0], (n + i) * 4); });
+    return { type: "tube", kind: 3, U: o.U0, U0: o.U0, y0: o.y0, dy: o.dy, n, rows, q: o.q, M, MI: m4.invert(M), data, center: [0, 0, 0], alpha: 0, S: 1, mu: [0, 0], a: 0, gamma: 0, mid: 0 };
+  }
+  function tubeAt(F, p) {
+    const q = m4.apply(F.MI, p), y = q[1], r = Math.hypot(q[0], q[2]);
+    const fi = (y - F.y0) / F.dy;
+    if (fi < 0 || fi > F.n - 1) return m4.applyDir(F.M, [0, F.U0, 0]);
+    const i = Math.min(F.n - 2, Math.floor(fi)), f = fi - i, A = F.rows[i], B = F.rows[i + 1];
+    const v = A.map((a, k) => a + (B[k] - a) * f), d = A.map((a, k) => (B[k] - a) / F.dy);
+    let a, b, da, db, Q;
+    if (r < v[0] - 1e-6) return null;
+    if (r <= v[1]) { a = v[0]; b = v[1]; da = d[0]; db = d[1]; Q = F.q[0] * (v[5] ?? 1); }
+    else if (r < v[2]) return null;
+    else if (r <= v[3]) { a = v[2]; b = v[3]; da = d[2]; db = d[3]; Q = F.q[1]; }
+    else if (r < v[4]) return null;
+    else { const uy = F.U0, ur = r > 1e-6 ? (uy * v[4] * d[4]) / r : 0; return m4.applyDir(F.M, [r > 1e-6 ? (ur * q[0]) / r : 0, uy, r > 1e-6 ? (ur * q[2]) / r : 0]); }
+    const den = Math.max(b * b - a * a, 1e-9), uy = Q / den, eta = (r * r - a * a) / den;
+    const ur = r > 1e-6 ? (uy * (a * da * (1 - eta) + b * db * eta)) / r : 0;
+    return m4.applyDir(F.M, [r > 1e-6 ? (ur * q[0]) / r : 0, uy, r > 1e-6 ? (ur * q[2]) / r : 0]);
+  }
   function flowSpec(o = {}) {
+    if (o.kind === 3 || o.type === "tube") return o.kind === 3 ? o : tubeSpec(o);
     const type = o.type ?? (o.chord != null ? "airfoil" : o.radius != null ? "cylinder" : "uniform");
     const U = o.U ?? o.speed ?? 1, center = o.center ?? [0, 0, 0];
     if (type === "cylinder") {
@@ -987,6 +1047,7 @@
   // Velocity at world point p, or null inside the body.
   function flowAt(F, p) {
     if (F.kind === 0) return [F.U, 0, 0];
+    if (F.kind === 3) return tubeAt(F, p);
     const ca = Math.cos(F.alpha), sa = Math.sin(F.alpha);
     let x = (p[0] - F.center[0]) / F.S, y = (p[1] - F.center[1]) / F.S;
     let w;
@@ -1024,6 +1085,7 @@
     cylinder: (o = {}) => flowObject(flowSpec({ ...o, type: "cylinder" })),
     airfoil: (o = {}) => flowObject(flowSpec({ ...o, type: "airfoil" })),
     uniform: (o = {}) => flowObject(flowSpec({ ...o, type: "uniform" })),
+    tube: (o = {}) => flowObject(flowSpec({ ...o, type: "tube" })),
   };
   function flowObject(F) {
     return {
@@ -1055,10 +1117,48 @@
   // (seed, slot, generation). The state is stepped in fixed steps on a global time grid,
   // so the picture at time t depends only on the seed and t: the page checker and
   // screenshots see the same smoke every time. Set `time` (or scene.time) from the figure's state.
+  // What the particles are made of sets how they move, from SI numbers scaled by `units` (world
+  // units per meter: "m", "cm", "mm", or a number). Things that fall get gravity and the drag that
+  // brings them to their terminal speed in still air (vt, m/s); bubbles do the same upward (rise).
+  // Hot gas gets Archimedes' lift on a parcel at its birth temperature in air at 293 K,
+  // g (T - Ta) / T, fading as it mixes and cools, against an entrainment drag (1/s). Eddies are
+  // the air's own swirl [speed m/s, size m, change rate], so a stiff tracer like dust rides them.
+  const UNITS = { m: 1, cm: 100, mm: 1000, km: 0.001 };
+  const MATTER = {
+    smoke: { gas: true, style: "smoke", temperature: [600, 300], drag: 1.6, eddy: [0.9, 0.8, 0.35], life: [5, 9], size: [0.3, 2.4], opacity: 0.3, bounce: 0, friction: 0.05 },
+    exhaust: { gas: true, style: "smoke", temperature: [1100, 320], drag: 0.9, eddy: [2.2, 3, 0.25], life: [6, 12], size: [1, 8], opacity: 0.26, bounce: 0, friction: 0.05 },
+    steam: { gas: true, style: "smoke", temperature: [373, 295], drag: 2.5, eddy: [0.4, 0.3, 0.5], life: [1.5, 3.5], size: [0.04, 0.5], opacity: 0.35, color: "#f3f5f7", fade: [0.12, 0.65], bounce: 0, friction: 0.05 },
+    fire: { gas: true, style: "fire", temperature: [1300, 700], drag: 3.5, eddy: [1, 0.15, 1.4], life: [0.4, 0.9], size: [0.08, 0.3], intensity: 0.55, bounce: 0, friction: 0.05 },
+    dust: { vt: 0.3, style: "smoke", eddy: [0.6, 0.6, 0.3], life: [3, 7], size: [0.08, 1], opacity: 0.22, color: "#a8916f", bounce: 0, friction: 1 },
+    mist: { vt: 0.25, style: "smoke", eddy: [0.4, 0.5, 0.4], life: [1.5, 3], size: [0.05, 0.4], opacity: 0.18, color: "#eef4f8", fade: [0.1, 0.6], bounce: 0, friction: 1 },
+    sand: { vt: 2.5, style: "dot", eddy: [0.2, 0.3, 0.3], life: [1.2, 2.5], size: [0.006, 0.006], color: "#c4a26a", bounce: 0.15, friction: 0.85 },
+    water: { vt: 5.5, style: "streak", eddy: [0.05, 0.3, 0.3], life: [0.8, 2], size: [0.012, 0.012], color: "#d4e9f7", bounce: 0.1, friction: 0.6 },
+    rain: { vt: 8.5, style: "streak", life: [1.5, 3], size: [0.006, 0.006], color: "#bcd3e6", bounce: 0.02, friction: 0.95 },
+    snow: { vt: 1, style: "dot", eddy: [0.8, 0.6, 0.5], life: [4, 8], size: [0.012, 0.012], color: "#ffffff", bounce: 0, friction: 1 },
+    spark: { vt: 7, style: "spark", temperature: [2100, 900], life: [0.5, 1.4], size: [0.01, 0.006], bounce: 0.35, friction: 0.25 },
+    ember: { vt: 1.5, lift: 1.8, style: "spark", temperature: [1250, 750], eddy: [0.5, 0.3, 0.6], life: [1.5, 3.5], size: [0.012, 0.008], bounce: 0.2, friction: 0.6 },
+    bubble: { rise: 0.25, style: "sphere", eddy: [0.06, 0.02, 1], life: [2, 5], size: [0.004, 0.005], color: "#dff1fb", bounce: 0, friction: 0 },
+    air: { drag: 20, style: "streak", eddy: [0.3, 1, 0.3], life: [1, 2], size: [0.004, 0.004], color: "#9fc3dd", bounce: 0.5, friction: 0 },
+  };
+  function matterPreset(o) {
+    const P = MATTER[o.matter];
+    if (!P) throw new Error("E3.particles: unknown matter " + JSON.stringify(o.matter) + "; one of " + Object.keys(MATTER).join(", "));
+    const u = typeof o.units === "number" ? o.units : UNITS[o.units ?? "m"] ?? 1, G = 9.81;
+    const forces = {}, opts = { style: P.style, life: P.life, size: P.size.map(s => s * u) };
+    for (const k of ["temperature", "color", "opacity", "fade", "intensity"]) if (P[k] != null) opts[k] = P[k];
+    if (P.vt != null) { forces.gravity = -G * u; forces.drag = G / P.vt; }
+    else if (P.rise != null) { forces.gravity = G * u; forces.drag = G / P.rise; }
+    else forces.drag = P.drag ?? 0;
+    const T = o.temperature ?? P.temperature, T0 = Array.isArray(T) ? T[0] : T;
+    if (P.gas && T0) forces.buoyancy = G * u * Math.max(0, (T0 - (o.ambient ?? 293)) / T0);
+    if (P.lift) forces.buoyancy = G * u * P.lift;
+    if (P.eddy) forces.turbulence = { strength: P.eddy[0] * u * Math.max(1, forces.drag), scale: P.eddy[1] * u, speed: P.eddy[2] };
+    return { opts, forces, bounce: P.bounce ?? 0.2, friction: P.friction ?? 0.5 };
+  }
   const PDEF = {
     count: 2000, seed: 1, life: [2, 4], step: 1 / 30, prewarm: true, style: "smoke",
     size: [0.2, 0.8], opacity: 0.6, fade: [0.12, 0.4], trail: 0.12, width: 0, intensity: 1, density: 1,
-    temperature: [1900, 900], color: null, colorBy: null, range: [0, 1], soft: null, measure: false,
+    temperature: [1900, 900], color: null, colorBy: null, range: [0, 1], soft: null, measure: false, glow: 0, segments: null, volume: null,
   };
   const STYLE_ID = { smoke: 0, fire: 1, spark: 2, streak: 3, sphere: 4, dot: 5 };
   class Particles extends Node {
@@ -1068,10 +1168,15 @@
       this.pickable = false;
       this.cut = false;
       this.time = null;
-      Object.assign(this, PDEF, o);
+      const M = o.matter ? matterPreset(o) : null;
+      Object.assign(this, PDEF, M && M.opts, o);
       this.emitter = { shape: "point", ...(o.emitter || {}) };
-      this.forces = o.forces || {};
+      this.forces = M ? { ...M.forces, ...(o.forces || {}) } : o.forces || {};
       this.colliders = o.colliders || [];
+      // A collider without its own bounce and friction takes the matter's: water splashes a
+      // little and runs, dust and snow stay where they land, sparks skip.
+      if (M) for (const c of this.colliders) { if (c.bounce == null) c.bounce = M.bounce; if (c.friction == null) c.friction = M.friction; }
+      if (o.ground != null) this.colliders.push({ plane: [0, 1, 0, o.ground], bounce: M ? M.bounce : 0.2, friction: M ? M.friction : 0.5 });
       this._state = null;
       this._n = null;
       this.hits = [];
@@ -1212,7 +1317,7 @@
           if (F.turb[0]) { const c = curl(px * F.turb[1], py * F.turb[1], pz * F.turb[1] + t * F.turb[2]); vx += c[0] * F.turb[0]; vy += c[1] * F.turb[0]; vz += c[2] * F.turb[0]; }
           px += vx * dtl; py += vy * dtl; pz += vz * dtl;
         } else {
-          let ax = F.g[0] + F.drag * (F.wind[0] - vx), ay = F.g[1] + F.drag * (F.wind[1] - vy) + F.buoyancy * Math.max(0, 1 - age / life), az = F.g[2] + F.drag * (F.wind[2] - vz);
+          let ax = F.g[0], ay = F.g[1] + F.buoyancy * Math.max(0, 1 - age / life), az = F.g[2];
           if (F.turb[0]) { const c = curl(px * F.turb[1], py * F.turb[1], pz * F.turb[1] + t * F.turb[2]); ax += c[0] * F.turb[0]; ay += c[1] * F.turb[0]; az += c[2] * F.turb[0]; }
           if (F.vortex) {
             const V = F.vortex, r = [px - V.c[0], py - V.c[1], pz - V.c[2]], ra = v3.dot(r, V.a), rp = v3.sub(r, v3.scale(V.a, ra));
@@ -1223,8 +1328,18 @@
             const d = [A.p[0] - px, A.p[1] - py, A.p[2] - pz], q = A.s / Math.pow(v3.dot(d, d) + A.r * A.r, 1.5);
             ax += d[0] * q; ay += d[1] * q; az += d[2] * q;
           }
-          vx += ax * dtl; vy += ay * dtl; vz += az * dtl;
-          px += vx * dtl; py += vy * dtl; pz += vz * dtl;
+          const k = F.drag;
+          if (k > 0) {
+            // Drag solved exactly over the step, so stiff drag (dust, bubbles) stays stable: the
+            // velocity relaxes at rate k toward the wind plus the other forces over k.
+            const e = Math.exp(-k * dtl), f = (1 - e) / k;
+            const tx = F.wind[0] + ax / k, ty = F.wind[1] + ay / k, tz = F.wind[2] + az / k;
+            px += tx * dtl + (vx - tx) * f; py += ty * dtl + (vy - ty) * f; pz += tz * dtl + (vz - tz) * f;
+            vx = tx + (vx - tx) * e; vy = ty + (vy - ty) * e; vz = tz + (vz - tz) * e;
+          } else {
+            vx += ax * dtl; vy += ay * dtl; vz += az * dtl;
+            px += vx * dtl; py += vy * dtl; pz += vz * dtl;
+          }
         }
         for (const C of F.planes) {
           const s = C.n[0] * px + C.n[1] * py + C.n[2] * pz - C.d;
@@ -1253,7 +1368,8 @@
     // Brings the state to time t (seconds). Returns true if anything was simulated.
     // stepFn(tEnd) runs one step on whatever integrator holds the state; reset() starts over.
     advanceWith(t, n, reset, stepFn) {
-      const h = this.step, te = this.simTime(t), target = Math.floor(te / h + 1e-6), P = this.period;
+      // At least one step, so a system at time 0 (a paused figure, reduced motion) has been born.
+      const h = this.step, te = this.simTime(t), target = Math.max(1, Math.floor(te / h + 1e-6)), P = this.period;
       const need = P ? Math.ceil(P / h) + 2 : 4000;
       if (this._n == null || target < this._n || target - this._n > need || this._count !== n) {
         this._n = P ? target - need : Math.max(0, target - need);
@@ -1310,18 +1426,41 @@
       this.pickable = false;
       this.cut = false;
       this.time = null;
-      Object.assign(this, { radius: 1, length: 8, throttle: 1, temperature: 2500, fuel: "kerosene", cells: 1.5, spread: 0.05, turbulence: 1, intensity: 1, light: 1, speed: 1 }, o);
+      Object.assign(this, { radius: 1, length: 8, throttle: 1, temperature: 2500, fuel: "kerosene", cells: 1.5, spread: 0.05, turbulence: 1, intensity: 1, light: 1, speed: 1, expansion: 0.8, impact: null, splash: 1, ground: 0, profile: null }, o);
+      if (this.profile && o.cut == null) this.cut = true;
     }
-    get lengthNow() { return this.length * (0.45 + 0.55 * clamp01(this.throttle)); }
-    // A point light in world space that stands in for the plume's glow on nearby surfaces.
-    glowLight() {
-      if (!this.light || this.throttle <= 0) return null;
-      const T = this.temperature * (0.7 + 0.3 * clamp01(this.throttle));
-      const at = this.toWorld([0, -this.lengthNow * 0.3, 0]);
-      const k = this.light * clamp01(this.throttle) * 2.2;
+    get lengthNow() { return this.profile ? this.profile[this.profile.length - 1][1] : this.length * (0.45 + 0.55 * clamp01(this.throttle)); }
+    // Distance along the jet (local units) to the surface it hits: a number, or with
+    // impact: true the plane y = ground in world space; 0 when it hits nothing.
+    impactNow() {
+      if (this.profile || !this.impact) return 0;
+      if (typeof this.impact === "number") return this.impact;
+      const W = this.world(), o = m4.apply(W, [0, 0, 0]), d = m4.applyDir(W, [0, -1, 0]), ws = Math.hypot(W[0], W[1], W[2]) || 1;
+      const dn = v3.norm(d);
+      if (dn[1] > -0.05) return 0;
+      const dist = (o[1] - this.ground) / -dn[1] / ws;
+      return dist > 0 && dist < this.lengthNow * 1.6 ? dist : 0;
+    }
+    get splashRadius() { return this.radius * 4.5 * this.splash * (0.6 + 0.4 * clamp01(this.throttle)); }
+    // Exit pressure over ambient at the current throttle: a throttled engine runs over-expanded.
+    get expansionNow() { return this.expansion * (0.35 + 0.65 * clamp01(this.throttle)); }
+    // Point lights in world space that stand in for the plume's glow on nearby surfaces:
+    // a strong one just below the exit (it lights the nozzle and the stand) and a softer
+    // one down the plume for the ground and the smoke.
+    glowLights() {
+      if (!this.light || this.throttle <= 0 || this.profile) return [];
+      const thr = clamp01(this.throttle), T = this.temperature * (0.7 + 0.3 * thr);
       const sc = this.world(), s = Math.hypot(sc[0], sc[1], sc[2]);
-      return { position: at, color: blackbody(T * 0.75).map(v => v * k), range: this.lengthNow * s * 0.9 };
+      const L = this.lengthNow, k = this.light * thr, imp = this.impactNow();
+      const col = blackbody(T * 0.75);
+      // With an impact, the second light sits in the splash and lights the pad and the cloud from below.
+      return [
+        { position: this.toWorld([0, -L * 0.12, 0]), color: col.map(v => v * k * 5), range: L * s * 0.6 },
+        imp ? { position: this.toWorld([0, -imp * 0.96, 0]), color: blackbody(1900).map(v => v * k * 4), range: this.splashRadius * s * 1.6 }
+            : { position: this.toWorld([0, -L * 0.6, 0]), color: col.map(v => v * k * 2.5), range: L * s * 1.1 },
+      ];
     }
+    glowLight() { return this.glowLights()[0] || null; }
   }
 
   // ---------- shaders ----------
@@ -1469,6 +1608,7 @@ uniform mat4 uModel;
 uniform vec3 uColor; uniform vec3 uLight; uniform vec3 uEye;
 uniform float uSun;
 uniform vec4 uMat; uniform vec3 uF0; uniform vec4 uBrush; uniform vec4 uDetail; uniform vec3 uEmit;
+uniform vec4 uTissue; uniform vec3 uSssCol; // tissue: scattering, sheen, fibers on, _; scattered light color
 uniform vec4 uTempAxis; uniform vec4 uTempS; uniform vec4 uTempT; uniform vec4 uHeat;
 uniform vec3 uKeyCol; uniform vec3 uFillDir; uniform vec3 uFillCol; uniform vec3 uRimDir; uniform vec3 uRimCol;
 uniform vec4 uPtPos[2]; uniform vec3 uPtCol[2];
@@ -1543,6 +1683,8 @@ vec3 shadePBR(vec3 N, vec3 V, vec3 wp, vec3 lp, vec3 ln, float vis, out vec3 emi
       float g = 0.55 * vnoise1(s) + 0.3 * vnoise1(s * 3.7 + 11.0) + 0.15 * vnoise1(s * 11.3 + 37.0);
       rough = clamp(rough * (1.0 + 0.4 * g), 0.03, 1.0);
       f0 *= 1.0 + 0.07 * g;
+      // Muscle: fascicles show as fine light and dark stripes along the fibers.
+      if (uTissue.z > 0.5) diff *= 0.8 + 0.2 * smoothstep(-0.4, 0.6, g + 0.35 * sin(s * 2.1));
     }
   }
   if (uDetail.z > 0.5) {
@@ -1566,8 +1708,12 @@ vec3 shadePBR(vec3 N, vec3 V, vec3 wp, vec3 lp, vec3 ln, float vis, out vec3 emi
   if (uTempAxis.w > 0.5) {
     float Tk = temperatureAt(lp);
     if (uHeat.x > 0.5) {
-      vec4 ht = heatTint(Tk - uHeat.y);
-      f0 = mix(f0, toLin(mix(ht.rgb, vec3(0.6), 0.3)), ht.a * 0.7);
+      // Oxide colors vary across a fired part: jitter the temperature by surface noise so the
+      // bands mottle the way real heat tint does, and keep them muted.
+      float span = max(abs(uTempS.y - uTempS.x), 1e-3);
+      float nT = 0.6 * vnoise(lp * (7.0 / span)) + 0.4 * vnoise(lp * (19.0 / span) + 7.3);
+      vec4 ht = heatTint(Tk - uHeat.y + 45.0 * nT);
+      f0 = mix(f0, toLin(mix(ht.rgb, vec3(0.6), 0.45)), ht.a * 0.5);
       rough = mix(rough, max(rough, 0.5), smoothstep(620.0, 900.0, Tk - uHeat.y));
     }
     emission += blackbody(Tk) * glowOf(Tk);
@@ -1584,6 +1730,23 @@ vec3 shadePBR(vec3 N, vec3 V, vec3 wp, vec3 lp, vec3 ln, float vis, out vec3 emi
     vec3 d = uPtPos[i].xyz - wp;
     float r2 = dot(d, d), att = 1.0 / (1.0 + r2 / (uPtPos[i].w * uPtPos[i].w));
     col += lightPBR(N, V, normalize(d), uPtCol[i] * att, diff, f0, a, X, Y, aniso);
+  }
+  // Tissue: light that enters scatters under the surface, so it wraps past the terminator tinted
+  // by the blood and fat it passed through, glows through thin edges, and fuzzy fibers add sheen.
+  if (uTissue.x > 0.0) {
+    vec3 sc = toLin(uSssCol);
+    float sssAmt = uTissue.x, w = 0.55 * sssAmt;
+    for (int i = 0; i < 3; i++) {
+      if (i > 0 && uSun > 0.5) break;
+      vec3 L = i == 0 ? uLight : i == 1 ? uFillDir : uRimDir;
+      vec3 Lc = i == 0 ? uKeyCol * mix(1.0, vis, 0.6) : i == 1 ? uFillCol : uRimCol;
+      float ndl = dot(N, L), wrapped = clamp((ndl + w) / (1.0 + w), 0.0, 1.0);
+      col += Lc * sc * (wrapped * wrapped - max(ndl, 0.0) * max(ndl, 0.0)) * sssAmt * base / PI * 1.6;
+      col += Lc * sc * pow(clamp(dot(V, -(L + N * 0.35)), 0.0, 1.0), 4.0) * sssAmt * 0.22;
+    }
+    col += sc * envDiff(-N) * uLook.x * 0.18 * sssAmt;
+    float NoV0 = max(dot(N, V), 0.0);
+    col += uTissue.y * pow(1.0 - NoV0, 4.0) * (envDiff(N) * uLook.x + uKeyCol * vis * 0.25) * mix(base, vec3(1.0), 0.4) * 0.7;
   }
   float NoV = max(dot(N, V), 1e-4);
   vec3 Nb = N;
@@ -1708,6 +1871,7 @@ uniform vec3 uColor; uniform vec3 uEye; uniform vec3 uLight; uniform vec3 uKeyCo
 uniform vec4 uCut; uniform float uCutOn; uniform float uId; uniform vec3 uHighlight; uniform float uHighlightOn;
 uniform sampler2D uScene; uniform vec2 uSceneInv; uniform vec2 uSceneSize;
 uniform mat4 uViewProj; uniform vec4 uGlass; uniform vec4 uLook;
+uniform vec4 uWater; // water: ripple strength, ripple wavelength (world), time, depth color
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
 vec2 screenOf(vec3 w) { vec4 c = uViewProj * vec4(w, 1.0); return (c.xy / c.w * 0.5 + 0.5) * uSceneSize; }
@@ -1716,25 +1880,46 @@ void main() {
   vec3 N = normalize(vNormal);
   if (!gl_FrontFacing) N = -N;
   vec3 V = normalize(uEye - vWorld);
+  if (uWater.x > 0.0 && N.y > 0.2) {
+    // A water surface: three travelling swells and a finer chop tilt the normal; the tilts move
+    // the refracted picture and break the sun's reflection into glints.
+    vec2 q = vWorld.xz / max(uWater.y, 1e-6);
+    float t = uWater.z;
+    vec2 g = vec2(0.8, 0.6) * cos(dot(q, vec2(0.8, 0.6)) + t * 1.3)
+           + vec2(-0.5, 0.86) * cos(dot(q, vec2(-0.5, 0.86)) * 1.7 + t * 1.9) * 0.55
+           + vec2(0.24, -0.97) * cos(dot(q, vec2(0.24, -0.97)) * 2.9 + t * 2.7) * 0.3;
+    g += vec2(vnoise(vec3(q * 3.1, t * 0.7)), vnoise(vec3(q * 3.1 + 11.0, t * 0.7))) * 0.35;
+    N = normalize(N + vec3(-g.x, 0.0, -g.y) * uWater.x * 0.08 * N.y);
+  }
   float NoV = clamp(dot(N, V), 0.0, 1.0);
   float ior = uGlass.x, thick = uGlass.y, disp = uGlass.z, rough = uGlass.w;
   float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
   float F = f0 + (1.0 - f0) * pow(1.0 - NoV, 5.0);
   vec2 here = gl_FragCoord.xy;
-  vec3 behind = vec3(0.0); float behindA = 0.0;
+  vec3 behind = vec3(0.0), wsum = vec3(0.0); float behindA = 0.0;
   float tir = 0.0;
-  for (int c = 0; c < 3; c++) {
-    float n = ior + (float(c) - 1.0) * disp;
+  // Dispersion: six wavelengths across the visible band, each bent by its own index and weighted
+  // into RGB by a smooth response, so a fringe is a soft gradient rather than three hard copies.
+  // Rough (frosted) glass spreads each sample over a small disk of what's behind.
+  float ang = 6.2831853 * fract(52.9829189 * fract(dot(here, vec2(0.06711056, 0.00583715))));
+  for (int i = 0; i < 6; i++) {
+    float u = (float(i) + 0.5) / 6.0;
+    float n = ior + (u - 0.5) * 2.0 * disp;
     vec3 Tr = refract(-V, N, 1.0 / n);
     if (dot(Tr, Tr) < 1e-6) { tir += 1.0; continue; }
-    // Where the bent ray leaves the body, approximately, and the opaque picture there.
     vec2 at = screenOf(vWorld + Tr * thick * (1.0 + 0.6 * (1.0 - NoV)));
-    vec4 s = texture(uScene, clamp(at, vec2(0.5), uSceneSize - 0.5) * uSceneInv);
-    behind[c] = s[c];
-    behindA += s.a / 3.0;
+    float a2 = ang + float(i) * 2.39996;
+    at += vec2(cos(a2), sin(a2)) * rough * 28.0 * sqrt(u + 0.1);
+    vec4 sm = texture(uScene, clamp(at, vec2(0.5), uSceneSize - 0.5) * uSceneInv);
+    vec3 w = vec3(exp(-pow((u - 0.1) / 0.24, 2.0)), exp(-pow((u - 0.5) / 0.22, 2.0)), exp(-pow((u - 0.9) / 0.24, 2.0)));
+    behind += sm.rgb * w; wsum += w;
+    behindA += sm.a / 6.0;
   }
+  behind /= max(wsum, vec3(1e-4));
+  tir *= 3.0 / 6.0;
   // Absorption: a faint tint, stronger where the light crosses more glass (edges).
-  vec3 tint = pow(clamp(uColor, 0.02, 1.0), vec3(0.6 + 1.6 * (1.0 - NoV)));
+  // Water absorbs red first, so deeper water (or a longer path at a grazing angle) turns blue-green.
+  vec3 tint = pow(clamp(uColor, 0.02, 1.0), vec3((0.6 + 1.6 * (1.0 - NoV)) * (1.0 + uWater.w)));
   float T = (1.0 - F) * (1.0 - tir / 3.0);
   vec3 R = reflect(-V, N);
   vec3 refl = envSpec(R, rough) * uLook.y;
@@ -1791,7 +1976,26 @@ uniform vec2 uInvSize; uniform float uStep; uniform float uInk;
 uniform vec2 uScale; uniform int uTaps; uniform float uAo; uniform float uAoR;
 uniform vec2 uFxInv; uniform vec2 uBloomInv; uniform vec4 uPost;
 uniform mat3 uViewRot; uniform vec2 uTanHalf; uniform vec2 uSize;
+uniform vec4 uShim[4]; uniform vec4 uShimR[4]; uniform int uShimN; uniform float uShimT;
 out vec4 o;
+// Heat shimmer: hot gas bends the light from what's behind it. Each zone is a tapered capsule
+// in output pixels (start, end; radius at each end, strength in pixels); noise drifting along
+// it offsets where the scene behind is read, so solids seen through the jet waver.
+vec2 shimmer(vec2 p) {
+  vec2 off = vec2(0.0);
+  for (int i = 0; i < 4; i++) {
+    if (i >= uShimN) break;
+    vec2 a = uShim[i].xy, ab = uShim[i].zw - a;
+    float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0);
+    float r = mix(uShimR[i].x, uShimR[i].y, t), d = length(p - (a + ab * t));
+    float m = (1.0 - smoothstep(r * 0.35, r, d)) * smoothstep(0.0, 0.1, t) * (1.0 - smoothstep(0.7, 1.0, t));
+    if (m <= 0.0) continue;
+    vec2 dir = ab / max(length(ab), 1e-4);
+    vec3 q = vec3((p - dir * uShimT * r * 2.5) / max(r * 0.3, 1.0), uShimT * 3.0);
+    off += vec2(vnoise(q), vnoise(q + 19.7)) * uShimR[i].z * m;
+  }
+  return off;
+}
 vec4 shade(vec2 px) {
   vec4 c0 = texture(uColor, px * uInvSize);
   c0.rgb = min(c0.rgb, vec3(c0.a));
@@ -1861,13 +2065,14 @@ float occlusion(vec2 px) {
 }
 void main() {
   vec2 o0 = floor(gl_FragCoord.xy);
+  vec2 o1 = uShimN > 0 ? o0 + shimmer(o0 + 0.5) : o0;
   vec4 sum = vec4(0.0);
   float N = float(uTaps);
   for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
-    if (i < uTaps && j < uTaps) sum += shade((o0 + (vec2(float(i), float(j)) + 0.5) / N) * uScale);
+    if (i < uTaps && j < uTaps) sum += shade((o1 + (vec2(float(i), float(j)) + 0.5) / N) * uScale);
   }
   vec4 sc = sum / (N * N);
-  if (uAo > 0.0) sc.rgb *= occlusion((o0 + 0.5) * uScale);
+  if (uAo > 0.0) sc.rgb *= occlusion((o1 + 0.5) * uScale);
   vec4 res = sc;
   if (uPost.x > 0.5) {
     vec4 fx = texture(uFx, (o0 + 0.5) * uFxInv);
@@ -2042,11 +2247,41 @@ uniform vec4 uFlowA; uniform vec4 uFlowB; uniform vec4 uFlowC;
 vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
 vec2 cdiv(vec2 a, vec2 b) { float d = max(dot(b, b), 1e-30); return vec2(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / d; }
 vec2 csqrt(vec2 a) { float r = length(a), t = atan(a.y, a.x) * 0.5; return sqrt(r) * vec2(cos(t), sin(t)); }
+uniform highp sampler2D uFlowTex; uniform vec4 uFlowD; uniform vec4 uFlowE; uniform mat4 uFlowM; uniform mat4 uFlowMI;
+// Tube flow (kind 3): boundary radii by station in uFlowTex (row 0: c0 c1 b0 b1, row 1: x0),
+// uFlowD: y0, dy, stations, outside speed; uFlowE: core and bypass flux (Q / pi).
+vec4 tubeFlow(vec3 pw) {
+  vec3 q = (uFlowMI * vec4(pw, 1.0)).xyz;
+  float r = length(q.xz), fi = (q.y - uFlowD.x) / uFlowD.y;
+  int n = int(uFlowD.z + 0.5);
+  if (fi < 0.0 || fi > float(n - 1)) return vec4(mat3(uFlowM) * vec3(0.0, uFlowD.w, 0.0), 1.0);
+  int i = min(n - 2, int(floor(fi)));
+  float f = fi - float(i);
+  vec4 A = texelFetch(uFlowTex, ivec2(i, 0), 0), B = texelFetch(uFlowTex, ivec2(i + 1, 0), 0);
+  vec2 ra = texelFetch(uFlowTex, ivec2(i, 1), 0).xy, rb = texelFetch(uFlowTex, ivec2(i + 1, 1), 0).xy;
+  float xa = ra.x, xb = rb.x, heat = mix(ra.y, rb.y, f);
+  vec4 v = mix(A, B, f), d = (B - A) / uFlowD.y;
+  float x0 = mix(xa, xb, f), dx0 = (xb - xa) / uFlowD.y;
+  float a, b, da, db, Q, uy, ur;
+  if (r < v.x - 1e-4) return vec4(0.0);
+  if (r <= v.y) { a = v.x; b = v.y; da = d.x; db = d.y; Q = uFlowE.x * heat; }
+  else if (r < v.z) return vec4(0.0);
+  else if (r <= v.w) { a = v.z; b = v.w; da = d.z; db = d.w; Q = uFlowE.y; }
+  else if (r < x0) return vec4(0.0);
+  else { uy = uFlowD.w; ur = r > 1e-4 ? uy * x0 * dx0 / r : 0.0; vec3 lv = vec3(r > 1e-4 ? ur * q.x / r : 0.0, uy, r > 1e-4 ? ur * q.z / r : 0.0); return vec4(mat3(uFlowM) * lv, 1.0); }
+  float den = max(b * b - a * a, 1e-6);
+  uy = Q / den;
+  float eta = (r * r - a * a) / den;
+  ur = r > 1e-4 ? uy * (a * da * (1.0 - eta) + b * db * eta) / r : 0.0;
+  vec3 lv = vec3(r > 1e-4 ? ur * q.x / r : 0.0, uy, r > 1e-4 ? ur * q.z / r : 0.0);
+  return vec4(mat3(uFlowM) * lv, 1.0);
+}
 // uFlowA: kind, U, alpha, S. uFlowB: center xyz, mid. uFlowC: mu.x, mu.y, a, gamma. Returns w = 0 inside the body.
 vec4 flowAt(vec3 p) {
   int kind = int(uFlowA.x + 0.5);
   float U = uFlowA.y;
   if (kind == 0) return vec4(U, 0.0, 0.0, 1.0);
+  if (kind == 3) return tubeFlow(p);
   float al = uFlowA.z, ca = cos(al), sa = sin(al);
   vec2 x = (p.xy - uFlowB.xy) / uFlowA.w;
   float g = uFlowC.w / (2.0 * PI);
@@ -2159,7 +2394,7 @@ void main() {
     if (uTurb.x > 0.0) v += curl(p * uTurb.y + vec3(0.0, 0.0, uT * uTurb.z)) * uTurb.x;
     p += v * h;
   } else {
-    vec3 acc = uGrav.xyz + uGrav.w * (uWind.xyz - v);
+    vec3 acc = uGrav.xyz;
     acc.y += uWind.w * max(0.0, 1.0 - age / life);
     if (uTurb.x > 0.0) acc += curl(p * uTurb.y + vec3(0.0, 0.0, uT * uTurb.z)) * uTurb.x;
     if (uVortC.y > 0.5) {
@@ -2172,8 +2407,16 @@ void main() {
       vec3 d = uAttr[j].xyz - p;
       acc += d * uAttr[j].w / pow(dot(d, d) + uAttrR[j] * uAttrR[j], 1.5);
     }
-    v += acc * h;
-    p += v * h;
+    float kd = uGrav.w;
+    if (kd > 0.0) {
+      float e = exp(-kd * h), f = (1.0 - e) / kd;
+      vec3 vt = uWind.xyz + acc / kd;
+      p += vt * h + (v - vt) * f;
+      v = vt + (v - vt) * e;
+    } else {
+      v += acc * h;
+      p += v * h;
+    }
   }
   for (int j = 0; j < 8; j++) {
     if (j >= uNPlane) break;
@@ -2214,43 +2457,86 @@ void main() { o = vec4(0.0); }`;
   const VS_PARTICLE = `#version 300 es
 ${G_COMMON}
 ${G_SLOT}
+${G_FLOW}
 layout(location=0) in vec4 aP; layout(location=1) in vec4 aV;
 uniform mat4 uViewProj; uniform vec3 uEye; uniform vec3 uCamR; uniform vec3 uCamU;
 uniform vec4 uTime; uniform vec4 uSize; uniform int uStyle; uniform vec4 uShape;
-out vec2 vUv; out float vAge; out float vRnd; out vec3 vWorld; out vec3 vCenter; out float vSize; out vec3 vVel;
+uniform vec4 uSlab; uniform vec2 uSlabZ; uniform vec3 uSlabEye; uniform vec2 uPxW;
+out vec2 vUv; out float vAge; out float vRnd; out vec3 vWorld; out vec3 vCenter; out float vSize; out vec3 vVel; out float vCov;
 flat out int vAlive;
+// uPxW: world size of one output pixel, per unit of distance (perspective) and flat (orthographic).
+// uShape: trail (seconds of path behind the head), width (world units, 0 = from size), ribbon segments, part shadow.
+// uSlab: camera forward (w = 0 for no slab); uSlabZ: the depth range this draw keeps.
 void main() {
   int i = gl_InstanceID;
   float k, age;
   slotAt(i, uTime.x, uLife.y, k, age);
   float life = lifeOf(i, k);
   float r = rnd(i, k, 7u);
-  vAlive = 0;
+  vAlive = 0; vCov = 1.0;
   vUv = vec2(0.0); vAge = 0.0; vRnd = r; vWorld = vec3(0.0); vCenter = vec3(0.0); vSize = 0.0; vVel = vec3(0.0);
   if (aP.w != k || age < 0.0 || age > life || r > uTime.w) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vAlive = 1;
   float dtR = uTime.y - uTime.x;
   vec3 p = aP.xyz + aV.xyz * dtR;
+  if (dot(uSlab.xyz, uSlab.xyz) > 0.5) {
+    float z = dot(p - uSlabEye, uSlab.xyz);
+    if (z < uSlabZ.x || z >= uSlabZ.y) { vAlive = 0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  }
   age += dtR;
   float t01 = uLife.y <= 0.0 ? 0.0 : clamp(age / life, 0.0, 1.0);
   float size = mix(uSize.x, uSize.y, sqrt(t01)) * (1.0 + uSize.z * (rnd(i, k, 8u) - 0.5));
-  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
-  vUv = c; vAge = t01; vCenter = p; vSize = size; vVel = aV.xyz;
+  vAge = t01; vCenter = p; vSize = size; vVel = aV.xyz;
   vec3 w;
   if (uStyle == 2 || uStyle == 3) {
-    vec3 v = aV.xyz; float sp = length(v);
-    vec3 dir = sp > 1e-5 ? v / sp : uCamU;
-    float len = max(sp * uShape.x, size);
-    vec3 side = cross(dir, normalize(uEye - p));
-    side = length(side) > 1e-5 ? normalize(side) : uCamR;
+    // A ribbon of vertex pairs along the path the particle just travelled. Tracers in a
+    // flow walk the field backwards, so the ribbon bends with its streamline (and curls
+    // around a wing); everything else trails straight back along its velocity. The
+    // ribbon is no longer than the particle's age, so nothing shows before its birth.
+    int segs = max(int(uShape.z), 1);
+    int seg = gl_VertexID >> 1;
+    float side = float(gl_VertexID & 1) * 2.0 - 1.0;
+    float u = float(seg) / float(segs);
+    float sp = length(aV.xyz);
+    vec3 dir = sp > 1e-5 ? aV.xyz / sp : uCamU;
+    float trailT = max(uShape.x, 1e-4);
+    float back = min(u * trailT, age);
+    float h = seg > 0 ? back / float(seg) : trailT / float(segs);
+    vec3 q = p, tang = dir;
+    if (uFlowA.x > -0.5) {
+      vec3 vv = aV.xyz;
+      for (int st = 0; st < 24; st++) {
+        if (st >= seg) break;
+        vec4 f = flowAt(q);
+        vv = f.w > 0.5 ? f.xyz : vv;
+        q -= vv * h;
+      }
+      vec4 fb = flowAt(q);
+      vec3 vt = fb.w > 0.5 ? fb.xyz : vv;
+      tang = length(vt) > 1e-7 ? normalize(vt) : dir;
+    } else {
+      q = p - dir * sp * back;
+    }
+    vec3 toEye = normalize(uEye - q);
+    vec3 sideV = cross(tang, toEye);
+    sideV = length(sideV) > 1e-5 ? normalize(sideV) : uCamR;
     float wd = uShape.y > 0.0 ? uShape.y : size * 0.3;
-    w = p + dir * (c.y * 0.5 - 0.5) * len + side * c.x * wd * 0.5;
+    // Never thinner than about 1.5 output pixels: a thinner ribbon is drawn at that width
+    // and faded by the share of it it really covers, so it stays smooth instead of breaking up.
+    float px = uPxW.x * length(uEye - q) + uPxW.y, wMin = 1.5 * px;
+    vCov = min(1.0, wd / wMin);
+    wd = max(wd, wMin);
+    float taper = uStyle == 3 ? (1.0 - 0.75 * u) * smoothstep(0.0, 0.08, 1.0 - u) : 1.0 - 0.7 * u;
+    w = q + sideV * side * wd * 0.5 * taper;
+    vUv = vec2(side, u);
   } else {
+    vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
     float ang = uStyle == 0 ? r * 6.2831853 + age * (r - 0.5) * 0.6 : 0.0;
     vec2 rc = mat2(cos(ang), sin(ang), -sin(ang), cos(ang)) * c;
     float s = uStyle == 4 ? size * 1.25 : size * 0.5;
     w = p + (uCamR * rc.x + uCamU * rc.y) * s;
-    if (uStyle == 4) vUv = c;
+    vUv = uStyle == 4 ? c : rc;
+    if (uStyle == 0) vUv = c;
   }
   vWorld = w;
   gl_Position = uViewProj * vec4(w, 1.0);
@@ -2259,7 +2545,8 @@ void main() {
   const FS_PARTICLE = `#version 300 es
 ${G_COMMON}
 ${G_ENV}
-in vec2 vUv; in float vAge; in float vRnd; in vec3 vWorld; in vec3 vCenter; in float vSize; in vec3 vVel;
+${G_SHADOW}
+in vec2 vUv; in float vAge; in float vRnd; in vec3 vWorld; in vec3 vCenter; in float vSize; in vec3 vVel; in float vCov;
 flat in int vAlive;
 uniform int uStyle; uniform vec4 uShape; uniform vec3 uEye; uniform vec3 uCamR; uniform vec3 uCamU; uniform mat4 uView;
 uniform sampler2D uDepth; uniform vec2 uDepthScale;
@@ -2279,37 +2566,61 @@ void main() {
   float life = smoothstep(0.0, max(uFade.x, 1e-4), vAge) * (1.0 - smoothstep(1.0 - max(uFade.y, 1e-4), 1.0, vAge));
   float d2 = dot(vUv, vUv);
   if (uStyle == 0) {
-    float n = vnoise(vec3(vUv * 1.8 + vRnd * 13.0, vRnd * 7.0 + vAge * 1.5));
-    float puff = smoothstep(1.0, 0.15, d2 + 0.45 * n);
+    // Smoke: a puff of two noise octaves, lit as a small volume. Density toward the light
+    // self-shadows the puff (bright on the lit side, dark underneath), the scene's shadow
+    // map darkens smoke under the machine, and when the light is behind the puff its thin
+    // edges glow (forward scattering). Hot soot (glow > 0) emits by black-body color and
+    // cools along its life, so fire turns into smoke in one system.
+    vec3 sd = vec3(vRnd * 13.0, vRnd * 7.0, vRnd * 29.0);
+    float n1 = vnoise(vec3(vUv * 1.8 + sd.x, sd.y + vAge * 1.5));
+    float n2 = vnoise(vec3(vUv * 3.9 + sd.z, sd.x + vAge * 2.3)) * 0.5;
+    float puff = smoothstep(1.0, 0.12, d2 + 0.45 * n1 + 0.22 * n2);
     float a = puff * life * soft * uFade.w;
     if (a < 0.002) discard;
     vec3 toEye = normalize(uEye - vCenter);
     vec3 nrm = normalize(uCamR * vUv.x + uCamU * vUv.y + toEye * sqrt(max(1.0 - d2, 0.05)));
+    vec2 uvL = vUv + vec2(dot(uLight, uCamR), dot(uLight, uCamU)) * 0.55;
+    float dL = smoothstep(1.0, 0.12, dot(uvL, uvL) + 0.45 * vnoise(vec3(uvL * 1.8 + sd.x, sd.y + vAge * 1.5)));
+    float selfSh = 1.0 - 0.55 * dL * puff;
+    float vis = mix(1.0, shadowAt(vCenter, vec3(0.0, 1.0, 0.0)), uShape.w);
+    float mu = max(dot(-toEye, uLight), 0.0);
+    float fwd = mu * mu * mu * mu * (1.0 - puff) * 1.6;
     vec3 alb = toLin(colorAt());
-    vec3 lit = envDiff(nrm) * uLook.x + uKeyCol * (0.35 + 0.65 * max(dot(nrm, uLight), 0.0)) / PI;
+    float ndl = max(dot(nrm, uLight), 0.0);
+    vec3 lit = envDiff(nrm) * uLook.x * (1.0 - 0.25 * puff)
+             + uKeyCol * ((0.25 + 0.75 * ndl) * selfSh + fwd) * vis / PI;
     for (int i = 0; i < 2; i++) {
       if (uPtPos[i].w <= 0.0) continue;
       vec3 d = uPtPos[i].xyz - vCenter;
       float att = 1.0 / (1.0 + dot(d, d) / (uPtPos[i].w * uPtPos[i].w));
-      lit += uPtCol[i] * att * (0.4 + 0.6 * max(dot(nrm, normalize(d)), 0.0)) / PI;
+      vec3 ld = normalize(d);
+      // Smoke between the camera and a flame glows with the light passing through it.
+      float through = pow(max(dot(-toEye, ld), 0.0), 4.0) * (1.0 - 0.7 * puff) * 2.5;
+      lit += uPtCol[i] * att * (0.4 + 0.6 * max(dot(nrm, ld), 0.0) + through) / PI;
     }
-    vec3 col = toSrgb(tonemap(alb * lit * uLook.z));
-    o = vec4(col * a, a);
+    float T = mix(uHeatP.x, uHeatP.y, vAge);
+    vec3 emit = blackbody(T) * glowOf(T) * uHeatP.w * (0.6 + 0.4 * puff);
+    vec3 col = toSrgb(tonemap(alb * lit * uLook.z + emit));
+    o = vec4(col * a + emit * a * uLook.w * 0.15, a);
   } else if (uStyle == 1 || uStyle == 2) {
     float T = mix(uHeatP.x, uHeatP.y, vAge);
     vec3 e = blackbody(T) * glowOf(T) * uHeatP.z;
     float shape = uStyle == 1 ? pow(max(1.0 - d2, 0.0), 1.5) * (0.75 + 0.25 * vnoise(vec3(vUv * 2.5, vRnd * 9.0 + vAge * 3.0)))
-                              : (1.0 - vUv.x * vUv.x) * smoothstep(-1.0, 0.4, vUv.y);
-    float a = shape * life * soft;
+                              : (1.0 - vUv.x * vUv.x) * (1.0 - vUv.y) * (1.0 - vUv.y);
+    float a = shape * life * soft * (uStyle == 2 ? vCov : 1.0);
     if (a < 0.002) discard;
     vec3 c = toSrgb(tonemap(e)) * a;
     o = vec4(c + e * a * uLook.w * 0.15, 0.0);
   } else if (uStyle == 3) {
-    float across = 1.0 - smoothstep(0.35, 1.0, abs(vUv.x));
-    float along = smoothstep(-1.0, 0.6, vUv.y);
-    float a = across * along * life * uFade.w;
+    // Air tracer: a thin ribbon with a brighter core, fading toward its tail.
+    float ax = abs(vUv.x);
+    float across = 1.0 - smoothstep(0.3, 1.0, ax);
+    float core = 1.0 - smoothstep(0.0, 0.55, ax);
+    float along = (1.0 - vUv.y) * (1.0 - 0.5 * vUv.y);
+    float a = across * along * life * uFade.w * vCov;
     if (a < 0.003) discard;
-    o = vec4(colorAt() * a, a);
+    vec3 c = colorAt();
+    o = vec4(mix(c, mix(c, vec3(1.0), 0.35), core) * a, a);
   } else {
     float edge = 1.0 - smoothstep(0.8, 1.0, sqrt(d2));
     float a = edge * life * uFade.w;
@@ -2361,42 +2672,118 @@ ${G_COMMON}
 in vec3 vWorld;
 uniform mat4 uInvModel; uniform vec3 uEye; uniform mat4 uView; uniform vec3 uCamF;
 uniform sampler2D uDepth; uniform vec2 uDepthScale;
-uniform vec4 uP0; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uP3; uniform vec4 uLook;
+uniform vec4 uP0; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uP3; uniform vec4 uP4; uniform vec4 uLook;
+uniform vec4 uProf[24]; uniform vec4 uCut;
 out vec4 o;
 // uP0: exit radius, length, bound radius, time. uP1: throttle, cell length, core T, steps.
-// uP2: spread, turbulence, intensity, fuel. uP3: world-to-local scale, flow speed, _, _.
+// uP2: spread, turbulence, intensity, fuel. uP3: world-to-local scale, flow speed, expansion, _.
+// uP4: distance to the surface the jet hits (0 = none), splash radius, inner-flame stations, _.
+// uProf: inner flame stations (radius, distance from the origin, temperature).
 float fbm(vec3 x) { return 0.55 * vnoise(x) + 0.3 * vnoise(x * 2.03 + 17.0) + 0.15 * vnoise(x * 4.1 + 41.0); }
+// Emission by temperature, normalized so 2500 K gives 1 and compressed so the cooler tail
+// of the plume still shows instead of the exit alone blowing out.
+vec3 emitAt(float T) { return blackbody(T) * pow(glowOf(T) / 35.5, 0.6); }
+// Radius and temperature of the inner flame at distance s from its origin (-1 past the end).
+float profAt(float s, out float T) {
+  int n = int(uP4.z + 0.5);
+  vec4 a = uProf[0];
+  T = a.z;
+  if (s <= a.y) return a.x;
+  for (int i = 1; i < 24; i++) {
+    if (i >= n) break;
+    vec4 b = uProf[i];
+    if (s <= b.y) { float f = (s - a.y) / max(b.y - a.y, 1e-6); T = mix(a.z, b.z, f); return mix(a.x, b.x, f); }
+    a = b;
+  }
+  T = a.z;
+  return -1.0;
+}
+// The burning gas inside a chamber and nozzle: it fills the duct to its wall, hottest in the
+// middle, cooling as it expands; seen through a section cut.
+vec3 flameField(vec3 q, out float sigma) {
+  float s = -q.y, r = length(q.xz), T;
+  float R = profAt(s, T);
+  sigma = 0.0;
+  if (R <= 0.0) return vec3(0.0);
+  vec3 nq = vec3(q.x, q.y + uP0.w * uP3.y, q.z) / max(uP0.x, 1e-6) * 1.8;
+  float n = uP2.y > 0.0 ? fbm(nq) : 0.5;
+  float rr = r / max(R, 1e-6);
+  float body = smoothstep(1.0, 0.86, rr + 0.1 * (n - 0.5));
+  float Tl = T * (1.0 - 0.22 * rr * rr) * (0.93 + 0.14 * n);
+  sigma = body * 0.04;
+  return emitAt(Tl) * body * uP2.z * uP1.x * 0.3;
+}
 vec3 field(vec3 q, out float sigma) {
-  float r0 = uP0.x, L = uP0.y, lam = uP1.y, thr = uP1.x;
+  float r0 = uP0.x, L = uP0.y, lam = uP1.y, thr = uP1.x, ex = uP3.z;
   float s = -q.y, r = length(q.xz);
+  float imp = uP4.x;
+  sigma = 0.0;
+  if (imp > 0.0 && s > imp) return vec3(0.0);
+  // A jet that hits a surface keeps its strength down to it.
+  if (imp > 0.0) L = max(L, imp * 1.5);
+  // Mean radius: the spreading jet, pushed out (under-expanded) or necked in
+  // (over-expanded) by the exit pressure, settling back over a few cells.
   float R = r0 * (1.0 + uP2.x * s / r0);
+  R *= 1.0 + 0.4 * (ex - 1.0) * smoothstep(0.0, lam * 0.6, s) * exp(-s / (lam * 3.0));
+  // Near the surface the jet slows and bulges (the stagnation bubble).
+  float nearImp = imp > 0.0 ? smoothstep(imp - 2.5 * r0, imp, s) : 0.0;
+  R *= 1.0 + 1.4 * nearImp * nearImp;
   float cells = s / lam;
-  R *= 1.0 - 0.12 * (0.5 + 0.5 * cos(6.2831853 * cells)) * exp(-s / (lam * 4.0));
-  float turb = uP2.y * smoothstep(0.0, lam * 2.5, s);
-  vec3 nq = vec3(q.x, q.y + uP0.w * uP3.y, q.z) / r0 * 1.4;
+  float ripple = 0.1 + 0.22 * min(abs(ex - 1.0), 1.0);
+  R *= 1.0 - ripple * (0.5 + 0.5 * cos(6.2831853 * cells)) * exp(-s / (lam * 4.0));
+  // The mixing layer: eddies grow with distance and the layer thickens.
+  float grow = 1.0 + 0.6 * s / L;
+  float turb = uP2.y * smoothstep(0.0, lam * 1.5, s) * (0.6 + 0.4 * s / L);
+  vec3 nq = vec3(q.x, q.y + uP0.w * uP3.y, q.z) / (r0 * grow) * 1.4;
   float n = turb > 0.001 ? fbm(nq) : 0.0;
   float rr = r / R + turb * n * 0.45;
   float body = smoothstep(1.08, 0.5, rr) * smoothstep(0.0, 0.08 * r0, s);
   float fade = 1.0 - smoothstep(0.55 * L, L, s);
-  float T = uP1.z * (0.5 + 0.5 * exp(-s / (L * 0.35))) * (1.0 - 0.3 * smoothstep(0.35, 1.0, rr));
-  float dia = 0.0;
-  for (int k = 0; k < 7; k++) {
-    float sk = (float(k) + 0.62) * lam;
-    float dk = (s - sk) / (0.14 * lam);
-    dia += exp(-dk * dk - pow(r / (0.38 * R), 2.0)) * pow(0.74, float(k));
+  float T = uP1.z * (0.62 + 0.38 * exp(-s / (L * 0.5))) * (1.0 - 0.3 * smoothstep(0.35, 1.0, rr));
+  // Shock diamonds: strong when the exit pressure is off ambient, faint when matched.
+  float diaGain = clamp(0.3 + 1.4 * abs(ex - 1.0), 0.3, 1.0);
+  // Only the two cells nearest this point can contribute (each is a narrow Gaussian).
+  float dia = 0.0, rr2 = pow(r / (0.38 * R), 2.0);
+  float kc = floor(s / lam - 0.62);
+  for (int j = 0; j < 2; j++) {
+    float k = kc + float(j);
+    if (k < 0.0 || k > 6.0) continue;
+    float dk = (s - (k + 0.62) * lam) / (0.14 * lam);
+    dia += exp(-dk * dk - rr2) * pow(0.74, k);
   }
+  dia *= diaGain;
   float coreLen = lam * 0.85;
   float core = s < coreLen ? exp(-pow(r / (0.8 * r0 * (1.0 - s / coreLen) + 1e-3), 2.0)) : 0.0;
   int fuel = int(uP2.w + 0.5);
-  vec3 bb = blackbody(T) * glowOf(T);
+  vec3 bb = emitAt(T);
   vec3 tint = fuel == 1 ? vec3(0.55, 0.62, 1.0) : fuel == 2 ? vec3(0.75, 0.62, 1.0) : vec3(1.0);
-  float bodyGain = fuel == 2 ? 0.08 : fuel == 1 ? 0.35 : 1.0;
+  float bodyGain = fuel == 2 ? 0.1 : fuel == 1 ? 0.4 : 1.0;
   vec3 e = bb * body * fade * bodyGain * mix(vec3(1.0), tint, 0.6);
-  vec3 hot = blackbody(T * 1.35) * glowOf(T * 1.35);
-  e += hot * dia * (fuel == 2 ? 0.9 : 0.55) * fade * mix(vec3(1.0), tint, 0.5);
-  e += hot * core * 0.9 * mix(vec3(1.0), tint, 0.7);
-  sigma = body * fade * (fuel == 0 ? 0.35 : 0.08) * (0.6 + 0.4 * smoothstep(0.3 * L, L, s));
-  return e * uP2.z * thr * 0.16;
+  vec3 hot = emitAt(T * 1.25);
+  e += hot * dia * (fuel == 2 ? 1.2 : 0.8) * fade * mix(vec3(1.0), tint, 0.5);
+  e += hot * core * 1.2 * mix(vec3(1.0), tint, 0.7);
+  // Afterburning: fuel-rich exhaust meets air in the shear layer and burns as a slightly
+  // wider, cooler, ragged orange sheath that starts a cell or so downstream.
+  float R2 = R * 1.3 * (1.0 + 0.6 * s / L);
+  float n3 = turb > 0.001 ? fbm(nq * 0.6 + vec3(7.0, 0.0, 3.0)) : 0.0;
+  float sheath = smoothstep(1.2, 0.55, r / R2 + 0.6 * n3) * (1.0 - body) * smoothstep(lam * 0.9, lam * 2.5, s) * fade;
+  float Ta = 1600.0 + 250.0 * n3;
+  float abGain = fuel == 3 ? 1.1 : fuel == 1 ? 0.45 : fuel == 2 ? 0.1 : 0.85;
+  e += emitAt(Ta) * sheath * abGain * 0.35;
+  // Soot: kerosene and solid exhaust absorb; hydrogen and methane are nearly clear.
+  float soot = fuel == 0 ? 0.35 : fuel == 3 ? 0.8 : 0.08;
+  sigma = (body * soot + sheath * soot * 0.5) * fade * (0.6 + 0.4 * smoothstep(0.3 * L, L, s));
+  // Splash: the flow turns along the surface as a hot, thin, ragged sheet that cools outward.
+  if (imp > 0.0) {
+    float above = imp - s, Rs = uP4.y;
+    float n4 = turb > 0.001 ? fbm(vec3(q.x, q.z, uP0.w * uP3.y * 0.6) / r0 * 0.9) : 0.5;
+    float hs = r0 * (0.35 + 0.5 * smoothstep(0.0, Rs, r));
+    float sheet = exp(-pow(above / max(hs, 1e-3), 2.0)) * (1.0 - smoothstep(Rs * (0.55 + 0.45 * n4), Rs, r)) * step(0.0, above);
+    float Ts = 2100.0 - 900.0 * smoothstep(0.0, Rs, r) + 200.0 * n4;
+    e += emitAt(Ts) * sheet * (fuel == 2 ? 0.25 : 1.0) * 0.6 / max(uP2.z * thr * 0.55, 1e-4) * thr;
+    sigma += sheet * soot * 0.9;
+  }
+  return e * uP2.z * thr * 0.55;
 }
 void main() {
   vec3 rdw = normalize(vWorld - uEye);
@@ -2428,21 +2815,228 @@ void main() {
   float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   vec3 E = vec3(0.0); float Tr = 1.0;
   float scale = uP3.x;
+  // Low-frequency flicker of the whole flame, from the time alone (deterministic).
+  float flick = 1.0 + 0.08 * vnoise1(uP0.w * 14.0) + 0.04 * vnoise1(uP0.w * 37.0 + 5.0);
   for (int i = 0; i < 96; i++) {
     if (i >= steps || Tr < 0.01) break;
     float t = t0 + (float(i) + jit) * dt;
     vec3 q = ro + rd * t;
     if (length(q.xz) > Rb) continue;
+    if (dot(uCut.xyz, eye + rdw * t) > uCut.w) continue;
     float sig;
-    vec3 e = field(q, sig);
+    vec3 e = uP4.z > 0.5 ? flameField(q, sig) : field(q, sig);
     float ds = dt * scale / uP0.x;
-    E += Tr * e * ds;
+    E += Tr * e * flick * ds;
     Tr *= exp(-sig * ds);
   }
   float alpha = 1.0 - Tr;
   vec3 col = toSrgb(tonemap(E * uLook.z));
   o = vec4(col + E * uLook.w * 0.12, alpha);
 }`;
+
+  // ---------- volumetric media (smoke, dust, steam, fire) ----------
+  // A particle system with `volume` set is drawn as a continuous medium instead of sprites.
+  // Each frame its particles are splatted into a 3D grid (R: density, G: hot density), a
+  // second grid stores how much key light reaches each cell, and the view ray is marched
+  // through the grid at part resolution: billowy detail noise erodes the edges, light
+  // scatters toward the eye with a two-lobed phase, flames light it with falloff and
+  // occlusion, young soot glows by black-body color, and a depth-aware upsample puts the
+  // result in the effects layer without halos around solid parts.
+  const VS_VSPLAT = `#version 300 es
+${G_COMMON}
+${G_SLOT}
+layout(location=0) in vec4 aP; layout(location=1) in vec4 aV;
+uniform vec4 uTime; uniform vec4 uSize; uniform vec4 uFade; uniform vec3 uVolMin; uniform vec3 uDims;
+uniform float uVoxel; uniform float uSlice; uniform float uPtMax; uniform vec4 uVHeat;
+out float vRv; out float vDz; out float vPs; out float vW; out float vHot;
+// uFade: fade in, fade out, mass scale (count / drawn), density. uVHeat: glow, hot share of life, thinning, _.
+void main() {
+  int i = gl_VertexID;
+  float k, age;
+  slotAt(i, uTime.x, uLife.y, k, age);
+  float life = lifeOf(i, k);
+  float r = rnd(i, k, 7u);
+  gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 1.0;
+  vRv = 1.0; vDz = 0.0; vPs = 1.0; vW = 0.0; vHot = 0.0;
+  if (aP.w != k || age < 0.0 || age > life || r > uTime.w) return;
+  float dtR = uTime.y - uTime.x;
+  vec3 p = aP.xyz + aV.xyz * dtR;
+  age += dtR;
+  float t01 = uLife.y <= 0.0 ? 0.0 : clamp(age / life, 0.0, 1.0);
+  float size = mix(uSize.x, uSize.y, sqrt(t01)) * (1.0 + uSize.z * (rnd(i, k, 8u) - 0.5));
+  vec3 g = (p - uVolMin) / uVoxel;
+  float rv = max(size * 0.5 / uVoxel, 0.8);
+  float dz = g.z - (uSlice + 0.5);
+  if (abs(dz) >= rv) return;
+  float rc = sqrt(rv * rv - dz * dz);
+  float ps = min(2.0 * rc + 2.0, uPtMax);
+  float fade = smoothstep(0.0, max(uFade.x, 1e-4), t01) * (1.0 - smoothstep(1.0 - max(uFade.y, 1e-4), 1.0, t01));
+  // A puff thins as it grows (the same smoke spread over more volume); each is a little denser or thinner.
+  float grow = uSize.x / max(size, 1e-6);
+  vW = uFade.w * uFade.z * fade * mix(0.5, 1.5, rnd(i, k, 9u)) * pow(grow, uVHeat.z);
+  vHot = uVHeat.x * (1.0 - smoothstep(0.0, max(uVHeat.y, 1e-3), t01));
+  vRv = rv; vDz = dz; vPs = ps;
+  gl_Position = vec4(g.xy / uDims.xy * 2.0 - 1.0, 0.0, 1.0);
+  gl_PointSize = ps;
+}`;
+  const FS_VSPLAT = `#version 300 es
+precision highp float;
+in float vRv; in float vDz; in float vPs; in float vW; in float vHot;
+out vec4 o;
+void main() {
+  vec2 off = (gl_PointCoord * 2.0 - 1.0) * (vPs * 0.5);
+  float q = 1.0 - (dot(off, off) + vDz * vDz) / (vRv * vRv);
+  if (q <= 0.0) discard;
+  float w = vW * q * q;
+  o = vec4(w, w * vHot, 0.0, 0.0);
+}`;
+  // Key light reaching each cell: march toward the light through the coarse density.
+  const FS_VLIGHT = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+uniform sampler3D uDens;
+uniform vec3 uLDims; uniform float uSlice; uniform vec3 uLDelta; uniform float uSigmaStep; uniform int uLSteps;
+uniform vec4 uPt0; uniform vec4 uPt1; uniform float uSigma; // point lights in grid coordinates (w > 0: on)
+out vec4 o;
+float march(vec3 p, vec3 d, int n, float sig) {
+  float tau = 0.0;
+  for (int i = 0; i < 64; i++) {
+    if (i >= n) break;
+    if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) break;
+    tau += (1.0 - exp(-1.5 * textureLod(uDens, p, 1.0).r)) * sig;
+    p += d;
+  }
+  return exp(-tau);
+}
+// R: key light reaching the cell; G, B: the share of each point light (a flame) that does.
+// The point lights are marched in 12 steps straight to the light, so a cell behind smoke darkens.
+float toPoint(vec3 p, vec4 L) {
+  if (L.w <= 0.0) return 1.0;
+  vec3 d = (L.xyz - p) / 12.0;
+  return march(p + d * 0.5, d, 12, uSigma * L.w / 12.0);
+}
+void main() {
+  vec3 p = vec3(gl_FragCoord.xy, uSlice + 0.5) / uLDims;
+  o = vec4(march(p + uLDelta * 0.5, uLDelta, uLSteps, uSigmaStep), toPoint(p, uPt0), toPoint(p, uPt1), 1.0);
+}`;
+  const FS_VMARCH = `#version 300 es
+${G_COMMON}
+${G_ENV}
+precision highp sampler3D;
+uniform sampler3D uDens; uniform sampler3D uLightVol; uniform sampler3D uNoise;
+uniform sampler2D uDepth; uniform vec2 uDepthMap;
+uniform mat4 uInvVP; uniform vec3 uEye; uniform vec3 uCamF; uniform vec2 uVSize;
+uniform vec3 uVolMin; uniform vec3 uVolSize; uniform float uVoxel;
+uniform vec2 uSlabZ; uniform int uSteps; uniform vec4 uCut;
+uniform vec4 uMed;    // extinction at full coverage (per world unit), erosion, detail frequency, ambient occlusion
+uniform vec4 uMed2;   // shadow strength, powder, flame occlusion, emission-only (fire)
+uniform vec3 uFlow; uniform vec3 uFlow2; uniform vec3 uAlbedo;
+uniform vec3 uLight; uniform vec3 uKeyCol; uniform vec4 uPtPos[2]; uniform vec3 uPtCol[2]; uniform vec4 uLook;
+uniform vec4 uHeatT;  // hot temperature, cool temperature, intensity, glow
+out vec4 o;
+float hg(float c, float g) { float g2 = g * g; return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5); }
+float cover(float d) { return 1.0 - exp(-1.5 * d); }
+void main() {
+  vec2 ndc = gl_FragCoord.xy / uVSize * 2.0 - 1.0;
+  vec4 a = uInvVP * vec4(ndc, -1.0, 1.0), b = uInvVP * vec4(ndc, 1.0, 1.0);
+  vec3 pn = a.xyz / a.w, pf = b.xyz / b.w;
+  vec3 ro, rd; float zPerT, z0;
+  if (uOrtho > 0.5) { ro = pn; rd = normalize(pf - pn); zPerT = 1.0; z0 = dot(pn - uEye, uCamF); }
+  else { ro = uEye; rd = normalize(pf - uEye); zPerT = max(dot(rd, uCamF), 1e-4); z0 = 0.0; }
+  vec3 inv = 1.0 / (abs(rd) + 1e-9) * sign(rd + 1e-12);
+  vec3 ta = (uVolMin - ro) * inv, tb = (uVolMin + uVolSize - ro) * inv;
+  vec3 tmn = min(ta, tb), tmx = max(ta, tb);
+  float t0 = max(max(tmn.x, tmn.y), tmn.z), t1 = min(min(tmx.x, tmx.y), tmx.z);
+  float sceneZ = linDepth(texture(uDepth, gl_FragCoord.xy * uDepthMap).r);
+  t0 = max(t0, max((uSlabZ.x - z0) / zPerT, 0.0));
+  t1 = min(t1, min((sceneZ - z0) / zPerT, (uSlabZ.y - z0) / zPerT));
+  if (t1 <= t0) { o = vec4(0.0); return; }
+  float ds = max((t1 - t0) / float(uSteps), uVoxel * 0.45);
+  float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  float Tr = 1.0; vec3 C = vec3(0.0), Ce = vec3(0.0);
+  float cosT = dot(rd, uLight);
+  float phase = mix(hg(cosT, -0.25), hg(cosT, 0.6), 0.6);
+  vec3 envUp = envDiff(vec3(0.0, 1.0, 0.0)) * uLook.x, envDn = envDiff(vec3(0.0, -1.0, 0.0)) * uLook.x;
+  float t = t0 + jit * ds;
+  for (int i = 0; i < 192; i++) {
+    if (t > t1 || Tr < 0.01) break;
+    vec3 p = ro + rd * t;
+    float tNow = t;
+    t += ds;
+    if (dot(uCut.xyz, p) > uCut.w) continue;
+    vec3 uvw = (p - uVolMin) / uVolSize;
+    // Level 0 always: at the box's silhouette neighboring rays enter far apart, the screen-space
+    // derivatives jump, and an automatic level would read the whole grid's average as a seam.
+    vec2 dh = textureLod(uDens, uvw, 0.0).rg;
+    // Empty space: if the coarse grid is empty here too, stride ahead three steps.
+    if (dh.r < 0.003) { if (textureLod(uDens, uvw, 2.0).r < 0.002) t += 2.0 * ds; continue; }
+    float cov = cover(dh.r);
+    // Detail: billows eat into the thin edges, much less into the dense core.
+    float nz = textureLod(uNoise, p * uMed.z + uFlow, 0.0).r * 0.62 + textureLod(uNoise, p * (uMed.z * 2.71) + uFlow2, 0.0).r * 0.38;
+    float e = uMed.y * (1.0 - 0.7 * cov);
+    float d = clamp((cov - (1.0 - nz) * e) / max(1.0 - (1.0 - nz) * e, 1e-3), 0.0, 1.0);
+    float sigma = d * uMed.x;
+    if (sigma <= 0.0) continue;
+    float heat = clamp(dh.g / max(dh.r, 1e-4), 0.0, 1.0);
+    float T = mix(uHeatT.y, uHeatT.x, heat);
+    vec3 em = blackbody(T) * glowOf(T) * uHeatT.z * uHeatT.w * heat * (0.55 + 0.45 * nz);
+    vec3 S = vec3(0.0);
+    if (uMed2.w < 0.5) {
+      // Single scattering plus a cheap multiple-scattering term, so thick smoke isn't black inside.
+      vec4 lv = textureLod(uLightVol, uvw, 0.0);
+      float tl = lv.r;
+      float sh = mix(1.0, max(tl, pow(tl, 0.25) * 0.55), uMed2.x);
+      float ao = exp(-textureLod(uDens, uvw, 2.0).r * uMed.w);
+      float powder = mix(1.0, 1.0 - exp(-5.0 * d), uMed2.y);
+      vec3 Ld = uKeyCol * sh * phase * powder / PI;
+      vec3 La = mix(envDn * 0.5, envUp, clamp(0.3 + 0.7 * uvw.y, 0.0, 1.0)) * ao;
+      vec3 Lp = vec3(0.0);
+      for (int j = 0; j < 2; j++) {
+        if (uPtPos[j].w <= 0.0) continue;
+        vec3 dv = uPtPos[j].xyz - p;
+        float d2 = dot(dv, dv), rr = uPtPos[j].w * uPtPos[j].w;
+        float att = rr / (rr + d2); att *= att;
+        float tp = j == 0 ? lv.g : lv.b;
+        float occ = max(tp, pow(tp, 0.25) * 0.5);
+        Lp += uPtCol[j] * att * occ * (0.35 + 0.65 * ao) * 1.5 / PI;
+      }
+      S = uAlbedo * (Ld + La + Lp);
+    }
+    float tr = exp(-sigma * ds), w = Tr * (1.0 - tr);
+    C += w * (S + em);
+    Ce += w * em;
+    Tr *= tr;
+  }
+  float alpha = 1.0 - Tr;
+  if (alpha < 0.002) { o = vec4(0.0); return; }
+  vec3 col = toSrgb(tonemap(C / alpha * uLook.z)) * alpha;
+  o = vec4(col + Ce * uLook.w * 0.15, alpha);
+}`;
+  // Depth-aware upsample of a part-resolution effect into the effects layer.
+  const FS_VUP = `#version 300 es
+${G_COMMON}
+uniform sampler2D uV; uniform sampler2D uDepth; uniform vec2 uDepthScale; uniform vec2 uRatio; uniform vec2 uVMax;
+out vec4 o;
+void main() {
+  vec2 hp = gl_FragCoord.xy * uRatio - 0.5;
+  vec2 b = floor(hp), f = hp - b;
+  float zc = linDepth(texture(uDepth, gl_FragCoord.xy * uDepthScale).r);
+  vec4 acc = vec4(0.0), best = vec4(0.0);
+  float wsum = 0.0, bestD = 1e30;
+  for (int j = 0; j < 4; j++) {
+    vec2 o2 = vec2(float(j & 1), float(j >> 1));
+    vec2 ti = clamp(b + o2, vec2(0.0), uVMax);
+    float zt = linDepth(texture(uDepth, (ti + 0.5) / uRatio * uDepthScale).r);
+    float bw = (o2.x > 0.5 ? f.x : 1.0 - f.x) * (o2.y > 0.5 ? f.y : 1.0 - f.y);
+    float dz = abs(zc - zt) / max(zc, 1e-4);
+    float w = bw * exp(-dz * 50.0) + 1e-6;
+    vec4 s = texelFetch(uV, ivec2(ti), 0);
+    acc += s * w; wsum += w;
+    if (dz < bestD) { bestD = dz; best = s; }
+  }
+  o = wsum > 1e-3 ? acc / wsum : best;
+}`;
+
 
   // ---------- WebGL renderer ----------
   let R = null;
@@ -2496,9 +3090,12 @@ void main() {
     env: () => [VS_FULL, FS_ENV], prefilter: () => [VS_FULL, FS_PREFILTER],
     pupdate: () => [VS_PUPDATE, FS_NULL, ["oP", "oV"]], particle: () => [VS_PARTICLE, FS_PARTICLE], psphere: () => [VS_PARTICLE, FS_PSPHERE],
     plume: () => [VS, FS_PLUME],
+    vsplat: () => [VS_VSPLAT, FS_VSPLAT], vlight: () => [VS_FULL, FS_VLIGHT], vmarch: () => [VS_FULL, FS_VMARCH], vup: () => [VS_FULL, FS_VUP],
   };
   // Programs compile the first time a frame needs them, so a page without particles never pays for them.
-  const prog = name => R.prog[name] || (R.prog[name] = compile(R.gl, ...PROGRAMS[name]()));
+  // Compiling a program (or allocating a big target) makes a slow frame that says nothing about the
+  // device; R.hitch tells the quality tiers to ignore it.
+  const prog = name => R.prog[name] || ((R.hitch = true), (R.prog[name] = compile(R.gl, ...PROGRAMS[name]())));
 
   // One WebGL context serves every figure. It renders into an OffscreenCanvas and each
   // frame is handed over with transferToImageBitmap(), which is exact; reading a shared
@@ -2513,6 +3110,7 @@ void main() {
     R = {
       canvas, gl, offscreen, hdr, prog: {}, env: new Map(), cw: 0, ch: 0,
       maxSamples: Math.min(4, gl.getParameter(gl.MAX_SAMPLES) || 0),
+      ptMax: (gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE) || [1, 64])[1],
       empty: gl.createVertexArray(),
       main: null, msaa: null, scene: null, fx: null, bloom: [], shadow: {},
     };
@@ -2877,8 +3475,12 @@ void main() {
     gl.bindVertexArray(a);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0); gl.vertexAttribDivisor(0, 1);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16); gl.vertexAttribDivisor(1, 1);
+    const pts = gl.createVertexArray();
+    gl.bindVertexArray(pts);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16);
     gl.bindVertexArray(null);
-    G = sys._cpuGpu = { gl, count: sys.count, buffer: b, draw: a };
+    G = sys._cpuGpu = { gl, count: sys.count, buffer: b, draw: a, points: pts };
     return G;
   }
   const SHAPE_ID = { point: 0, disk: 1, ring: 2, cone: 3, sphere: 4, box: 5, line: 6, mesh: 7 };
@@ -2896,6 +3498,30 @@ void main() {
       uEm4: [...end, sys._samples ? sys._samples.length / 6 : 0],
     };
   }
+  // Flow-field uniforms; a tube flow's station table goes to texture unit 11 as a float texture.
+  function flowUniforms(fl) {
+    const u = {
+      uFlowA: fl ? [fl.kind, fl.U, fl.alpha, fl.S] : [-1, 0, 0, 1],
+      uFlowB: fl ? [...fl.center, fl.mid] : [0, 0, 0, 0],
+      uFlowC: fl ? [fl.mu[0], fl.mu[1], fl.kind === 1 ? fl.R : fl.a, fl.gamma] : [0, 0, 0, 0],
+      uFlowTex: 11,
+    };
+    const { gl } = R;
+    gl.activeTexture(gl.TEXTURE11);
+    if (fl && fl.kind === 3) {
+      if (!fl._tex || fl._texGl !== gl) {
+        fl._texGl = gl;
+        fl._tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, fl._tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, fl.n, 2, 0, gl.RGBA, gl.FLOAT, fl.data);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      } else gl.bindTexture(gl.TEXTURE_2D, fl._tex);
+      Object.assign(u, { uFlowD: [fl.y0, fl.dy, fl.n, fl.U0], uFlowE: [fl.q[0], fl.q[1], 0, 0], uFlowM: fl.M, uFlowMI: fl.MI });
+    } else gl.bindTexture(gl.TEXTURE_2D, R.dummyFloat || (R.dummyFloat = (() => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 2, 0, gl.RGBA, gl.FLOAT, new Float32Array(8)); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST); return t; })()));
+    gl.activeTexture(gl.TEXTURE0);
+    return u;
+  }
   function forceUniforms(F) {
     const u = {
       uGrav: [...F.g, F.drag], uWind: [...F.wind, F.buoyancy], uTurb: [...F.turb, 0],
@@ -2903,9 +3529,7 @@ void main() {
       uVortC: [F.vortex ? F.vortex.pull : 0, F.vortex ? 1 : 0, 0, 0],
       uNAttr: F.attractors.length, uNPlane: F.planes.length, uNSph: F.spheres.length,
       uKillMin: F.kill ? [...F.kill.min, 1] : [0, 0, 0, 0], uKillMax: F.kill ? [...F.kill.max, 0] : [0, 0, 0, 0],
-      uFlowA: F.flow ? [F.flow.kind, F.flow.U, F.flow.alpha, F.flow.S] : [-1, 0, 0, 1],
-      uFlowB: F.flow ? [...F.flow.center, F.flow.mid] : [0, 0, 0, 0],
-      uFlowC: F.flow ? [F.flow.mu[0], F.flow.mu[1], F.flow.kind === 1 ? F.flow.R : F.flow.a, F.flow.gamma] : [0, 0, 0, 0],
+      ...flowUniforms(F.flow),
     };
     const attr = new Float32Array(16), attrR = [0.1, 0.1, 0.1, 0.1];
     F.attractors.forEach((a, j) => { attr.set([...a.p, a.s], j * 4); attrR[j] = a.r; });
@@ -2979,7 +3603,185 @@ void main() {
     return { uColA: a, uColB: b, uColorBy: [by, ...(sys.range || [0, 1]), 0] };
   }
 
+  // ---------- volumetric media on the GPU ----------
+  // `volume: true` (or options) on a "smoke" or "fire" system draws it as a medium (see the shaders).
+  //   density   extinction scale [1]             erosion  how much billow noise eats the edges [0.6]
+  //   detail    noise frequency, per world unit  flow     velocity the detail drifts with (default: wind and rise)
+  //   ambient   occlusion of sky light [0.8]     shadow   key-light self-shadowing [1]
+  //   powder    dark edges toward the light [0.5] occlusion  how much smoke hides flames behind it [0.25]
+  //   hot       share of life the soot glows [0.3; fire 1]   thin  how fast a puff thins as it grows [1]
+  //   resolution  cells along the longest side   bounds  [[x0, y0, z0], [x1, y1, z1]] (default: found by simulating)
+  //   albedo    smoke color (default warm grey)
+  const VDEF = { density: 1, erosion: 0.6, detail: null, flow: null, ambient: 0.8, shadow: 1, powder: 0.5, occlusion: 0.25, hot: null, thin: 1, resolution: null, bounds: null, albedo: null };
+  const volumeOpts = sys => (sys.volume && (sys.style === "smoke" || sys.style === "fire") ? { ...VDEF, ...(sys.volume === true ? {} : sys.volume) } : null);
+  const sizePair = sys => (Array.isArray(sys.size) ? sys.size : [sys.size, sys.size]);
+  const volumeSigma = (sys, V) => (V.density * 8) / Math.max(1e-9, (sizePair(sys)[0] + sizePair(sys)[1]) / 2) * (sys.style === "fire" ? 0.35 : 1);
+  // Tileable billow noise (inverted Worley, three octaves), 32³, made once.
+  function noise3() {
+    if (R.noise3) return R.noise3;
+    const { gl } = R, N = 32, val = new Float32Array(N * N * N);
+    for (const [c, w, salt] of [[4, 0.55, 1], [8, 0.3, 2], [16, 0.15, 3]]) {
+      const pts = new Float32Array(c * c * c * 3);
+      for (let i = 0; i < c * c * c; i++) for (let a = 0; a < 3; a++) pts[i * 3 + a] = rndU(i, salt, 40 + a, 9);
+      const cs = N / c, wrap = v => ((v % c) + c) % c;
+      for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const px = (x + 0.5) / cs, py = (y + 0.5) / cs, pz = (z + 0.5) / cs;
+        const cx = Math.floor(px), cy = Math.floor(py), cz = Math.floor(pz);
+        let best = 9;
+        for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const ix = cx + dx, iy = cy + dy, iz = cz + dz, j = (wrap(iz) * c + wrap(iy)) * c + wrap(ix);
+          const fx = ix + pts[j * 3] - px, fy = iy + pts[j * 3 + 1] - py, fz = iz + pts[j * 3 + 2] - pz;
+          best = Math.min(best, fx * fx + fy * fy + fz * fz);
+        }
+        val[(z * N + y) * N + x] += w * (1 - Math.min(1, Math.sqrt(best)));
+      }
+    }
+    let lo = Infinity, hi = -Infinity;
+    for (const v of val) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    const data = new Uint8Array(val.length);
+    for (let i = 0; i < val.length; i++) data[i] = Math.round(((val[i] - lo) / (hi - lo || 1)) * 255);
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_3D, t);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, N, N, 0, gl.RED, gl.UNSIGNED_BYTE, data);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.generateMipmap(gl.TEXTURE_3D);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    for (const w of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, w, gl.REPEAT);
+    R.noise3 = t;
+    return t;
+  }
+  // The world box the medium lives in: given, or found by running a sample of the system on the
+  // CPU over two lifetimes and padding by the largest puff. Cached until the system changes.
+  function volumeBounds(sys, V) {
+    if (V.bounds) return V.bounds;
+    const W = sys.world();
+    const key = JSON.stringify([sys.emitter, sys.forces, sys.colliders, sys.life, sys.size, sys.seed, Array.from(W)]);
+    if (sys._vbKey === key) return sys._vb;
+    const probe = new Particles({ count: 320, seed: sys.seed, life: sys.life, step: 1 / 15, prewarm: false, emitter: sys.emitter, forces: sys.forces, colliders: sys.colliders, kill: sys.kill, cpu: true });
+    probe.matrix = W;
+    const P = probe.period || 4, min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const f of [0.35, 0.7, 1.05, 1.4, 1.75, 2.1]) {
+      probe.simulate(P * f);
+      for (const a of probe.alive()) for (let k = 0; k < 3; k++) { if (a.position[k] < min[k]) min[k] = a.position[k]; if (a.position[k] > max[k]) max[k] = a.position[k]; }
+    }
+    const pad = Math.max(...sizePair(sys)) * 0.55;
+    if (!(min[0] <= max[0])) { const c = m4.apply(W, sys.emitter.position || [0, 0, 0]); for (let k = 0; k < 3; k++) { min[k] = c[k] - pad * 4; max[k] = c[k] + pad * 4; } }
+    for (let k = 0; k < 3; k++) { const e = (max[k] - min[k]) * 0.06 + pad; min[k] -= e; max[k] += e; }
+    sys._vbKey = key;
+    sys._vb = [min, max];
+    return sys._vb;
+  }
+  // Cubic cells over the box; the cell count along the longest side follows the device's tier.
+  function volumeLayout(sys, V) {
+    const [min, max] = volumeBounds(sys, V);
+    const ext = [0, 1, 2].map(k => Math.max(1e-6, max[k] - min[k]));
+    // Detail comes from the billow noise, not the grid, so a coarse grid looks nearly the same and
+    // costs far less (the splat and light passes run once per slice).
+    if (sys._vres == null) sys._vres = V.resolution ?? [36, 48, 60][Q.rank ?? startRank()];
+    const voxel = Math.max(...ext) / sys._vres;
+    const dims = ext.map(e => Math.max(4, Math.ceil(e / voxel)));
+    const size = dims.map(d => d * voxel);
+    return { dims, voxel, size, min: [0, 1, 2].map(k => (min[k] + max[k]) / 2 - size[k] / 2) };
+  }
+  function volumeGrid(sys, dims) {
+    const { gl } = R;
+    let G = sys._vg;
+    if (G && G.gl === gl && G.dims.join() === dims.join()) return G;
+    if (G && G.gl === gl) { gl.deleteTexture(G.dens); gl.deleteTexture(G.light); gl.deleteFramebuffer(G.fb); }
+    const tex3 = (d, fmt, levels) => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_3D, t);
+      gl.texStorage3D(gl.TEXTURE_3D, levels, fmt, d[0], d[1], d[2]);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, levels > 1 ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      for (const w of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, w, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    const ld = dims.map(v => Math.max(4, Math.ceil(v / 2)));
+    R.hitch = true;
+    G = sys._vg = { gl, dims, ld, dens: tex3(dims, gl.RG16F, Math.floor(Math.log2(Math.max(...dims))) + 1), light: tex3(ld, gl.RGBA16F, 1), fb: gl.createFramebuffer() };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, G.fb);
+    gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, G.dens, 0, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) { R.volBad = true; return null; }
+    return G;
+  }
+  function particlePoints(sys) {
+    if (sys._mode === "cpu") { particleSource(sys); return sys._cpuGpu.points; }
+    return sys._gpu.sets[sys._gpu.cur].update;
+  }
+  // Splats the particles into the density grid slice by slice, then fills the light grid.
+  function prepareVolume(sys, V, lay, L, sceneTime, pts) {
+    const { gl } = R;
+    const G = volumeGrid(sys, lay.dims);
+    if (!G) return false;
+    const [nx, ny, nz] = lay.dims;
+    const t = sys._t ?? 0, tr = sys.simTime(sys.time ?? sceneTime ?? 0);
+    const sz = sizePair(sys), fade = Array.isArray(sys.fade) ? sys.fade : [sys.fade, sys.fade];
+    const fire = sys.style === "fire";
+    const P = prog("vsplat");
+    gl.useProgram(P.p);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, G.fb);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    gl.viewport(0, 0, nx, ny);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    setAll(P, {
+      uTime: [t, Math.max(t, Math.min(tr, t + sys.step)), 0, sys.density], uLife: [sys.lifeRange[0], sys.period, 0, 0], uSeed: sys.seed,
+      uSize: [sz[0], sz[1], sys.sizeJitter ?? 0.5, 0], uFade: [fade[0], fade[1], sys.count / Math.max(1, sys._drawN), sys.opacity],
+      uVolMin: lay.min, uDims: lay.dims, uVoxel: lay.voxel, uPtMax: R.ptMax,
+      uVHeat: [fire ? Math.max(1, sys.glow) : sys.glow, V.hot ?? (fire ? 1 : 0.3), V.thin, 0],
+    });
+    gl.bindVertexArray(particlePoints(sys));
+    for (let z = 0; z < nz; z++) {
+      gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, G.dens, 0, z);
+      gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+      setU(P, "uSlice", z);
+      gl.drawArrays(gl.POINTS, 0, sys._drawN);
+    }
+    gl.disable(gl.BLEND);
+    gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, G.light, 0, 0);
+    gl.activeTexture(gl.TEXTURE8);
+    gl.bindTexture(gl.TEXTURE_3D, G.dens);
+    gl.generateMipmap(gl.TEXTURE_3D);
+    const PL = prog("vlight");
+    gl.useProgram(PL.p);
+    const [lx, ly, lz] = G.ld, diag = Math.hypot(...lay.size), ds = Math.max(lay.voxel * 1.5, diag / 60);
+    // Point lights in grid coordinates; w carries the light's distance through the grid in world units.
+    const pt = j => { if (!pts || !pts[j]) return [0, 0, 0, 0]; const g = pts[j].position.map((v, k) => (v - lay.min[k]) / lay.size[k]); return [...g, 1]; };
+    const sig = volumeSigma(sys, V);
+    setAll(PL, { uDens: 8, uLDims: G.ld, uLDelta: L.map((v, k) => (v * ds) / lay.size[k]), uSigmaStep: sig * ds, uLSteps: Math.min(64, Math.ceil(diag / ds)), uPt0: pt(0), uPt1: pt(1), uSigma: sig * diag * (V.occlusion ?? 0.25) * 2 });
+    gl.viewport(0, 0, lx, ly);
+    gl.bindVertexArray(R.empty);
+    for (let z = 0; z < lz; z++) {
+      gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, G.light, 0, z);
+      setU(PL, "uSlice", z);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0);
+    return true;
+  }
+  // The part-resolution buffer volumes are marched into; grows like the other targets.
+  function volBuffer(w, h) {
+    const { gl } = R;
+    let B = R.vbuf;
+    if (!B || B.w < w || B.h < h) {
+      if (B) { gl.deleteFramebuffer(B.fb); gl.deleteTexture(B.tex); }
+      const W = Math.max(w, B?.w ?? 0), H = Math.max(h, B?.h ?? 0);
+      // Creating a texture binds it to the active unit; use unit 0, which every pass rebinds,
+      // so the scene depth on unit 2 isn't replaced mid-pass.
+      gl.activeTexture(gl.TEXTURE0);
+      const tex = texture(W, H, ...R.colorFmt, gl.NEAREST);
+      B = R.vbuf = { w: W, h: H, tex, fb: framebuffer([tex]) };
+    }
+    return B;
+  }
+  const volumeColor = (sys, V) => toLinear(colorOf(sys.color ?? V.albedo ?? (sys.style === "fire" ? "#333333" : "#d6d0c6"), true));
+
   // ---------- render ----------
+  let E3stats = null;
   // Renders the scene into the shared WebGL canvas; returns a view for projection and picking.
   // outScale: output pixels per CSS pixel (the screen's density). ss: supersampling
   // factor (1 to 3); the frame is rendered ss times larger and filtered down in the
@@ -2999,7 +3801,22 @@ void main() {
     const C = camera(cam, scene, bounds, cssW / cssH);
     const look = lookOf(scene), dark = pageDark();
     const L = lightDir(scene, C);
-    const cut = scene.cutPlane ? (Array.isArray(scene.cutPlane) ? scene.cutPlane : [...scene.cutPlane.normal, scene.cutPlane.offset ?? 0]) : null;
+    // cutPlane: [nx, ny, nz, d], { normal, offset }, or { facing: "camera", at, offset, level, follow }:
+    // a cut through `at` (default the scene's center) that opens the side facing the viewer when
+    // it is switched on, then stays fixed to the model like a real cutaway, so turning the model
+    // doesn't re-slice it. follow: true re-faces the camera every frame; level: false lets the cut
+    // tilt with the view instead of staying upright.
+    const cpo = scene.cutPlane;
+    if (!cpo || cpo.facing !== "camera") scene._cutFace = null;
+    const cut = !cpo ? null : Array.isArray(cpo) ? cpo : cpo.facing === "camera" ? (() => {
+      const at = cpo.at ?? bounds.center;
+      let n = scene._cutFace;
+      if (!n || cpo.follow) {
+        const d = v3.sub(C.eye, C.target);
+        n = scene._cutFace = v3.norm(cpo.level === false ? d : [d[0], 0, d[2]]);
+      }
+      return [...n, v3.dot(n, at) + (cpo.offset ?? 0)];
+    })() : [...cpo.normal, cpo.offset ?? 0];
     const cutN = cut ? v3.norm(cut.slice(0, 3)) : null;
     const cutV = cut ? [...cutN, cut[3] / v3.len(cut.slice(0, 3))] : [0, 1, 0, 1e9];
     const hatch = (C.worldPerPx / cssH) * 7;
@@ -3007,9 +3824,21 @@ void main() {
     const hiDefault = hexRgb(pal.orange || "#d9800f");
 
     const mats = new Map();
-    const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node))); return m; };
+    const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node, scene.look))); return m; };
     const opaque = items.filter(it => matOf(it).kind === "opaque");
     const glassItems = items.filter(it => matOf(it).kind === "glass");
+    // A glass part that wholly contains another solid is a container (a jar, a tank, a cylinder
+    // around a piston): thin walls, so what's inside isn't bent into doubled copies. Prisms, lenses
+    // and blocks keep refracting as solid glass. An explicit material thickness always wins.
+    const worldBox = it => {
+      const b = it.node.mesh.bounds, min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+      for (let i = 0; i < 8; i++) { const p = m4.apply(it.world, [i & 1 ? b.max[0] : b.min[0], i & 2 ? b.max[1] : b.min[1], i & 4 ? b.max[2] : b.min[2]]); for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], p[k]); max[k] = Math.max(max[k], p[k]); } }
+      return [min, max];
+    };
+    for (const g of glassItems) {
+      const [gmin, gmax] = worldBox(g);
+      g.container = items.some(it => it !== g && matOf(it).kind !== "glass" && (() => { const [a, b] = worldBox(it); return [0, 1, 2].every(k => a[k] >= gmin[k] - 1e-6 && b[k] <= gmax[k] + 1e-6); })());
+    }
     const ghosts = items.filter(it => matOf(it).kind === "ghost").sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
     opaque.concat(glassItems).forEach((it, i) => { it.id = ((i * 97) % 254) + 1; });
 
@@ -3024,11 +3853,11 @@ void main() {
     const kc = look.keyColor.map(v => v * look.key), fc = look.fillColor.map(v => v * look.fill), rc = [1, 1, 1].map(v => v * look.rim);
     const fillDir = viewToWorld(C, [0.8, 0.1, 0.55]), rimDir = viewToWorld(C, [0.25, 0.5, -0.85]);
     const points = [];
-    for (const f of fxNodes) if (f.node.isPlume) { const gl_ = f.node.glowLight(); if (gl_) points.push(gl_); }
+    for (const f of fxNodes) if (f.node.isPlume) points.push(...f.node.glowLights());
     for (const p of scene.lights || []) points.push({ position: p.position, color: colorOf(p.color || "#ffffff", true).map(v => (v ** 2.2) * (p.intensity ?? 1)), range: p.range ?? bounds.radius });
     const ptPos = new Float32Array(8), ptCol = new Float32Array(6);
     points.slice(0, 2).forEach((p, i) => { ptPos.set([...p.position, p.range], i * 4); ptCol.set(p.color, i * 3); });
-    const hasGlow = items.some(it => matOf(it).glow) || fxNodes.some(f => f.node.isPlume || (f.node.isParticles && (f.node.style === "fire" || f.node.style === "spark")));
+    const hasGlow = items.some(it => matOf(it).glow) || fxNodes.some(f => f.node.isPlume || (f.node.isParticles && (f.node.style === "fire" || f.node.style === "spark" || (f.node.style === "smoke" && f.node.glow > 0))));
     const bloomK = (scene.bloom === false ? 0 : typeof scene.bloom === "number" ? scene.bloom : look.bloom) * (R.hdr && q.bloom ? 1 : 0);
     const exposure = (scene.exposure ?? 1) * look.exposure;
     const lookU = [look.diffuse, look.specular, exposure, bloomK > 0 ? 0.12 : 0];
@@ -3041,11 +3870,22 @@ void main() {
     // Particles step before anything is drawn (sphere particles draw with the solids).
     const tierFrac = q.particles;
     for (const f of fxNodes) if (f.node.isParticles) {
-      const sys = f.node, n = Math.max(1, Math.min(sys.count, Math.ceil(sys.count * (sys.quality === false ? 1 : tierFrac))));
+      const sys = f.node, exact = sys.quality === false || sys.measure || sys.cpu || !Number.isFinite(sys.lifeRange[1]);
+      const n = Math.max(1, Math.min(sys.count, Math.ceil(sys.count * (exact ? 1 : tierFrac))));
       sys._drawN = n;
       stepParticles(sys, n);
     }
     const spheres = fxNodes.filter(f => f.node.isParticles && f.node.style === "sphere");
+    // Volumetric systems splat into their grids now, before anything reads them.
+    for (const f of fxNodes) {
+      const sys = f.node;
+      if (!sys.isParticles) continue;
+      sys._volLay = null;
+      const V = R.hdr && !R.volBad ? volumeOpts(sys) : null;
+      if (!V) continue;
+      const lay = volumeLayout(sys, V);
+      if (prepareVolume(sys, V, lay, L, scene.time, points)) sys._volLay = lay;
+    }
 
     // Shadow maps from the key light, fitted around the scene.
     const sh = scene.shadow === false ? null : typeof scene.shadow === "object" ? scene.shadow : {};
@@ -3101,6 +3941,9 @@ void main() {
     const unbindSamplers = () => { for (const u of [5, 6, 7]) gl.bindSampler(u, null); };
 
     const samples = q.moving && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
+    // What this frame ran at, for the harness and for pages that report it.
+    E3stats = { tier: q.name, moving: q.moving, ss, scale: q.scale, samples, size: [W, H], out: [Wo, Ho], triangles: items.reduce((n, it) => n + (it.node.mesh ? it.node.mesh.indices.length / 3 : 0), 0), particles: fxNodes.filter(f => f.node.isParticles).reduce((n, f) => n + (f.node._drawN || 0), 0), plumes: fxNodes.filter(f => f.node.isPlume).length };
+    scene.stats = E3stats;
     targets(W, H, Wo, Ho, samples, glassItems.length > 0);
     const target = samples ? R.msaa.fb : R.main.fb;
     const partShadow = shadowOn ? (sh.parts ?? 1) * look.parts : 0;
@@ -3129,6 +3972,7 @@ void main() {
       const cutOn = cut && it.node.cut ? 1 : 0;
       if (cutOn) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
       const r = it.node.mesh.bounds.radius || 1, wr = it.radius || 1;
+      const bb = it.node.mesh.bounds, sc = wr / r, minSide = Math.max(1e-6, Math.min(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1], bb.max[2] - bb.min[2]) * sc);
       const T = m.temp;
       const tS = [0, 0, 0, 0], tT = [0, 0, 0, 0];
       if (T) T.stops.forEach(([s, t], j) => { tS[j] = s; tT[j] = t; });
@@ -3137,11 +3981,16 @@ void main() {
       setAll(P, {
         uModel: it.world, uNormalMat: m4.normalMatrix(it.world), uColor: m.rgb, uId: it.id / 255, uCutOn: cutOn,
         uMat: [m.physical ? 1 : 0, m.metal, m.roughness, m.clearcoat], uF0: m.f0,
-        uBrush: [...m.brushAxis, m.anisotropy], uDetail: [m.brush, m.anisotropy > 0 ? 70 / wr : 0, m.weave ? 1 : 0, 9 / r],
+        // Muscle fibers run along `fibers`: a linear grain with a little anisotropy and fine stripes.
+        uBrush: m.fibers ? [...m.fibers, Math.max(m.anisotropy, 0.3)] : [...m.brushAxis, m.anisotropy],
+        uDetail: m.fibers ? [1, 140 / wr, 0, 9 / r] : [m.brush, m.anisotropy > 0 ? 70 / wr : 0, m.weave ? 1 : 0, 9 / r],
+        uTissue: [m.sss, m.sheen, m.fibers ? 1 : 0, 0], uSssCol: m.sssColor,
         uEmit: m.emissive, uTempAxis: [...(T ? T.axis : [0, 1, 0]), T ? T.stops.length : 0], uTempS: tS, uTempT: tT,
         uHeat: [m.heatShift != null ? 1 : 0, m.heatShift ?? 0, 0, partShadow],
         uHighlightOn: hl ? 1 : 0, uHighlight: typeof hl === "string" ? hexRgb(pal[hl] || hl) : hiDefault,
-        uOpacity: m.opacity, uGlass: [m.ior, m.thickness ?? wr * 0.9, m.dispersion, m.roughness],
+        // Water's refraction depth is its real depth (the box's smallest side), not its size.
+        uOpacity: m.opacity, uGlass: [m.ior, m.thickness ?? (m.water ? minSide * 0.6 : it.container ? minSide * 0.03 : wr * 0.9), m.dispersion, m.roughness],
+        uWater: m.water ? [m.water.ripples, m.water.wavelength ?? wr * 0.12, scene.time ?? 0, m.water.depth] : [0, 1, 0, 0],
       });
       gl.bindVertexArray(g.vao);
       gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
@@ -3157,7 +4006,8 @@ void main() {
       const P = prog("psphere");
       gl.useProgram(P.p);
       const camR = viewToWorld(C, [1, 0, 0]), camU = viewToWorld(C, [0, 1, 0]);
-      setAll(P, { ...common, uCamR: camR, uCamU: camU, uCamF: C.forward, uOrthoCam: C.ortho ? 1 : 0, uPartShadow: partShadow });
+      // The particle vertex shader also declares the flow table; point it at a harmless texture.
+      setAll(P, { ...common, uCamR: camR, uCamU: camU, uCamF: C.forward, uOrthoCam: C.ortho ? 1 : 0, uPartShadow: partShadow, ...flowUniforms(null) });
       spheres.forEach((f, j) => {
         const sys = f.node, t = sys._t ?? 0, tr = sys.simTime(sys.time ?? scene.time ?? 0);
         const sz = Array.isArray(sys.size) ? sys.size : [sys.size, sys.size];
@@ -3248,45 +4098,132 @@ void main() {
 
     // Effects layer at output resolution: plumes and sprite particles, back to front,
     // depth-tested by hand against the solids' depth buffer.
-    const fxDraw = fxNodes.filter(f => f.node.isPlume || (f.node.isParticles && f.node.style !== "sphere"))
-      .sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
+    // Sprites and plumes sort per node, back to front. A plume splits every particle system
+    // into the sprites behind its midplane (drawn before it) and those in front (after it),
+    // so smoke wraps around the flame instead of sitting on top of it.
+    const plumeNodes = fxNodes.filter(f => f.node.isPlume);
+    const plumeDepth = f => v3.dot(v3.sub(f.node.toWorld([0, -f.node.lengthNow * 0.5, 0]), C.eye), C.forward);
+    const fxDraw = [];
+    const sprites = fxNodes.filter(f => f.node.isParticles && f.node.style !== "sphere");
+    if (plumeNodes.length) {
+      const cuts = plumeNodes.map(f => ({ f, z: plumeDepth(f) })).sort((a, b) => b.z - a.z);
+      let far = Infinity;
+      for (const c of cuts) {
+        for (const sp of sprites) fxDraw.push({ ...sp, slab: [c.z, far] });
+        fxDraw.push(c.f);
+        far = c.z;
+      }
+      for (const sp of sprites) fxDraw.push({ ...sp, slab: [-Infinity, far] });
+    } else fxDraw.push(...sprites.sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye)));
     gl.bindFramebuffer(gl.FRAMEBUFFER, R.fx.fb);
     gl.viewport(0, 0, Wo, Ho);
     gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
     if (fxDraw.length) {
       gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.CULL_FACE);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       bindEnv();
+      bindShadow();
       gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, R.main.depth);
       const depthScale = [(W / Wo) / R.main.w, (H / Ho) / R.main.h];
       const camR = viewToWorld(C, [1, 0, 0]), camU = viewToWorld(C, [0, 1, 0]);
       for (const f of fxDraw) {
         const node = f.node;
         if (node.isPlume) {
+          // Marched into the part-resolution buffer, then upsampled by depth into the effects layer.
+          const Wv = Math.max(1, Math.round(Wo * q.vscale)), Hv = Math.max(1, Math.round(Ho * q.vscale));
+          const VB = volBuffer(Wv, Hv);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, VB.fb);
+          gl.viewport(0, 0, Wv, Hv);
+          gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+          gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, R.main.depth);
           const P = prog("plume");
           gl.useProgram(P.p);
-          const Lp = node.lengthNow, r0 = node.radius, thr = clamp01(node.throttle);
-          const Rb = r0 * (1 + node.spread * Lp / r0) * 1.7;
+          const prof = node.profile, Lp = node.lengthNow, thr = clamp01(node.throttle), imp = node.impactNow();
+          const r0 = prof ? Math.max(...prof.map(st => st[0])) : node.radius;
+          let Rb = prof ? r0 * 1.04 : r0 * (1 + node.spread * Lp / r0) * 1.7;
+          if (imp) Rb = Math.max(Rb, node.splashRadius * 1.05);
           const proxy = R.unitCyl || (R.unitCyl = transformMesh(mesh.cylinder(1, 1, { segments: 28 }), m4.translation([0, -0.5, 0])));
           const g = upload(proxy);
           const ws = Math.hypot(f.world[0], f.world[1], f.world[2]) || 1;
+          const profU = new Float32Array(96);
+          if (prof) prof.slice(0, 24).forEach((st, i) => profU.set([st[0], st[1], st[2] ?? node.temperature, 0], i * 4));
           setAll(P, {
             uModel: m4.multiply(f.world, m4.scaling([Rb, Lp * 1.02, Rb])), uViewProj: C.vp, uNormalMat: m4.normalMatrix(f.world),
-            uInvModel: m4.invert(f.world), uEye: C.eye, uView: C.view, uCamF: C.forward, uDepth: 2, uDepthScale: depthScale,
+            uInvModel: m4.invert(f.world), uEye: C.eye, uView: C.view, uCamF: C.forward, uDepth: 2, uDepthScale: [(depthScale[0] * Wo) / Wv, (depthScale[1] * Ho) / Hv],
             uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0, uLook: lookU,
-            uP0: [r0, Lp, Rb, node.time ?? scene.time ?? 0], uP1: [thr, node.cells * 2 * r0 * Math.sqrt(0.4 + 0.6 * thr), node.temperature, q.steps],
-            uP2: [node.spread, node.turbulence, node.intensity, FUELS[node.fuel] ?? 0], uP3: [1 / ws, node.speed * r0 * 6, 0, 0],
+            uP0: [r0, Lp, Rb, node.time ?? scene.time ?? 0], uP1: [thr, node.cells * 2 * r0 * Math.sqrt(0.4 + 0.6 * thr) * Math.sqrt(Math.max(0.2, node.expansionNow)), node.temperature, q.steps],
+            uP2: [node.spread, node.turbulence, node.intensity, FUELS[node.fuel] ?? 0], uP3: [1 / ws, node.speed * r0 * 6, node.expansionNow, 0],
+            uP4: [imp, node.splashRadius, prof ? Math.min(24, prof.length) : 0, 0], uProf: profU,
+            uCut: node.cut && cut ? cutV : [0, 1, 0, 1e30],
           });
+          gl.disable(gl.BLEND);
           gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT);
           gl.bindVertexArray(g.vao);
           gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
           gl.disable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, R.fx.fb);
+          gl.viewport(0, 0, Wo, Ho);
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+          const PU = prog("vup");
+          gl.useProgram(PU.p);
+          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, VB.tex);
+          setAll(PU, { uV: 0, uDepth: 2, uDepthScale: depthScale, uRatio: [Wv / Wo, Hv / Ho], uVMax: [Wv - 1, Hv - 1], uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0 });
+          gl.bindVertexArray(R.empty);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          continue;
+        }
+        if (node.isParticles && node._volLay) {
+          const sys = node, V = volumeOpts(sys), lay = sys._volLay, G = sys._vg;
+          const Wv = Math.max(1, Math.round(Wo * q.vscale)), Hv = Math.max(1, Math.round(Ho * q.vscale));
+          const VB = volBuffer(Wv, Hv);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, VB.fb);
+          gl.viewport(0, 0, Wv, Hv);
+          gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+          gl.disable(gl.BLEND);
+          gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, R.main.depth);
+          const P = prog("vmarch");
+          gl.useProgram(P.p);
+          gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_3D, G.dens);
+          gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_3D, G.light);
+          gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_3D, noise3());
+          const time = sys.time ?? scene.time ?? 0, sz = sizePair(sys), detail = V.detail ?? 1 / (((sz[0] + sz[1]) / 2) * 1.6);
+          const Fo = sys.forces || {}, wind = Fo.wind || [0, 0, 0], rise = ((Fo.buoyancy || 0) / Math.max(Fo.drag || 1, 0.2)) * 0.5;
+          const vel = V.flow ?? [wind[0] * 0.7, wind[1] * 0.7 + rise, wind[2] * 0.7];
+          const temps = Array.isArray(sys.temperature) ? sys.temperature : [sys.temperature, sys.temperature];
+          const fire = sys.style === "fire";
+          setAll(P, {
+            ...envU, uDens: 8, uLightVol: 9, uNoise: 10, uDepth: 2, uDepthMap: [(depthScale[0] * Wo) / Wv, (depthScale[1] * Ho) / Hv],
+            uInvVP: m4.invert(C.vp), uEye: C.eye, uCamF: C.forward, uVSize: [Wv, Hv], uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0,
+            uVolMin: lay.min, uVolSize: lay.size, uVoxel: lay.voxel, uSteps: q.vsteps,
+            uSlabZ: f.slab ? [Math.max(f.slab[0], -1e30), Math.min(f.slab[1], 1e30)] : [-1e30, 1e30],
+            uCut: sys.cut && cut ? cutV : [0, 1, 0, 1e30],
+            uMed: [volumeSigma(sys, V), V.erosion, detail, V.ambient], uMed2: [V.shadow, V.powder, V.occlusion, fire ? 1 : 0],
+            uFlow: vel.map(v => -v * time * detail), uFlow2: vel.map((v, k) => -v * time * detail * 3.4 + [0.31, 0.57 + time * 0.04, 0.13][k]),
+            uAlbedo: volumeColor(sys, V), uLight: L, uKeyCol: kc, uPtPos: ptPos, uPtCol: ptCol, uLook: lookU,
+            uHeatT: [temps[0], temps[1], sys.intensity, fire ? Math.max(1, sys.glow) : sys.glow],
+          });
+          gl.bindVertexArray(R.empty);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, R.fx.fb);
+          gl.viewport(0, 0, Wo, Ho);
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+          const PU = prog("vup");
+          gl.useProgram(PU.p);
+          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, VB.tex);
+          setAll(PU, { uV: 0, uDepth: 2, uDepthScale: depthScale, uRatio: [Wv / Wo, Hv / Ho], uVMax: [Wv - 1, Hv - 1], uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0 });
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
           continue;
         }
         const sys = node, P = prog("particle");
         gl.useProgram(P.p);
         const t = sys._t ?? 0, tr = sys.simTime(sys.time ?? scene.time ?? 0);
+        const ribbon = sys.style === "streak" || sys.style === "spark";
+        const segs = ribbon ? Math.max(1, Math.min(24, sys.segments ?? (sys.style === "streak" ? 10 : 2))) : 1;
+        const F = sys.params();
         const sz = Array.isArray(sys.size) ? sys.size : [sys.size, sys.size];
         const fade = Array.isArray(sys.fade) ? sys.fade : [sys.fade, sys.fade];
         const temps = Array.isArray(sys.temperature) ? sys.temperature : [sys.temperature, sys.temperature];
@@ -3294,16 +4231,21 @@ void main() {
           ...envU, uViewProj: C.vp, uView: C.view, uEye: C.eye, uCamR: camR, uCamU: camU, uDepth: 2, uDepthScale: depthScale,
           uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0, uLight: L, uKeyCol: kc, uPtPos: ptPos, uPtCol: ptCol, uLook: lookU,
           uTime: [t, Math.max(t, Math.min(tr, t + sys.step)), 0, sys.density], uLife: [sys.lifeRange[0], sys.period, 0, 0], uSeed: sys.seed,
-          uSize: [sz[0], sz[1], sys.sizeJitter ?? 0.5, 0], uStyle: STYLE_ID[sys.style] ?? 0, uShape: [sys.trail, sys.width, 0, 0],
+          uSize: [sz[0], sz[1], sys.sizeJitter ?? 0.5, 0], uStyle: STYLE_ID[sys.style] ?? 0, uShape: [sys.trail, sys.width, segs, partShadow],
+          uPxW: C.ortho ? [0, (2 * C.tanHalf[1]) / Ho] : [(2 * C.tanHalf[1]) / Ho, 0],
           uFade: [fade[0], fade[1], sys.soft ?? bounds.radius * 0.04, sys.opacity],
-          uHeatP: [temps[0], temps[1], sys.intensity, 0],
+          uHeatP: [temps[0], temps[1], sys.intensity, sys.glow],
+          uSlab: f.slab ? [...C.forward, 0] : [0, 0, 0, 0], uSlabZ: f.slab ? [Math.max(f.slab[0], -1e30), Math.min(f.slab[1], 1e30)] : [-1e30, 1e30], uSlabEye: C.eye,
+          ...flowUniforms(F.flow),
+          ...shadowU,
           ...particleColors(sys),
         });
         gl.bindVertexArray(particleSource(sys));
-        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, sys._drawN);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, ribbon ? 2 * (segs + 1) : 4, sys._drawN);
       }
       gl.bindVertexArray(null);
       gl.disable(gl.BLEND);
+      unbindSamplers();
     }
 
     // Bloom from whatever glows.
@@ -3365,7 +4307,31 @@ void main() {
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, R.fx.tex);
     gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, bloomTex || R.fx.tex);
     const v = C.view;
+    // Shimmer zones: behind every lit plume, plus any in scene.shimmer ({ from, to, radius: [r0, r1], strength }).
+    const shimU = new Float32Array(16), shimR = new Float32Array(16);
+    let shimN = 0;
+    const toPx = w => { const c = m4.project(C.vp, w); return [(c[0] * 0.5 + 0.5) * Wo, (c[1] * 0.5 + 0.5) * Ho]; };
+    const pxPerWorld = w => { const d = C.ortho ? 1 : Math.max(v3.dot(v3.sub(w, C.eye), C.forward), C.near); return Ho / (2 * C.tanHalf[1] * d); };
+    const zone = (a, b, ra, rb, k) => {
+      if (shimN >= 4) return;
+      const A = toPx(a), B = toPx(b);
+      shimU.set([...A, ...B], shimN * 4);
+      shimR.set([ra * pxPerWorld(a), rb * pxPerWorld(b), k, 0], shimN * 4);
+      shimN++;
+    };
+    for (const f of fxNodes) {
+      const n = f.node;
+      if (!n.isPlume || n.profile || !(n.throttle > 0) || n.shimmer === false) continue;
+      const ws = Math.hypot(f.world[0], f.world[1], f.world[2]) || 1, Lp = n.lengthNow, imp = n.impactNow();
+      const end = imp ? imp : Lp * 1.35;
+      zone(n.toWorld([0, -Lp * 0.15, 0]), n.toWorld([0, -end, 0]), n.radius * ws * 1.8, (imp ? n.splashRadius : n.radius * 4) * ws, 2.2 * clamp01(n.throttle));
+    }
+    for (const z of scene.shimmer || []) {
+      const r = Array.isArray(z.radius) ? z.radius : [z.radius ?? 1, z.radius ?? 1];
+      zone(z.from, z.to, r[0], r[1], z.strength ?? 2);
+    }
     setAll(cp, {
+      uShim: shimU, uShimR: shimR, uShimN: shimN, uShimT: scene.time ?? 0,
       uColor: 0, uNormal: 1, uDepth: 2, uFx: 3, uBloom: 4,
       uInvSize: [1 / R.main.w, 1 / R.main.h], uScale: [W / Wo, H / Ho], uTaps: Math.max(1, Math.min(3, Math.round(W / Wo))),
       uStep: Math.max(0.75, 0.62 * scale * (scene.ink ?? 1)), uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0,
@@ -3436,6 +4402,10 @@ void main() {
       project,
       ray,
       pick,
+      // The section cut this frame used, [nx, ny, nz, d] with a unit normal (n·p > d is removed), or null.
+      cut: cut ? [...v3.norm(cut.slice(0, 3)), cut[3] / v3.len(cut.slice(0, 3))] : null,
+      // False for a point the section cut removed.
+      kept: p => !cut || v3.dot(cut.slice(0, 3), p) <= cut[3],
       // True when something opaque sits between the camera and p.
       hidden(p) {
         const s = project(p), hit = pick([s[0], s[1]]);
@@ -3653,6 +4623,8 @@ void main() {
     scene: o => new Scene(o),
     node: (m, o) => new Node(m, o),
     particles: o => new Particles(o),
+    // The matter presets E3.particles({ matter }) draws on, for reading their numbers.
+    matter: MATTER,
     plume: o => new Plume(o),
     Node, Scene, Particles, Plume,
     flow,
@@ -3669,7 +4641,11 @@ void main() {
       force(name) { Q.forced = TIERS[name] ? name : null; },
       tiers: TIERS,
     },
+    // True when the page is dark (from the palette's background): pick a look by it, in draw.
+    get dark() { return pageDark(); },
     get canvas() { return R && R.canvas; },
+    // The last frame's tier, supersampling, MSAA samples, size, and triangle and particle counts.
+    get stats() { return E3stats; },
     available() { try { renderer(); return true; } catch { return false; } },
     // For tests: the pure functions the shaders mirror.
     _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS },
