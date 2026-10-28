@@ -1,0 +1,253 @@
+<div class="abstract"><ul>
+<li>A turbofan is a big fan with a small jet engine in the middle to turn it. On an airliner, most of the thrust comes from the fan.</li>
+<li>Each fan blade is a wing that goes around. Air moves faster over the curved side than under it, and the pressure difference pushes the blade, which pushes the air back.</li>
+<li>Two shafts turn inside each other: a slow one for the fan, a fast one for the core compressor, each driven by its own turbine.</li>
+<li>Pushing a lot of air a little faster wastes less energy than pushing a little air much faster. That is why the fans keep getting bigger.</li>
+</ul></div>
+
+<p class="lede">Stand behind an airliner engine at the gate and you can see straight through it around the middle: a ring of daylight between the fan and the core. That ring is where most of the thrust is made. The jet engine in the center, with its burning fuel and spinning turbines, exists mostly to turn the fan. Here is one on a test stand. Push the throttle and watch the two streams of air:</p>
+
+<figure class="demo" id="stand" aria-label="A turbofan with air tracers that follow its surfaces: the stream narrows into the inlet, a wide blue stream leaves the fan duct, and a narrow hot stream leaves the core nozzle. The throttle sets the fan speed and the flow; Cut away opens the nacelle."></figure>
+<script>
+{
+  // Air follows the engine: an axisymmetric tube flow built from the engine's own surfaces, so
+  // tracers speed up where the duct narrows and can't pass through a wall or a blade row.
+  const scene = E3.scene({ look: "studio" });
+  const tf = E3.parts.turbofan({ cutaway: false });
+  scene.add(tf);
+  const inlet = tf.ports.inlet, fanN = tf.ports.fanNozzle, coreN = tf.ports.nozzle;
+  const U = 2400, n1Of = thr => 0.22 + 0.78 * thr;
+  let F = tf.airflow({ speed: U * n1Of(0.9) }), flowAt = 90;
+  const em = tf.airflowEmitters(F), I = F.info;
+  const kill = { min: [I.yUp - 200, -4000, -4000], max: [I.yDn - 100, 4000, 4000] };
+  const tracer = (e, color, count, seed, range, opacity) => scene.add(E3.particles({
+    count, seed, life: [6, 6], style: "streak", trail: 0.55, width: 10, segments: 14, color, colorBy: "speed", range, opacity,
+    emitter: { ...e, rake: 0 }, flow: F, kill,
+  }));
+  const systems = [
+    tracer(em.outside, ["#6f8fb8", "#9db7d8"], 700, 21, [900, 1400], 0.55),
+    tracer(em.bypass, ["blue", "#7fb0ff"], 1100, 22, [1500, 3200], 0.9),
+    tracer(em.core, ["blue", "orange"], 420, 23, [1500, 5000], 0.95),
+  ];
+  demo("stand", {
+    aspect: w => (w < 560 ? 0.95 : 1.55),
+    orbit: { yaw: 0.6, pitch: 0.2 },
+    state: () => ({ t: 0, low: 0, high: 0 }),
+    controls: [
+      { key: "thrust", label: "Throttle", min: 0, max: 100, step: 1, value: 90, unit: "%", color: "orange" },
+      { key: "cut", label: "Cut away", type: "toggle", value: false },
+    ],
+    presets: [{ label: "Idle", set: { thrust: 5 } }, { label: "Cruise", set: { thrust: 70 } }, { label: "Take-off", set: { thrust: 95 } }],
+    caption: "A high-bypass turbofan. The air follows the engine's own surfaces: the streamtube narrows into the inlet, about one part in eight goes through the core, and both jets leave faster than they came in. Spools and tracers run far slower than life.",
+    status: (s, v) => { const n1 = n1Of(v.thrust / 100); return `fan at ${(n1 * 100).toFixed(0)}% speed, about ${(n1 * 3600).toFixed(0)} rpm`; },
+    step(dt, s, v) { s.t += dt; const n1 = n1Of(v.thrust / 100); s.low += dt * 5 * n1; s.high += dt * 7 * (0.5 + 0.5 * n1); },
+    draw(g, s, v) {
+      scene.time = s.t;
+      const n1 = n1Of(v.thrust / 100);
+      // The flow is rebuilt only when the throttle moves: through-flow speed scales with fan speed.
+      if (v.thrust !== flowAt) { F = tf.airflow({ speed: U * n1 }); flowAt = v.thrust; for (const sys of systems) sys.flow = F; }
+      for (const sys of systems) sys.density = 0.3 + 0.7 * n1;
+      tf.cutaway(v.cut).pose({ low: s.low, high: s.high });
+      const view = g.render3d(scene, { ...s.view, fov: 26, target: [1200, 0, 0], distance: 13000 });
+      g.callouts([{ at: view.project(fanN.center), text: "bypass stream" }, { at: view.project(coreN.center), text: "core jet" }, { at: view.project(inlet.center), text: "inlet" }]);
+    },
+  });
+}
+</script>
+
+<p>Two streams leave the engine. The wide, cool one from the fan duct carries most of the air and most of the thrust. The narrow, hot one from the core is the jet engine's own exhaust, and in an engine like this one the fan duct passes about seven and a half times as much air as the core does. That number, the <dfn data-def="The mass of air passing through the fan duct, around the core, divided by the mass passing through the core.">bypass ratio</dfn>, is what the shape of the engine is about.</p>
+
+<h2>A wing that goes around</h2>
+
+<p>A fan blade makes thrust the way a wing makes lift. Here is the air flowing past a wing section, drawn as ribbons that each follow their own streamline. Air meeting the curved upper surface speeds up, which lowers its pressure; the pressure underneath stays higher, and the difference pushes the wing up and the air down. Tilt the wing <span class="scrub" data-key="alpha"></span> and watch the ribbons over the top turn pale:</p>
+
+<figure class="demo" id="wing" aria-label="Air tracers streaming past a wing section. Pale ribbons are fast, blue ones slow. The angle of attack is a slider."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", shadow: { opacity: 0.1 } });
+  const FLOW = { type: "airfoil", chord: 1, thickness: 0.12, camber: 0.04, alpha: 0.12, U: 1 };
+  const build = alpha => E3.mesh.transform(E3.mesh.extrude(E3.flow.airfoil({ ...FLOW, alpha }).outline(140), 2.4, { bevel: 0.004 }), E3.m4.translation([0, 0, -1.2]));
+  const wing = scene.add(build(FLOW.alpha), { material: "aluminum", name: "wing" });
+  const air = scene.add(E3.particles({
+    count: 1100, seed: 5, life: [3.2, 3.2], style: "streak", trail: 0.45, width: 0.007, segments: 14, color: "blue", colorBy: "speed", range: [0.5, 1.7], opacity: 0.9,
+    emitter: { shape: "box", size: [0.02, 1.5, 2.2], position: [-1.7, 0, 0], rake: 20, speed: 1 },
+    flow: FLOW, kill: { min: [-2, -2, -2], max: [2.3, 2, 2] },
+  }));
+  let lastAlpha = FLOW.alpha;
+  demo("wing", {
+    aspect: w => (w < 560 ? 0.9 : 1.5),
+    orbit: { yaw: 0.35, pitch: 0.2 },
+    state: () => ({ t: 0 }),
+    controls: [{ key: "alpha", label: "Angle of attack", min: -4, max: 14, step: 0.5, value: 7, unit: "°", color: "blue" }],
+    caption: "Potential flow past a cambered section, with the trailing edge condition that fixes the circulation. Lift rises with the angle; a real wing stalls past about 15°, which this model doesn't know.",
+    status: (s, v) => `lift coefficient ${E3.flow.airfoil({ ...FLOW, alpha: v.alpha * Math.PI / 180 }).lift.toFixed(2)}`,
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      const alpha = v.alpha * Math.PI / 180;
+      if (alpha !== lastAlpha) { wing.mesh = build(alpha); air.flow = { ...FLOW, alpha }; lastAlpha = alpha; }
+      g.render3d(scene, { ...s.view, fov: 26 });
+    },
+  });
+}
+</script>
+
+<p>Now bend that wing into a ring of blades and spin it. Each blade meets air coming from two directions at once: straight in through the inlet, and sideways, because the blade itself is moving. Near the hub the blade moves slowly, so the air arrives nearly head-on; at the tip it moves at about 450 m/s, faster than sound, and the air arrives almost sideways <a class="cite" href="#ref-cumpsty"></a>. A blade that met both correctly has to be twisted. Spin it up <span class="scrub" data-key="rpm"></span> and watch the arrows:</p>
+
+<figure class="demo" id="blade" aria-label="One fan blade, twisted from root to tip, with arrows showing the incoming air and the blade's own motion at the root and at the tip."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const span = 620, hub = 275;
+  const blade = E3.parts.blade({ span, chord: [330, 250], twist: [58, 22], thickness: [0.09, 0.05], camber: [0.05, 0.03] });
+  scene.add(E3.mesh.cylinder(hub, 300, { segments: 48 }), { material: "titanium", name: "hub", position: [0, -150, 0] });
+  const holder = scene.group({ name: "blade" });
+  holder.add(blade, { material: "titanium", name: "fan blade" });
+  holder.position = [0, 0, 0];
+  const arrows = scene.group({ name: "arrows" });
+  const K = 2.6;
+  const arrowAt = (name, color) => arrows.add(E3.mesh.arrow([0, 0, 0], [0, 100, 0]), { name, material: "paint", color, cut: false });
+  const vin = [arrowAt("in root", "blue"), arrowAt("in tip", "blue")], vbl = [arrowAt("blade root", "orange"), arrowAt("blade tip", "orange")];
+  demo("blade", {
+    aspect: w => (w < 560 ? 0.9 : 1.4),
+    orbit: { yaw: 0.9, pitch: 0.35 },
+    controls: [{ key: "rpm", label: "Fan speed", min: 500, max: 3800, step: 50, value: 2800, unit: " rpm", color: "orange" }],
+    caption: "Blue arrows: air coming in at 130 m/s. Orange arrows: how fast the blade moves at the root and the tip. The blade is twisted so that at every radius its edge meets the sum of the two.",
+    status: (s, v) => { const tip = (v.rpm * 2 * Math.PI / 60) * (hub + span) / 1000; return `tip speed ${tip.toFixed(0)} m/s, Mach ${(tip / 340).toFixed(2)} relative to the air`; },
+    draw(g, s, v) {
+      const w = v.rpm * 2 * Math.PI / 60, vin0 = 130;
+      const place = (node, r, dir, len) => { node.matrix = E3.m4.multiply(E3.m4.translation([0, r, 0]), E3.m4.alignY(dir)); node.mesh = E3.mesh.arrow([0, 0, 0], [0, Math.max(60, len * K), 0], { radius: 16, head: 90, headRadius: 40 }); };
+      for (const [i, r] of [[0, 30], [1, span - 30]]) {
+        const vb = w * (hub + r) / 1000;
+        place(vin[i], r, [0, 0, -1], vin0);
+        place(vbl[i], r, [-1, 0, 0], vb);
+      }
+      const view = g.render3d(scene, { ...s.view, fov: 26, target: [0, span * 0.45, 0], distance: 3200 });
+      g.callouts([{ at: view.project([0, 30, 0]), text: "root" }, { at: view.project([0, span - 30, 0]), text: "tip" }]);
+    },
+  });
+}
+</script>
+
+<h2>What turns the fan</h2>
+
+<p>The fan is turned by the core, which is a jet engine of the kind that powered the first jets: a compressor squeezes air to thirty or forty times atmospheric pressure, fuel burns in it, and the hot gas blows through turbines on its way out. Cut the engine open and point at the parts:</p>
+
+<figure class="demo" id="cutaway" aria-label="The turbofan with a quarter of the nacelle and core casing cut away, showing the fan, booster, compressor, combustor, turbines, and shafts. Point at a part to read what it does."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const tf = E3.parts.turbofan({ cutaway: true });
+  scene.add(tf);
+  tf.cutaway(true);
+  let view = null;
+  const nameOf = node => { for (let n = node; n; n = n.parent) if (n.name && tf.notes[n.name]) return n.name; return null; };
+  demo("cutaway", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    orbit: { yaw: 0.6, pitch: 0.2 },
+    state: () => ({ hover: null, low: 0, high: 0 }),
+    controls: [{ key: "cut", label: "Cut away", type: "toggle", value: true }],
+    hover(p, s) { const hit = p && view ? view.pick(p) : null; const name = hit ? nameOf(hit.node) : null; if (name === s.hover) return false; s.hover = name; return true; },
+    status: s => (s.hover ? `${s.hover}: ${tf.notes[s.hover]}` : "Point at a part for what it does."),
+    caption: "Front to back: fan, booster, high-pressure compressor, combustor, high-pressure turbine, low-pressure turbine. Air gets hotter and higher in pressure to the combustor, then gives it back through the turbines.",
+    step(dt, s) { s.low += dt * 0.8; s.high += dt * 2.6; },
+    draw(g, s, v) {
+      tf.cutaway(v.cut);
+      tf.pose({ low: s.low, high: s.high });
+      tf.traverse(n => { if (n !== tf) n.highlight = !!s.hover && nameOf(n) === s.hover; });
+      view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(tf.labels().filter(l => /fan blades|booster|high-pressure compressor|combustor|high-pressure turbine|low-pressure turbine/.test(l.text)).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>The gas leaving the combustor is at about 1,700 K, hotter than the melting point of the turbine blades, which survive because cool air is bled from the compressor and blown through passages inside them <a class="cite" href="#ref-rr"></a>. The first turbine, right behind the combustor, drives the compressor. The turbine stages behind it drive the fan.</p>
+
+<h2>Two shafts, one inside the other</h2>
+
+<p>The fan wants to turn slowly, because its tips are already near the speed of sound; the core compressor wants to turn fast, because its blades are small. So the engine has two shafts, one inside the other. The outer, high-pressure shaft joins the compressor to its turbine and turns at about 10,000 rpm; the inner, low-pressure shaft runs the whole length of the engine, from the fan to the last turbine stages, at about 3,000 rpm. Set the fan speed <span class="scrub" data-key="n1"></span> and watch the two shafts:</p>
+
+<figure class="demo" id="spools" aria-label="The cut-away turbofan with its two shafts highlighted: the low-pressure shaft from the fan to the rear turbine and the high-pressure shaft between the compressor and the first turbine. A slider sets the fan speed."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const tf = E3.parts.turbofan({ cutaway: true });
+  scene.add(tf);
+  tf.cutaway(true);
+  const lowNames = ["LP shaft", "fan", "fan disk", "spinner", "lpt label", "booster label"], highNames = ["HP shaft", "hpc drum", "hpt label", "hpc label"];
+  demo("spools", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    orbit: { yaw: 0.5, pitch: 0.15 },
+    state: () => ({ low: 0, high: 0 }),
+    controls: [{ key: "n1", label: "Fan speed", min: 20, max: 100, step: 1, value: 60, unit: "%", color: "blue" }],
+    caption: "Blue is the low-pressure spool: fan, booster, low-pressure turbine, and the long shaft between them. Orange is the high-pressure spool: compressor drum, first turbine, and the short shaft around the blue one.",
+    status: (s, v) => `low spool ${(v.n1 * 36).toFixed(0)} rpm, high spool ${(6000 + v.n1 * 48).toFixed(0)} rpm`,
+    step(dt, s, v) { s.low += dt * 4 * v.n1 / 100; s.high += dt * 6 * (0.5 + 0.5 * v.n1 / 100); },
+    draw(g, s, v) {
+      tf.pose({ low: s.low, high: s.high });
+      for (const [names, color] of [[lowNames, "blue"], [highNames, "orange"]]) for (const n of names) { const node = tf.parts[n]; if (node) node.traverse(x => { x.highlight = color; }); }
+      const view = g.render3d(scene, { ...s.view, fov: 26 });
+      g.callouts(tf.labels().filter(l => /shaft/.test(l.text)).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<h2>Why the fans got so big</h2>
+
+<p>A jet pushes air backward, and the plane moves forward because of it. The thrust is the mass of air per second times how much its speed was raised. The energy spent is proportional to the square of that speed rise. So for the same thrust, a big fan that raises a lot of air by a little spends far less energy than a small jet that raises a little air by a lot. The <dfn data-def="The share of the energy given to the exhaust that ends up moving the aircraft: 2 divided by (1 + jet speed over flight speed).">propulsive efficiency</dfn> says how much of the jet's energy ends up pushing the plane. Drag the flight speed <span class="scrub" data-key="v0"></span> and see where each kind of engine sits:</p>
+
+<figure class="demo" id="efficiency" aria-label="A graph of propulsive efficiency against jet speed for a given flight speed, with markers for a turbojet, a low-bypass fan, and a high-bypass fan."></figure>
+<script>
+{
+  const eta = (vj, v0) => 2 / (1 + vj / v0);
+  const KINDS = [["turbojet", 600, "red"], ["low bypass", 400, "orange"], ["high bypass", 300, "blue"]];
+  demo("efficiency", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    controls: [{ key: "v0", label: "Flight speed", min: 100, max: 300, step: 5, value: 250, unit: " m/s", color: "blue" }],
+    caption: "Propulsive efficiency is 2 over (1 + jet speed over flight speed). At a given flight speed, the slower the jet, the less energy is left behind as a hot, fast wake, which is what a wide, slow bypass stream buys.",
+    status: (s, v) => KINDS.map(([n, vj]) => `${n} ${(eta(vj, v.v0) * 100).toFixed(0)}%`).join(" · "),
+    draw(g, s, v) {
+      const P = g.graph({ x: [v.v0, 900], y: [0, 1], axes: "frame", xLabel: "jet speed (m/s)", yLabel: "propulsive efficiency" });
+      P.fn(vj => eta(vj, v.v0), { color: "ink", label: `at ${v.v0} m/s` });
+      for (const [n, vj, c] of KINDS) P.marker(Math.max(vj, v.v0), eta(Math.max(vj, v.v0), v.v0), { color: c, label: n, pos: "ne" });
+    },
+  });
+}
+</script>
+
+<p>A jet that leaves no faster than the plane is flying would make no thrust at all, so the curve ends at 100% with nothing to show for it; real engines sit on its shoulder. Airliner fans have gone from a bypass ratio of 1 in the 1960s to 10 and more today, and most of the fuel saved along the way is this curve <a class="cite" href="#ref-cumpsty"></a>. The limit is the size of the fan: a wider fan means a heavier engine, more drag, and longer landing gear to keep it off the runway.</p>
+
+<h2>All the parts</h2>
+
+<p>Take the engine apart and the layout is plain: fan and its case at the front, the core as a stack of rings in the middle, the long low-pressure shaft threading through all of it, and the nacelle around the whole thing:</p>
+
+<figure class="demo" id="apart" aria-label="The turbofan exploded along its axis with its casings cut open, the main parts labeled."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const tf = E3.parts.turbofan({ cutaway: true });
+  scene.add(tf);
+  tf.cutaway(true);
+  demo("apart", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    orbit: { yaw: 0.6, pitch: 0.2 },
+    controls: [{ key: "apart", label: "Take apart", min: 0, max: 1, step: 0.01, value: 0.7 }],
+    caption: "The engine exploded along its axis. Titanium fan blades, an aluminum fan case, Inconel in the hot section, steel shafts.",
+    draw(g, s, v) {
+      tf.explode(v.apart);
+      const view = g.render3d(scene, { ...s.view, fov: 24 });
+      g.callouts(tf.labels().filter(l => !/label|shaft/.test(l.text)).slice(0, 9).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>
+
+<p>Nothing in it is there for its own sake. The core exists to turn the fan, the fan exists to move a great deal of air a little faster, and the whole point of the design is to leave as little energy as possible behind in the wake.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+<li id="ref-cumpsty">N. Cumpsty and A. Heyes, <em>Jet Propulsion</em>, 3rd ed. (Cambridge University Press, 2015).</li>
+<li id="ref-rr">Rolls-Royce, <em>The Jet Engine</em>, 5th ed. (Wiley, 2015).</li>
+</ol>
