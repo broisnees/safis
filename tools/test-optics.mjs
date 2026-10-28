@@ -200,7 +200,8 @@ const between = (u, v) => Math.acos(Math.max(-1, Math.min(1, (u[0] * v[0] + u[1]
 {
   const calls = [];
   const rec = name => (...args) => { calls.push(name); return name === "measure" ? String(args[0]).length * 7 : undefined; };
-  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => { calls.push(String(k)); }), set: (t, k, v) => { t[k] = v; return true; } });
+  const gradient = () => ({ addColorStop() {} });
+  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : String(k).endsWith("Gradient") ? gradient : (...a) => { calls.push(String(k)); }), set: (t, k, v) => { t[k] = v; return true; } });
   const g = { w: 640, h: 400, ctx, lit: () => false };
   for (const k of ["line", "path", "circle", "rect", "arrow", "text", "measure", "label"]) g[k] = rec(k);
   g.rgba = (c, a) => c;

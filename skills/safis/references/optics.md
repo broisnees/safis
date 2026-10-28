@@ -27,6 +27,7 @@ Conventions:
 | Fibers, light pipes, light guides | `Optics.body` from `Optics.segment` and `Optics.arc`, `Optics.fan`, `Optics.sensor` |
 | The eye, accommodation, glasses | `Optics.eye` + `g.eye`, `Optics.eyeFocus`, `Optics.correction` |
 | Where a bundle of rays meets, blur size | `Optics.focus`, `Optics.spot` |
+| Light as waves: wavefronts bending, a lens flattening or converging them | `g.optics(scene, { wavefronts })` |
 
 ## Elements
 
@@ -113,7 +114,7 @@ All angles in degrees.
 
 It returns `T = { segments, hits, sensors, energy, truncated, ms }`.
 
-- **`T.segments`**: `{ a, b, I, wl, band, depth, via, src, ray, med, end }`. `wl` is the wavelength (or `null`), `band` the list of wavelengths of white light not yet split, `src` and `ray` say which source and which of its rays, `end` is what stopped it (`"body"`, `"mirror"`, `"lens"`, `"absorber"`, `"escape"`, `"depth"`).
+- **`T.segments`**: `{ a, b, I, wl, band, depth, via, src, ray, med, end, opl }`. `opl` is `[start, end]`: the optical path length from the source (length times index; an ideal thin lens delays the center by h²/2f), so points of equal `opl` are on one wavefront. `wl` is the wavelength (or `null`), `band` the list of wavelengths of white light not yet split, `src` and `ray` say which source and which of its rays, `end` is what stopped it (`"body"`, `"mirror"`, `"lens"`, `"absorber"`, `"escape"`, `"depth"`).
 - **`T.hits`**: one per interaction: `{ p, px, kind, el, name, normal, din, dout, dr, i, t, R, n1, n2, I, wl, band, depth, via, src, ray }`. `kind` is `"refract"`, `"tir"`, `"mirror"`, `"lens"`, `"absorb"`, or `"sensor"`. `normal` points back toward the side the ray came from. `i` and `t` are the angles of incidence and refraction (`t` is `null` for total internal reflection), `R` the share reflected, `dout` the main outgoing direction and `dr` the reflected one. `px` is the canvas position (set by `g.optics`).
 - **`T.sensors[name]`**: `{ p, px, t, I, wl, band, dir, src, ray, via }` for every ray that landed, with `t` from 0 to 1 along the sensor.
 - **`T.energy`**: `{ escaped, absorbed, lost }`, summing to the light that went in.
@@ -146,6 +147,11 @@ Traces and draws: glass as a tinted fill with an ink outline, mirrors with a hat
 | `labels`, `marks`, `sources` | true | Element labels, dots where rays land on sensors and screens, source dots. |
 | `filter` | | `segment => boolean`: draw only some paths (tracing is unchanged). |
 | `rays`, `elements` | true | `false` skips that layer. |
+| `glass` | `"lit"` | Glass bodies shade by thickness (deeper toward the bottom), brighten at their edges (Fresnel reflection grows at grazing angles), and catch a highlight along the edges that face the light. `"flat"` is a plain tint. |
+| `spectrum` | `"smooth"` | Dispersed light draws as a continuous fan: between neighboring wavelengths of one ray, a band shaded from one color to the next. `"lines"` draws only the separate rays. |
+| `glow` | true | A soft halo under each ray. Where rays converge the halos add up, so a focus or a caustic shows as a bright spot. |
+| `tir` | true | A small ring in the ray's color at each total internal reflection. |
+| `wavefronts` | | Spacing in world units, or `{ spacing, phase, alpha, width }`: draws curves of equal optical path across neighboring rays of each source and path. Advance `phase` with time (`(s.t * speed) % spacing`) and they travel. Use a `fan` or `fanTo` with 15 to 25 rays so the curves are smooth. |
 
 ## g.rayAngles(hit, o)
 
@@ -293,6 +299,13 @@ The verdict in the status line comes from `Optics.eyeFocus`; the picture comes f
 }
 </script>
 ```
+
+## Recipes
+
+- **A smooth spectrum.** A white `Optics.ray` into a flint prism and a screen far enough away that every color lands on it; the fan fills between the colors. Colors that end on different things (one on the screen, one past it) aren't joined, so size the screen to catch them all.
+- **Wavefronts through a lens.** `Optics.fanTo(object, [0, -h], [0, h], { n: 21 })`, a lens, and `wavefronts: { spacing: 0.9, phase: (s.t * 1.2) % 0.9 }`, with `alpha: 0.5` on the rays so the fronts lead. Circles from the object flatten in the glass and curl round to the image.
+- **Total internal reflection.** A bent `Optics.body` of acrylic and a `fan` into its end: each bounce gets a ring; tighten the bend and rays leak out where they meet the wall below the critical angle.
+- **A caustic.** A beam through a real `Optics.lens` (spherical aberration) on a dark page: the glows pile up along the caustic curve and at the focus.
 
 ## Pitfalls
 
