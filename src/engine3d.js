@@ -4278,7 +4278,8 @@ void main() {
   // Unless distance (and target) are given, the scene is framed once from the first
   // view and that framing is kept, so turning the view doesn't make it zoom in and out.
   function camera(cam, scene, bounds, aspect) {
-    const fovDeg = cam.fov ?? 28;
+    // A lens's focal length (mm, on a 36 x 24 mm sensor) sets the field of view when no fov is given.
+    const fovDeg = cam.fov ?? (cam.focal ? (2 * Math.atan(12 / cam.focal) * 180) / Math.PI : 28);
     const fov = (fovDeg * Math.PI) / 180;
     const yaw = cam.yaw ?? -0.6, pitch = cam.pitch ?? 0.4;
     const dir = orbitDir(yaw, pitch);
@@ -4885,6 +4886,7 @@ void main() {
     // across; each frame looks through a different point of it, sheared so the plane at `focus`
     // stays put, and the average blurs everything off that plane by its real circle of confusion.
     // `aperture` (diameter, world units) overrides f/N, for a teaching figure that exaggerates the blur.
+    const lens = (cam.fNumber > 0 || cam.aperture > 0) && !C.ortho ? { f: cam.focal ?? 50, N: cam.fNumber ?? 2, F: cam.focus ?? C.distance, D: cam.aperture } : null;
     const stochastic = (!!Tr && (rig.some(l => l.t !== 0) || skyLit || bounces > 0 || !!hazeO)) || !!lens;
     const checkNow = checking();
     let accN = 0;
@@ -5361,7 +5363,7 @@ void main() {
     gl.activeTexture(gl.TEXTURE0);
 
     const image = R.offscreen ? R.canvas.transferToImageBitmap() : R.canvas;
-    const view = makeView(scene, items, C, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.ch - Ho, sw: Wo, sh: Ho });
+    const view = makeView(scene, items, C0, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.ch - Ho, sw: Wo, sh: Ho });
     view.quality = q.name;
     // A traced view refines over the next still frames; the runtime asks for them while this is true.
     view.converging = stochastic && !q.moving && accN + 1 < (scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48));
