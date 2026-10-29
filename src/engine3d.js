@@ -1517,9 +1517,15 @@
   }
 
   // ---------- shaders ----------
+  // Samplers default to lowp in GLSL ES, and some drivers (Mesa on AMD, phones) honor it and
+  // return 16-bit lookups: depth came back with about 11 bits, so the outlines and ambient
+  // occlusion drew rings of false steps across smooth parts as soon as the near plane got
+  // close. Every shader asks for full-precision lookups.
   const G_COMMON = `
 precision highp float;
 precision highp int;
+precision highp sampler2D;
+precision highp sampler2DShadow;
 const float PI = 3.141592653589793;
 vec3 toLin(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
 vec3 toSrgb(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
@@ -1895,6 +1901,7 @@ void main() {
   // Depth only, for the shadow maps; it honors the section cut so cut-away parts cast nothing.
   const FS_DEPTH = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 in vec3 vWorld;
 uniform vec4 uCut; uniform float uCutOn;
 out vec4 o;
@@ -2302,6 +2309,7 @@ void main() {
 
   const FS_GHOST = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 in vec3 vWorld; in vec3 vNormal;
 uniform vec3 uColor; uniform vec3 uEye; uniform vec3 uLight; uniform float uOpacity;
 uniform vec4 uCut; uniform float uCutOn;
@@ -2601,6 +2609,7 @@ void main() {
   // Copies a traced view's running average to the canvas.
   const FS_PRESENT = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 uniform sampler2D uSrc;
 out vec4 o;
 void main() { o = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0); }`;
@@ -2609,6 +2618,7 @@ void main() { o = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0); }`;
   // halve it down a chain, and add it back up with a tent filter.
   const FS_BLOOM_EXTRACT = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 uniform sampler2D uColor; uniform sampler2D uFx; uniform vec2 uColorInv; uniform vec2 uColorScale; uniform vec2 uFxInv; uniform float uFxOn;
 out vec4 o;
 vec3 over(vec4 c) { return max(c.rgb - vec3(c.a), 0.0); }
@@ -2624,6 +2634,7 @@ void main() {
 }`;
   const FS_DOWN = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 uniform sampler2D uSrc; uniform vec2 uSrcInv;
 out vec4 o;
 void main() {
@@ -2635,6 +2646,7 @@ void main() {
 }`;
   const FS_UP = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 uniform sampler2D uSrc; uniform vec2 uSrcInv; uniform float uWeight;
 out vec4 o;
 void main() {
@@ -2967,6 +2979,7 @@ void main() {
 }`;
   const FS_NULL = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 out vec4 o;
 void main() { o = vec4(0.0); }`;
 
@@ -3418,6 +3431,7 @@ void main() {
 }`;
   const FS_VSPLAT = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 in float vRv; in float vDz; in float vPs; in float vW; in float vHot;
 out vec4 o;
 void main() {
@@ -3430,6 +3444,7 @@ void main() {
   // Key light reaching each cell: march toward the light through the coarse density.
   const FS_VLIGHT = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 precision highp sampler3D;
 uniform sampler3D uDens;
 uniform vec3 uLDims; uniform float uSlice; uniform vec3 uLDelta; uniform float uSigmaStep; uniform int uLSteps;
@@ -6542,7 +6557,7 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
 
   // ---------- water on the GPU ----------
   const FS_WPOOL = `#version 300 es
-precision highp float; precision highp int;
+precision highp float; precision highp int; precision highp sampler2D;
 uniform sampler2D uState;
 uniform vec4 uP0;  // FFT size, pool width and length (m), time step (s)
 uniform vec4 uP1;  // depth (m), surface tension on, damping (1/s), world units per meter
@@ -6595,7 +6610,7 @@ void main() {
 }`;
 
   const FS_WOCEAN = `#version 300 es
-precision highp float; precision highp int;
+precision highp float; precision highp int; precision highp sampler2D;
 uniform sampler2D uH0;
 uniform vec4 uO0; // FFT size, patch (m), time (s), depth (m)
 uniform vec4 uO1; // choppiness, world units per meter, surface tension on
@@ -6628,7 +6643,7 @@ void main() {
   // One pass of an inverse FFT (Stockham radix 2, self-sorting) along x or z, on two complex
   // numbers per texel (and a second texture when TWO).
   const fsWfft = two => `#version 300 es
-precision highp float; precision highp int;
+precision highp float; precision highp int; precision highp sampler2D;
 uniform sampler2D uSrc0;${two ? " uniform sampler2D uSrc1;" : ""}
 uniform vec4 uF; // size, half-size of this stage's butterflies, direction (0 x, 1 z)
 layout(location=0) out vec4 o0;${two ? "\nlayout(location=1) out vec4 o1;" : ""}
@@ -6653,7 +6668,7 @@ void main() {
   // (below 1 where the sea folds: foam); B = slopes and their squares, mipmapped, so a distant
   // pixel reads the mean slope and its variance (roughness from the waves it can't resolve).
   const FS_WFIN = `#version 300 es
-precision highp float; precision highp int;
+precision highp float; precision highp int; precision highp sampler2D;
 uniform sampler2D uF0; uniform sampler2D uF1;
 uniform vec4 uFin; // mode (0 pool, 1 ocean)
 layout(location=0) out vec4 oA;
@@ -6674,7 +6689,7 @@ void main() {
   // ratio of the cell's area to its image's (energy is conserved). Drawn additively, so where
   // several cells fold onto one spot their light adds up: the bright lines.
   const VS_WCAUST = `#version 300 es
-precision highp float; precision highp int;
+precision highp float; precision highp int; precision highp sampler2D;
 uniform sampler2D uWA0; uniform sampler2D uWB0;
 uniform vec4 uWM0; // local x, z to map uv
 uniform vec4 uC0;  // half width, half length, depth (world), cells per side
@@ -6697,6 +6712,7 @@ void main() {
 }`;
   const FS_WCAUST = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 in vec2 vOld; in vec2 vNew;
 out vec4 o;
 void main() {
@@ -6708,6 +6724,7 @@ void main() {
   // The surface: the grid displaced by the maps (both cascades at sea). The far rings fade the
   // displacement out and are pinned inside the far plane so the sea reaches the horizon.
   const VS_WATER = `#version 300 es
+precision highp sampler2D;
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 uniform mat4 uModel, uViewProj;

@@ -587,9 +587,11 @@
   // ---------- GPU: one shared WebGL2 context, programs compiled once ----------
   const VS = `#version 300 es
 void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
-  // Shared: the pixel in box px, seeded gradient noise, ramps.
+  // Shared: the pixel in box px, seeded gradient noise, ramps. Samplers are declared highp:
+  // left at GLSL's lowp default, some drivers (Mesa on AMD, phones) read the float state of a
+  // simulation back at 16 bits.
   const HEAD = `#version 300 es
-precision highp float; precision highp int;
+precision highp float; precision highp int; precision highp sampler2D;
 uniform vec2 uSize; uniform float uK, uT; uniform uint uSeed; uniform vec3 uRamp[4];
 out vec4 o;
 vec2 px() { return vec2(gl_FragCoord.x, uSize.y - gl_FragCoord.y) / uK; }
