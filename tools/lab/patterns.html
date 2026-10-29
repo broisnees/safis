@@ -1,0 +1,85 @@
+<script>window.LAB = { scenes: {}, handles: {} };</script>
+<h1>Patterns lab</h1>
+<p class="dek">Trees, timelines, and bands for subjects beyond machines: biology, history, philosophy. Render with <code>node tools/check-3d.mjs --lab tools/lab/patterns.html</code>.</p>
+
+<h2>A family tree of life</h2>
+<figure class="demo" id="phylo" aria-label="A tree of vertebrates with branch lengths in millions of years; the path from the root to humans is drawn in color."></figure>
+<script>
+{
+  const T = { label: "vertebrates", children: [
+    { label: "ray-finned fish", length: 450 },
+    { label: "", length: 60, children: [
+      { label: "amphibians", length: 390 },
+      { label: "amniotes", length: 40, children: [
+        { label: "", length: 30, children: [{ label: "lizards", length: 320 }, { label: "", length: 70, children: [{ label: "crocodiles", length: 250 }, { label: "birds", length: 250 }] }] },
+        { label: "mammals", length: 140, children: [{ label: "platypus", length: 210 }, { label: "", length: 50, children: [{ label: "kangaroo", length: 160 }, { label: "", length: 70, children: [{ label: "mouse", length: 90 }, { label: "humans", length: 90, color: "orange" }] }] }] },
+      ] },
+    ] },
+  ] };
+  LAB.handles.phylo = demo("phylo", {
+    aspect: 1.5,
+    controls: [{ key: "who", label: "Follow", type: "choice", options: ["humans", "birds", "amphibians"].map(v => ({ value: v, label: v })), value: "humans" }],
+    draw(g, s, v) { g.tree(T, { orient: "right", lengths: true, highlight: v.who, color: "blue", box: [10, 10, g.w - 20, g.h - 20] }); },
+  });
+}
+</script>
+
+<h2>An argument, as a tree</h2>
+<figure class="demo" id="argument" aria-label="A claim at the top, with the reasons for and against it below, each with its own objections."></figure>
+<script>
+{
+  const A = { label: "Free will is compatible with determinism", children: [
+    { label: "Freedom is acting on your own reasons", color: "green", children: [{ label: "Frankfurt cases", color: "green", note: "no alternatives, still responsible" }] },
+    { label: "Consequence argument", color: "red", children: [{ label: "Past + laws fix every act", color: "red" }, { label: "Reply: 'could have' is conditional", color: "green" }] },
+  ] };
+  LAB.handles.argument = demo("argument", {
+    aspect: 1.7,
+    draw(g, s, v) { g.tree(A, { orient: "down", edges: "curve", style: "cards", size: 12, box: [10, 14, g.w - 20, g.h - 30] }); },
+  });
+}
+</script>
+
+<section class="band dark">
+<h2>A timeline, in a dark band</h2>
+<figure class="demo" id="history" aria-label="A timeline of writing from cuneiform to the printing press, with eras shaded and a marker the reader drags."></figure>
+<script>
+{
+  const E = [
+    { t: -3200, label: "cuneiform", color: "brass" }, { t: -3100, label: "hieroglyphs", color: "brass" },
+    { t: -1200, label: "oracle bones", color: "red" }, { t: -1050, label: "Phoenician alphabet", color: "blue" },
+    { t: -800, label: "Greek alphabet", color: "blue" }, { t: 105, label: "paper (Cai Lun)", color: "green" },
+    { t: 1041, label: "movable type (Bi Sheng)", color: "green" }, { t: 1450, label: "Gutenberg press", color: "orange" },
+  ];
+  LAB.handles.history = demo("history", {
+    aspect: 2.2,
+    controls: [{ key: "now", label: "Year", min: -3400, max: 1500, step: 10, value: -900 }],
+    draw(g, s, v) {
+      g.timeline(E, { range: [-3400, 1600], now: v.now, eras: [{ from: -3400, to: -1200, label: "Bronze Age", color: "brass" }, { from: -1200, to: 500, label: "Iron Age", color: "muted" }, { from: 500, to: 1600, label: "Middle Ages", color: "blue" }] });
+    },
+  });
+}
+</script>
+</section>
+
+<h2>Motion components</h2>
+<figure class="demo" id="motion" aria-label="A prompt as token chips with the model's next-word probabilities as ranked bars, and an attention matrix."></figure>
+<script>
+{
+  const P = { cats: [["are", 0.71], ["sleep", 0.12], ["is", 0.05], ["ran", 0.04], ["sat", 0.03], ["near", 0.02]], dog: [["is", 0.64], ["barks", 0.15], ["are", 0.06], ["ran", 0.05], ["sat", 0.04], ["near", 0.02]] };
+  LAB.handles.motion = demo("motion", {
+    aspect: 1.5,
+    state: () => ({ t: 1 }),
+    controls: [{ key: "prompt", label: "Prompt", type: "text", value: "the cats near the dog", examples: ["the cats near the dog", "the dog near the cats"] }],
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const words = v.prompt.trim().split(/\s+/), subj = words.find(w => P[w]) ?? "cats";
+      const toks = g.tokens([...words, P[subj][0][0]], { at: [16, 14], size: 15, colors: "none", from: words.length, caret: true }).rects;
+      g.bars(P[subj].map(([label, value]) => ({ label, value })), { box: [16, 74, g.w * 0.55, g.h - 90], share: true, id: "next" });
+      const n = Math.min(5, words.length), M = Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => (c > r ? 0 : +(Math.cos(r * 1.7 + c) * 0.5 + (r === c ? 0.4 : 0)).toFixed(2))));
+      g.matrix(M, { at: [g.w * 0.66, 92], cell: 38, rowLabels: words.slice(0, n), colLabels: words.slice(0, n), highlight: { row: n - 1 } });
+      const last = toks[toks.length - 1];
+      g.flow([[last.cx, last.y + last.h + 4], [last.cx, 70], [g.w * 0.3, 70]], { t: s.t, color: "orange", r: 2.5 });
+    },
+  });
+}
+</script>

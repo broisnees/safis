@@ -3,7 +3,7 @@
 // turned, the MSAA path (which only runs while the view moves), the tier the frame ran at,
 // triangle and particle counts, and any script or WebGL error. Screenshots go to --out.
 //
-// Usage: node tools/check-3d.mjs [--figure id] [--out dir] [--dark] [--scale 2] [--template file] [--lab file]
+// Usage: node tools/check-3d.mjs [--figure id] [--out dir] [--dark] [--scale 2] [--gpu] [--template file] [--lab file]
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,7 +32,8 @@ const pagePath = path.join(out, "lab.html");
 await writeFile(pagePath, page);
 
 const scale = +arg("--scale", 1);
-const b = await openBrowser({ viewport: { width: 1100, height: 900, deviceScaleFactor: scale, mobile: false } });
+// --gpu renders on this machine's GPU (real frame times); the default software renderer is several times slower.
+const b = await openBrowser({ viewport: { width: 1100, height: 900, deviceScaleFactor: scale, mobile: false }, gpu: argv.includes("--gpu") });
 const errors = [];
 b.on(m => {
   if (m.method === "Runtime.exceptionThrown") errors.push(`exception: ${m.params.exceptionDetails.exception?.description?.split("\n")[0] ?? m.params.exceptionDetails.text}`);

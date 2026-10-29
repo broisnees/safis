@@ -1,0 +1,336 @@
+<script>window.LAB = { scenes: {}, handles: {} };</script>
+<h1>Light lab</h1>
+<p class="dek">Physical lights in E3: area lights with traced soft shadows, the inverse-square law, light bounced between walls, a sky, haze and dust in a beam, the physical sky and the Earth, and grass in the wind. Render with <code>node tools/check-3d.mjs --lab tools/lab/light.html</code>.</p>
+
+<h2>An area light and a wall</h2>
+<figure class="demo" id="room-rect" aria-label="A rectangular light above a floor with a wall; the wall casts a shadow with a dark core and soft edges."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "darkroom", units: "m" });
+  scene.add(E3.mesh.box(2, 0.01, 2), { name: "floor", position: [0, -0.005, 0] });
+  scene.add(E3.mesh.box(0.8, 0.8, 0.02), { name: "wall", position: [0, 0.4, 0] });
+  const light = { type: "rect", position: [0.35, 1.3, -0.35], size: [0.5, 0.25], power: 120, normal: [0, -1, 0] };
+  scene.lights = [light];
+  LAB.scenes["room-rect"] = scene;
+  LAB.handles["room-rect"] = demo("room-rect", {
+    aspect: 1.1, orbit: { yaw: -0.55, pitch: 0.55 },
+    controls: [{ key: "size", label: "Light size", min: 0.02, max: 1.2, step: 0.01, value: 0.5, unit: " m" }, { key: "power", label: "Power", min: 5, max: 300, step: 1, value: 120, unit: " W" }],
+    draw(g, s, v) {
+      light.size = [v.size, v.size / 2]; light.power = v.power;
+      g.render3d(scene, { ...s.view, fov: 30 });
+    },
+  });
+}
+</script>
+
+<section class="band dark">
+<h2>A ball of light over a floor</h2>
+<figure class="demo" id="room-sphere" aria-label="A glowing sphere above a floor; the floor is brightest under it and dims with distance."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "darkroom", units: "m" });
+  scene.add(E3.mesh.box(2, 0.01, 2), { name: "floor", position: [0, -0.005, 0] });
+  const light = { type: "sphere", position: [0, 0.8, 0], radius: 0.12, power: 100 };
+  scene.lights = [light];
+  LAB.scenes["room-sphere"] = scene;
+  LAB.handles["room-sphere"] = demo("room-sphere", {
+    aspect: 1.1, orbit: { yaw: -0.6, pitch: 0.45 },
+    controls: [{ key: "h", label: "Height", min: 0.2, max: 1.6, step: 0.01, value: 0.8, unit: " m" }, { key: "power", label: "Power", min: 1, max: 200, step: 1, value: 100, unit: " W" }],
+    status: (s, v) => `irradiance under the light ${(v.power / (4 * Math.PI * v.h * v.h)).toFixed(1)} W/m²`,
+    draw(g, s, v) {
+      light.position = [0, v.h, 0]; light.power = v.power;
+      g.render3d(scene, { ...s.view, fov: 30, target: [0, 0.4, 0], distance: 4.4 });
+    },
+  });
+}
+</script>
+<p>This figure sits in a dark band: the page goes dark edge to edge, and the figure and its controls draw in the dark theme.</p>
+</section>
+
+<h2>Photons from a point</h2>
+<figure class="demo" id="photons" aria-label="Rays from a small light land on a floor; a magnifier shows where they land on one small patch."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "darkroom", units: "m" });
+  scene.add(E3.mesh.box(2, 0.01, 2), { name: "floor", position: [0, -0.005, 0] });
+  const light = { type: "point", position: [0, 0.9, 0], power: 60, visible: 0.025 };
+  scene.lights = [light];
+  let rays = null, key = "";
+  LAB.scenes.photons = scene;
+  LAB.handles.photons = demo("photons", {
+    aspect: 1.2, orbit: { yaw: -0.5, pitch: 0.55 },
+    controls: [{ key: "h", label: "Height", min: 0.3, max: 1.5, step: 0.01, value: 0.9, unit: " m" }],
+    draw(g, s, v) {
+      light.position = [0, v.h, 0];
+      if (key !== String(v.h)) { rays = E3.photons(scene, light, { count: 6000, direction: [0, -1, 0], cone: 1.2, seed: 2 }); key = String(v.h); }
+      const view = g.render3d(scene, { ...s.view, fov: 30, target: [0, 0.3, 0], distance: 4.6 });
+      const patch = [0.35, 0, 0.2], half = 0.08;
+      const inPatch = p => Math.abs(p[0] - patch[0]) < half && Math.abs(p[2] - patch[2]) < half;
+      rays.forEach((r, i) => { if (r.hit && (inPatch(r.hit.point) || i % 8 === 0)) g.line(view.project(r.from), view.project(r.to), { stroke: "#ffffff", width: 0.6, alpha: inPatch(r.hit.point) ? 0.5 : 0.07 }); });
+      const fp = view.project(patch);
+      g.inset([g.w * 0.78, g.h * 0.68, Math.min(g.w, g.h) * 0.25], [fp[0], fp[1], 12], box => {
+        const z = g.render3d(scene, { ...s.view, fov: 30, target: patch, distance: 0.55 }, { box });
+        for (const r of rays) if (r.hit && inPatch(r.hit.point)) {
+          g.line(z.project(v3lerp(r.to, r.from, 0.35)), z.project(r.to), { stroke: "#ffffff", width: 0.7, alpha: 0.35 });
+          g.circle(z.project(r.to), 2.4, { fill: "#f2c14e" });
+        }
+      }, { background: "#000000", stroke: "#888888" });
+    },
+  });
+  function v3lerp(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+}
+</script>
+
+<h2>Light that bounces</h2>
+<figure class="demo" id="bounce" aria-label="A box with a red and a green wall lit from above; with bounces the white walls take on the colors of their neighbors."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "darkroom", units: "m" });
+  const W = 1, add = (m, o) => scene.add(m, o);
+  add(E3.mesh.box(W, 0.01, W), { name: "floor", position: [0, 0, 0] });
+  add(E3.mesh.box(W, 0.01, W), { name: "ceiling", position: [0, W, 0] });
+  add(E3.mesh.box(W, W, 0.01), { name: "back", position: [0, W / 2, -W / 2] });
+  add(E3.mesh.box(0.01, W, W), { name: "left", position: [-W / 2, W / 2, 0], color: "#c83a2c" });
+  add(E3.mesh.box(0.01, W, W), { name: "right", position: [W / 2, W / 2, 0], color: "#3b9a4a" });
+  add(E3.mesh.box(0.28, 0.55, 0.28), { name: "tall box", position: [-0.17, 0.28, -0.12], rotation: [0, 0.3, 0] });
+  add(E3.mesh.box(0.28, 0.28, 0.28), { name: "short box", position: [0.18, 0.15, 0.15], rotation: [0, -0.3, 0] });
+  scene.lights = [{ type: "rect", position: [0, W - 0.012, 0], size: [0.25, 0.25], power: 110 }];
+  LAB.scenes.bounce = scene;
+  LAB.handles.bounce = demo("bounce", {
+    aspect: 1, orbit: { yaw: 0, pitch: 0.05 },
+    controls: [{ key: "b", label: "Bounces", min: 0, max: 3, step: 1, value: 2 }],
+    draw(g, s, v) {
+      scene.bounces = v.b;
+      g.render3d(scene, { ...s.view, fov: 34, target: [0, 0.5, 0], distance: 2.6 });
+    },
+  });
+}
+</script>
+
+<h2>A sky of light</h2>
+<figure class="demo" id="skydome" aria-label="A gray floor under a dark tile, lit evenly from a white sky; the shadow under the tile is soft and darkens as the tile comes down."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "darkroom", units: "m", sky: { color: "#ffffff", intensity: 6 } });
+  scene.add(E3.mesh.box(2, 0.01, 2), { name: "floor", color: "#bdbdbd" });
+  const tile = scene.add(E3.mesh.box(0.6, 0.02, 0.6), { name: "tile", color: "#111111", position: [0, 0.3, 0] });
+  LAB.scenes.skydome = scene;
+  LAB.handles.skydome = demo("skydome", {
+    aspect: 1.1, orbit: { yaw: -0.5, pitch: 0.5 },
+    controls: [{ key: "h", label: "Tile height", min: 0.03, max: 1, step: 0.01, value: 0.3, unit: " m" }],
+    draw(g, s, v) {
+      tile.position = [0, v.h, 0];
+      g.render3d(scene, { ...s.view, fov: 30, target: [0, 0.2, 0], distance: 4.2 });
+    },
+  });
+}
+</script>
+
+<h2>Red, green, and blue light</h2>
+<figure class="demo" id="rgb" aria-label="Three colored lights over a white floor; where they overlap the colors add up to white."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "darkroom", units: "m" });
+  scene.add(E3.mesh.box(2, 0.01, 2), { name: "floor" });
+  scene.lights = [
+    { type: "sphere", position: [-0.25, 0.35, 0.12], radius: 0.04, power: 18, color: "#ff0000" },
+    { type: "sphere", position: [0.25, 0.35, 0.12], radius: 0.04, power: 18, color: "#00ff00" },
+    { type: "sphere", position: [0, 0.35, -0.3], radius: 0.04, power: 18, color: "#0000ff" },
+  ];
+  LAB.scenes.rgb = scene;
+  LAB.handles.rgb = demo("rgb", {
+    aspect: 1.1, orbit: { yaw: 0, pitch: 1.0 },
+    draw(g, s, v) { g.render3d(scene, { ...s.view, fov: 30, target: [0, 0, 0], distance: 3 }); },
+  });
+}
+</script>
+
+<h2>A beam through dusty air</h2>
+<figure class="demo" id="shafts" aria-label="A lamp behind a wall with a window; a beam of light crosses dusty air from the window to the floor and lights the motes floating in it."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "darkroom", units: "m", haze: { density: 0.3, g: 0.6, center: [0.5, 0.9, 0], radius: 1.8 } });
+  scene.add(E3.mesh.box(4.4, 0.02, 3), { name: "floor", position: [0, -0.01, 0] });
+  // A closed back room: the wall with its window, a ceiling, and side walls, so light leaves only through the window.
+  const box = (sx, sy, sz, x, y, z) => scene.add(E3.mesh.box(sx, sy, sz), { name: "wall", position: [x, y, z] });
+  const wall = (z0, z1, y0, y1) => box(0.04, y1 - y0, z1 - z0, -0.9, (y0 + y1) / 2, (z0 + z1) / 2);
+  wall(-1, -0.2, 0, 2.2); wall(0.2, 1, 0, 2.2); wall(-0.2, 0.2, 0, 0.9); wall(-0.2, 0.2, 1.3, 2.2);
+  box(1.2, 0.04, 2, -1.5, 2.2, 0); box(1.2, 2.2, 0.04, -1.5, 1.1, -1); box(1.2, 2.2, 0.04, -1.5, 1.1, 1); box(0.04, 2.2, 2, -2.1, 1.1, 0);
+  scene.lights = [{ type: "sphere", position: [-1.7, 1.55, 0], radius: 0.08, power: 400 }];
+  scene.add(E3.particles({ matter: "motes", units: "m", count: 2500, seed: 5, emitter: { shape: "box", size: [1.6, 1.2, 0.6], position: [0.1, 0.8, 0] } }));
+  LAB.scenes.shafts = scene;
+  LAB.handles.shafts = demo("shafts", {
+    aspect: 1.5, orbit: { yaw: -0.45, pitch: 0.12 },
+    state: () => ({ t: 20 }),
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      g.render3d(scene, { ...s.view, fov: 34, target: [0, 0.8, 0], distance: 4.6 });
+    },
+  });
+}
+</script>
+
+<h2>The sky at sunset, and the Earth</h2>
+<figure class="demo" id="sky" aria-label="The western sky from the ground as the Sun sets; an inset globe shows where day and night meet."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "outdoor", sky: { sun: { elevation: 2, azimuth: 270 } } });
+  const ground = scene.add(E3.mesh.box(400, 0.1, 400), { name: "ground", color: "#2c2b26", position: [0, -0.05, 0] });
+  const globeScene = E3.scene({ look: "studio", lighting: "sun", shadow: false });
+  const earth = globeScene.add(E3.earth({ radius: 1 }));
+  LAB.scenes.sky = scene;
+  LAB.handles.sky = demo("sky", {
+    aspect: 1.45,
+    controls: [{ key: "el", label: "Sun elevation", min: -18, max: 40, step: 0.1, value: 2, unit: "°" }],
+    draw(g, s, v) {
+      scene.sky = { sun: { elevation: v.el, azimuth: 270 } };
+      g.render3d(scene, { yaw: -Math.PI / 2, pitch: -0.12, fov: 60, target: [-10, 4, 0], distance: 10 });
+      // The globe: the observer at 52° N; the Sun's direction follows the time of day.
+      const a = (v.el / 90) * Math.PI / 2 - Math.PI / 2;
+      globeScene.light = [Math.cos(a) * -1, 0.3, Math.sin(a)];
+      earth.rotation = [0, -0.4, 0];
+      g.render3d(globeScene, { yaw: 0.3, pitch: 0.3, fov: 24 }, { box: [g.w - 170, g.h - 170, 150, 150] });
+    },
+  });
+}
+</script>
+
+<h2>The Earth</h2>
+<figure class="demo" id="earth" aria-label="The Earth lit by the Sun, turning, with the Sun glinting off the oceans."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", lighting: "sun", shadow: false, light: [1, 0.3, 0.6] });
+  const earth = scene.add(E3.earth());
+  LAB.scenes.earth = scene;
+  LAB.handles.earth = demo("earth", {
+    aspect: 1.2, orbit: { yaw: 0.2, pitch: 0.25 },
+    controls: [{ key: "turn", label: "Turn", min: 0, max: 6.28, step: 0.01, value: 1.2 }],
+    draw(g, s, v) { earth.rotation = [0, v.turn, 0]; g.render3d(scene, { ...s.view, fov: 26 }); },
+  });
+}
+</script>
+
+<h2>Grass in the wind</h2>
+<figure class="demo" id="grass" aria-label="A square of lawn on its soil; the blades lean and ripple as the wind picks up."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const lawn = scene.add(E3.grass({ size: 0.4, units: "m", seed: 4 }));
+  LAB.scenes.grass = scene;
+  LAB.handles.grass = demo("grass", {
+    aspect: 1.25, orbit: { yaw: -0.75, pitch: 0.55 },
+    state: () => ({ t: 1.5 }),
+    controls: [{ key: "wind", label: "Wind", min: 0, max: 12, step: 0.1, value: 4, unit: " m/s" }],
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t; lawn.wind = v.wind;
+      g.render3d(scene, { ...s.view, fov: 28 });
+    },
+  });
+}
+</script>
+
+<h2>How big a light looks</h2>
+<figure class="demo" id="solid" aria-label="A hemisphere over a point on a floor; a panel light above projects onto it as a patch, and that patch flattened onto the base."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "darkroom", units: "m" });
+  scene.add(E3.mesh.box(2, 0.01, 2), { name: "floor" });
+  const light = { type: "rect", position: [0.3, 0.9, -0.2], size: [0.5, 0.3], power: 80 };
+  scene.lights = [light];
+  const dome = scene.add(E3.mesh.parametric((u, w) => [0.35 * Math.cos(u * 6.2832) * Math.sin(w * 1.5708), 0.35 * Math.cos(w * 1.5708), 0.35 * Math.sin(u * 6.2832) * Math.sin(w * 1.5708)], { nu: 48, nv: 16 }), { material: "ghost", opacity: 0.25, trace: false, castShadow: false });
+  let cap = null, flat = null;
+  LAB.scenes.solid = scene;
+  LAB.handles.solid = demo("solid", {
+    aspect: 1.1, orbit: { yaw: -0.5, pitch: 0.5 },
+    controls: [{ key: "x", label: "Light across", min: -0.8, max: 0.8, step: 0.01, value: 0.3, unit: " m" }],
+    status: (s, v) => s.sa ? `solid angle ${s.sa.omega.toFixed(3)} sr · cosine-weighted ${s.sa.projected.toFixed(3)} sr · ${(100 * s.sa.share).toFixed(1)}% of the sky` : "",
+    draw(g, s, v) {
+      light.position = [v.x, 0.9, -0.2];
+      s.sa = E3.solidAngle([0, 0.006, 0], [0, 1, 0], light, { radius: 0.35 });
+      if (cap) { cap.mesh = s.sa.cap; flat.mesh = s.sa.disk; }
+      else { cap = scene.add(s.sa.cap, { material: { color: "#f2c14e", emissive: 0.6 }, trace: false, castShadow: false, twoSided: true }); flat = scene.add(s.sa.disk, { material: { color: "#f2c14e", emissive: 0.6 }, trace: false, castShadow: false, twoSided: true, position: [0, 0.004, 0] }); }
+      g.render3d(scene, { ...s.view, fov: 30, target: [0, 0.3, 0], distance: 3.4 });
+    },
+  });
+}
+</script>
+
+<h2>A camera's depth of field</h2>
+<figure class="demo" id="dof" aria-label="Left, two balls on a checkered floor and a camera aimed at them, with its plane of focus; right, the photograph it takes, sharp at the focus and blurred in front and behind."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", units: "m" });
+  const checker = (u, v) => ((Math.floor(u * 8) + Math.floor(v * 8)) % 2 ? "#d8d8d8" : "#b4b4b4");
+  scene.add(E3.mesh.box(1.6, 0.01, 1.6), { name: "floor", material: { color: "#ffffff", metal: 0, roughness: 0.8, map: checker, mapping: "planar", mapBox: [-0.8, -0.8, 1.6, 1.6] } });
+  scene.add(E3.mesh.sphere(0.11), { name: "green", color: "green", position: [-0.25, 0.115, 0.25] });
+  scene.add(E3.mesh.sphere(0.07), { name: "red", color: "red", position: [0.3, 0.075, -0.35] });
+  const camPos = [0.2, 0.3, 1.9], camAt = [0, 0.08, 0];
+  const over = E3.scene({ look: "studio", units: "m" });
+  for (const n of scene.children) over.add(n.mesh, { name: n.name, material: n.material, color: n.color, position: n.position });
+  const body = over.add(E3.mesh.box(0.2, 0.13, 0.1, { round: 0.012 }), { name: "camera", material: "graphite" });
+  const lensN = over.add(E3.mesh.cylinder(0.045, 0.08), { name: "lens", material: "steel" });
+  const plane = over.add(E3.mesh.box(1.2, 0.5, 0.002), { name: "focus plane", material: "ghost", opacity: 0.25, color: "blue", castShadow: false });
+  LAB.scenes.dof = scene;
+  LAB.handles.dof = demo("dof", {
+    aspect: 2,
+    controls: [{ key: "N", label: "f-number", type: "choice", options: [1.4, 2, 2.8, 4, 5.6, 8, 16].map(n => ({ value: n, label: "f/" + n })), value: 1.4 },
+               { key: "focus", label: "Focus distance", min: 0.8, max: 3, step: 0.01, value: 1.6, unit: " m" }],
+    draw(g, s, v) {
+      const d = E3.v3.norm(E3.v3.sub(camAt, camPos)), yaw = Math.atan2(d[0], -d[2]), pitch = Math.asin(-d[1]);
+      const M = E3.m4.invert(E3.m4.lookAt(camPos, camAt, [0, 1, 0]));
+      body.matrix = M; lensN.matrix = E3.m4.multiply(M, E3.m4.multiply(E3.m4.translation([0, 0, -0.05]), E3.m4.rotationX(Math.PI / 2)));
+      plane.matrix = E3.m4.multiply(M, E3.m4.translation([0, 0, -v.focus]));
+      g.render3d(over, { yaw: -0.7, pitch: 0.55, fov: 30 }, { box: [0, 0, g.w * 0.48, g.h] });
+      g.render3d(scene, { yaw, pitch, target: camAt, distance: E3.v3.dist(camPos, camAt), focal: 50, fNumber: +v.N, aperture: 0.25 / v.N, focus: v.focus }, { box: [g.w * 0.52, g.h * 0.08, g.w * 0.46, g.h * 0.84] });
+    },
+  });
+}
+</script>
+
+<h2>The Moon, and a projector</h2>
+<figure class="demo" id="moon" aria-label="The Moon lit by the Sun from the side, showing its phase; a slider moves the Sun around it."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", lighting: "sun", shadow: false, background: "#000000" });
+  scene.add(E3.moon());
+  LAB.scenes.moon = scene;
+  LAB.handles.moon = demo("moon", {
+    aspect: 1.3,
+    controls: [{ key: "phase", label: "Sun around the Moon", min: 0, max: 6.28, step: 0.01, value: 0.35 }],
+    draw(g, s, v) { scene.light = [Math.sin(v.phase), 0.05, Math.cos(v.phase)]; g.render3d(scene, { yaw: 0, pitch: 0, fov: 24 }); },
+  });
+}
+</script>
+
+<figure class="demo" id="projector" aria-label="A picture cast by a projector onto a box and the wall behind it, bending around the box's corner."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const pic = (u, v) => ((Math.floor(u * 6) + Math.floor(v * 4)) % 2 ? "#e2603c" : "#f2efe6");
+  const pr = { position: [2.2, 1.4, 2.6], target: [0, 0.5, 0], fov: 26, aspect: 1.5 };
+  const mat = { color: "#ffffff", metal: 0, roughness: 0.7, map: pic, mapping: "project", projector: pr };
+  scene.add(E3.mesh.box(3, 2, 0.05), { name: "wall", position: [0, 1, -0.6], material: mat });
+  scene.add(E3.mesh.box(0.7, 0.7, 0.7), { name: "box", position: [0, 0.35, 0], material: mat });
+  LAB.scenes.projector = scene;
+  LAB.handles.projector = demo("projector", {
+    aspect: 1.4, orbit: { yaw: -0.4, pitch: 0.25 },
+    draw(g, s, v) { g.render3d(scene, { ...s.view, fov: 30 }); },
+  });
+}
+</script>
+
+<h2>A glass of water</h2>
+<figure class="demo" id="tumbler" aria-label="A glass tumbler two-thirds full of water, with a spoon standing in it bent at the surface."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio" });
+  const prof = [[0, 0], [3.2, 0], [3.4, 0.4], [3.8, 9], [3.55, 9], [3.15, 0.6], [0, 0.6]];
+  scene.add(E3.mesh.lathe(prof), { name: "glass", material: "glass" });
+  scene.add(E3.mesh.lathe([[0, 0.61], [3.14, 0.61], [3.5, 6.2], [0, 6.2]]), { name: "water", material: "water" });
+  scene.add(E3.mesh.box(0.5, 10, 0.12, { round: 0.05 }), { name: "spoon", material: "steel", position: [0.8, 4.6, 0], rotation: [0, 0, 0.32] });
+  LAB.scenes.tumbler = scene;
+  LAB.handles.tumbler = demo("tumbler", { aspect: 1.2, orbit: { yaw: -0.4, pitch: 0.25 }, draw(g, s) { scene.time = 1; g.render3d(scene, { ...s.view, fov: 28 }); } });
+}
+</script>
