@@ -776,6 +776,8 @@
 
   // Everything the renderer needs to know about how a node looks.
   function resolveMaterial(node, look) {
+    // A light's own surface.
+    if (node._light) return { name: "light", rgb: [1, 1, 1], physical: true, metal: 0, f0: [0, 0, 0], emissive: node._light, temp: null, opacity: 1, kind: "opaque", roughness: 1, anisotropy: 0, brush: 0, brushAxis: [0, 1, 0], clearcoat: 0, weave: false, heatShift: null, ior: 1.5, dispersion: 0, thickness: null, water: null, glow: true, sss: 0, sssColor: [0, 0, 0], sheen: 0, fibers: null, emitter: true, map: null, foliage: false };
     let m = node.material, name = null;
     const tissueOf = n => (look === "anatomy" && TISSUE[n] ? TISSUE[n] : {});
     if (typeof m === "string") { name = m; m = { ...(MATERIALS[m] ?? { color: m }), ...tissueOf(m) }; }
@@ -816,6 +818,10 @@
       glow: !!temp || emissive.some(v => v > 0),
       sss: tissue ? clamp01(m.sss ?? 0.4) : 0, sssColor: tissue ? colorOf(m.sssColor ?? "#b5463d", true) : [0, 0, 0],
       sheen: tissue ? clamp01(m.sheen ?? 0) : 0, fibers: tissue && m.fibers ? v3.norm(m.fibers === true ? [0, 1, 0] : m.fibers) : null,
+      emitter: false, foliage: !!m.foliage,
+      // A picture on the part: map (canvas, image, ImageData, or (u, v) => color), mapping
+      // "sphere" (latitude and longitude), "planar" (local x-z), or "box"; mapRoughness: alpha is roughness.
+      map: m.map ? { src: m.map, mapping: { sphere: 0, planar: 1, box: 2, project: 3 }[m.mapping ?? "sphere"] ?? 0, box: m.mapBox ?? [-0.5, -0.5, 1, 1], rough: !!m.mapRoughness, projector: m.projector ?? null } : null,
     };
   }
 
@@ -833,6 +839,9 @@
     outdoor: { env: 2, key: 3.4, fill: 0.55, rim: 0.4, diffuse: 0.9, specular: 1, ink: 0.65, parts: 0.65, ground: 0.6, soft: 0.45, bloom: 0.7, exposure: 0.95, keyColor: [1, 0.94, 0.84], fillColor: [0.72, 0.84, 1] },
     // Anatomy: a soft surgical studio; anatomy materials shade as tissue, light ink.
     anatomy: { env: 0, key: 2.3, fill: 0.8, rim: 0.9, diffuse: 1.05, specular: 0.9, ink: 0.45, parts: 0.55, ground: 0.45, soft: 1.3, bloom: 0.45, exposure: 1.05, keyColor: [1, 0.96, 0.92], fillColor: [0.92, 0.95, 1] },
+    // Darkroom: nothing but the scene's own lights (scene.lights with a type and power) and sky,
+    // on black. Shadows, bounced light, and haze are traced, so what you see is what the light does.
+    darkroom: { env: 0, key: 0, fill: 0, rim: 0, diffuse: 0, specular: 0, ink: 0.4, parts: 0, ground: 0, soft: 1, bloom: 0.5, exposure: 0.15, keyColor: [1, 1, 1], fillColor: [1, 1, 1], room: true },
   };
   const lookOf = scene => LOOKS[scene.look] || LOOKS.studio;
   // Whether the page is dark, from the palette's background.
@@ -1371,6 +1380,11 @@
       // At least one step, so a system at time 0 (a paused figure, reduced motion) has been born.
       const h = this.step, te = this.simTime(t), target = Math.max(1, Math.floor(te / h + 1e-6)), P = this.period;
       const need = P ? Math.ceil(P / h) + 2 : 4000;
+      // The picture at time t depends on the forces, colliders, and emitter too: when one changes
+      // (a wind slider moved while paused), simulate again from the start.
+      let sig = "";
+      try { sig = JSON.stringify([this.forces, this.colliders, this.emitter, this.density]); } catch { sig = this._sig; }
+      if (sig !== this._sig) { this._sig = sig; this._n = null; }
       if (this._n == null || target < this._n || target - this._n > need || this._count !== n) {
         this._n = P ? target - need : Math.max(0, target - need);
         this._count = n;
@@ -1571,6 +1585,173 @@ float shadowAt(vec3 wp, vec3 n) {
   return vis;
 }`;
 
+  // Ray tracing against the scene's triangles: a bounding volume hierarchy in float textures
+  // (two texels per node: min + first child or first triangle, max + triangle count; three per
+  // triangle: a vertex + material, two edges + cut flag), walked with a small stack. Used for
+  // the shadows of area lights, light bounced between surfaces, sky occlusion, and light shafts.
+  const G_TRACE = `
+uniform highp sampler2D uBvhN; uniform highp sampler2D uBvhT; uniform highp sampler2D uBvhM;
+uniform ivec4 uBvh; uniform vec4 uBvhCut;
+vec4 bvhN(int i) { return texelFetch(uBvhN, ivec2(i & 1023, i >> 10), 0); }
+vec4 bvhT(int i) { return texelFetch(uBvhT, ivec2(i & 1023, i >> 10), 0); }
+vec4 bvhM(int i) { return texelFetch(uBvhM, ivec2(i & 1023, i >> 10), 0); }
+float boxHit(vec3 o, vec3 inv, vec3 lo, vec3 hi, float tmax) {
+  vec3 a = (lo - o) * inv, b = (hi - o) * inv;
+  vec3 mn = min(a, b), mx = max(a, b);
+  float t0 = max(max(mn.x, mn.y), max(mn.z, 0.0)), t1 = min(min(mx.x, mx.y), min(mx.z, tmax));
+  return t0 <= t1 ? t0 : 1e30;
+}
+// The nearest triangle along o + t d with 0 < t < tmax (any: the first one found). Returns t,
+// or 1e30 for a miss; id is the triangle. Triangles of parts the section cut removed are skipped.
+float trace(vec3 o, vec3 d, float tmax, bool any, out int id) {
+  id = -1;
+  if (uBvh.x == 0) return 1e30;
+  vec3 dd = vec3(abs(d.x) < 1e-9 ? 1e-9 : d.x, abs(d.y) < 1e-9 ? 1e-9 : d.y, abs(d.z) < 1e-9 ? 1e-9 : d.z);
+  vec3 inv = 1.0 / dd;
+  float best = tmax;
+  if (boxHit(o, inv, bvhN(0).xyz, bvhN(1).xyz, best) > 1e29) return 1e30;
+  int stack[32];
+  int sp = 0, ni = 0;
+  for (int guard = 0; guard < 2048; guard++) {
+    vec4 A = bvhN(2 * ni), B = bvhN(2 * ni + 1);
+    int cnt = int(B.w);
+    if (cnt > 0) {
+      int first = int(A.w);
+      for (int k = 0; k < 16; k++) {
+        if (k >= cnt) break;
+        int j = first + k;
+        vec4 p0 = bvhT(3 * j), e1 = bvhT(3 * j + 1), e2 = bvhT(3 * j + 2);
+        vec3 pv = cross(d, e2.xyz);
+        float det = dot(e1.xyz, pv);
+        if (abs(det) < 1e-14) continue;
+        float id_ = 1.0 / det;
+        vec3 tv = o - p0.xyz;
+        float u = dot(tv, pv) * id_;
+        if (u < 0.0 || u > 1.0) continue;
+        vec3 qv = cross(tv, e1.xyz);
+        float v = dot(d, qv) * id_;
+        if (v < 0.0 || u + v > 1.0) continue;
+        float t = dot(e2.xyz, qv) * id_;
+        if (t <= 0.0 || t >= best) continue;
+        if (e1.w > 0.5 && uBvh.w == 1 && dot(o + d * t, uBvhCut.xyz) > uBvhCut.w) continue;
+        best = t; id = j;
+        if (any) return t;
+      }
+    } else {
+      int l = int(A.w), r = l + 1;
+      float tl = boxHit(o, inv, bvhN(2 * l).xyz, bvhN(2 * l + 1).xyz, best);
+      float tr = boxHit(o, inv, bvhN(2 * r).xyz, bvhN(2 * r + 1).xyz, best);
+      if (tl < 1e29 && tr < 1e29) { ni = tl <= tr ? l : r; if (sp < 32) stack[sp++] = tl <= tr ? r : l; continue; }
+      if (tl < 1e29) { ni = l; continue; }
+      if (tr < 1e29) { ni = r; continue; }
+    }
+    if (sp == 0) break;
+    ni = stack[--sp];
+  }
+  return id >= 0 ? best : 1e30;
+}
+bool blocked(vec3 o, vec3 d, float tmax) { int id; return trace(o, d, tmax, true, id) < 1e29; }
+vec3 triNormal(int j) { return normalize(cross(bvhT(3 * j + 1).xyz, bvhT(3 * j + 2).xyz)); }
+vec3 triAlbedo(int j) { return bvhM(int(bvhT(3 * j).w)).rgb; }`;
+
+  // Physical lights: points, spheres, disks, and rectangles with a power in watts, sampled over
+  // their area (soft shadows that harden as a light shrinks, exact inverse-square and cosine
+  // falloff), a sky that surrounds the scene, and diffuse light bounced between surfaces.
+  // uLA: position, type (0 point, 1 sphere, 2 disk, 3 rect); uLB: radiance (W/m²/sr; W/sr for a
+  // point), radius; uLC, uLD: the half axes of a disk or rect (their cross product is the side
+  // that emits), uLC.w two-sided. uRoom: light count, samples, bounces, frame. uSkyU: sky radiance,
+  // kind (1 uniform, 2 the physical sky). uUnits: world units per meter.
+  const G_LIGHTS = `
+uniform vec4 uRoom; uniform vec4 uLA[8]; uniform vec4 uLB[8]; uniform vec4 uLC[8]; uniform vec4 uLD[8];
+uniform vec4 uSkyU; uniform float uUnits; uniform float uTraceEps;
+uint rngS;
+float rnd() { rngS = rngS * 747796405u + 2891336453u; uint w = ((rngS >> ((rngS >> 28u) + 4u)) ^ rngS) * 277803737u; return float((w >> 22u) ^ w) / 4294967296.0; }
+void rngInit(vec2 px, float frame) { rngS = hashu(uint(px.x) * 1973u + uint(px.y) * 9277u + uint(frame) * 26699u) | 1u; }
+float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+// Low-discrepancy pairs, rotated per pixel, so a few samples already cover a light evenly.
+vec2 lds(float n, vec2 px) { return fract(vec2(0.7548776662, 0.5698402910) * n + vec2(ign(px), ign(px + vec2(37.0, 17.0)))); }
+// One sample of light i seen from x: unit direction l, distance, and the light arriving along it
+// times its solid angle (irradiance per unit cosine, W/m²).
+vec3 sampleLight(int i, vec3 x, vec2 r, out vec3 l, out float dist) {
+  vec3 c = uLA[i].xyz;
+  int type = int(uLA[i].w + 0.5);
+  if (type == 0) {
+    vec3 d = c - x; float r2 = max(dot(d, d), 1e-12);
+    dist = sqrt(r2); l = d / dist;
+    return uLB[i].rgb * uUnits * uUnits / r2;
+  }
+  if (type == 1) {
+    float R = uLB[i].w; vec3 d = c - x; float d2 = dot(d, d), dl = sqrt(d2);
+    l = d / max(dl, 1e-9); dist = 0.0;
+    if (dl <= R * 1.0001) return vec3(0.0);
+    float cmax = sqrt(max(0.0, 1.0 - R * R / d2));
+    float ct = 1.0 - r.x * (1.0 - cmax), st = sqrt(max(0.0, 1.0 - ct * ct)), ph = 6.2831853 * r.y;
+    vec3 t1 = normalize(cross(abs(l.x) > 0.5 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), l)), t2 = cross(l, t1);
+    l = normalize(t1 * (cos(ph) * st) + t2 * (sin(ph) * st) + l * ct);
+    float b = dot(l, d); dist = b - sqrt(max(0.0, b * b - d2 + R * R));
+    return uLB[i].rgb * (6.2831853 * (1.0 - cmax));
+  }
+  vec3 U = uLC[i].xyz, V = uLD[i].xyz, p;
+  float area;
+  if (type == 2) {
+    vec2 q = 2.0 * r - 1.0, s;
+    if (q.x == 0.0 && q.y == 0.0) s = vec2(0.0);
+    else if (abs(q.x) > abs(q.y)) s = q.x * vec2(cos(0.7853982 * q.y / q.x), sin(0.7853982 * q.y / q.x));
+    else s = q.y * vec2(cos(1.5707963 - 0.7853982 * q.x / q.y), sin(1.5707963 - 0.7853982 * q.x / q.y));
+    p = c + U * s.x + V * s.y; area = PI * length(U) * length(V);
+  } else { p = c + U * (2.0 * r.x - 1.0) + V * (2.0 * r.y - 1.0); area = 4.0 * length(U) * length(V); }
+  vec3 n = normalize(cross(U, V));
+  vec3 d = p - x; float d2 = max(dot(d, d), 1e-12);
+  dist = sqrt(d2); l = d / dist;
+  float cl = -dot(l, n);
+  if (uLC[i].w > 0.5) cl = abs(cl);
+  if (cl <= 0.0) return vec3(0.0);
+  return uLB[i].rgb * cl * area / d2;
+}
+// What the sky sends along d: a uniform dome, or the physical sky.
+vec3 skyRad(vec3 d);
+vec3 cosDir(vec3 n, vec2 r) {
+  float ph = 6.2831853 * r.x, s = sqrt(r.y);
+  vec3 t1 = normalize(cross(abs(n.x) > 0.5 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), n)), t2 = cross(n, t1);
+  return normalize(t1 * (cos(ph) * s) + t2 * (sin(ph) * s) + n * sqrt(max(0.0, 1.0 - r.y)));
+}
+// Direct light from every light at x, with a shadow ray each: the irradiance a diffuse surface
+// with normal n receives (W/m²). Used where the eye path bounces.
+vec3 directAt(vec3 x, vec3 n, vec2 r) {
+  vec3 e = vec3(0.0);
+  int nl = int(uRoom.x + 0.5);
+  for (int i = 0; i < 8; i++) {
+    if (i >= nl) break;
+    vec3 l; float dist;
+    vec3 Lc = sampleLight(i, x, fract(r + float(i) * vec2(0.37, 0.61)), l, dist);
+    float c = dot(n, l);
+    if (c <= 0.0 || dot(Lc, Lc) <= 0.0) continue;
+    if (blocked(x + n * uTraceEps, l, max(dist - 2.0 * uTraceEps, 0.0))) continue;
+    e += Lc * c;
+  }
+  return e;
+}
+// Light scattered toward wo (unit, from x toward the eye) at a point in the air, per unit of
+// scattering: each light's irradiance times the Henyey-Greenstein phase function with asymmetry g
+// (dust and haze scatter forward, so a beam glows brightest when you look toward its light).
+float hgPhase(float mu, float g) { float g2 = g * g; return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5)); }
+vec3 scatterAt(vec3 x, vec3 wo, float g, vec2 r) {
+  vec3 e = vec3(0.0);
+  int nl = int(uRoom.x + 0.5);
+  for (int i = 0; i < 8; i++) {
+    if (i >= nl) break;
+    vec3 l; float dist;
+    vec3 Lc = sampleLight(i, x, fract(r + float(i) * vec2(0.37, 0.61)), l, dist);
+    if (dot(Lc, Lc) <= 0.0) continue;
+    if (blocked(x, l, max(dist - 2.0 * uTraceEps, 0.0))) continue;
+    e += Lc * hgPhase(dot(-l, wo), g);
+  }
+  return e;
+}`;
+
+  // The sky: single scattering in a real atmosphere (Rayleigh for the blue, Mie for the haze
+  // around the Sun, ozone for the deep blue of twilight), marched along the view ray with the
+  // sunlight reaching each point attenuated on its way in; stars come out after sunset.
   const VS = `#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
@@ -1798,14 +1979,61 @@ ${G_COMMON}
 ${G_ENV}
 ${G_SHADOW}
 ${G_SURFACE}
-in vec3 vWorld; in vec3 vNormal; in vec3 vLocal; in vec3 vLocalN;
+${G_TRACE}
+${G_LIGHTS}
+${G_SKY}
+${G_SKYRAD}
+in vec3 vWorld; in vec3 vNormal; in vec3 vLocal; in vec3 vLocalN; in vec4 vBlade;
 uniform vec4 uCut; uniform float uCutOn; uniform float uId; uniform vec3 uHighlight; uniform float uHighlightOn;
 uniform float uHatch;
+uniform vec4 uPart;   // two-sided, foliage, darkroom (only the scene's own lights), _
+uniform sampler2D uMap; uniform vec4 uMapOn; // on, mapping (0 sphere, 1 planar, 2 box), alpha is roughness, _
+uniform vec4 uMapBox; // planar and box mapping: origin (x, z) and size (x, z) in local units
+uniform mat4 uMapVP;  // projector mapping: the projector's view-projection
+uniform vec3 uMapProj; // and where it stands
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
+// Light from the scene's own lights (sampled over their area, with a shadow ray each), the sky
+// (with a ray for whether it can be seen), and light bounced off other surfaces.
+vec3 shadeLights(vec3 N, vec3 V, vec3 wp, vec3 diff, vec3 f0, float a) {
+  vec3 sum = vec3(0.0);
+  int spp = int(uRoom.y + 0.5), nb = int(uRoom.z + 0.5), nl = int(uRoom.x + 0.5);
+  bool sky = uSkyU.w > 0.5;
+  int depth = max(nb, sky ? 1 : 0);
+  vec3 X = vec3(1.0, 0.0, 0.0), Y = vec3(0.0, 0.0, 1.0);
+  for (int s = 0; s < 16; s++) {
+    if (s >= spp) break;
+    vec2 r = lds(uRoom.w * float(spp) + float(s), gl_FragCoord.xy);
+    for (int i = 0; i < 8; i++) {
+      if (i >= nl) break;
+      vec3 l; float dist;
+      vec3 Lc = sampleLight(i, wp, fract(r + float(i) * vec2(0.37, 0.61)), l, dist);
+      if (dot(N, l) <= 0.0 || dot(Lc, Lc) <= 0.0) continue;
+      if (blocked(wp + N * uTraceEps, l, max(dist - 2.0 * uTraceEps, 0.0))) continue;
+      sum += lightPBR(N, V, l, Lc, diff, f0, a, X, Y, 0.0);
+    }
+    vec3 thr = diff, x = wp, nn = N;
+    for (int b = 0; b < 6; b++) {
+      if (b >= depth) break;
+      vec3 d = cosDir(nn, b == 0 ? fract(r.yx + vec2(0.5)) : vec2(rnd(), rnd()));
+      int id;
+      float t = trace(x + nn * uTraceEps, d, 1e20, false, id);
+      if (t > 1e29) { if (sky) sum += thr * skyRad(d); break; }
+      if (b >= nb) break;
+      vec3 y = x + nn * uTraceEps + d * t, ny = triNormal(id);
+      if (dot(ny, d) > 0.0) ny = -ny;
+      vec3 rho = triAlbedo(id);
+      sum += thr * rho / PI * directAt(y, ny, vec2(rnd(), rnd()));
+      thr *= rho; x = y; nn = ny;
+    }
+  }
+  return sum / float(max(spp, 1));
+}
 void main() {
   if (uCutOn > 0.5 && dot(vWorld, uCut.xyz) > uCut.w) discard;
-  if (!gl_FrontFacing) {
+  vec3 N = normalize(vNormal);
+  if (!gl_FrontFacing && uPart.x > 0.5) N = -N;
+  else if (!gl_FrontFacing) {
     if (uCutOn < 0.5) discard;
     // Looking into a cut solid: this back face stands in for the section face. Its depth
     // stays where it is (so nearer surfaces still win); only the hatch is laid out on the
@@ -1825,15 +2053,86 @@ void main() {
     oNormal = vec4(n * 0.5 + 0.5, uId);
     return;
   }
-  vec3 N = normalize(vNormal);
+  gBase = uColor; gRough = uMat.z;
+  if (uMapOn.x > 0.5) {
+    // A picture on the part: latitude and longitude of the local direction (a globe), the
+    // local x-z plane (a floor, a map), or the dominant axis (boxes).
+    vec2 uv;
+    vec3 q = vLocal;
+    if (uMapOn.y < 0.5) { vec3 dn = normalize(q); uv = vec2(atan(dn.x, dn.z) / (2.0 * PI) + 0.5, acos(clamp(dn.y, -1.0, 1.0)) / PI); }
+    else if (uMapOn.y < 1.5) uv = (q.xz - uMapBox.xy) / uMapBox.zw;
+    else if (uMapOn.y > 2.5) { vec4 c = uMapVP * vec4(vWorld, 1.0); uv = c.w > 0.0 ? vec2(c.x, -c.y) / c.w * 0.5 + 0.5 : vec2(-1.0); }
+    else { vec3 an = abs(vLocalN); uv = (an.x > an.y && an.x > an.z ? q.zy : an.y > an.z ? q.xz : q.xy) / uMapBox.zw; }
+    vec2 gx = dFdx(uv), gy = dFdy(uv);
+    if (uMapOn.y < 0.5) {
+      // Longitude wraps around at the back; take its slope from the shifted copy there, so the
+      // seam doesn't pick the smallest mip.
+      vec2 hx = dFdx(vec2(fract(uv.x + 0.5), uv.y)), hy = dFdy(vec2(fract(uv.x + 0.5), uv.y));
+      if (abs(hx.x) + abs(hy.x) < abs(gx.x) + abs(gy.x)) { gx.x = hx.x; gy.x = hy.x; }
+    }
+    vec4 tx = textureGrad(uMap, uv, gx, gy);
+    // A projected picture only lands inside its frame.
+    if (uMapOn.y > 2.5) {
+      vec3 toP = uMapProj - vWorld;
+      float dp = length(toP);
+      bool outside = uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0 || dot(N, toP) <= 0.0;
+      if (outside || blocked(vWorld + N * uTraceEps, toP / dp, dp - 2.0 * uTraceEps)) tx = vec4(1.0);
+    }
+    gBase = uColor * tx.rgb;
+    if (uMapOn.z > 0.5) gRough = tx.a;
+  }
+  if (uPart.y > 0.5 && vBlade.z > 0.5) {
+    // Grass: each blade a little different in hue and dryness, darker toward the root where
+    // the blades shade each other, a lighter, drier tip.
+    float rr = vBlade.x, h = vBlade.y;
+    vec3 c = gBase * mix(vec3(0.82, 0.92, 0.7), vec3(1.12, 1.06, 0.8), fract(rr * 7.31));
+    c = mix(c, vec3(0.62, 0.6, 0.36) * dot(gBase, vec3(0.6)), smoothstep(0.75, 1.0, h) * step(0.82, fract(rr * 3.7)) * 0.6);
+    gBase = c * mix(0.32, 1.0, smoothstep(0.0, 0.55, h));
+  }
   vec3 V = normalize(uEye - vWorld);
   float vis = shadowAt(vWorld, N);
   vec3 col, glow = vec3(0.0);
-  if (uMat.x < 0.5) col = shadeSoft(N, V, vWorld, vis);
-  else {
+  if (uMat.x > 1.5) {
+    // A light's own surface: its radiance, so a dim light looks dim and a bright one white.
+    // A bright colored bulb looks its color at full strength (like a camera), not white.
+    vec3 e = uEmit * uLook.z;
+    float pk = max(e.r, max(e.g, e.b));
+    col = pk > 0.76 ? toSrgb(e / pk * mix(0.86, 1.0, smoothstep(1.0, 4.0, pk)) + vec3(0.14) * smoothstep(1.0, 8.0, pk) * (1.0 - e / pk)) : toSrgb(tonemap(e));
+    glow = min(e, vec3(4.0)) * 0.1 * step(0.01, uLook.w);
+    // The back of a one-sided panel or disk gives no light.
+    if (!gl_FrontFacing && uPart.w < 0.5) { col = vec3(0.16); glow = vec3(0.0); }
+  } else if (uPart.z > 0.5) {
+    // A dark room lit only by the scene's lights and sky: diagram materials are ideal
+    // diffuse (Lambertian) surfaces, physical ones keep their metal and gloss.
+    vec3 base = toLin(gBase);
+    float metal = uMat.x > 0.5 ? uMat.y : 0.0, rough = uMat.x > 0.5 ? clamp(gRough, 0.03, 1.0) : 1.0;
+    vec3 f0 = uMat.x > 0.5 ? mix(vec3(0.04), uF0, metal) : vec3(0.0);
+    vec3 lin = shadeLights(N, V, vWorld, base * (1.0 - metal), f0, rough * rough);
+    if (uPart.y > 0.5) {
+      vec3 back = vec3(0.0);
+      int nl = int(uRoom.x + 0.5);
+      for (int i = 0; i < 8; i++) {
+        if (i >= nl) break;
+        vec3 l; float dist;
+        vec3 Lc = sampleLight(i, vWorld, vec2(0.5), l, dist);
+        back += Lc * pow(max(dot(-V, l), 0.0), 3.0) * max(-dot(N, l), 0.0);
+      }
+      lin += back * base * 0.5;
+    }
+    col = toSrgb(tonemap((lin + uEmit) * uLook.z));
+    glow = uEmit * uLook.w;
+  } else if (uMat.x < 0.5) {
+    col = shadeSoft(N, V, vWorld, vis);
+    if (uRoom.x > 0.5) col = toSrgb(toLin(col) + shadeLights(N, V, vWorld, toLin(gBase), vec3(0.0), 1.0) * uLook.z);
+    col = toSrgb(toLin(col) * waterTint(vWorld));
+  } else {
     vec3 em;
     vec3 lin = shadePBR(N, V, vWorld, vLocal, vLocalN, vis, em);
-    col = toSrgb(tonemap((lin + em) * uLook.z));
+    if (uRoom.x > 0.5) {
+      float metal = uMat.y, rough = clamp(gRough, 0.03, 1.0);
+      lin += shadeLights(N, V, vWorld, toLin(gBase) * (1.0 - metal), mix(vec3(0.04), uF0, metal), rough * rough);
+    }
+    col = toSrgb(tonemap((lin * waterTint(vWorld) + em) * uLook.z));
     glow = em * uLook.w;
   }
   if (uHighlightOn > 0.5) col = mix(col, uHighlight, 0.38);
@@ -1971,13 +2270,45 @@ void main() {
   // reduced render scale), ambient occlusion, the effects layer, and bloom.
   const FS_COMPOSITE = `#version 300 es
 ${G_COMMON}
+${G_TRACE}
+${G_LIGHTS}
+${G_SKY}
+${G_SKYRAD}
 uniform sampler2D uColor; uniform sampler2D uNormal; uniform sampler2D uDepth; uniform sampler2D uFx; uniform sampler2D uBloom;
 uniform vec2 uInvSize; uniform float uStep; uniform float uInk;
 uniform vec2 uScale; uniform int uTaps; uniform float uAo; uniform float uAoR;
 uniform vec2 uFxInv; uniform vec2 uBloomInv; uniform vec4 uPost;
 uniform mat3 uViewRot; uniform vec2 uTanHalf; uniform vec2 uSize;
 uniform vec4 uShim[4]; uniform vec4 uShimR[4]; uniform int uShimN; uniform float uShimT;
+uniform vec4 uBg;      // background: 0 none (the page shows through), 1 a color, 2 the sky; exposure
+uniform vec3 uBgColor; uniform vec3 uEyeW;
+uniform vec4 uHaze;    // scattering per meter, asymmetry g, steps, on
+uniform vec4 uHazeBall; // where the haze is: center, radius
+uniform vec3 uHazeCol;
 out vec4 o;
+// Light scattered by haze along the view ray, up to the first surface: the beams from each
+// light (blocked where something stands in its way) and how much of what's behind gets through.
+vec3 hazeMarch(vec3 eye, vec3 dir, float tmax, vec2 px, out float T) {
+  T = 1.0;
+  vec3 oc = eye - uHazeBall.xyz;
+  float b = dot(oc, dir), c = dot(oc, oc) - uHazeBall.w * uHazeBall.w, h = b * b - c;
+  if (h <= 0.0) return vec3(0.0);
+  h = sqrt(h);
+  float t0 = max(-b - h, 0.0), t1 = min(-b + h, tmax);
+  if (t1 <= t0) return vec3(0.0);
+  int n = int(uHaze.z + 0.5);
+  float dt = (t1 - t0) / float(n), sig = uHaze.x / uUnits;
+  float j = fract(ign(px) + uRoom.w * 0.6180339);
+  vec3 sum = vec3(0.0);
+  for (int i = 0; i < 64; i++) {
+    if (i >= n) break;
+    vec3 p = eye + dir * (t0 + (float(i) + j) * dt);
+    vec2 r = lds(uRoom.w * float(n) + float(i), px);
+    sum += T * sig * dt * scatterAt(p, -dir, uHaze.y, r);
+    T *= exp(-sig * dt);
+  }
+  return sum * uHazeCol;
+}
 // Heat shimmer: hot gas bends the light from what's behind it. Each zone is a tapered capsule
 // in output pixels (start, end; radius at each end, strength in pixels); noise drifting along
 // it offsets where the scene behind is read, so solids seen through the jet waver.
@@ -2074,9 +2405,25 @@ void main() {
   vec4 sc = sum / (N * N);
   if (uAo > 0.0) sc.rgb *= occlusion((o1 + 0.5) * uScale);
   vec4 res = sc;
+  // World direction of this output pixel's view ray.
+  vec2 ndc = (o0 + 0.5) / (uSize / uScale) * 2.0 - 1.0;
+  vec3 wdir = normalize(transpose(uViewRot) * (uOrtho > 0.5 ? vec3(0.0, 0.0, -1.0) : vec3(ndc * uTanHalf, -1.0)));
+  if (uBg.x > 0.5) {
+    vec3 bgc = uBg.x > 1.5 ? toSrgb(tonemap(skyRad(wdir) * uBg.y)) : uBgColor;
+    res = vec4(res.rgb + bgc * (1.0 - res.a), 1.0);
+  }
   if (uPost.x > 0.5) {
     vec4 fx = texture(uFx, (o0 + 0.5) * uFxInv);
-    res = vec4(min(fx.rgb, vec3(1.0)) + sc.rgb * (1.0 - fx.a), fx.a + sc.a * (1.0 - fx.a));
+    res = vec4(min(fx.rgb, vec3(1.0)) + res.rgb * (1.0 - fx.a), fx.a + res.a * (1.0 - fx.a));
+  }
+  if (uHaze.w > 0.5) {
+    vec4 nc = texture(uNormal, (o1 + 0.5) * uScale * uInvSize);
+    float dz = nc.a < 0.5 / 255.0 ? 1e20 : linDepth(texture(uDepth, (o1 + 0.5) * uScale * uInvSize).r);
+    float tmax = dz > 1e19 ? 1e20 : dz / max(dot(wdir, transpose(uViewRot) * vec3(0.0, 0.0, -1.0)), 1e-3);
+    float T;
+    vec3 sc2 = hazeMarch(uEyeW, wdir, tmax, o0, T);
+    res.rgb = toSrgb(min(toLin(res.rgb) * T + tonemap(sc2 * uBg.y), vec3(1.0)));
+    res.a = max(res.a, 1.0 - T);
   }
   if (uPost.y > 0.0) {
     vec3 b = texture(uBloom, (o0 + 0.5) * uBloomInv).rgb * uPost.y;
@@ -2087,6 +2434,13 @@ void main() {
   res.rgb = clamp(res.rgb + dz * step(0.002, res.a), 0.0, res.a);
   o = res;
 }`;
+
+  // Copies a traced view's running average to the canvas.
+  const FS_PRESENT = `#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+out vec4 o;
+void main() { o = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0); }`;
 
   // Bloom: pick out what's brighter than its own coverage (glowing parts, fire, plumes),
   // halve it down a chain, and add it back up with a tent filter.
@@ -2546,6 +2900,8 @@ void main() {
 ${G_COMMON}
 ${G_ENV}
 ${G_SHADOW}
+${G_TRACE}
+${G_LIGHTS}
 in vec2 vUv; in float vAge; in float vRnd; in vec3 vWorld; in vec3 vCenter; in float vSize; in vec3 vVel; in float vCov;
 flat in int vAlive;
 uniform int uStyle; uniform vec4 uShape; uniform vec3 uEye; uniform vec3 uCamR; uniform vec3 uCamU; uniform mat4 uView;
@@ -2598,6 +2954,8 @@ void main() {
       float through = pow(max(dot(-toEye, ld), 0.0), 4.0) * (1.0 - 0.7 * puff) * 2.5;
       lit += uPtCol[i] * att * (0.4 + 0.6 * max(dot(nrm, ld), 0.0) + through) / PI;
     }
+    if (uPRoom.y > 0.5) lit = vec3(0.0);
+    if (uPRoom.x > 0.5) lit += scatterAt(vCenter, toEye, 0.35, lds(uRoom.w, gl_FragCoord.xy)) * (0.45 + 0.55 * selfSh) * 4.0;
     float T = mix(uHeatP.x, uHeatP.y, vAge);
     vec3 emit = blackbody(T) * glowOf(T) * uHeatP.w * (0.6 + 0.4 * puff);
     vec3 col = toSrgb(tonemap(alb * lit * uLook.z + emit));
@@ -2625,6 +2983,17 @@ void main() {
     float edge = 1.0 - smoothstep(0.8, 1.0, sqrt(d2));
     float a = edge * life * uFade.w;
     if (a < 0.003) discard;
+    if (uPRoom.x > 0.5) {
+      a = min(1.0, a * (0.25 + 0.75 * vCov) * 1.0);
+      // Dust in a beam: each mote scatters the light that reaches it (none in shadow), mostly
+      // forward, so motes glitter when you look toward the light and vanish outside the beam.
+      vec3 E = scatterAt(vCenter, normalize(uEye - vCenter), uPRoom.z, lds(uRoom.w + vRnd * 97.0, vec2(vRnd * 4096.0, 0.0))) * 4.0;
+      vec3 c = toSrgb(tonemap(toLin(colorAt()) * E * uLook.z * (uPRoom.y > 0.5 ? 1.0 : 0.6)));
+      if (uPRoom.y < 0.5) c = max(c, colorAt() * 0.5);
+      float k = uPRoom.y > 0.5 ? clamp(max(c.r, max(c.g, c.b)) * 1.6, 0.0, 1.0) : 1.0;
+      o = vec4(c * a * k, a * k);
+      return;
+    }
     o = vec4(colorAt() * a, a);
   }
 }`;
@@ -3038,6 +3407,177 @@ void main() {
 }`;
 
 
+  // ---------- light transport ----------
+  // Lights with a shape and a power (watts) light the scene the way real ones do: brightness
+  // falls off with the square of the distance and the cosine of the angle, shadows soften as a
+  // light grows and harden as it shrinks, and light bounces between surfaces. Shadows, bounces,
+  // sky occlusion, and light shafts are traced against the scene's triangles (a BVH).
+  const unitsOf = u => (typeof u === "number" && u > 0 ? u : UNITS[u] ?? 1);
+  const LIGHT_TYPE = { point: 0, sphere: 1, disk: 2, rect: 3, sun: 4 };
+  // The old { position, color, intensity, range } lights stay the studio's soft point lights; a
+  // light is physical once it says what it is (type) or how strong it is (power).
+  const isPhysical = p => !!p && (p.type != null || p.power != null);
+  // Half-axes of a disk or rect: U x V points the way it shines. Default: facing down.
+  function lightAxes(p) {
+    let U = [1, 0, 0], V = [0, 0, 1];
+    const n = p.normal ?? (p.target ? v3.sub(p.target, p.position ?? [0, 0, 0]) : null);
+    if (p.rotation) { const M = m4.compose([0, 0, 0], p.rotation, 1); U = v3.norm(m4.applyDir(M, U)); V = v3.norm(m4.applyDir(M, V)); }
+    else if (n) {
+      const nn = v3.norm(n), t = Math.abs(nn[1]) > 0.9 ? [0, 0, 1] : [0, 1, 0];
+      U = v3.norm(v3.cross(t, nn)); V = v3.cross(nn, U);
+    }
+    return [U, V];
+  }
+  // The sunlight that gets through the air at this elevation, as a color (relative to space).
+  function lightRig(scene, addSun = false) {
+    const units = unitsOf(scene.units);
+    const list = (scene.lights || []).filter(p => isPhysical(p) && p.on !== false).map(p => {
+      const type = p.type ?? (p.size ? "rect" : p.radius ? "sphere" : "point");
+      // The color sets how the power splits across red, green, and blue; the power stays the power.
+      const c0 = toLinear(colorOf(p.color ?? "#ffffff", true));
+      const mean = (c0[0] + c0[1] + c0[2]) / 3 || 1;
+      const col = c0.map(v => v / mean);
+      const P = p.power ?? 100, R = p.radius ?? 0, pos = p.position ?? [0, 0, 0], two = !!p.twoSided;
+      let U = [0, 0, 0], V = [0, 0, 0], rad, t = LIGHT_TYPE[type] ?? 0, area = 0;
+      if (t === 1 && !(R > 0)) t = 0;
+      if (t === 0) rad = P / (4 * Math.PI);
+      else if (t === 1) { const Rm = R / units; rad = P / (4 * Math.PI * Math.PI * Rm * Rm); }
+      else if (t === 4) rad = P;
+      else {
+        const [Uh, Vh] = lightAxes(p);
+        const sz = t === 2 ? [R * 2, R * 2] : Array.isArray(p.size) ? p.size : [p.size ?? 1, p.size ?? 1];
+        U = v3.scale(Uh, sz[0] / 2); V = v3.scale(Vh, sz[1] / 2);
+        area = (t === 2 ? Math.PI / 4 : 1) * sz[0] * sz[1];
+        rad = P / (Math.PI * area / (units * units)) / (two ? 2 : 1);
+      }
+      const dir = t === 4 ? v3.norm(p.direction ?? p.position ?? [0, 1, 0]) : null;
+      return { p, t, position: dir ?? pos, radius: t === 4 ? (p.angle ?? 0.0047) : R, U, V, two, rgb: col.map(v => v * rad), radiance: rad, color: col, area };
+    });
+    const sky = skyOf(scene);
+    // A physical sky brings its Sun: a disc half a degree across, as bright as the air lets it be.
+    if (addSun && sky && sky.kind === 2 && sky.sun[1] > -0.02 && scene.sky.sunLight !== false && list.length < 8) {
+      const tr = sunTransmittance(sky.sun, sky.haze), E = 3.2 * sky.intensity;
+      list.push({ p: { visible: false }, t: 4, position: sky.sun, radius: 0.0047, U: [0, 0, 0], V: [0, 0, 0], two: false, rgb: tr.map(v => v * E), radiance: E, color: tr, area: 0, sun: true });
+    }
+    return list.slice(0, 8);
+  }
+  // Meshes that show each light (a glowing ball, disk, or panel), rebuilt when the light moves.
+  function lightItems(rig, bounds) {
+    const out = [];
+    for (const L of rig) {
+      const p = L.p;
+      if (p.visible === false || L.t === 4 || (L.t === 0 && !p.visible)) continue;
+      const key = [L.t, L.position, L.radius, L.U, L.V, p.size, p.visible].flat().join(",");
+      if (!p._show || p._show.key !== key) {
+        let m;
+        if (L.t <= 1) m = transformMesh(mesh.sphere(L.t === 1 ? L.radius : (typeof p.visible === "number" ? p.visible : (bounds?.radius ?? 1) * 0.012), { segments: 24 }), m4.translation(L.position));
+        else {
+          const pts = [], seg = L.t === 2 ? 48 : 4;
+          for (let i = 0; i < seg; i++) {
+            const a = L.t === 2 ? (i / seg) * Math.PI * 2 : (i + 0.5) * Math.PI / 2;
+            const ca = L.t === 2 ? Math.cos(a) : Math.sign(Math.cos(a)), sa = L.t === 2 ? Math.sin(a) : Math.sign(Math.sin(a));
+            pts.push(v3.add(L.position, v3.add(v3.scale(L.U, ca), v3.scale(L.V, sa))));
+          }
+          const P = [...L.position, ...pts.flat()], I = [];
+          for (let i = 0; i < seg; i++) I.push(0, 1 + i, 1 + ((i + 1) % seg));
+          const n = v3.norm(v3.cross(L.U, L.V)), N = [];
+          for (let i = 0; i <= seg; i++) N.push(...n);
+          m = makeMesh(new Float32Array(P), new Float32Array(N), new Uint32Array(I));
+        }
+        p._show = { key, node: new Node(m, { name: p.name ?? "light", castShadow: false, trace: false, cut: false, twoSided: true, pickable: p.pickable ?? true }) };
+      }
+      const node = p._show.node;
+      node._light = L.rgb;
+      node.light = p;
+      const b = node.mesh.bounds;
+      out.push({ node, world: m4.identity(), center: b.center, radius: b.radius });
+    }
+    return out;
+  }
+
+  // The scene's triangles in world space, in a bounding volume hierarchy (binned surface area
+  // heuristic, at most 16 triangles a leaf), kept on the scene until something moves.
+  const meshIds = new WeakMap();
+  let meshSeq = 0;
+  const meshId = m => { let i = meshIds.get(m); if (!i) meshIds.set(m, (i = ++meshSeq)); return i; };
+  function buildBVH(list, matOf) {
+    let nt = 0;
+    for (const it of list) nt += it.node.mesh.indices.length / 3;
+    const V0 = new Float32Array(nt * 3), E1 = new Float32Array(nt * 3), E2 = new Float32Array(nt * 3);
+    const lo = new Float32Array(nt * 3), hi = new Float32Array(nt * 3), cen = new Float32Array(nt * 3);
+    const matI = new Int32Array(nt), cutF = new Uint8Array(nt), itemI = new Int32Array(nt), mats = [];
+    let t = 0;
+    list.forEach((it, ii) => {
+      const m = matOf(it), alb = toLinear(m.rgb), Wm = it.world, P = it.node.mesh.positions, I = it.node.mesh.indices;
+      mats.push(alb[0], alb[1], alb[2], m.metal || 0);
+      const wp = new Float32Array(P.length);
+      for (let i = 0; i < P.length; i += 3) {
+        const x = P[i], y = P[i + 1], z = P[i + 2];
+        wp[i] = Wm[0] * x + Wm[4] * y + Wm[8] * z + Wm[12];
+        wp[i + 1] = Wm[1] * x + Wm[5] * y + Wm[9] * z + Wm[13];
+        wp[i + 2] = Wm[2] * x + Wm[6] * y + Wm[10] * z + Wm[14];
+      }
+      for (let k = 0; k < I.length; k += 3, t++) {
+        const a = I[k] * 3, b = I[k + 1] * 3, c = I[k + 2] * 3;
+        for (let d = 0; d < 3; d++) {
+          const A = wp[a + d], B = wp[b + d], C = wp[c + d];
+          V0[t * 3 + d] = A; E1[t * 3 + d] = B - A; E2[t * 3 + d] = C - A;
+          lo[t * 3 + d] = Math.min(A, B, C); hi[t * 3 + d] = Math.max(A, B, C); cen[t * 3 + d] = (A + B + C) / 3;
+        }
+        matI[t] = ii; cutF[t] = it.node.cut ? 1 : 0; itemI[t] = ii;
+      }
+    });
+    const idx = new Uint32Array(nt);
+    for (let i = 0; i < nt; i++) idx[i] = i;
+    const nodes = new Float32Array(Math.max(2, 2 * nt) * 8);
+    let count = 1;
+  function traceCPU(B, o, d, tmax = Infinity, any = false, cut = null) {
+    if (!B || !B.nTris) return null;
+    const N = B.nodes, T = B.tris;
+    const inv = d.map(x => 1 / (Math.abs(x) < 1e-12 ? 1e-12 : x));
+  function traceOf(scene, items, matOf) {
+    const list = items.filter(it => it.node.trace !== false && it.node.castShadow !== false && !it.node._light && matOf(it).kind === "opaque");
+    let key = "";
+    for (const it of list) {
+      key += meshId(it.node.mesh) + "." + (it.node.mesh.version ?? 0) + (it.node.cut ? "c" : "") + ":" + matOf(it).rgb.join(",") + ":";
+      for (let k = 0; k < 16; k++) key += (Math.round(it.world[k] * 1e5) / 1e5) + ",";
+      key += "|";
+    }
+    let Tr = scene._trace;
+    if (!Tr || Tr.key !== key) {
+      if (Tr && Tr.gpu && R && Tr.gpu.gl === R.gl) for (const t of [Tr.gpu.nodes, Tr.gpu.tris, Tr.gpu.mats]) R.gl.deleteTexture(t);
+      Tr = scene._trace = { key, bvh: buildBVH(list, matOf), gpu: null };
+    }
+    return Tr;
+  }
+  function floatTex(data, texels) {
+    const { gl } = R;
+    const h = Math.max(1, Math.ceil(texels / 1024)), buf = new Float32Array(1024 * h * 4);
+    buf.set(data.subarray(0, Math.min(data.length, buf.length)));
+    const t = texture(1024, h, gl.RGBA32F, gl.RGBA, gl.FLOAT, gl.NEAREST);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 1024, h, gl.RGBA, gl.FLOAT, buf);
+    return t;
+  }
+  function traceGPU(Tr) {
+    if (Tr.gpu && Tr.gpu.gl === R.gl) return Tr.gpu;
+    const B = Tr.bvh;
+    Tr.gpu = { gl: R.gl, nodes: floatTex(B.nodes, B.nNodes * 2), tris: floatTex(B.tris, Math.max(1, B.nTris) * 3), mats: floatTex(B.mats, B.mats.length / 4) };
+    return Tr.gpu;
+  }
+  const dummyFloat = () => R.dummyFloat || (R.dummyFloat = floatTex(new Float32Array(4), 1));
+  function bindTrace(gpu) {
+    const { gl } = R;
+    gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, gpu ? gpu.nodes : dummyFloat());
+    gl.activeTexture(gl.TEXTURE13); gl.bindTexture(gl.TEXTURE_2D, gpu ? gpu.tris : dummyFloat());
+    gl.activeTexture(gl.TEXTURE14); gl.bindTexture(gl.TEXTURE_2D, gpu ? gpu.mats : dummyFloat());
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  // Pictures on parts (material.map): a canvas, image, ImageData, or a function (u, v) -> color
+  // painted once into a 1024 x 512 canvas. Uploaded once per source, with mipmaps.
+  const mapCache = new WeakMap();
+  const imgCache = new Map();
   // ---------- WebGL renderer ----------
   let R = null;
   function compile(gl, vs, fs, varyings) {
@@ -3078,6 +3618,7 @@ void main() {
       case gl.FLOAT_MAT3: gl.uniformMatrix3fv(l, false, v); break;
       case gl.FLOAT_MAT4: gl.uniformMatrix4fv(l, false, v); break;
       case gl.UNSIGNED_INT: gl.uniform1ui(l, v >>> 0); break;
+      case gl.INT_VEC4: gl.uniform4iv(l, v); break;
       default: gl.uniform1i(l, v | 0);
     }
   }
@@ -3087,7 +3628,7 @@ void main() {
     main: () => [VS, FS_MAIN], depth: () => [VS, FS_DEPTH], ghost: () => [VS, FS_GHOST], glass: () => [VS, FS_GLASS],
     ground: () => [VS_GROUND, FS_GROUND], composite: () => [VS_FULL, FS_COMPOSITE],
     extract: () => [VS_FULL, FS_BLOOM_EXTRACT], down: () => [VS_FULL, FS_DOWN], up: () => [VS_FULL, FS_UP],
-    env: () => [VS_FULL, FS_ENV], prefilter: () => [VS_FULL, FS_PREFILTER],
+    env: () => [VS_FULL, FS_ENV], prefilter: () => [VS_FULL, FS_PREFILTER], present: () => [VS_FULL, FS_PRESENT],
     pupdate: () => [VS_PUPDATE, FS_NULL, ["oP", "oV"]], particle: () => [VS_PARTICLE, FS_PARTICLE], psphere: () => [VS_PARTICLE, FS_PSPHERE],
     plume: () => [VS, FS_PLUME],
     vsplat: () => [VS_VSPLAT, FS_VSPLAT], vlight: () => [VS_FULL, FS_VLIGHT], vmarch: () => [VS_FULL, FS_VMARCH], vup: () => [VS_FULL, FS_VUP],
@@ -3786,7 +4327,16 @@ void main() {
   // outScale: output pixels per CSS pixel (the screen's density). ss: supersampling
   // factor (1 to 3); the frame is rendered ss times larger and filtered down in the
   // composite pass, so the result can be copied to the page 1:1 with no resampling.
-  function render(scene, cam = {}, cssW, cssH, outScale = 1, ss = 2) {
+  // For the page checker and screenshots, a traced view is refined to its final look in one call.
+  function render(scene, cam, cssW, cssH, outScale, ss) {
+    let view = renderFrame(scene, cam, cssW, cssH, outScale, ss);
+    for (let k = 0; view.converging && checking() && k < 16; k++) {
+      if (view.source.image.close) view.source.image.close();
+      view = renderFrame(scene, cam, cssW, cssH, outScale, ss);
+    }
+    return view;
+  }
+  function renderFrame(scene, cam = {}, cssW, cssH, outScale = 1, ss = 2) {
     renderer();
     const { gl } = R;
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -3797,10 +4347,16 @@ void main() {
     const scale = (W / Wo) * outScale;
     const items = collect(scene);
     const fxNodes = items.fx;
-    const bounds = sceneBounds(items);
-    const C = camera(cam, scene, bounds, cssW / cssH);
     const look = lookOf(scene), dark = pageDark();
-    const L = lightDir(scene, C);
+    // Physical lights (and in the darkroom, the physical sky's Sun) and the shapes that show them.
+    const room = !!look.room, sky = skyOf(scene);
+    const rig = lightRig(scene, room);
+    items.push(...lightItems(rig, scene._bounds));
+    const bounds = sceneBounds(items);
+    scene._bounds = bounds;
+    let C = camera(cam, scene, bounds, cssW / cssH);
+    const physSky = sky && sky.kind === 2 && !room;
+    const L = physSky ? sky.sun : lightDir(scene, C);
     // cutPlane: [nx, ny, nz, d], { normal, offset }, or { facing: "camera", at, offset, level, follow }:
     // a cut through `at` (default the scene's center) that opens the side facing the viewer when
     // it is switched on, then stays fixed to the model like a real cutaway, so turning the model
@@ -3888,7 +4444,7 @@ void main() {
     }
 
     // Shadow maps from the key light, fitted around the scene.
-    const sh = scene.shadow === false ? null : typeof scene.shadow === "object" ? scene.shadow : {};
+    const sh = scene.shadow === false || room ? null : typeof scene.shadow === "object" ? scene.shadow : {};
     const shadowOn = !!sh && sh.cast !== false && items.length > 0;
     let shadowU = { uShadowA: [0, 0, 0, 0], uShadowB: [0, 0, 0, 0], uShadowVP: m4.identity(), uShadowCmp: 5, uShadowRaw: 6, uShadowGlass: 7 };
     let SM = null;
@@ -3947,6 +4503,54 @@ void main() {
     targets(W, H, Wo, Ho, samples, glassItems.length > 0);
     const target = samples ? R.msaa.fb : R.main.fb;
     const partShadow = shadowOn ? (sh.parts ?? 1) * look.parts : 0;
+
+    // Traced light: the scene's BVH, the lights, and how many frames of this exact view have been
+    // averaged so far (area lights, sky, bounces, and haze are sampled, so still frames refine).
+    const skyLit = !!(sky && room);
+    const hazeO = scene.haze && rig.length ? (typeof scene.haze === "number" ? { density: scene.haze } : scene.haze) : null;
+    // A projector's picture is blocked by whatever stands in its way, so projector mapping traces too.
+    const projecting = items.some(it => matOf(it).map?.projector);
+    const Tr = rig.length || skyLit || projecting ? traceOf(scene, items, matOf) : null;
+    const gpuT = Tr ? traceGPU(Tr) : null;
+    const LA = new Float32Array(32), LB = new Float32Array(32), LC = new Float32Array(32), LD = new Float32Array(32);
+    rig.forEach((l, i) => { LA.set([...l.position, l.t], i * 4); LB.set([...l.rgb, l.radius], i * 4); LC.set([...l.U, l.two ? 1 : 0], i * 4); LD.set([...l.V, 0], i * 4); });
+    const bounces = Tr ? Math.max(0, Math.min(6, Math.round(scene.bounces ?? 0))) : 0;
+    // Depth of field: a lens of focal length `focal` (mm) at f-number `fNumber` has an aperture f/N
+    // across; each frame looks through a different point of it, sheared so the plane at `focus`
+    // stays put, and the average blurs everything off that plane by its real circle of confusion.
+    // `aperture` (diameter, world units) overrides f/N, for a teaching figure that exaggerates the blur.
+    const stochastic = (!!Tr && (rig.some(l => l.t !== 0) || skyLit || bounces > 0 || !!hazeO)) || !!lens;
+    const checkNow = checking();
+    let accN = 0;
+    if (stochastic) {
+      let sig = `${Wo}x${Ho}|${dark}|${exposure}|${scene.time ?? 0}|${bounces}|${JSON.stringify(scene.haze ?? 0)}|${JSON.stringify(scene.sky ?? 0)}|${Array.from(C.vp, v => v.toFixed(5))}|${cutV}|${Array.from(LA)}|${Array.from(LB)}|${Array.from(LC)}|${Array.from(LD)}|${Tr ? Tr.key : ""}|${lens ? [lens.f, lens.N, lens.F, lens.D] : ""}|`;
+      for (const it of items) sig += meshId(it.node.mesh) + (it.node.highlight ? "h" : "") + (it.node.color ?? "") + (it.node.opacity ?? 1) + Array.from(it.world, v => v.toFixed(4)) + ";";
+      // Particles count too: their settings (a wind moved while paused) change the picture.
+      for (const f of fxNodes) { if (f.node.isParticles) { try { f.node._accSig ??= ""; sig += JSON.stringify([f.node.forces, f.node.emitter, f.node.density, f.node.opacity, f.node.time]); } catch {} } else sig += (f.node.time ?? "") + (f.node.throttle ?? "") + ","; }
+      const A = scene._acc;
+      accN = A && A.sig === sig && !q.moving ? A.n + 1 : 0;
+      scene._acc = { ...(A || {}), sig, n: accN };
+    }
+    // Samples per pixel per frame: one while moving or bouncing (each bounce is another ray), more for the checker.
+    const spp = q.moving ? 1 : checkNow ? 4 : bounces > 0 || hazeO ? 1 : 2;
+    const C0 = C;
+    if (lens && accN > 0) {
+      const A = lens.D > 0 ? lens.D / 2 : (lens.f / lens.N / 2000) * unitsOf(scene.units);
+      const n = accN - 1, u = (0.7548776662 * n + 0.5) % 1, w = (0.5698402910 * n + 0.5) % 1;
+      const r = Math.sqrt(u) * A, a = w * Math.PI * 2, ox = r * Math.cos(a), oy = r * Math.sin(a);
+      const view = m4.multiply(m4.translation([-ox, -oy, 0]), C.view), proj = new Float32Array(C.proj);
+      proj[8] -= (proj[0] * ox) / lens.F; proj[9] -= (proj[5] * oy) / lens.F;
+      const inv = m4.invert(C.view), eye = m4.apply(inv, [ox, oy, 0]);
+      C = { ...C, view, proj, vp: m4.multiply(proj, view), eye };
+    }
+    const traceU = {
+      uBvhN: 12, uBvhT: 13, uBvhM: 14, uBvh: [Tr && Tr.bvh.nTris ? 1 : 0, Tr ? Tr.bvh.nNodes : 0, Tr ? Tr.bvh.nTris : 0, cut ? 1 : 0], uBvhCut: cutV,
+      uRoom: [Tr ? rig.length : 0, spp, bounces, accN], uLA: LA, uLB: LB, uLC: LC, uLD: LD,
+      uSkyU: skyLit ? (sky.kind === 1 ? [...sky.rgb, 1] : [1, 1, 1, 2]) : [0, 0, 0, 0],
+      uUnits: unitsOf(scene.units), uTraceEps: bounds.radius * 2e-4,
+      uSunDir: sky && sky.kind === 2 ? sky.sun : [0, 1, 0], uSkyP: sky && sky.kind === 2 ? [20 * sky.intensity, sky.haze, sky.altitude, sky.stars] : [20, 1, 2, 0],
+    };
+    bindTrace(gpuT);
     const common = {
       uViewProj: C.vp, uEye: C.eye, uLight: L, uCut: cutV, uSun: scene.lighting === "sun" ? 1 : 0, uHatch: hatch,
       uKeyCol: kc, uFillDir: fillDir, uFillCol: fc, uRimDir: rimDir, uRimCol: rc, uPtPos: ptPos, uPtCol: ptCol, uLook: lookU,
@@ -3991,6 +4595,11 @@ void main() {
         // Water's refraction depth is its real depth (the box's smallest side), not its size.
         uOpacity: m.opacity, uGlass: [m.ior, m.thickness ?? (m.water ? minSide * 0.6 : it.container ? minSide * 0.03 : wr * 0.9), m.dispersion, m.roughness],
         uWater: m.water ? [m.water.ripples, m.water.wavelength ?? wr * 0.12, scene.time ?? 0, m.water.depth] : [0, 1, 0, 0],
+        uMat: [m.emitter ? 2 : m.physical ? 1 : 0, m.metal, m.roughness, m.clearcoat],
+        uPart: [it.node.twoSided ? 1 : 0, m.foliage ? 1 : 0, room ? 1 : 0, it.node.light && it.node.light.twoSided ? 1 : 0],
+        uMap: 15, uMapOn: m.map ? [1, m.map.mapping, m.map.rough ? 1 : 0, 0] : [0, 0, 0, 0], uMapBox: m.map ? m.map.box : [0, 0, 1, 1],
+        uMapVP: m.map && m.map.projector ? projectorVP(m.map.projector) : m4.identity(), uMapProj: m.map && m.map.projector ? m.map.projector.position : [0, 0, 0],
+        ...grassU(it.node),
       });
       gl.bindVertexArray(g.vao);
       gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
@@ -4296,9 +4905,32 @@ void main() {
     gl.viewport(0, 0, R.cw, R.ch);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    let AC = null;
+    if (stochastic) {
+      AC = scene._acc;
+      if (!AC.tex || AC.gl !== gl || AC.w < Wo || AC.h < Ho) {
+        if (AC.tex && AC.gl === gl) { gl.deleteFramebuffer(AC.fb); gl.deleteTexture(AC.tex); }
+        const [ci, cf, ct] = R.colorFmt;
+        AC.w = Math.max(Wo, AC.gl === gl ? AC.w || 0 : 0); AC.h = Math.max(Ho, AC.gl === gl ? AC.h || 0 : 0);
+        AC.tex = texture(AC.w, AC.h, ci, cf, ct, gl.NEAREST); AC.fb = framebuffer([AC.tex]); AC.gl = gl;
+        accN = 0; AC.n = 0;
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, AC.fb);
+    }
     gl.viewport(0, 0, Wo, Ho);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.BLEND);
+    if (AC) {
+      gl.enable(gl.BLEND);
+      gl.blendColor(0, 0, 0, 1 / (accN + 1));
+      gl.blendFunc(gl.CONSTANT_ALPHA, gl.ONE_MINUS_CONSTANT_ALPHA);
+    }
+    // Background: the darkroom's black (or scene.background), the physical sky, or the page.
+    const bgO = scene.background;
+    let bgMode = 0, bgColor = [0, 0, 0];
+    if (bgO != null && bgO !== "none" && bgO !== false) { bgMode = 1; bgColor = colorOf(bgO, true); }
+    else if (bgO == null && sky && (sky.kind === 2 || room)) bgMode = 2;
+    else if (bgO == null && room) bgMode = 1;
     const cp = prog("composite");
     gl.useProgram(cp.p);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.main.color);
@@ -4339,15 +4971,34 @@ void main() {
       uAo: scene.ao === false ? 0 : typeof scene.ao === "number" ? scene.ao : 0.5, uAoR: bounds.radius * 0.09,
       uFxInv: [1 / R.fx.w, 1 / R.fx.h], uBloomInv: bloomInv, uPost: [fxDraw.length ? 1 : 0, bloomTex ? bloomK : 0, 0, 0],
       uViewRot: new Float32Array([v[0], v[1], v[2], v[4], v[5], v[6], v[8], v[9], v[10]]), uTanHalf: C.tanHalf, uSize: [W, H],
+      ...traceU,
+      uBg: [bgMode, exposure, 0, 0], uBgColor: bgColor, uEyeW: C.eye,
+      uSkyU: bgMode === 2 && !skyLit && sky ? [1, 1, 1, 2] : traceU.uSkyU,
+      uHaze: hazeO ? [hazeO.density ?? 0.05, hazeO.g ?? hazeO.anisotropy ?? 0.5, q.moving ? 10 : 20, 1] : [0, 0, 0, 0],
+      uHazeBall: hazeO ? [...(hazeO.center ?? bounds.center), hazeO.radius ?? bounds.radius * 1.6] : [0, 0, 0, 1], uHazeCol: hazeO ? toLinear(colorOf(hazeO.color ?? "#ffffff", true)) : [1, 1, 1],
     });
     gl.bindVertexArray(R.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (AC) {
+      gl.disable(gl.BLEND);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, Wo, Ho);
+      const pp = prog("present");
+      gl.useProgram(pp.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, AC.tex);
+      setAll(pp, { uSrc: 0 });
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
     gl.bindVertexArray(null);
     gl.activeTexture(gl.TEXTURE0);
 
     const image = R.offscreen ? R.canvas.transferToImageBitmap() : R.canvas;
     const view = makeView(scene, items, C, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.ch - Ho, sw: Wo, sh: Ho });
     view.quality = q.name;
+    // A traced view refines over the next still frames; the runtime asks for them while this is true.
+    view.converging = stochastic && !q.moving && accN + 1 < (scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48));
+    view.frames = stochastic ? accN + 1 : 1;
+    view.trace = (o, d, tmax) => (Tr ? traceCPU(Tr.bvh, o, v3.norm(d), tmax ?? Infinity, false, cut ? cutV : null) : null);
     return view;
   }
 

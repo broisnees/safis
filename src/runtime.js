@@ -468,12 +468,14 @@
         ctx.drawImage(s.image, s.sx, s.sy, s.sw, s.sh, bx, by, bw, bh);
         ctx.restore();
         if (s.image.close) s.image.close();
+        // Traced light refines over a few still frames; keep drawing until it settles.
+        if (view.converging) g.wantsFrame = true;
         return {
           ...view,
           box,
           project: p => { const q = view.project(p); return [q[0] + bx, q[1] + by, q[2]]; },
           pick: (p, opt) => view.pick([p[0] - bx, p[1] - by], opt),
-          hidden: p => view.hidden(p),
+          hidden: (p, self) => view.hidden(p, self),
         };
       },
       // Small XYZ axis marker showing the 3D view's orientation.
