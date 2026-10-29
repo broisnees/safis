@@ -342,6 +342,29 @@ figure.demo.wide { width: min(calc(100vw - 40px), var(--wide)); margin-left: 50%
 .zoom button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: hover) { .zoom button:not(:disabled):hover { color: var(--ink); } }
 .safis-checking .stage .zoom { display: none; }
+/* Loading. Until its kit loads, a figure holds its place with a spinner; once live, its stage
+   shows one until the first frame is drawn, and a quiet chip while a 3D view is still refining
+   or a simulation is catching up (shown only if that lasts, so quick devices never see it). */
+@keyframes safis-spin { to { rotate: 1turn; } }
+figure.demo:not(.is-live) { position: relative; }
+figure.demo:not(.is-live)::before { content: ""; display: block; aspect-ratio: 1.6; border-radius: 4px; background: color-mix(in srgb, var(--panel) 70%, transparent); }
+figure.demo:not(.is-live)::after, .stage.loading::after, .stage.busy::after {
+  content: ""; position: absolute; width: 22px; height: 22px; box-sizing: border-box; border-radius: 50%; pointer-events: none;
+  border: 2px solid color-mix(in srgb, var(--muted) 30%, transparent); border-top-color: var(--muted); animation: safis-spin 0.9s linear infinite;
+}
+figure.demo:not(.is-live)::after { inset: 0; margin: auto; }
+.stage.loading { min-height: 120px; }
+.stage.loading::after { inset: 0; margin: auto; }
+.stage.busy::before {
+  content: attr(data-busy); position: absolute; inset-inline-start: 10px; bottom: 10px; z-index: 2; padding: 4px 10px 4px 32px; border-radius: 999px;
+  font: 500 12px/1.4 var(--sans, system-ui); color: var(--muted); background: color-mix(in srgb, var(--panel) 84%, transparent); pointer-events: none;
+  opacity: 0; animation: safis-show 0.2s 0.6s forwards;
+}
+.stage.busy::after { inset-inline-start: 18px; bottom: 15px; width: 14px; height: 14px; z-index: 3; opacity: 0; animation: safis-spin 0.9s linear infinite, safis-show 0.2s 0.6s forwards; }
+@keyframes safis-show { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { figure.demo:not(.is-live)::after, .stage.loading::after, .stage.busy::after { animation-duration: 2.4s; } }
+.safis-checking .stage.loading::after, .safis-checking .stage.busy::before, .safis-checking .stage.busy::after { display: none; }
+@media print { .stage.loading::after, .stage.busy::before, .stage.busy::after { display: none; } }
 @media print { .stage .zoom { display: none; } }
 
 figure.demo figcaption, figure.demo > .caption {
@@ -1847,8 +1870,28 @@ pre.mermaid { white-space: pre-wrap; color: var(--muted); }
     high: { rank: 2, ss: 3, scale: 1, msaa: 4, shadow: 2048, particles: 1, steps: 48, bloom: true, vsteps: 88, vscale: 0.5 },
   };
   const TIER_NAMES = ["low", "medium", "high"];
-  const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null };
+  // Still frames have their own level, since a weak or software GPU can spend seconds on one at
+  // full quality and as long again on each of the refinement passes after it: 2 is full quality,
+  // 1 drops the supersampling and caps refinement, 0 also renders at 3/4 size with the low tier's
+  // shadows and volumes. The runtime reports how long each still frame blocked (observe), and the
+  // level steps down when they run long and back up when they're quick.
+  const STILL = [
+    { ss: 1, scale: 0.75, samples: 8, lensSamples: 12 },
+    { ss: 1, scale: 1, samples: 24, lensSamples: 36 },
+  ];
+  const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null, still: null, stillEma: 0, stillDownAt: -1e9, stillQuick: 0, hitch: false };
+  function startStill() { return R && R.soft ? 0 : 2; }
+  function observeStill(ms) {
+    if (Q.hitch || !(ms >= 0) || checking()) return;
+    if (Q.still == null) Q.still = startStill();
+    Q.stillEma = Q.stillEma ? Q.stillEma * 0.6 + ms * 0.4 : ms;
+    const now = performance.now();
+    if (Q.stillEma > 90 && Q.still > 0) { Q.still--; Q.stillDownAt = now; Q.stillEma = 0; Q.stillQuick = 0; }
+    else if (Q.stillEma < 22 && Q.still < 2 && now - Q.stillDownAt > 10000) { if (++Q.stillQuick >= 6) { Q.still++; Q.stillEma = 0; Q.stillQuick = 0; } }
+    else Q.stillQuick = 0;
+  }
   function startRank() {
+    if (R && R.soft) return 0;
     try {
       const coarse = matchMedia("(pointer: coarse)").matches;
       const small = Math.min(screen.width, screen.height) < 600;
@@ -1873,6 +1916,7 @@ pre.mermaid { white-space: pre-wrap; color: var(--muted); }
     }
     const hitch = typeof R !== "undefined" && R && R.hitch;
     if (hitch) R.hitch = false;
+    Q.hitch = !!hitch;
     if (moving && dt < 250 && !hitch) {
       Q.ema = Q.ema * 0.9 + Math.min(dt, 250) * 0.1;
       if (Q.ema > 30 && Q.rank > 0 && now - Q.downAt > 800) { Q.rank--; Q.downAt = now; Q.ema = 20; Q.quickSince = now; }
@@ -1882,6 +1926,11 @@ pre.mermaid { white-space: pre-wrap; color: var(--muted); }
       } else Q.quickSince = 0;
     }
     const name = TIER_NAMES[Q.rank], t = TIERS[name];
+    if (Q.still == null) Q.still = startStill();
+    if (!moving && Q.still < 2) {
+      const lite = STILL[Q.still], hi = Q.still ? TIERS.high : TIERS.low;
+      return { ...t, name, ss: Math.min(ss, lite.ss), scale: lite.scale, shadow: hi.shadow, steps: hi.steps, vsteps: hi.vsteps, vscale: hi.vscale, moving, lite };
+    }
     if (!moving) return { ...t, name, ss, scale: 1, shadow: TIERS.high.shadow, steps: TIERS.high.steps, vsteps: TIERS.high.vsteps, vscale: TIERS.high.vscale, moving };
     return { ...t, name, ss: Math.min(ss, t.ss), moving };
   }
@@ -5291,7 +5340,15 @@ void main() {
     R.sRaw = sampler(false, gl.NEAREST);
     R.dummyDepth = texture(1, 1, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST);
     R.dummyColor = texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
-    if (canvas.addEventListener) canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); R = null; });
+    // A software GL (SwiftShader, llvmpipe) starts at the lightest still and moving quality.
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    R.soft = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER)));
+    // After a lost context (a GPU reset, or the browser reclaiming it) the next frame makes a new
+    // one; every figure redraws then, since the frames they were showing may never have finished.
+    if (canvas.addEventListener) canvas.addEventListener("webglcontextlost", e => {
+      e.preventDefault(); R = null;
+      if (typeof window !== "undefined") setTimeout(() => window.dispatchEvent(new Event("safis:redraw")), 250);
+    });
     return R;
   }
 
@@ -6480,7 +6537,7 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     };
     const unbindSamplers = () => { for (const u of [5, 6, 7]) gl.bindSampler(u, null); };
 
-    const samples = q.moving && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
+    const samples = (q.moving || q.lite) && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
     // What this frame ran at, for the harness and for pages that report it.
     E3stats = { tier: q.name, moving: q.moving, ss, scale: q.scale, samples, size: [W, H], out: [Wo, Ho], triangles: items.reduce((n, it) => n + (it.node.mesh ? it.node.mesh.indices.length / 3 : 0), 0), particles: fxNodes.filter(f => f.node.isParticles).reduce((n, f) => n + (f.node._drawN || 0), 0), plumes: fxNodes.filter(f => f.node.isPlume).length };
     scene.stats = E3stats;
@@ -7004,7 +7061,7 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     const view = makeView(scene, items, C0, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.ch - Ho, sw: Wo, sh: Ho });
     view.quality = q.name;
     // A traced view refines over the next still frames; the runtime asks for them while this is true.
-    view.converging = stochastic && !q.moving && accN + 1 < (scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48));
+    view.converging = stochastic && !q.moving && accN + 1 < Math.min(scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48), q.lite ? (lens ? q.lite.lensSamples : q.lite.samples) : Infinity);
     view.frames = stochastic ? accN + 1 : 1;
     view.trace = (o, d, tmax) => (Tr ? traceCPU(Tr.bvh, o, v3.norm(d), tmax ?? Infinity, false, cut ? cutV : null) : null);
     return view;
@@ -8422,6 +8479,9 @@ void main() {
       get tier() { return TIER_NAMES[Q.rank ?? startRank()]; },
       force(name) { Q.forced = TIERS[name] ? name : null; },
       tiers: TIERS,
+      // The runtime reports how long a still frame blocked the page (ms), to set the still level.
+      observe: observeStill,
+      get still() { return Q.still ?? startStill(); },
     },
     // True when the page is dark (from the palette's background): pick a look by it, in draw.
     get dark() { return pageDark(); },
@@ -21537,7 +21597,10 @@ void main() {
       const gl = canvas.getContext("webgl2", { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: !off, depth: false, stencil: false });
       if (!gl) { noGPU = true; return null; }
       R = { canvas, gl, off, w: 1, h: 1, progs: {}, vao: gl.createVertexArray() };
-      canvas.addEventListener?.("webglcontextlost", e => { e.preventDefault(); R = null; });
+      canvas.addEventListener?.("webglcontextlost", e => {
+        e.preventDefault(); R = null;
+        setTimeout(() => window.dispatchEvent(new Event("safis:redraw")), 250);
+      });
     } catch (e) { noGPU = true; errors.push(String(e.message || e)); }
     return R;
   }
@@ -22085,25 +22148,49 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
     gl.blitFramebuffer(0, 0, A.w, A.h, 0, 0, B.w, B.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
   }
+  // Inside a figure's frame (the runtime sets __safisFrame), stepping shares a budget of about 10 ms
+  // a frame across every sim on the page, so warming one up to t = 9 s, or catching up after the
+  // tab was hidden, runs over several frames instead of freezing the page; the sim reports
+  // `behind` until it gets there. Called from anywhere else, or while the page checker runs,
+  // advance(t) gets all the way to t at once.
+  const STEP_BUDGET = 10;
+  let budgetFrom = -1e9;
+  const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const stepDeadline = () => {
+    if (typeof window === "undefined" || !window.__safisFrame || document.documentElement.classList.contains("safis-checking")) return Infinity;
+    const now = nowMs();
+    if (now - budgetFrom > 3 * STEP_BUDGET) budgetFrom = now;
+    return budgetFrom + STEP_BUDGET;
+  };
   // A sim's clock: fixed steps of S.dt, a checkpoint from warm(t), and going back in time.
   function clock(S, stepOnce, save, load, init) {
     const restart = () => { init(); S.time = 0; };
+    // The checkpoint warm(t) asked for, taken when the clock passes t.
+    const mark = () => { if (S.warmTo != null && S.time + S.dt > S.warmTo + 1e-9) { S.chk = { ...save(), time: S.time, at: S.warmTo }; S.warmTo = null; } };
     Object.assign(S, {
-      time: 0, chk: null,
-      reset() { restart(); S.chk = null; return S; },
+      time: 0, chk: null, warmTo: null, behind: false,
+      reset() { restart(); S.chk = null; S.warmTo = null; return S; },
       advance(t) {
         t = num(t, 0);
         if (t < S.time - 1e-9) { if (S.chk && t >= S.chk.time - 1e-9) { load(S.chk); S.time = S.chk.time; } else restart(); }
-        for (let n = 0; S.time + S.dt <= t + 1e-9 && n < 1e5; n++) { stepOnce(S.dt); S.time += S.dt; }
+        const end = stepDeadline();
+        S.target = t;
+        for (let n = 0; S.time + S.dt <= t + 1e-9 && n < 1e5; n++) {
+          mark();
+          stepOnce(S.dt); S.time += S.dt;
+          if ((n & 3) === 3 && nowMs() > end) break;
+        }
+        mark();
+        S.behind = S.time + S.dt <= t + 1e-9;
         return S;
       },
       warm(t) {
         t = num(t, 0);
-        if (S.chk?.at === t) { load(S.chk); S.time = S.chk.time; return S; }
-        if (t < S.time - 1e-9 || S.chk) restart();
-        S.advance(t);
-        S.chk = { ...save(), time: S.time, at: t };
-        return S;
+        if (S.chk?.at === t) { load(S.chk); S.time = S.chk.time; S.warmTo = null; S.behind = false; return S; }
+        if (S.warmTo === t && S.time <= t + 1e-9) return S.advance(t);   // still on its way there
+        if (t < S.time - 1e-9 || S.chk || S.warmTo != null) { restart(); S.chk = null; }
+        S.warmTo = t;
+        return S.advance(t);
       },
     });
     restart();
@@ -22474,8 +22561,34 @@ void main() {
       pass("flBnd", G.V1, { ...bu, uV: G.V, uA: G.V, uMode: 0 }); [G.V, G.V1] = [G.V1, G.V];
     }
     // The velocity grid the CPU reads (arrows, particles, probes): GPU readback or the CPU arrays.
+    // Without WebGPU the readback goes through a pixel buffer and a fence, so the CPU picks it up
+    // when the GPU is done instead of waiting on every queued step; the field is then at most two
+    // steps old. It stays exact while the page checker runs and when particles ride the fluid.
+    let rbq = null;
+    function readAsync() {
+      const gl = R.gl;
+      if (rbq && rbq.gl !== gl) rbq = null;
+      if (rbq?.fence) {
+        const st = gl.clientWaitSync(rbq.fence, 0, 0);
+        if (st === gl.ALREADY_SIGNALED || st === gl.CONDITION_SATISFIED) {
+          if (rbq.at > rbAt) { gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rbq.pbo); gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, rb); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); rbAt = rbq.at; }
+          gl.deleteSync(rbq.fence); rbq.fence = null;
+        }
+      }
+      if (rbAt === serial) return true;
+      if (!rbq?.fence) {
+        if (!rbq) { rbq = { gl, pbo: gl.createBuffer(), fence: null, at: -1 }; gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rbq.pbo); gl.bufferData(gl.PIXEL_PACK_BUFFER, rb.byteLength, gl.STREAM_READ); }
+        pass("flRead", G.RB, { uS: G.S, uN: [nx, ny], uWs: ws(), uV: G.V, uP: G.P, uF: RF, uHm: h });
+        gl.bindFramebuffer(gl.FRAMEBUFFER, G.RB.fb); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rbq.pbo);
+        gl.readPixels(0, 0, G.RB.w, G.RB.h, gl.RGBA, gl.FLOAT, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        rbq.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); rbq.at = serial; gl.flush();
+      }
+      return rbAt >= 0 && serial - rbAt <= 2;
+    }
     function field() {
       if (rbAt === serial) return rb;
+      if (G && !S._sync && !document.documentElement.classList.contains("safis-checking") && readAsync()) return rb;
       if (G) { pass("flRead", G.RB, { uS: G.S, uN: [nx, ny], uWs: ws(), uV: G.V, uP: G.P, uF: RF, uHm: h }); readTex(G.RB, rb); }
       else { WS = ws(); for (let J = 0; J < ry; J++) for (let I = 0; I < rx; I++) { const x = (I + 0.5) * RF, y = (J + 0.5) * RF, k = (I + J * rx) * 4, c = min(nx - 1, floor(x)) + min(ny - 1, floor(y)) * nx; rb[k] = su(C.u, x, y) * h; rb[k + 1] = svv(C.v, x, y) * h; rb[k + 2] = solid[c]; rb[k + 3] = C.p[c]; } }
       rbAt = serial;
@@ -23116,7 +23229,7 @@ void main() {
     if (F) {   // the fluid comes back in step with the particles
       const adv = S.advance, warm = S.warm;
       S.advance = t => { if (t < S.time - 1e-9) { adv(t); F.advance(S.time); return S; } return adv(t); };
-      S.warm = t => { if (S.chk?.at === t && F.chk?.at === t) { F.warm(t); return warm(t); } F.reset(); S.reset(); adv(t); F.warm(t); return warm(t); };
+      S.warm = t => { if (S.chk?.at === t && F.chk?.at === t) { F.warm(t); return warm(t); } if (S.warmTo === t && S.time <= t + 1e-9) return S.advance(t); F.reset(); S.reset(); adv(t); F.warm(t); return warm(t); };
     }
     S.set = (k = {}) => { if (k.density != null) S.density = cn(k.density, 1, 0, 1); if (k.wind) { wind[0] = k.wind[0] * u; wind[1] = k.wind[1] * u; } if (k.emitter) Object.assign(E, k.emitter); if (k.light !== undefined) S.light = k.light; if (k.emitting != null) S.emitting = !!k.emitting; return S; };
     // The live particles: { p, v, age, life, k (0-1 through its life), spin }.
@@ -23233,7 +23346,14 @@ void main() {
       }
       return { uSeg: pad(s, 384), uSegW: pad(w, 96), uNs: w.length, uW: width / 2, uSpr: spread, uI: I, uCore: on ? 1 : 0, uHue: core, uHalo: halo };
     };
-    const fx = {}, def = (name, fn) => { fx[name] = (b, o = {}) => { const box = boxOf(b); return { box, ...fn(box, DEF[name](box, o), o, isDark()) }; }; };
+    // A sim that hasn't reached its time yet (a warm-up spread over frames) keeps catching up
+    // while it is drawn, even on a paused figure, and the figure says so.
+    const catchUp = S => {
+      if (!S || !S.behind || typeof S.advance !== "function") return;
+      S.advance(S.target);
+      if (S.behind) { g.wantsFrame = true; g.busy = "Simulating"; }
+    };
+    const fx = {}, def = (name, fn) => { fx[name] = (b, o = {}) => { catchUp(o.sim ?? o.sys); const box = boxOf(b); return { box, ...fn(box, DEF[name](box, o), o, isDark()) }; }; };
 
     // Hot specks with a glowing streak (sparks and embers share the look).
     const flecks = (c, list, width, dk) => {
@@ -25345,6 +25465,7 @@ void main() {
         if (bw * bh * (out * ss) ** 2 > budget) ss = 1;
         // The figure's `quality` ("low" | "medium" | "high") forces a tier; `still` tells the
         // engine this frame isn't part of a drag or animation, so it renders at full quality.
+        const t0 = performance.now();
         const view = E3.render(scene, { quality: g.quality, still: !g.interacting, ...cam }, bw, bh, out, ss);
         const s = view.source;
         ctx.save();
@@ -25352,8 +25473,10 @@ void main() {
         ctx.drawImage(s.image, s.sx, s.sy, s.sw, s.sh, bx, by, bw, bh);
         ctx.restore();
         if (s.image.close) s.image.close();
+        // How long a still frame held the page tells the engine how much a still frame can afford.
+        if (!g.interacting) E3.quality.observe?.(performance.now() - t0);
         // Traced light refines over a few still frames; keep drawing until it settles.
-        if (view.converging) g.wantsFrame = true;
+        if (view.converging) g.wantsFrame = g.busy = true;
         return {
           ...view,
           box,
@@ -25509,7 +25632,8 @@ void main() {
 
     el.classList.add("is-live");
     const plate = node("div", "plate");
-    const stage = node("div", "stage");
+    const stage = node("div", "stage loading");
+    d.loading = true;
     stage.tabIndex = 0;
     stage.setAttribute("role", "group");
     stage.setAttribute("aria-label", el.getAttribute("aria-label") || "interactive figure");
@@ -26354,11 +26478,11 @@ void main() {
     return (d.band = out);
   }
   function render(d) {
-    const band = bandPalette(d);
-    if (!band) return renderInner(d);
-    const saved = { ...palette };
-    Object.assign(palette, band);
-    try { renderInner(d); } finally { Object.assign(palette, saved); }
+    const band = bandPalette(d), outer = window.__safisFrame;
+    const saved = band && { ...palette };
+    if (band) Object.assign(palette, band);
+    window.__safisFrame = true;
+    try { renderInner(d); } finally { window.__safisFrame = outer; if (band) Object.assign(palette, saved); }
   }
   function renderInner(d) {
     d.dirty = false;
@@ -26374,9 +26498,14 @@ void main() {
     ctx.globalCompositeOperation = "source-over";
     ctx.setTransform(d.dpr, 0, 0, d.dpr, 0, 0);
     const interacting = !!(d.orbiting || d.dragging || d.spin || d.zoomEase || d.tweens.size || (d.playing && d.spec.step));
-    Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, quality: d.spec.quality, wantsFrame: false });
+    Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, quality: d.spec.quality, wantsFrame: false, busy: false });
     guard(d, "draw", () => d.spec.draw(d.g, d.s, d.v, d.handle));
     d.pulse = d.g.wantsFrame;
+    // The stage shows a spinner until its first frame, and a quieter one while a 3D view is
+    // still refining or a simulation is still catching up (g.busy).
+    if (d.loading) { d.loading = false; d.stage.classList.remove("loading"); }
+    const busy = d.g.busy ? (typeof d.g.busy === "string" ? d.g.busy : "Refining") : "";
+    if (d.busy !== busy) { d.busy = busy; d.stage.dataset.busy = busy; d.stage.classList.toggle("busy", !!busy); }
     if (d.statusEl && !d.broken) guard(d, "status", () => { d.statusEl.textContent = d.spec.status(d.s, d.v, d.handle) ?? ""; });
   }
 
@@ -26431,6 +26560,13 @@ void main() {
   function frame(now) {
     const dt = clamp((now - lastTime) / 1000, 0, 1 / 30);
     lastTime = now;
+    window.__safisFrame = true;
+    try { frameDemos(now, dt); } finally { window.__safisFrame = false; }
+    requestAnimationFrame(frame);
+  }
+  // Simulations stepped while this runs keep to a per-frame time budget (Fx), so a long warm-up
+  // spreads over frames; called from anywhere else they finish at once.
+  function frameDemos(now, dt) {
     for (const d of demos) {
       if (d.needsResize) { d.needsResize = false; resize(d); }
       if (d.tweens.size && !d.broken) runTweens(d, now);
@@ -26455,7 +26591,6 @@ void main() {
       if (d.pulse && d.visible) d.dirty = true;
       if (d.dirty && !d.released && (d.visible || d.near || !d.w)) render(d);
     }
-    requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 

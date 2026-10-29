@@ -164,7 +164,7 @@ Section cuts work best on closed meshes that don't overlap each other. For an "x
 
 ## Physical light
 
-For figures *about* light (shadows, brightness, color mixing, bounce light, the sky), use real lights instead of the studio rig. A light with a `type` or a `power` is physical: brightness falls with the square of the distance and the cosine of the angle, its shadow has a dark core and soft edges that harden as the light shrinks, and every shadow, bounce, and beam is ray traced against the scene's triangles. Still frames refine over about half a second (the runtime keeps drawing until `view.converging` is false); dragging shows a lighter, slightly grainy preview.
+For figures *about* light (shadows, brightness, color mixing, bounce light, the sky), use real lights instead of the studio rig. A light with a `type` or a `power` is physical: brightness falls with the square of the distance and the cosine of the angle, its shadow has a dark core and soft edges that harden as the light shrinks, and every shadow, bounce, and beam is ray traced against the scene's triangles. Still frames refine over about half a second (the runtime keeps drawing until `view.converging` is false, with a "Refining" chip if it takes long); dragging shows a lighter, slightly grainy preview. On a slow or software GPU the runtime measures each still frame and `E3.quality.still` steps down from 2 (full) to 1 (no supersampling, 24 passes) or 0 (also 3/4 size, low-tier shadows, 8 passes); the checker always gets full quality.
 
 ```js
 const scene = E3.scene({ look: "darkroom", units: "m" });           // black room, only these lights
