@@ -913,7 +913,10 @@ void main() {
       const gl = canvas.getContext("webgl2", { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: !off, depth: false, stencil: false });
       if (!gl) { noGPU = true; return null; }
       R = { canvas, gl, off, w: 1, h: 1, progs: {}, vao: gl.createVertexArray() };
-      canvas.addEventListener?.("webglcontextlost", e => { e.preventDefault(); R = null; });
+      canvas.addEventListener?.("webglcontextlost", e => {
+        e.preventDefault(); R = null;
+        setTimeout(() => window.dispatchEvent(new Event("safis:redraw")), 250);
+      });
     } catch (e) { noGPU = true; errors.push(String(e.message || e)); }
     return R;
   }
@@ -1461,25 +1464,49 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
     gl.blitFramebuffer(0, 0, A.w, A.h, 0, 0, B.w, B.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
   }
+  // Inside a figure's frame (the runtime sets __safisFrame), stepping shares a budget of about 10 ms
+  // a frame across every sim on the page, so warming one up to t = 9 s, or catching up after the
+  // tab was hidden, runs over several frames instead of freezing the page; the sim reports
+  // `behind` until it gets there. Called from anywhere else, or while the page checker runs,
+  // advance(t) gets all the way to t at once.
+  const STEP_BUDGET = 10;
+  let budgetFrom = -1e9;
+  const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const stepDeadline = () => {
+    if (typeof window === "undefined" || !window.__safisFrame || document.documentElement.classList.contains("safis-checking")) return Infinity;
+    const now = nowMs();
+    if (now - budgetFrom > 3 * STEP_BUDGET) budgetFrom = now;
+    return budgetFrom + STEP_BUDGET;
+  };
   // A sim's clock: fixed steps of S.dt, a checkpoint from warm(t), and going back in time.
   function clock(S, stepOnce, save, load, init) {
     const restart = () => { init(); S.time = 0; };
+    // The checkpoint warm(t) asked for, taken when the clock passes t.
+    const mark = () => { if (S.warmTo != null && S.time + S.dt > S.warmTo + 1e-9) { S.chk = { ...save(), time: S.time, at: S.warmTo }; S.warmTo = null; } };
     Object.assign(S, {
-      time: 0, chk: null,
-      reset() { restart(); S.chk = null; return S; },
+      time: 0, chk: null, warmTo: null, behind: false,
+      reset() { restart(); S.chk = null; S.warmTo = null; return S; },
       advance(t) {
         t = num(t, 0);
         if (t < S.time - 1e-9) { if (S.chk && t >= S.chk.time - 1e-9) { load(S.chk); S.time = S.chk.time; } else restart(); }
-        for (let n = 0; S.time + S.dt <= t + 1e-9 && n < 1e5; n++) { stepOnce(S.dt); S.time += S.dt; }
+        const end = stepDeadline();
+        S.target = t;
+        for (let n = 0; S.time + S.dt <= t + 1e-9 && n < 1e5; n++) {
+          mark();
+          stepOnce(S.dt); S.time += S.dt;
+          if ((n & 3) === 3 && nowMs() > end) break;
+        }
+        mark();
+        S.behind = S.time + S.dt <= t + 1e-9;
         return S;
       },
       warm(t) {
         t = num(t, 0);
-        if (S.chk?.at === t) { load(S.chk); S.time = S.chk.time; return S; }
-        if (t < S.time - 1e-9 || S.chk) restart();
-        S.advance(t);
-        S.chk = { ...save(), time: S.time, at: t };
-        return S;
+        if (S.chk?.at === t) { load(S.chk); S.time = S.chk.time; S.warmTo = null; S.behind = false; return S; }
+        if (S.warmTo === t && S.time <= t + 1e-9) return S.advance(t);   // still on its way there
+        if (t < S.time - 1e-9 || S.chk || S.warmTo != null) { restart(); S.chk = null; }
+        S.warmTo = t;
+        return S.advance(t);
       },
     });
     restart();
@@ -1850,8 +1877,34 @@ void main() {
       pass("flBnd", G.V1, { ...bu, uV: G.V, uA: G.V, uMode: 0 }); [G.V, G.V1] = [G.V1, G.V];
     }
     // The velocity grid the CPU reads (arrows, particles, probes): GPU readback or the CPU arrays.
+    // Without WebGPU the readback goes through a pixel buffer and a fence, so the CPU picks it up
+    // when the GPU is done instead of waiting on every queued step; the field is then at most two
+    // steps old. It stays exact while the page checker runs and when particles ride the fluid.
+    let rbq = null;
+    function readAsync() {
+      const gl = R.gl;
+      if (rbq && rbq.gl !== gl) rbq = null;
+      if (rbq?.fence) {
+        const st = gl.clientWaitSync(rbq.fence, 0, 0);
+        if (st === gl.ALREADY_SIGNALED || st === gl.CONDITION_SATISFIED) {
+          if (rbq.at > rbAt) { gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rbq.pbo); gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, rb); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); rbAt = rbq.at; }
+          gl.deleteSync(rbq.fence); rbq.fence = null;
+        }
+      }
+      if (rbAt === serial) return true;
+      if (!rbq?.fence) {
+        if (!rbq) { rbq = { gl, pbo: gl.createBuffer(), fence: null, at: -1 }; gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rbq.pbo); gl.bufferData(gl.PIXEL_PACK_BUFFER, rb.byteLength, gl.STREAM_READ); }
+        pass("flRead", G.RB, { uS: G.S, uN: [nx, ny], uWs: ws(), uV: G.V, uP: G.P, uF: RF, uHm: h });
+        gl.bindFramebuffer(gl.FRAMEBUFFER, G.RB.fb); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rbq.pbo);
+        gl.readPixels(0, 0, G.RB.w, G.RB.h, gl.RGBA, gl.FLOAT, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        rbq.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); rbq.at = serial; gl.flush();
+      }
+      return rbAt >= 0 && serial - rbAt <= 2;
+    }
     function field() {
       if (rbAt === serial) return rb;
+      if (G && !S._sync && !document.documentElement.classList.contains("safis-checking") && readAsync()) return rb;
       if (G) { pass("flRead", G.RB, { uS: G.S, uN: [nx, ny], uWs: ws(), uV: G.V, uP: G.P, uF: RF, uHm: h }); readTex(G.RB, rb); }
       else { WS = ws(); for (let J = 0; J < ry; J++) for (let I = 0; I < rx; I++) { const x = (I + 0.5) * RF, y = (J + 0.5) * RF, k = (I + J * rx) * 4, c = min(nx - 1, floor(x)) + min(ny - 1, floor(y)) * nx; rb[k] = su(C.u, x, y) * h; rb[k + 1] = svv(C.v, x, y) * h; rb[k + 2] = solid[c]; rb[k + 3] = C.p[c]; } }
       rbAt = serial;
@@ -2492,7 +2545,7 @@ void main() {
     if (F) {   // the fluid comes back in step with the particles
       const adv = S.advance, warm = S.warm;
       S.advance = t => { if (t < S.time - 1e-9) { adv(t); F.advance(S.time); return S; } return adv(t); };
-      S.warm = t => { if (S.chk?.at === t && F.chk?.at === t) { F.warm(t); return warm(t); } F.reset(); S.reset(); adv(t); F.warm(t); return warm(t); };
+      S.warm = t => { if (S.chk?.at === t && F.chk?.at === t) { F.warm(t); return warm(t); } if (S.warmTo === t && S.time <= t + 1e-9) return S.advance(t); F.reset(); S.reset(); adv(t); F.warm(t); return warm(t); };
     }
     S.set = (k = {}) => { if (k.density != null) S.density = cn(k.density, 1, 0, 1); if (k.wind) { wind[0] = k.wind[0] * u; wind[1] = k.wind[1] * u; } if (k.emitter) Object.assign(E, k.emitter); if (k.light !== undefined) S.light = k.light; if (k.emitting != null) S.emitting = !!k.emitting; return S; };
     // The live particles: { p, v, age, life, k (0-1 through its life), spin }.
@@ -2609,7 +2662,14 @@ void main() {
       }
       return { uSeg: pad(s, 384), uSegW: pad(w, 96), uNs: w.length, uW: width / 2, uSpr: spread, uI: I, uCore: on ? 1 : 0, uHue: core, uHalo: halo };
     };
-    const fx = {}, def = (name, fn) => { fx[name] = (b, o = {}) => { const box = boxOf(b); return { box, ...fn(box, DEF[name](box, o), o, isDark()) }; }; };
+    // A sim that hasn't reached its time yet (a warm-up spread over frames) keeps catching up
+    // while it is drawn, even on a paused figure, and the figure says so.
+    const catchUp = S => {
+      if (!S || !S.behind || typeof S.advance !== "function") return;
+      S.advance(S.target);
+      if (S.behind) { g.wantsFrame = true; g.busy = "Simulating"; }
+    };
+    const fx = {}, def = (name, fn) => { fx[name] = (b, o = {}) => { catchUp(o.sim ?? o.sys); const box = boxOf(b); return { box, ...fn(box, DEF[name](box, o), o, isDark()) }; }; };
 
     // Hot specks with a glowing streak (sparks and embers share the look).
     const flecks = (c, list, width, dk) => {
