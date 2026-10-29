@@ -1148,6 +1148,10 @@
     ember: { vt: 1.5, lift: 1.8, style: "spark", temperature: [1250, 750], eddy: [0.5, 0.3, 0.6], life: [1.5, 3.5], size: [0.012, 0.008], bounce: 0.2, friction: 0.6 },
     bubble: { rise: 0.25, style: "sphere", eddy: [0.06, 0.02, 1], life: [2, 5], size: [0.004, 0.005], color: "#dff1fb", bounce: 0, friction: 0 },
     air: { drag: 20, style: "streak", eddy: [0.3, 1, 0.3], life: [1, 2], size: [0.004, 0.004], color: "#9fc3dd", bounce: 0.5, friction: 0 },
+    // Dust motes hanging in a room (10 µm: Stokes settling of a few mm/s), carried by faint drafts;
+    // seen only where a beam lights them. Pollen grains (25 µm) settle a little faster.
+    motes: { vt: 0.004, style: "dot", eddy: [0.03, 0.35, 0.12], life: [30, 60], size: [0.0018, 0.0018], color: "#f4ecdc", bounce: 0, friction: 1 },
+    pollen: { vt: 0.025, style: "dot", eddy: [0.15, 0.5, 0.2], life: [12, 24], size: [0.0025, 0.0025], color: "#f0d36a", bounce: 0, friction: 1 },
   };
   function matterPreset(o) {
     const P = MATTER[o.matter];
@@ -2942,6 +2946,8 @@ void main() {
     float ang = uStyle == 0 ? r * 6.2831853 + age * (r - 0.5) * 0.6 : 0.0;
     vec2 rc = mat2(cos(ang), sin(ang), -sin(ang), cos(ang)) * c;
     float s = uStyle == 4 ? size * 1.25 : size * 0.5;
+    // A dot smaller than a pixel (a dust mote, a grain far away) draws a pixel wide, fainter by its coverage.
+    if (uStyle == 5) { float px = uPxW.x * length(uEye - p) + uPxW.y, sm = max(s, 0.9 * px); vCov = (s / sm) * (s / sm); s = sm; }
     w = p + (uCamR * rc.x + uCamU * rc.y) * s;
     vUv = uStyle == 4 ? c : rc;
     if (uStyle == 0) vUv = c;
@@ -2962,6 +2968,7 @@ uniform int uStyle; uniform vec4 uShape; uniform vec3 uEye; uniform vec3 uCamR; 
 uniform sampler2D uDepth; uniform vec2 uDepthScale;
 uniform vec3 uColA; uniform vec3 uColB; uniform vec4 uColorBy; uniform vec4 uHeatP; uniform vec4 uFade;
 uniform vec3 uLight; uniform vec3 uKeyCol; uniform vec4 uPtPos[2]; uniform vec3 uPtCol[2]; uniform vec4 uLook;
+uniform vec4 uPRoom; // physical lights on, dark room (only those lights), dust asymmetry g
 out vec4 o;
 vec3 colorAt() {
   float t = uColorBy.x > 1.5 ? clamp((length(vVel) - uColorBy.y) / max(uColorBy.z - uColorBy.y, 1e-6), 0.0, 1.0) : (uColorBy.x > 0.5 ? vAge : 0.0);
@@ -5001,6 +5008,7 @@ void main() {
           ...flowUniforms(F.flow),
           ...shadowU,
           ...particleColors(sys),
+          ...traceU, uPRoom: [Tr && rig.length ? 1 : 0, room ? 1 : 0, sys.scatter ?? 0.6, 0],
         });
         gl.bindVertexArray(particleSource(sys));
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, ribbon ? 2 * (segs + 1) : 4, sys._drawN);
