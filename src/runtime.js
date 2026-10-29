@@ -357,28 +357,6 @@
         if (o.label) g.text(o.label, [x + w / 2, y + h + 12], { size: 12, weight: 500, color: "muted" });
         if (o.ends) { g.text(o.ends[0], [x - 6, y + h / 2], { size: 11, align: "right", color: "muted" }); g.text(o.ends[1], [x + w + 6, y + h / 2], { size: 11, align: "left", color: "muted" }); }
       },
-      // A circular magnifier: redraws `draw` zoomed around `from`, shown in a circle at `to`.
-      inset(o, draw) {
-        const { from, to } = o, R = o.radius ?? 70, zoom = o.zoom ?? 3, r = R / zoom;
-        const dx = to[0] - from[0], dy = to[1] - from[1], d = Math.hypot(dx, dy) || 1;
-        const nx = -dy / d, ny = dx / d;
-        const lineO = { stroke: "muted", width: 1 };
-        g.line([from[0] + nx * r, from[1] + ny * r], [to[0] + nx * R, to[1] + ny * R], lineO);
-        g.line([from[0] - nx * r, from[1] - ny * r], [to[0] - nx * R, to[1] - ny * R], lineO);
-        g.circle(from, r, { stroke: "muted", width: 1 });
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(to[0], to[1], R, 0, TAU);
-        ctx.fillStyle = color("panel");
-        ctx.fill();
-        ctx.clip();
-        ctx.translate(to[0], to[1]);
-        ctx.scale(zoom, zoom);
-        ctx.translate(-from[0], -from[1]);
-        draw(g);
-        ctx.restore();
-        g.circle(to, R, { stroke: "ink", width: 1.5 });
-      },
       // World coordinates (y up) -> canvas pixels, fitted into the canvas or into o.box = [x, y, w, h].
       fit(x0, x1, y0, y1, o = {}) {
         const pad = o.pad ?? 16;
@@ -418,6 +396,41 @@
         const lab = { size: 12, weight: 500, color: "muted" };
         if (o.xLabel) { const p = P([x1, ay]); g.text(o.xLabel, [p[0], p[1] - 10], { ...lab, align: "right" }); }
         if (o.yLabel) { const p = P([ax, y1]); g.text(o.yLabel, [p[0] + 8, p[1] + 2], { ...lab, align: "left" }); }
+      },
+      // A magnifier: a circle at `at` ([x, y, r]) showing a close-up of the spot `focus` ([x, y, r]),
+      // joined to it by the two outer tangent lines. fn(box, g) draws the close-up into box (the
+      // circle's bounding square), already clipped to the circle: a g.render3d with a nearer camera,
+      // or 2D drawing scaled up.
+      //
+      // The older form g.inset({ from, to, radius, zoom }, draw) redraws `draw(g)` scaled by `zoom`
+      // around `from`, shown in a circle of `radius` at `to`.
+      inset(at, focus, fn, o = {}) {
+        if (!Array.isArray(at)) {
+          const { from, to } = at, R = at.radius ?? 70, zoom = at.zoom ?? 3, draw = focus;
+          return g.inset([to[0], to[1], R], [from[0], from[1], R / zoom], () => {
+            ctx.translate(to[0], to[1]); ctx.scale(zoom, zoom); ctx.translate(-from[0], -from[1]);
+            draw(g);
+          }, { stroke: "muted", dash: [], ...at });
+        }
+        const [cx, cy, R] = at, [fx, fy, fr] = focus;
+        const dx = cx - fx, dy = cy - fy, d = Math.hypot(dx, dy);
+        const stroke = o.stroke ?? "muted", width = o.width ?? 1.2;
+        if (d > R + fr) {
+          // Outer tangents of two circles: unit normal n with n·(c2 - c1) = r1 - r2.
+          const ux = dx / d, uy = dy / d, k = (fr - R) / d, h = Math.sqrt(Math.max(0, 1 - k * k));
+          for (const s of [1, -1]) {
+            const nx = ux * k - s * uy * h, ny = uy * k + s * ux * h;
+            g.line([fx + nx * fr, fy + ny * fr], [cx + nx * R, cy + ny * R], { stroke, width, dash: o.dash ?? [4, 4], alpha: o.alpha ?? 0.8 });
+          }
+        }
+        g.circle([fx, fy], fr, { stroke, width, dash: o.dash ?? [4, 4] });
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, TAU);
+        ctx.clip();
+        if (o.background !== false) { ctx.fillStyle = color(o.background ?? "panel"); ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R); }
+        try { fn([cx - R, cy - R, 2 * R, 2 * R], g); } finally { ctx.restore(); }
+        g.circle([cx, cy], R, { stroke, width: width * 1.4 });
       },
       // Runs fn with drawing clipped to box = [x, y, w, h].
       clip(box, fn) {
