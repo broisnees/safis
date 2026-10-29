@@ -1,0 +1,1512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How air works</title>
+<meta name="description" content="From molecules flying at the speed of a bullet, to the ten tonnes of weight pressing on every square meter, to the winds that circle storms and the lift that holds up a plane.">
+<meta name="explainer:category" content="Physics">
+<!-- explainer:runtime:start v3 shared -->
+<link rel="stylesheet" href="../safis.css?v=150b587b44">
+<script src="../safis.js?v=10959a5ba2"></script>
+<!-- explainer:runtime:end -->
+</head>
+<body>
+<div class="page has-toc">
+<nav class="toc" aria-label="All explainers"><!-- explainer:nav:start --><a class="site" href="../index.html">Safis</a><h2>Body</h2><ul><li><a href="../doomscrolling/index.html">Doomscrolling</a></li><li><a href="../heart/index.html">How the Heart Pumps, and What Happens in a Heart Attack</a></li><li><a href="../jaw-joint/index.html">The Jaw Joint</a></li></ul><h2>Biology</h2><ul><li><a href="../protein/index.html">How a Cell Builds a Protein</a></li><li><a href="../neuron/index.html">How a Neuron Fires</a></li></ul><h2>Chemistry</h2><ul><li><a href="../battery/index.html">The Lithium-Ion Battery</a></li><li><a href="../reactions/index.html">Why Chemical Reactions Happen</a></li><li><a href="../ice/index.html">Why Ice Floats</a></li><li><a href="../water/index.html">Why water is so strange</a></li></ul><h2>Physics</h2><ul><li><a href="../pendulum/index.html">How a Pendulum Keeps Time</a></li><li><a href="../air/index.html" aria-current="page">How air works</a></li><li><a href="../sound/index.html">How Sound Travels and How We Hear It</a></li><li><a href="../light/index.html">What Light Is</a></li></ul><h2>Machines</h2><ul><li><a href="../lock/index.html">How a Pin Tumbler Lock Knows Your Key</a></li><li><a href="../rocket-engine/index.html">How a Rocket Engine Makes Thrust</a></li><li><a href="../turbofan/index.html">How a Turbofan Moves Air</a></li></ul><h2>Earth &amp; Space</h2><ul><li><a href="../tides/index.html">Why There Are Two Tides a Day</a></li></ul><h2>Computing</h2><ul><li><a href="../cdn/index.html">How a CDN Makes a Faraway Site Fast</a></li><li><a href="../hash-table/index.html">How a Hash Table Finds Things</a></li><li><a href="../dns/index.html">How DNS Turns a Name into an Address</a></li><li><a href="../starlink/index.html">How Starlink Delivers Internet from Space</a></li></ul><h2>AI</h2><ul><li><a href="../next-word/index.html">How a Language Model Picks the Next Word</a></li><li><a href="../learning/index.html">How a Neural Network Learns</a></li><li><a href="../transformers/index.html">How a Transformer Works</a></li><li><a href="../attention/index.html">How Attention Works</a></li></ul><h2>Math</h2><ul><li><a href="../matrix/index.html">How a Matrix Transforms Space</a></li><li><a href="../fourier/index.html">How Spinning Circles Draw Anything</a></li><li><a href="../derivative/index.html">What a Derivative Measures</a></li></ul><!-- explainer:nav:end --></nav>
+<main>
+<!-- explainer:back:start --><a class="backlink" href="../index.html">← Safis</a><!-- explainer:back:end -->
+<header>
+  <p class="kicker">Physics</p>
+  <h1>How air works</h1>
+  <p class="dek">From molecules flying at the speed of a bullet, to the ten tonnes of weight pressing on every square meter, to the winds that circle storms and the lift that holds up a plane.</p>
+</header>
+<article>
+<!-- explainer:article:start -->
+<div class="abstract"><ul>
+<li>Air is a crowd of molecules, 78% nitrogen and 21% oxygen, each flying at about 500 m/s and hitting a neighbor seven billion times a second.</li>
+<li>Pressure is the drumming of those hits on every surface. At sea level it adds up to 101 kPa, the weight of ten tonnes on each square meter, pressing from every side at once.</li>
+<li>The weight of the air above sets the pressure, so it halves about every 5.5 km you climb. Warm air is thinner than cool air at the same pressure, so it floats up.</li>
+<li>Wind is air sliding from high pressure toward low, turned sideways by the Earth's spin until it circles around storms instead of filling them.</li>
+<li>Air flowing past a body curves, and curving air needs a difference in pressure to bend it. That difference is drag behind a cylinder and lift under a wing.</li>
+</ul></div>
+
+<script>
+// Shared model for every figure on this page. SI units unless a comment says otherwise.
+window.AIR = (() => {
+  const R = 8.314462618, kB = 1.380649e-23, NA = 6.02214076e23, g0 = 9.80665;   // CODATA 2018 (exact R, k, NA)
+  // Dry air near the ground, by volume (U.S. Standard Atmosphere 1976), and molar masses (kg/mol).
+  const GAS = {
+    N2: { M: 0.0280134, frac: 0.78084, color: "blue", name: "nitrogen" },
+    O2: { M: 0.0319988, frac: 0.209476, color: "red", name: "oxygen" },
+    Ar: { M: 0.039948, frac: 0.00934, color: "purple", name: "argon" },
+  };
+  const Mair = 0.0289644, P0 = 101325, SIGMA = 3.65e-10;   // mean molar mass; sea-level pressure; collision diameter (USSA 1976)
+  const K = c => c + 273.15;
+  // Maxwell–Boltzmann speed distribution in three dimensions, per (m/s).
+  const mb = (v, T, M) => { const a = M / (2 * R * T); return 4 * Math.PI * Math.pow(a / Math.PI, 1.5) * v * v * Math.exp(-a * v * v); };
+  const vmean = (T, M) => Math.sqrt(8 * R * T / (Math.PI * M));
+  const vrms = (T, M) => Math.sqrt(3 * R * T / M);
+  const vpeak = (T, M) => Math.sqrt(2 * R * T / M);
+  // U.S. Standard Atmosphere 1976, 0 to 86 km: base geopotential height (m), temperature (K), lapse rate (K/m), pressure (Pa).
+  const LAYERS = [[0, 288.15, -0.0065, 101325], [11000, 216.65, 0, 22632.06], [20000, 216.65, 0.001, 5474.889], [32000, 228.65, 0.0028, 868.0187],
+    [47000, 270.65, 0, 110.9063], [51000, 270.65, -0.0028, 66.93887], [71000, 214.65, -0.002, 3.956420]];
+  function atm(z) {                                        // z: geometric altitude in m
+    const h = 6356766 * z / (6356766 + z);
+    let b = LAYERS[0];
+    for (const L of LAYERS) if (h >= L[0]) b = L;
+    const [hb, Tb, Lr, Pb] = b, T = Tb + Lr * (h - hb);
+    const P = Lr === 0 ? Pb * Math.exp(-g0 * Mair * (h - hb) / (R * Tb)) : Pb * Math.pow(Tb / T, g0 * Mair / (R * Lr));
+    const n = P / (kB * T);
+    return { T, P, rho: P * Mair / (R * T), n, mfp: 1 / (Math.SQRT2 * Math.PI * SIGMA * SIGMA * n), spacing: Math.cbrt(1 / n) };
+  }
+  // Boiling point of water at pressure P (Clausius–Clapeyron with a heat of vaporization of 40.66 kJ/mol).
+  const boil = P => 1 / (1 / 373.15 - R * Math.log(P / P0) / 40660) - 273.15;
+
+  // ---------- a gas of hard spheres in a box ----------
+  // Lengths in box units (the box is 1 high), speeds in box units per second. Each velocity
+  // component has the real spread for its gas, sqrt(RT/M), scaled by VS box units per m/s.
+  // Molecules are drawn to scale with each other: ANG box units per ångström. Their collision
+  // diameter is nitrogen's, 3.65 Å (USSA 1976).
+  const VS = 7e-4, ANG = 0.0099, RCOL = 3.65 / 2 * ANG;
+  function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+  function gauss(r) { let u = 0; while (!u) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * r()); }
+  function gas({ n = 200, W = 1.6, H = 1, D = 0.45, r = RCOL, T = 293.15, seed = 1, collide = true, mix = null } = {}) {
+    const rand = rng(seed), G = { W, H, D, r, collide, x: [], y: [], z: [], vx: [], vy: [], vz: [], M: [], kind: [], rot: [], spin: [], imp: [0, 0, 0, 0, 0, 0], t: 0, hits: 0, coll: [], trail: [], free: 0, frees: [], log: [] };
+    const kinds = mix ?? (() => { const out = []; const nAr = Math.max(1, Math.round(n * GAS.Ar.frac)), nO = Math.round(n * GAS.O2.frac); for (let i = 0; i < n; i++) out.push(i < nAr ? "Ar" : i < nAr + nO ? "O2" : "N2"); return out; })();
+    for (let i = 0; i < n; i++) {
+      const k = kinds[i % kinds.length], M = GAS[k].M, s = Math.sqrt(R * T / M) * VS;
+      let x, y, z, tries = 0;
+      do { x = r + rand() * (W - 2 * r); y = r + rand() * (H - 2 * r); z = r + rand() * (D - 2 * r); tries++; }
+      while (collide && tries < 60 && G.x.some((xx, j) => (xx - x) ** 2 + (G.y[j] - y) ** 2 + (G.z[j] - z) ** 2 < 4.4 * r * r));
+      G.x.push(x); G.y.push(y); G.z.push(z); G.vx.push(gauss(rand) * s); G.vy.push(gauss(rand) * s); G.vz.push(gauss(rand) * s); G.M.push(M); G.kind.push(k);
+      // A diatomic molecule tumbles end over end, a few turns per second on this slowed clock.
+      G.rot.push([rand() * TAU, rand() * TAU, 0]); G.spin.push([(rand() - 0.5) * 9, (rand() - 0.5) * 9]); G.coll.push(0);
+    }
+    return G;
+  }
+  // R T VS² per molecule: the mean kinetic energy is (3/2) kT in three dimensions.
+  const kT = G => { let e = 0; for (let i = 0; i < G.x.length; i++) e += 0.5 * G.M[i] * (G.vx[i] ** 2 + G.vy[i] ** 2 + G.vz[i] ** 2); return e / G.x.length / 1.5; };
+  const temp = G => kT(G) / (R * VS * VS);
+  function scaleTo(G, T) { const f = Math.sqrt(T / Math.max(1, temp(G))); for (let i = 0; i < G.x.length; i++) { G.vx[i] *= f; G.vy[i] *= f; G.vz[i] *= f; } }
+  // Advance by dt with sub-steps short enough that nothing moves more than half a radius.
+  // Walls are perfectly elastic; G.imp collects the momentum delivered to the walls at
+  // x = 0, x = W (or the piston at wallX), y = 0, y = H, z = 0, z = D.
+  function step(G, dt, { wallX = null, track = -1 } = {}) {
+    const N = G.x.length, r = G.r, X = [G.x, G.y, G.z], V = [G.vx, G.vy, G.vz], hi = [wallX ?? G.W, G.H, G.D];
+    let vmax = 1e-6;
+    for (let i = 0; i < N; i++) vmax = Math.max(vmax, Math.abs(G.vx[i]), Math.abs(G.vy[i]), Math.abs(G.vz[i]));
+    const nsub = Math.min(60, Math.max(1, Math.ceil((dt * vmax * 2) / r))), h = dt / nsub;
+    const cell = 2 * r, nx = Math.max(1, Math.ceil(G.W / cell)), ny = Math.max(1, Math.ceil(G.H / cell)), nz = Math.max(1, Math.ceil(G.D / cell));
+    const head = G.collide ? new Int32Array(nx * ny * nz) : null, next = new Int32Array(N);
+    const cellOf = i => Math.min(nx - 1, (G.x[i] / cell) | 0) + nx * (Math.min(ny - 1, (G.y[i] / cell) | 0) + ny * Math.min(nz - 1, (G.z[i] / cell) | 0));
+    for (let s = 0; s < nsub; s++) {
+      for (let i = 0; i < N; i++) {
+        G.rot[i][0] += G.spin[i][0] * h; G.rot[i][1] += G.spin[i][1] * h;
+        for (let a = 0; a < 3; a++) {
+          const P = X[a], U = V[a];
+          P[i] += U[i] * h;
+          if (P[i] < r) { P[i] = 2 * r - P[i]; if (U[i] < 0) { G.imp[2 * a] += -2 * G.M[i] * U[i]; U[i] = -U[i]; } }
+          if (P[i] > hi[a] - r) { P[i] = 2 * (hi[a] - r) - P[i]; if (U[i] > 0) { G.imp[2 * a + 1] += 2 * G.M[i] * U[i]; U[i] = -U[i]; if (a === 0) { G.hits++; G.log.push([G.t, i, G.y[i], G.z[i]]); } } }
+          P[i] = clamp(P[i], r, hi[a] - r);
+        }
+      }
+      if (G.collide) {
+        head.fill(-1);
+        for (let i = 0; i < N; i++) { const c = cellOf(i); next[i] = head[c]; head[c] = i; }
+        for (let i = 0; i < N; i++) {
+          const ci = Math.min(nx - 1, (G.x[i] / cell) | 0), cj = Math.min(ny - 1, (G.y[i] / cell) | 0), ck = Math.min(nz - 1, (G.z[i] / cell) | 0);
+          for (let oz = -1; oz <= 1; oz++) for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+            const a = ci + ox, b = cj + oy, c = ck + oz;
+            if (a < 0 || b < 0 || c < 0 || a >= nx || b >= ny || c >= nz) continue;
+            for (let j = head[a + nx * (b + ny * c)]; j >= 0; j = next[j]) {
+              if (j <= i) continue;
+              const dx = G.x[j] - G.x[i], dy = G.y[j] - G.y[i], dz = G.z[j] - G.z[i], d2 = dx * dx + dy * dy + dz * dz;
+              if (d2 >= 4 * r * r || d2 < 1e-14) continue;
+              const d = Math.sqrt(d2), ux = dx / d, uy = dy / d, uz = dz / d;
+              const vn = (G.vx[i] - G.vx[j]) * ux + (G.vy[i] - G.vy[j]) * uy + (G.vz[i] - G.vz[j]) * uz;
+              const push = (2 * r - d) / 2;
+              G.x[i] -= ux * push; G.y[i] -= uy * push; G.z[i] -= uz * push; G.x[j] += ux * push; G.y[j] += uy * push; G.z[j] += uz * push;
+              if (vn <= 0) continue;                       // already separating
+              const J = 2 * G.M[i] * G.M[j] / (G.M[i] + G.M[j]) * vn;   // elastic: momentum and energy both kept
+              G.vx[i] -= J / G.M[i] * ux; G.vy[i] -= J / G.M[i] * uy; G.vz[i] -= J / G.M[i] * uz;
+              G.vx[j] += J / G.M[j] * ux; G.vy[j] += J / G.M[j] * uy; G.vz[j] += J / G.M[j] * uz;
+              G.coll[i]++; G.coll[j]++;
+              if (i === track || j === track) { G.frees.push(G.free); if (G.frees.length > 200) G.frees.shift(); G.free = 0; G.trail.push(null); }
+            }
+          }
+        }
+      }
+      if (track >= 0) G.free += Math.hypot(G.vx[track], G.vy[track], G.vz[track]) * h;
+      G.t += h;
+    }
+    if (track >= 0) { G.trail.push([G.x[track], G.y[track], G.z[track]]); if (G.trail.length > 900) G.trail.shift(); }
+    if (G.log.length > 4000) G.log.splice(0, G.log.length - 4000);
+  }
+
+  // ---------- molecules in 3D ----------
+  // Space-filling models at real bond lengths (N≡N 1.10 Å, O=O 1.21 Å) and van der Waals radii,
+  // shaded like CPK models in the colors of E3.ELEMENTS; argon is a single atom (1.88 Å).
+  const EL = { N: E3.ELEMENTS.N, O: E3.ELEMENTS.O, Ar: { vdw: 1.88, color: "#a98bd8" } };
+  const SHAPE = { N2: ["N", 1.10], O2: ["O", 1.21], Ar: ["Ar", 0] };
+  const meshCache = new Map();
+  function molMesh(k, unit, seg = 14) {
+    const key = `${k}|${unit}|${seg}`;
+    if (meshCache.has(key)) return meshCache.get(key);
+    const [el, bond] = SHAPE[k], rA = EL[el].vdw * unit;
+    const ball = x => E3.mesh.transform(E3.mesh.sphere(rA, { segments: seg }), E3.m4.translation([x, 0, 0]));
+    const m = bond ? E3.mesh.merge(ball(-bond / 2 * unit), ball(bond / 2 * unit)) : E3.mesh.sphere(rA, { segments: seg });
+    meshCache.set(key, m);
+    return m;
+  }
+  const MAT = { N2: { base: "plastic", color: EL.N.color, roughness: 0.32 }, O2: { base: "plastic", color: EL.O.color, roughness: 0.32 }, Ar: { base: "plastic", color: EL.Ar.color, roughness: 0.28 } };
+  // A scene of molecules for a gas G: a glass box and one node per molecule (up to `limit`),
+  // placed and tumbled from the simulation each frame. Box centered on the origin.
+  function stage(G, { limit = 400, look = "studio", glass = true, seg = 12, unit = ANG, pad = 0 } = {}) {
+    const scene = E3.scene({ look, shadow: { opacity: 0.16, strength: 0.35, softness: 1 } });
+    const box = glass ? scene.add(E3.mesh.box(G.W, G.H, G.D), { material: { base: "glass", roughness: 0.02 }, name: "glass box", pickable: false, castShadow: false }) : null;
+    const nodes = [];
+    for (let i = 0; i < Math.min(limit, G.x.length); i++) nodes.push(scene.add(molMesh(G.kind[i], unit, seg), { material: MAT[G.kind[i]], name: G.kind[i] }));
+    // Centers live in [r, L - r]; drawn molecules are kept a whole molecule's radius (pad) from the glass.
+    const fit = (p, L, r) => (pad > r ? pad + (p - r) * (L - 2 * pad) / (L - 2 * r) : p) - L / 2;
+    const at = (Gn, x, y, z) => [fit(x, Gn.W, Gn.r), fit(y, Gn.H, Gn.r), fit(z, Gn.D, Gn.r)];
+    return { scene, box, nodes, at, sync(Gn = G) {
+      const n = Math.min(nodes.length, Gn.x.length);
+      for (let i = 0; i < nodes.length; i++) {
+        const nd = nodes[i];
+        nd.visible = i < n;
+        if (i >= n) continue;
+        nd.position = at(Gn, Gn.x[i], Gn.y[i], Gn.z[i]);
+        nd.rotation = Gn.rot[i];
+      }
+    } };
+  }
+  // A soft-shaded molecule for the 2D figures: lit spheres with a highlight, not flat dots.
+  function ball(g, p, r, color, alpha = 1) {
+    const c = g.ctx, base = g.color(color);
+    c.save(); c.globalAlpha = alpha;
+    const grd = c.createRadialGradient(p[0] - r * 0.35, p[1] - r * 0.4, r * 0.1, p[0], p[1], r);
+    grd.addColorStop(0, g.mix(color, "#ffffff", 0.55)); grd.addColorStop(0.55, base); grd.addColorStop(1, g.mix(color, "#000000", 0.35));
+    c.fillStyle = grd; c.beginPath(); c.arc(p[0], p[1], r, 0, TAU); c.fill(); c.restore();
+  }
+  function molecule(g, p, k, ang, s, o = {}) {
+    const c = GAS[k].color;
+    if (k === "Ar") { ball(g, p, s * 1.1, c, o.alpha ?? 1); return; }
+    const L = (k === "O2" ? 0.39 : 0.355) * s, dx = Math.cos(ang) * L, dy = Math.sin(ang) * L, a = s;
+    const pts = [[p[0] - dx, p[1] - dy], [p[0] + dx, p[1] + dy]];
+    if (dy < 0) pts.reverse();   // draw the far atom first
+    for (const q of pts) ball(g, q, a, c, o.alpha ?? 1);
+  }
+  return { R, kB, NA, g0, GAS, Mair, P0, K, mb, vmean, vrms, vpeak, atm, boil, VS, ANG, rng, gauss, gas, kT, temp, scaleTo, step, stage, molMesh, MAT, ball, molecule };
+})();
+</script>
+
+<p class="lede">Blow out a candle and a thread of smoke climbs from the wick, wavers, and tears itself into curls. Stand in a dim room with the sun coming through a gap in the curtains and the beam fills with specks of dust that drift and turn, though nothing in the room is moving. Both are showing you something you can't see: the air, which pushes the smoke up and carries the dust around.</p>
+
+<p>Air is easy to forget because it is so thin and so clear, yet a cubic meter of it weighs 1.2 kg. Everything in this article, from why your ears pop to why a plane stays up, comes from asking what that matter is doing. Drag across the room to wave your hand through the air, and watch the <span class="c-brass">dust</span>:</p>
+
+<figure class="demo" id="beam" aria-label="A dim room with a slanting beam of sunlight from the upper left. Dust motes drift slowly downward; the ones inside the beam glint, the rest are faint. Dragging stirs the air, and the motes swirl along with it."></figure>
+<script>
+{
+  // A room 4 m wide and 2.5 m tall with a faint draft (2 cm/s). The dust rides a real
+  // Navier–Stokes flow, so a drag through the room leaves eddies that carry it.
+  const sim = Fx.fluid({ domain: [4, 2.5], cells: 64, cpuCells: 32, speed: 0.02, nu: 4e-4, walls: "no-slip" });
+  const dust = Fx.particles({ matter: "dust", fluid: sim, count: 1400, seed: 3, ground: 2.46,
+    emitter: { shape: "box", at: [2, 1.15], size: [4, 2.1], speed: [0, 0.03], spread: 3.14 },
+    light: { from: [0.4, 0], dir: [0.6, 0.8], width: 0.7 } });
+  // Warm the simulation the first time the figure is drawn (on screen), not while the page loads.
+  const ready = (s, fig) => { if (!s.warm && (!fig || fig.visible)) { dust.warm(s.t); s.warm = true; } };
+  demo("beam", {
+    aspect: 1.6,
+    reset: true,
+    state: () => ({ t: 6, warm: false }),
+    controls: [{ key: "beam", label: "Sunbeam", type: "toggle", value: true, color: "brass" }],
+    drag: sim.interact,
+    caption: "Dust in a sunbeam. Each mote sinks at its terminal speed, about 0.3 m/s for the largest, and is carried by every eddy in the air; the ones in the beam scatter its light toward you. The air is simulated, so a stroke through the room leaves swirls that go on moving the dust after the stroke has passed.",
+    step(dt, s) { ready(s); s.t += dt; dust.advance(s.t); },
+    draw(g, s, v, fig) {
+      ready(s, fig);
+      g.rect(0, 0, g.w, g.h, { fill: g.mix("panel", "ink", 0.07) });
+      g.fx.particles(null, { sys: dust, light: v.beam ? undefined : null });
+      const fy = g.h * 2.46 / 2.5;
+      g.rect(0, fy, g.w, g.h - fy, { fill: "panel" });
+      g.line([0, fy], [g.w, fy], { stroke: "ink", width: 1.5 });
+    },
+  });
+}
+</script>
+
+<p>The dust doesn't fall the way a pebble would. The smallest motes take minutes to sink a meter, and each one swerves wherever the air around it goes, so the swirl you left behind keeps stirring them long after your hand has gone. The dust is tracing the motion of something far heavier than itself in total: the 50 kg or so of air in a small room.</p>
+
+<p>The candle shows the same stuff from another side. Turn the candle, then press <b>Blow out</b>:</p>
+
+<figure class="demo" id="candle" aria-label="A 3D candle with a burning flame on a dark background. Blowing pushes the flame over until it goes out, and a ribbon of grey smoke rises from the wick and spreads. Relighting brings the flame back."></figure>
+<script>
+{
+  const { mesh } = E3;
+  const scene = E3.scene({ look: "studio", units: "cm" });
+  // A candle 2.2 cm across and 9 cm tall, in centimeters. Wax is a pale satin solid; the wick is charred cotton.
+  scene.add(mesh.lathe([[0, 0], [1.1, 0], [1.1, 8.6], [1.0, 8.95], [0.55, 9.0], [0, 8.95]], { segments: 48 }), { material: { color: "#efe8da", roughness: 0.55 }, name: "wax" });
+  const wick = scene.add(mesh.cylinder(0.05, 0.75, { segments: 10 }), { material: { color: "#231d19", roughness: 0.9 }, position: [0, 9.3, 0], name: "wick" });
+  const BREEZE = s => (s.blow > 0 ? [-260 * s.blow, 0, 0] : [0, 0, 0]);
+  // The flame: gas from the hot wax burning where it meets the air, about 1,400 K at the glowing soot.
+  const fire = scene.add(E3.particles({
+    matter: "fire", units: "cm", count: 900, seed: 5, life: [0.05, 0.11], step: 1 / 240, size: [0.42, 0.14], temperature: [1650, 1100], volume: true,
+    emitter: { shape: "sphere", radius: 0.16, position: [0, 9.85, 0], speed: [18, 40], spread: 0.18, direction: [0, 1, 0] },
+  }));
+  // Smoke from the snuffed wick: unburnt wax vapor that condenses into droplets. It leaves at about 420 K,
+  // so it rises, slowing as it mixes with the room air; its eddies grow as it climbs.
+  const smoke = scene.add(E3.particles({
+    matter: "smoke", units: "cm", count: 1300, seed: 7, life: [1.6, 2.6], step: 1 / 120, size: [0.15, 1.3], opacity: 0.3, temperature: [430, 300], color: "#ddd8cf", volume: { erosion: 0.6, detail: 0.8 },
+    forces: { drag: 6, turbulence: { strength: 7, scale: 3.5, speed: 0.5 } },
+    emitter: { shape: "disk", radius: 0.05, position: [0, 9.75, 0], speed: [8, 16], spread: 0.12 },
+  }));
+  demo("candle", {
+    aspect: w => (w < 560 ? 0.85 : 1.3),
+    orbit: { yaw: 0.35, pitch: 0.1, minPitch: -0.2, maxPitch: 0.7 },
+    state: () => ({ t: 3, lit: true, since: 9, fire: 1, smoke: 0, blow: 0 }),
+    controls: [
+      { label: "Blow out", type: "button", primary: true, action: s => { if (s.lit) { s.blowAt = s.t; } } },
+      { label: "Light", type: "button", action: s => { s.lit = true; s.since = 0; s.blowAt = null; } },
+    ],
+    caption: "A candle, about life size. The breath pushes the flame sideways and cools it below the temperature it needs to keep burning; the wick goes on giving off wax vapor, which condenses into a smoke of tiny droplets. The smoke is warm, so it rises.",
+    status: s => (s.lit ? (s.blowAt != null ? "blowing" : "burning") : s.since < 6 ? "out: warm smoke rising from the wick" : "out"),
+    step(dt, s) {
+      s.t += dt; s.since += dt;
+      if (s.blowAt != null) {
+        const a = s.t - s.blowAt;
+        s.blow = a < 0.5 ? Math.sin(Math.PI * a / 0.5) : 0;
+        if (a > 0.32 && s.lit) { s.lit = false; s.since = 0; }
+        if (a > 0.6) s.blowAt = null;
+      } else s.blow = 0;
+      s.fire = Fx.follow(s.fire, s.lit ? 1 : 0, dt, s.lit ? 0.3 : 0.05);
+      s.smoke = s.lit ? Fx.follow(s.smoke, 0, dt, 0.3) : Math.exp(-s.since / 4);
+    },
+    draw(g, s) {
+      g.rect(0, 0, g.w, g.h, { fill: "#11100f" });
+      scene.time = s.t;
+      fire.density = s.fire;
+      fire.forces.wind = BREEZE(s);
+      smoke.density = s.smoke;
+      smoke.forces.wind = s.blow > 0 ? [-40 * s.blow, 0, 0] : [0, 0, 0];
+      wick.temperature = s.lit ? 1000 : Math.max(300, 1000 - s.since * 300);
+      // The flame as a real light: a small glowing ball radiating about a watt of visible light, falling off with distance squared.
+      scene.lights = [{ type: "sphere", position: [0, 10.4, 0], radius: 0.35, power: 1.2 * s.fire, color: "#ffb35c", visible: false }];
+      scene.exposure = 1.4;
+      const view = g.render3d(scene, { ...s.view, fov: 30, target: [0, 11, 0], distance: 30 });
+      const label = (p, text, dx) => { const a = view.project(p), b = [a[0] + dx, a[1]]; g.line(a, b, { stroke: "#9a938a", width: 1 }); g.text(text, [b[0] + (dx > 0 ? 6 : -6), b[1]], { size: 12.5, color: "#ece6dc", align: dx > 0 ? "left" : "right", baseline: "middle" }); };
+      label([1.1, 5, 0], "wax", 60);
+      if (s.fire > 0.4) label([0.3, 10.6, 0], "flame", 70);
+      if (s.smoke > 0.35) label([0.4, 14.5, 0], "smoke", 70);
+    },
+  });
+}
+</script>
+
+<p>Your breath is air you've set moving, and moving air pushes: hard enough to bend the flame over and carry its heat away faster than it is made, so it dies. Then the warm smoke climbs, though nothing pulls it up. Air pushed on the flame, and air lifted the smoke. To see how, we have to look at what air is made of.</p>
+
+<h2>Molecules</h2>
+
+<p>If you could magnify a speck of air a hundred million times, you would see separate molecules flying in straight lines and bouncing off each other. Most are <span class="c-blue">nitrogen</span>, two nitrogen atoms bound together; about a fifth are <span class="c-red">oxygen</span>, also in pairs; and one molecule in a hundred is a lone atom of <span class="c-purple">argon</span> <a class="cite" href="#ref-ussa"></a>. Here are 220 of them in those proportions, in a glass box you can turn. Follow one molecule, and change the <span class="c-orange">temperature</span> <span class="scrub" data-key="tc"></span>:</p>
+
+<figure class="demo" id="gas" aria-label="A glass box seen in 3D holding about two hundred molecules that fly, tumble, and bounce: blue nitrogen molecules made of two atoms, red oxygen molecules of two atoms, and a couple of single purple argon atoms. One molecule, ringed in orange, leaves a dark trail of straight segments, each ending in a collision. A temperature slider makes them all move faster or slower."></figure>
+<script>
+{
+  const N = 220, FOLLOW = 30;
+  const fresh = () => { const G = AIR.gas({ n: N, seed: 7, D: 0.5 }); for (let i = 0; i < 150; i++) AIR.step(G, 1 / 60, { track: FOLLOW }); return G; };
+  const st = AIR.stage(AIR.gas({ n: N, seed: 7, D: 0.5 }));
+  demo("gas", {
+    aspect: w => (w < 560 ? 1.05 : 1.6),
+    reset: true,
+    orbit: { yaw: -0.38, pitch: 0.28, minPitch: -0.4, maxPitch: 1.3, zoom: 1.12 },
+    state: () => ({ G: fresh() }),
+    controls: [
+      { key: "tc", label: "Temperature", min: -80, max: 400, step: 1, value: 20, unit: " °C", color: "orange", marks: [{ value: -55, label: "airliner" }, { value: 20, label: "room" }, { value: 100, label: "boiling" }] },
+      { key: "trail", label: "Follow one", type: "toggle", value: true },
+    ],
+    change(key, s, v) { if (key === "tc") AIR.scaleTo(s.G, AIR.K(v.tc)); },
+    step(dt, s, v) { AIR.step(s.G, dt, { track: v.trail ? FOLLOW : -1 }); },
+    caption: "Air molecules in the proportions of real air: nitrogen (blue), oxygen (red), argon (purple), each atom at its real size and each pair at its real bond length. Every velocity has the real spread for its gas at this temperature, slowed down tens of billions of times, and the molecules are packed about ten times as densely as in real air so that they meet often. The dark trail is one molecule's path: straight lines, broken by collisions.",
+    status: (s, v) => `${v.tc} °C · nitrogen averages ${AIR.vmean(AIR.K(v.tc), AIR.GAS.N2.M).toFixed(0)} m/s, oxygen ${AIR.vmean(AIR.K(v.tc), AIR.GAS.O2.M).toFixed(0)} m/s`,
+    draw(g, s, v) {
+      const G = s.G;
+      st.sync(G);
+      st.nodes.forEach((n, i) => (n.highlight = v.trail && i === FOLLOW ? "orange" : false));
+      const view = g.render3d(st.scene, { ...s.view, fov: 30 });
+      if (v.trail && G.trail.length > 1) {
+        let seg = [];
+        const flush = () => { if (seg.length > 1) g.path(seg, { stroke: "ink", width: 1.5, alpha: 0.75 }); seg = []; };
+        for (const q of G.trail) { if (!q) { flush(); continue; } const p = view.project(st.at(G, ...q)); seg.push([p[0], p[1]]); }
+        flush();
+        const p = view.project(st.at(G, G.x[FOLLOW], G.y[FOLLOW], G.z[FOLLOW]));
+        g.circle([p[0], p[1]], 11, { stroke: "orange", width: 2 });
+      }
+    },
+  });
+}
+</script>
+
+<p>Each molecule runs straight until it meets another, then both fly off in new directions, tumbling as they go. The followed molecule's trail is a zigzag of straight lines, and no two legs are the same length. Heat the gas and every molecule speeds up, but nothing else about the picture changes. Temperature, at the level of molecules, is how fast they move.</p>
+
+<p>The speeds in the status line are real. At room temperature a nitrogen molecule averages 471 m/s, faster than a rifle bullet, and oxygen, a little heavier, 440 m/s. But no two molecules move at the same speed, and the spread has a definite shape. Give every molecule exactly the same speed and watch the histogram of speeds:</p>
+
+<figure class="demo" id="relax" aria-label="Left, a glass box of colliding molecules in 3D. Right, a histogram of their speeds with a smooth curve over it. After pressing the button every molecule has the same speed and the histogram is one tall bar; after a few collisions each it spreads into the curve."></figure>
+<script>
+{
+  const N = 300, OPT = { n: N, W: 1, H: 1, D: 0.6, seed: 11 };
+  const sameSpeed = s => {
+    const G = s.G, T = AIR.temp(G), r = AIR.rng(5 + Math.round(s.G.t * 10));
+    // Every molecule gets the energy the gas had on average, in a random direction, so the temperature doesn't change.
+    G.x.forEach((_, i) => { const sp = Math.sqrt(3 * AIR.R * T / G.M[i]) * AIR.VS, u = 2 * r() - 1, a = TAU * r(), q = Math.sqrt(1 - u * u); G.vx[i] = sp * q * Math.cos(a); G.vy[i] = sp * q * Math.sin(a); G.vz[i] = sp * u; });
+    G.coll.fill(0); s.since = 0;
+  };
+  // Maxwell's distribution, mixed over the three gases by their numbers.
+  const share = k => OPT_G.kind.filter(x => x === k).length / N;
+  const OPT_G = AIR.gas(OPT);
+  const pdf = (v, T) => ["N2", "O2", "Ar"].reduce((f, k) => f + share(k) * AIR.mb(v, T, AIR.GAS[k].M), 0);
+  const st = AIR.stage(OPT_G);
+  demo("relax", {
+    aspect: w => (w < 560 ? 0.95 : 2),
+    reset: true,
+    orbit: { yaw: -0.5, pitch: 0.32, minPitch: -0.3, maxPitch: 1.2 },
+    state: () => { const s = { G: AIR.gas(OPT), since: 0 }; sameSpeed(s); for (let i = 0; i < 240; i++) AIR.step(s.G, 1 / 30); s.since = 99; return s; },
+    controls: [{ label: "Same speed for all", type: "button", primary: true, action: s => sameSpeed(s) }],
+    caption: "The speeds of 300 colliding molecules (bars) and the distribution Maxwell predicted for them (curve). Collisions take any starting speeds to the same curve within a few collisions per molecule. Time here runs twice as fast as in the last figure.",
+    step(dt, s) { AIR.step(s.G, dt * 2); s.since += dt; },
+    status: s => (s.since < 0.05 ? "all at one speed" : `${(s.G.coll.reduce((a, b) => a + b, 0) / N).toFixed(1)} collisions per molecule so far`),
+    draw(g, s, v) {
+      const G = s.G, wide = g.w >= 560;
+      const A = wide ? [0, 0, g.h * 1.05, g.h] : [0, 0, g.w, g.h * 0.5];
+      const B = wide ? [g.h * 1.05 + 20, 8, g.w - g.h * 1.05 - 24, g.h - 16] : [6, g.h * 0.53, g.w - 12, g.h * 0.47 - 6];
+      st.sync(G);
+      g.render3d(st.scene, { ...s.view, fov: 30 }, { box: A });
+      const speeds = G.x.map((_, i) => Math.hypot(G.vx[i], G.vy[i], G.vz[i]) / AIR.VS);
+      const H = g.graph({ box: B, x: [0, 1200], y: [0, 0.0028], axes: "frame", xLabel: "Speed (m/s)", yLabel: "Share per m/s", yTicks: false, xTicks: [0, 300, 600, 900, 1200] });
+      H.histogram(speeds, { bins: 30, range: [0, 1200], density: true, color: "ink" });
+      H.fn(x => pdf(x, AIR.temp(G)), { color: "orange", width: 2.2, label: "Maxwell", labelAt: 800 });
+    },
+  });
+}
+</script>
+
+<p>One tall bar falls apart into a lopsided hump within a few collisions per molecule. Each collision hands energy from one molecule to the other at random, and after enough trades the speeds settle into the one spread that further trading doesn't change. James Clerk Maxwell worked out its shape in 1860 <a class="cite" href="#ref-maxwell"></a>. From any start, the bars end on the <span class="c-orange">curve</span>.</p>
+
+<p>Here is Maxwell's distribution for each of the three gases of air on its own. Drag the <span class="c-orange">temperature</span> <span class="scrub" data-key="tc"></span> and watch where the <span class="c-blue">nitrogen</span> and <span class="c-red">oxygen</span> peaks move:</p>
+
+<figure class="demo" id="mb" aria-label="A graph of the share of molecules at each speed from 0 to 2000 meters per second, with a blue curve for nitrogen, a red one for oxygen, and a purple one for argon. Raising the temperature shifts the curves to higher speeds and flattens them. The fast tail beyond 1000 meters per second is shaded."></figure>
+<script>
+{
+  demo("mb", {
+    aspect: 1.75,
+    controls: [{ key: "tc", label: "Temperature", min: -90, max: 600, step: 1, value: 20, unit: " °C", color: "orange", marks: [{ value: -56.5, label: "11 km up" }, { value: 20, label: "room" }, { value: 500, label: "oven glass" }] }],
+    caption: "Maxwell's distribution of molecular speeds for nitrogen (blue), oxygen (red), and argon (purple). The dots mark each gas's average speed. Heavier molecules move slower at the same temperature; the shaded tail is the share of nitrogen molecules faster than 1,000 m/s.",
+    status: (s, v) => { const T = AIR.K(v.tc), tail = 1 - Num.integrate(x => AIR.mb(x, T, AIR.GAS.N2.M), 0, 1000, 400); return `${v.tc} °C · ${(tail * 100).toFixed(tail < 0.01 ? 2 : 1)}% of nitrogen molecules are faster than 1,000 m/s`; },
+    draw(g, s, v) {
+      const T = AIR.K(v.tc);
+      const G = g.graph({ x: [0, 2000], y: [0, 0.0028], axes: "frame", xLabel: "Speed (m/s)", yLabel: "Share per m/s (×1000)", yFormat: y => (y * 1000).toFixed(1), xTicks: [0, 500, 1000, 1500, 2000] });
+      G.area(x => (x >= 1000 ? AIR.mb(x, T, AIR.GAS.N2.M) : 0), 1000, 2000, { color: "blue", alpha: 0.18 });
+      for (const k of ["Ar", "O2", "N2"]) {
+        const M = AIR.GAS[k].M, c = AIR.GAS[k].color;
+        G.fn(x => AIR.mb(x, T, M), { color: c, width: k === "Ar" ? 1.6 : 2.4, dash: k === "Ar" ? [5, 4] : null });
+        const m = AIR.vmean(T, M);
+        G.marker(m, AIR.mb(m, T, M), { color: c, label: k === "Ar" ? "argon" : `${AIR.GAS[k].name} ${m.toFixed(0)} m/s`, pos: k === "N2" ? "ne" : "nw" });
+      }
+      G.vline(1000, { color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Heat the air and both peaks slide right and flatten. The average grows as the square root of the absolute temperature, so going from 20 °C to 600 °C, three times hotter in kelvin, raises it by only √3, about 70%. Temperature fixes the average energy, ½mv², so lighter molecules move faster: <span class="c-purple">argon</span>, 40 times as heavy as a hydrogen atom, is the slowest of the three.</p>
+
+<p>The <span class="c-blue">shaded tail</span> matters more than it looks. Its molecules are the ones that break bonds, which is why chemical reactions speed up so steeply with temperature, and why light hydrogen leaks from the top of the atmosphere into space while nitrogen stays.</p>
+
+<p>How far does a molecule fly between collisions? The box above exaggerated how crowded air is. Here is a cube of real air 20 nm on a side, with every molecule in it at its true size. Climb to <span class="scrub" data-key="km"></span> and watch the distance a molecule flies before it hits another, its <dfn data-def="The average distance a molecule travels between collisions.">mean free path</dfn>:</p>
+
+<figure class="demo" id="mfp" aria-label="A glass cube of air 20 nanometers on a side in 3D, holding about two hundred molecules at their real size and spacing, mostly blue nitrogen pairs and red oxygen pairs, tiny against the empty space between them. A magnifier shows a few of them up close. A long green arrow leaves the cube, as long as the distance one molecule flies on average before hitting another. Climbing higher empties the cube and stretches the arrow."></figure>
+<script>
+{
+  // A cube of air 20 nm on a side, in nanometers; molecules at true size (1 Å = 0.1 nm).
+  const L = 20, r = AIR.rng(5), pts = [];
+  for (let i = 0; i < 420; i++) { const u = r(); pts.push({ p: [(r() - 0.5) * L, (r() - 0.5) * L, (r() - 0.5) * L], k: u < 0.0093 ? "Ar" : u < 0.0093 + 0.2095 ? "O2" : "N2", rot: [r() * TAU, r() * TAU, 0] }); }
+  const scene = E3.scene({ look: "studio", shadow: { opacity: 0.12, strength: 0.25, softness: 1 } });
+  scene.add(E3.mesh.box(L, L, L), { material: { base: "glass", roughness: 0.02 }, name: "glass cube", pickable: false, castShadow: false });
+  const nodes = pts.map(q => scene.add(AIR.molMesh(q.k, 0.1, 12), { material: AIR.MAT[q.k], name: q.k, position: q.p, rotation: q.rot }));
+  // The molecule the arrow starts from, and the one the magnifier looks at.
+  const START = [-L / 2 + 1.5, -L / 2 + 3, L / 2 - 2];
+  const start = scene.add(AIR.molMesh("N2", 0.1, 16), { material: AIR.MAT.N2, name: "N2", position: START, rotation: [0.4, 1.1, 0] });
+  const arrowNode = scene.add(E3.mesh.box(0.01, 0.01, 0.01), { material: { base: "plastic", color: "#3f9a5a", roughness: 0.4 }, name: "mean free path", castShadow: false });
+  let lastL = -1, look = 2;
+  const MAXA = 62;                                    // longest arrow drawn, nm
+  demo("mfp", {
+    aspect: w => (w < 560 ? 1.05 : 1.75),
+    orbit: { yaw: -0.5, pitch: 0.32, minPitch: -0.3, maxPitch: 1.2 },
+    controls: [{ key: "km", label: "Altitude", min: 0, max: 60, step: 0.1, value: 0, unit: " km", color: "green", marks: [{ value: 0, label: "sea level" }, { value: 8.8, label: "Everest" }, { value: 30, label: "balloon" }] }],
+    caption: "Every molecule in a cube of air 20 nm on a side, at its true size (nitrogen is about 0.4 nm long) and true number, from the U.S. Standard Atmosphere. The green arrow is the mean free path, the average flight between collisions; past 62 nm it is cut off. The magnifier shows one molecule and its neighborhood eight times closer.",
+    status: (s, v) => { const A = AIR.atm(v.km * 1000); return `${v.km.toFixed(1)} km · ${Math.round(A.n * L ** 3 * 1e-27)} molecules in the cube · spacing ${(A.spacing * 1e9).toFixed(1)} nm · mean free path ${A.mfp < 1e-6 ? (A.mfp * 1e9).toFixed(0) + " nm" : (A.mfp * 1e6).toFixed(A.mfp < 1e-5 ? 1 : 0) + " µm"}`; },
+    draw(g, s, v) {
+      const A = AIR.atm(v.km * 1000), show = Math.min(pts.length, Math.round(A.n * L ** 3 * 1e-27));
+      nodes.forEach((n, i) => (n.visible = i < show - 1));
+      const len = A.mfp * 1e9, drawn = Math.min(len, MAXA);
+      if (Math.abs(drawn - lastL) > 0.05) { arrowNode.mesh = E3.mesh.arrow([START[0] + 0.4, START[1], START[2]], [START[0] + drawn, START[1], START[2]], { radius: 0.22 }); lastL = drawn; }
+      const view = g.render3d(scene, { ...s.view, fov: 30, target: [12, 0, 0] });
+      const mid = view.project([START[0] + Math.min(drawn, 40) * 0.62, START[1], START[2]]);
+      g.text(`mean free path ${len < 1000 ? len.toFixed(0) + " nm" : (len / 1000).toFixed(len < 1e4 ? 1 : 0) + " µm"}${len > MAXA ? " (cut off)" : ""}`, [mid[0], mid[1] + 18], { size: 12.5, color: "green", align: "center", halo: true });
+      const e0 = view.project([-L / 2, L / 2, L / 2]), e1 = view.project([L / 2, L / 2, L / 2]);
+      g.dimension([e0[0], e0[1]], [e1[0], e1[1]], "20 nm", { offset: -14 });
+      // Magnifier: the same scene, eight times closer, centered on the starting molecule.
+      const f = view.project(START), R = Math.min(g.w, g.h) * 0.2, c = [g.w - R - 14, R + 14];
+      if (show > 0) g.inset([c[0], c[1], R], [f[0], f[1], R / 8], box => {
+        g.render3d(scene, { yaw: s.view.yaw, pitch: s.view.pitch, fov: 30, target: [START[0] + 1.2, START[1], START[2]], distance: 9, fit: "always" }, { box });
+      });
+    },
+  });
+}
+</script>
+
+<p>At sea level the molecules sit about 3.4 nm apart, ten times their own width, and a molecule flies about 66 nm, twenty spacings, before it happens to hit one <a class="cite" href="#ref-ussa"></a>. Air is mostly empty space. At 470 m/s that flight takes a seventh of a nanosecond, so each molecule collides about seven billion times a second. Climb, and the cube empties: at <button class="set" data-set="km=30">30 km</button> the mean free path is a few micrometers, and by 60 km it is a quarter of a millimeter.</p>
+
+<aside class="callout key"><p>Air is a thin crowd of molecules, each flying at about the speed of a bullet in a straight line for some 66 nm before it hits another. Everything air does is what that crowd does when you push on it, heat it, or let it fall.</p></aside>
+
+<h2>Pressure</h2>
+
+<p>When a molecule bounces off a wall it reverses its motion toward the wall, and the wall has to supply the push that reverses it. By Newton's third law the molecule pushes back just as hard, for a moment. One molecule makes a tap. Many make a steady push. Set how many <span class="c-blue">molecules</span> there are and watch the force on the <span class="c-orange">right-hand wall</span> over time:</p>
+
+<figure class="demo" id="wall" aria-label="Top, a glass box in 3D with nitrogen molecules flying and tumbling inside; its right-hand wall is tinted orange, and each time a molecule hits it a small orange arrow flashes there. Bottom, a trace of the force on that wall over time, spiky with few molecules and smooth with many, with a dashed line at the average."></figure>
+<script>
+{
+  const W = 0.8, H = 0.4, D = 0.4, R0 = 0.006;
+  const make = n => ({ G: AIR.gas({ n, W, H, D, r: R0, seed: 4, collide: false, mix: ["N2"] }), bins: [] });
+  const BIN = 0.1, FAST = 4;          // time here runs 4 times faster than in the gas figures
+  function adv(s, dt) {
+    const G = s.G, before = G.imp[1];
+    AIR.step(G, dt * FAST);
+    s.acc = (s.acc ?? 0) + (G.imp[1] - before); s.tb = (s.tb ?? 0) + dt;
+    if (s.tb >= BIN) { s.bins.push(s.acc / (s.tb * FAST) / G.x.length); s.acc = 0; s.tb = 0; if (s.bins.length > 80) s.bins.shift(); }
+  }
+  const st = AIR.stage(AIR.gas({ n: 500, W, H, D, r: R0, collide: false, mix: ["N2"] }), { limit: 500, pad: 0.021, seg: 10 });
+  st.scene.add(E3.mesh.box(0.006, H, D), { material: { base: "plastic", color: "#f0a060", roughness: 0.4 }, opacity: 0.4, position: [W / 2 + 0.004, 0, 0], name: "right wall", castShadow: false });
+  demo("wall", {
+    aspect: w => (w < 560 ? 0.9 : 1.45),
+    reset: true,
+    orbit: { yaw: -0.42, pitch: 0.3, minPitch: -0.3, maxPitch: 1.1 },
+    state: () => { const s = { ...make(10), n: 10 }; for (let i = 0; i < 400; i++) adv(s, 1 / 60); return s; },
+    controls: [{ key: "n", label: "Molecules", type: "choice", options: [1, 10, 100, 500], value: 10, color: "blue" }],
+    change(key, s, v) { if (key === "n") { Object.assign(s, make(v.n), { acc: 0, tb: 0 }); for (let i = 0; i < 400; i++) adv(s, 1 / 60); } },
+    caption: "Nitrogen molecules bouncing in a glass box, without colliding with each other. Each orange flash is one hit on the right wall; the trace below is the force on that wall, averaged over each tenth of a second and divided by the number of molecules. With more molecules the hits blur into a steady push: pressure.",
+    step(dt, s) { adv(s, dt); },
+    status: s => { const b = s.bins.slice(-60); if (b.length < 5) return "collecting"; const m = Num.mean(b), sd = Num.std(b); return `force swings by ±${(100 * sd / Math.max(m, 1e-9)).toFixed(0)}% of its average`; },
+    draw(g, s, v) {
+      const G = s.G, top = g.h * 0.55;
+      st.sync(G);
+      const view = g.render3d(st.scene, { ...s.view, fov: 30 }, { box: [0, 0, g.w, top] });
+      for (const [t, i, y, z] of G.log) if (G.t - t < 0.3) {
+        const a = view.project(st.at(G, G.W - G.r, y, z)), b = view.project(st.at(G, G.W - G.r, y, z).map((c, k) => (k === 0 ? c + 0.07 : c)));
+        g.arrow([a[0], a[1]], [b[0], b[1]], { stroke: "orange", width: 2, alpha: 1 - (G.t - t) / 0.3, head: 6 });
+      }
+      const F = AIR.kT(G) / G.W;                           // average force per molecule on one wall: kT / W
+      const Gr = g.graph({ box: [0, top + 8, g.w, g.h - top - 10], x: [0, 80 * BIN], y: [0, F * 3], axes: "frame", xLabel: "Time (slowed down)", yLabel: "Force", xTicks: false, yTicks: false });
+      Gr.series(s.bins.map((b, i) => [i * BIN, b]), { color: "orange", width: 1.8 });
+      Gr.hline(F, { color: "ink", label: "average" });
+    },
+  });
+}
+</script>
+
+<p>With <button class="set" data-set="n=1">one molecule</button> the wall feels nothing most of the time and a sharp kick now and then. With <button class="set" data-set="n=500">five hundred</button> the kicks overlap into a nearly steady push, and the swings shrink as one over the square root of the number: ten times the molecules, about a third the wobble. A square centimeter of wall in room air takes about 3×10²³ hits a second, so the push it feels is as smooth as anything in physics. That push per unit area is <dfn data-def="Force per unit area. In a gas, the momentum that molecules deliver to a surface each second, per square meter.">pressure</dfn>.</p>
+
+<p>Each hit delivers twice the molecule's momentum toward the wall, so pressure grows with three things: how many molecules hit, how often, and how hard. Squeeze the same molecules into half the space and each one returns to the wall twice as often. Heat them and they hit both more often and harder, each in proportion to their speed, so the push grows with speed squared, which is with temperature. Drag the <span class="c-green">piston</span> to change the volume, and set the <span class="c-orange">temperature</span>:</p>
+
+<figure class="demo" id="piston" aria-label="Left, a glass cylinder of molecules in 3D, closed at one end by a green piston the reader drags. Right, a graph of pressure against volume with curved orange lines of constant temperature; a dot marks the pressure measured from the molecules' hits, and a ring marks what the ideal gas law predicts."></figure>
+<script>
+{
+  const N = 240, W = 1.75, H = 1, D = 0.5, R0 = 0.004, FAST = 3;      // time in this figure runs 3 times faster than in the others
+  const PAD = 0.021, V0 = 1.0 * H * D;
+  let view = null, grab = null;
+  function adv(s, dt, wx, tc) {
+    const G = s.G, b = G.imp.reduce((a, c) => a + c, 0), h = dt * FAST;
+    AIR.step(G, h, { wallX: wx });
+    AIR.scaleTo(G, AIR.K(tc));                           // the walls are a heat bath
+    s.imp += G.imp.reduce((a, c) => a + c, 0) - b; s.tAcc += h;
+    if (s.tAcc > 0.6) {
+      const Pmeas = s.imp / s.tAcc / (2 * (wx * H + wx * D + H * D));   // momentum per second per unit area of wall
+      if (s.skip) s.skip--; else s.Pm = s.Pm == null ? Pmeas : s.Pm + (Pmeas - s.Pm) * 0.25;
+      s.imp = 0; s.tAcc = 0;
+    }
+  }
+  // Start a measurement afresh: anything the piston passed is moved back inside, as if it had moved slowly.
+  function settle(s, wx, tc) {
+    const G = s.G;
+    G.x.forEach((x, i) => { if (x > wx - G.r) G.x[i] = G.r + ((i * 0.6180339887) % 1) * (wx - 2 * G.r); });
+    Object.assign(s, { imp: 0, tAcc: 0, Pm: null, skip: 1 });
+    for (let i = 0; i < 150; i++) adv(s, 1 / 60, wx, tc);
+  }
+  const ref = N * AIR.R * 293.15 * AIR.VS ** 2 / V0;     // the ideal pressure at 20 °C and 1 L, in simulation units
+  const st = AIR.stage(AIR.gas({ n: N, W, H, D, r: R0, seed: 9, collide: false }), { pad: PAD });
+  const plate = st.scene.add(E3.mesh.box(0.035, H * 0.995, D * 0.995, { round: 0.006 }), { material: { base: "plastic", color: "#5fa86f", roughness: 0.45 }, name: "piston" });
+  const rod = st.scene.add(E3.mesh.cylinder(0.035, 1, { segments: 20 }), { material: "steel", name: "rod", rotation: [0, 0, Math.PI / 2] });
+  const xAt = x => -W / 2 + x;                                  // simulation x to world x along the cylinder
+  demo("piston", {
+    aspect: w => (w < 560 ? 0.85 : 1.9),
+    reset: true,
+    orbit: { yaw: -0.35, pitch: 0.3, minPitch: -0.2, maxPitch: 1.0 },
+    state: () => { const s = { G: AIR.gas({ n: N, W, H, D, r: R0, seed: 9, collide: false }) }; settle(s, 1, 20); return s; },
+    controls: [
+      { key: "vol", label: "Volume", min: 0.35, max: 1.6, step: 0.01, value: 1, unit: " L", color: "green" },
+      { key: "tc", label: "Temperature", min: -50, max: 300, step: 1, value: 20, unit: " °C", color: "orange" },
+    ],
+    caption: "A gas in a cylinder, its pressure measured from the molecules' hits on the walls over the last few seconds (dot) and computed from the ideal gas law (ring). The walls hold the temperature you set, and time runs three times faster than in the other figures. Pressure, volume, and temperature are tied together: PV = NkT.",
+    change(key, s, v) { AIR.scaleTo(s.G, AIR.K(v.tc)); settle(s, v.vol, v.tc); },
+    step(dt, s, v) { adv(s, dt, v.vol, v.tc); },
+    status: (s, v) => `ideal gas law ${(101.3 * AIR.K(v.tc) / 293.15 / v.vol).toFixed(0)} kPa · measured from the hits ${s.Pm ? (s.Pm / ref * 101.3).toFixed(0) : "…"} kPa`,
+    drag: {
+      hit(p, s, v) { if (!view) return false; const c = view.project([xAt(v.vol) + 0.02, 0, D / 2]); return Math.hypot(p[0] - c[0], p[1] - c[1]) < 28; },
+      start(p, s, v) { const a = view.project([0, 0, 0]), b = view.project([1, 0, 0]); grab = { p, vol: v.vol, k: (b[0] - a[0]) || 1 }; },
+      move(p, s, v, d, fig) { if (grab) fig.set("vol", clamp(Math.round((grab.vol + (p[0] - grab.p[0]) / grab.k) * 100) / 100, 0.35, 1.6)); },
+      end() { grab = null; },
+    },
+    draw(g, s, v) {
+      const G = s.G, wide = g.w >= 560;
+      const A = wide ? [0, 0, g.w * 0.52, g.h] : [0, 0, g.w, g.h * 0.5];
+      const B = wide ? [g.w * 0.56, 6, g.w * 0.44 - 6, g.h - 12] : [0, g.h * 0.53, g.w, g.h * 0.47 - 4];
+      st.sync(G);
+      const face = xAt(v.vol) + 0.0175 + 0.012;
+      plate.position = [face, 0, 0];
+      rod.scale = [1, W - v.vol + 0.35, 1];
+      rod.position = [face + (W - v.vol + 0.35) / 2, 0, 0];
+      view = g.render3d(st.scene, { ...s.view, fov: 30, target: [0.12, 0, 0] }, { box: A });
+      const c = view.project([face, 0, D / 2]);
+      g.handle([c[0], c[1]], { color: "green", active: !!grab });
+      const Gr = g.graph({ box: B, x: [0, 1.7], y: [0, 400], axes: "frame", xLabel: "Volume (L)", yLabel: "Pressure (kPa)", xTicks: [0, 0.5, 1, 1.5], yTicks: [0, 100, 200, 300, 400] });
+      for (const tc of [-50, 20, 150, 300]) Gr.fn(V => 101.3 * AIR.K(tc) / 293.15 / V, { color: "orange", width: 1, dash: [4, 4], domain: [0.2, 1.7] });
+      Gr.fn(V => 101.3 * AIR.K(v.tc) / 293.15 / V, { color: "orange", width: 2.2, domain: [0.2, 1.7], label: `${v.tc} °C`, labelAt: 1.45 });
+      g.circle(Gr([v.vol, 101.3 * AIR.K(v.tc) / 293.15 / v.vol]), 8, { stroke: "ink", width: 1.5 });
+      if (s.Pm) AIR.ball(g, Gr([v.vol, s.Pm / ref * 101.3]), 5.5, "green");
+    },
+  });
+}
+</script>
+
+<p>Halve the volume and the <span class="c-green">measured pressure</span> doubles; raise the temperature from 20 °C to 150 °C, from 293 K to 423 K, and it rises by 44%. The dot never strays far from the ring, though nothing in the simulation knows the formula. It only bounces molecules. The rule they obey is the <dfn data-def="PV = NkT: pressure times volume equals the number of molecules times Boltzmann's constant times the absolute temperature.">ideal gas law</dfn>:</p>
+
+<div class="tex">P\,\green{V} = N k\,\orange{T}</div>
+
+<p>Here N is the number of molecules and k is Boltzmann's constant, 1.380649×10⁻²³ J/K <a class="cite" href="#ref-codata"></a>. The law treats molecules as points that never meet, which is why I switched off their collisions here; real air at room conditions departs from it by less than a tenth of a percent. With it, 2.5×10²⁵ molecules per cubic meter at 293 K make 101 kPa.</p>
+
+<details class="deeper">
+<summary>Where PV = NkT comes from <span class="hint">2 min</span></summary>
+<p>Take a box of side L and one molecule with velocity component v<sub>x</sub> toward a wall. Each hit transfers 2mv<sub>x</sub>, and it returns to the same wall every 2L/v<sub>x</sub> seconds, so its average force is mv<sub>x</sub>²/L. Adding N molecules and dividing by the wall's area L² gives P = Nm⟨v<sub>x</sub>²⟩/V. Temperature is defined so that each direction of motion carries ½kT of energy on average, ½m⟨v<sub>x</sub>²⟩ = ½kT, and the product PV = NkT drops out. Collisions between molecules don't change the answer: they shuffle momentum between molecules but don't create or destroy any.</p>
+</details>
+
+<p>101 kPa is 101,325 newtons on every square meter, the weight of 10.3 tonnes, or a kilogram's weight on each square centimeter of your skin. We don't notice because it pushes from every side at once and the pushes cancel. Remove the air from one side and they stop cancelling. Here are two steel bowls 30 cm across, pressed rim to rim. Pump out the air inside, down to <span class="scrub" data-key="left"></span> of it:</p>
+
+<figure class="demo" id="bowls" aria-label="Two hemispherical bowls pressed together into a sphere, with molecules drumming on it from outside and fewer inside. Arrows around the rim show the net push holding the halves together; a readout gives the force needed to pull them apart."></figure>
+<script>
+{
+  const Rb = 0.15, area = Math.PI * Rb * Rb, r = AIR.rng(8), out = [], inn = [];
+  for (let i = 0; i < 520; i++) { const a = r() * TAU, d = Rb * (1.07 + r() * 0.62); out.push([d * Math.cos(a), d * Math.sin(a), r() < 0.21 ? "O2" : "N2", r() * TAU]); }
+  for (let i = 0; i < 160; i++) { const a = r() * TAU, d = Rb * 0.93 * Math.sqrt(r()); inn.push([d * Math.cos(a), d * Math.sin(a), r() < 0.21 ? "O2" : "N2", r() * TAU]); }
+  demo("bowls", {
+    aspect: 1.5,
+    state: () => ({ t: 0 }),
+    controls: [{ key: "left", label: "Air left inside", min: 0, max: 100, step: 1, value: 10, unit: "%", color: "blue" }],
+    caption: "Two bowls 30 cm across with some of the air pumped out from between them. The air outside presses on the whole sphere; along the line where the halves meet, that push is no longer balanced from inside. The force to pull them apart is the pressure difference times the area of the 30 cm circle.",
+    status: (s, v) => { const F = AIR.P0 * (1 - v.left / 100) * area; return `force to pull apart ${(F / 1000).toFixed(1)} kN, the weight of ${(F / AIR.g0).toFixed(0)} kg`; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const P = g.fit(-0.32, 0.32, -0.27, 0.27, { pad: 8 });
+      const sz = Math.max(1.8, 0.0042 * P.sx), jig = q => [q[0] + 0.004 * Math.sin(s.t * 9 + q[3] * 7), q[1] + 0.004 * Math.cos(s.t * 8 + q[3] * 5)];
+      out.forEach(q => { const p = jig(q); if (Math.abs(p[0]) < 0.32 && Math.abs(p[1]) < 0.27) AIR.molecule(g, P(p), q[2], q[3] + s.t * 2, sz); });
+      const keep = Math.round(inn.length * v.left / 100);
+      inn.slice(0, keep).forEach(q => AIR.molecule(g, P(jig(q)), q[2], q[3] + s.t * 2, sz));
+      // the two halves, split by a vertical line
+      for (const side of [-1, 1]) {
+        const pts = Num.linspace(-Math.PI / 2, Math.PI / 2, 40).map(a => P([side * Rb * Math.cos(a), Rb * Math.sin(a)]));
+        g.path(pts, { stroke: "ink", width: 3 });
+        g.line(P([side * Rb * 0.02, -Rb * 1.03]), P([side * Rb * 0.02, Rb * 1.03]), { stroke: "ink", width: 1.5 });
+        g.line(P([side * Rb, 0]), P([side * Rb * 1.35, 0]), { stroke: "ink", width: 2 });
+        g.circle(P([side * Rb * 1.42, 0]), 0.025 * P.sx, { stroke: "ink", width: 2 });
+      }
+      const f = 1 - v.left / 100;
+      for (const side of [-1, 1]) for (const y of [-0.8, -0.4, 0.4, 0.8]) {
+        const a = P([side * Rb * 1.0 * Math.cos(Math.asin(y)) + side * 0.05, y * Rb]), b = P([side * Rb * Math.cos(Math.asin(y)) + side * (0.05 - 0.07 * f), y * Rb]);
+        if (f > 0.03) g.arrow(a, b, { stroke: "blue", width: 2.5 });
+      }
+    },
+  });
+}
+</script>
+
+<p>Pump out <button class="set" data-set="left=0">all of it</button> and the force reaches 7.2 kN, the weight of a 730 kg car. The air outside presses on the bowls everywhere, and only where the inside air used to press back does the push go unanswered. In the 1650s Otto von Guericke, the mayor of Magdeburg, did this with larger bowls in public, and teams of horses failed to pull them apart. Once he let the air back in, they came apart by hand.</p>
+
+<aside class="callout mistake"><p>A vacuum doesn't suck. There is no pull from empty space; the bowls are pushed together by the air outside. A drinking straw works the same way: you lower the pressure in your mouth, and the atmosphere pushes the drink up the straw.</p></aside>
+
+<h2>The weight of the sky</h2>
+
+<p>The bowls show that the air pushes, but not why it pushes this hard. The answer is that the air is heavy and stacked high. Every layer of air rests on the layer below it, so the air at the bottom carries the weight of everything above. That weight, spread over each square meter, is the pressure. Climb up through the column of air above one square meter, to <span class="scrub" data-key="km"></span>:</p>
+
+<figure class="demo" id="column" aria-label="Left, a tall column of air from the ground to 50 kilometers, shaded darker where the air is denser, with a climber marker that can be dragged up and down and landmarks such as Everest. Right, a graph of pressure against altitude falling steeply and then flattening, with the climber's altitude marked."></figure>
+<script>
+{
+  let P;
+  demo("column", {
+    aspect: w => (w < 560 ? 0.95 : 1.75),
+    controls: [{ key: "km", label: "Altitude", min: 0, max: 50, step: 0.1, value: 5.5, unit: " km", color: "green", marks: [{ value: 0, label: "sea" }, { value: 8.8, label: "Everest" }, { value: 30, label: "30 km" }] }],
+    caption: "The column of air above one square meter, shaded by its density, and the pressure at each height, from the U.S. Standard Atmosphere 1976. The pressure at any height is the weight of the air above it, so it halves about every 5.5 km. The dashed curve is what a column at one constant temperature would give.",
+    status: (s, v) => { const A = AIR.atm(v.km * 1000), f = A.P / AIR.P0; return `${v.km.toFixed(1)} km · ${(A.P / 1000).toFixed(A.P < 1e4 ? 2 : 1)} kPa · ${(f * 100).toFixed(f < 0.1 ? 1 : 0)}% of the air is above you · ${(A.T - 273.15).toFixed(0)} °C`; },
+    drag: {
+      hit: (p, s, v) => P && Math.hypot(p[0] - P.cx, p[1] - P([0, v.km])[1]) < 26,
+      move(p, s, v, d, fig) { fig.set("km", clamp(Math.round(P.inv(p)[1] * 10) / 10, 0, 50)); },
+    },
+    draw(g, s, v) {
+      const wide = g.w >= 560;
+      const A = wide ? [0, 6, g.w * 0.36, g.h - 12] : [0, 6, g.w * 0.42, g.h - 12];
+      const B = wide ? [g.w * 0.4, 6, g.w * 0.6 - 6, g.h - 12] : [g.w * 0.44, 6, g.w * 0.56 - 4, g.h - 12];
+      P = g.fit(0, 1, 0, 50, { box: A, pad: 8, uniform: false });
+      const x0 = P([0.36, 0])[0], x1 = P([0.62, 0])[0];
+      P.cx = (x0 + x1) / 2;
+      for (let z = 0; z < 50; z += 0.5) {
+        const a = AIR.atm((z + 0.25) * 1000), y0 = P([0, z])[1], y1 = P([0, z + 0.5])[1];
+        g.rect(x0, y1, x1 - x0, y0 - y1 + 0.6, { fill: g.rgba("blue", 0.62 * a.rho / 1.225 + 0.03) });
+      }
+      g.rect(x0, P([0, 50])[1], x1 - x0, P([0, 0])[1] - P([0, 50])[1], { stroke: "ink", width: 1.2 });
+      g.line([x0, P([0, 0])[1]], P([0.8, 0]), { stroke: "ink", width: 2 });
+      for (const z of [10, 20, 30, 40, 50]) { const y = P([0, z])[1]; g.line([x0 - 6, y], [x0, y], { stroke: "ink", width: 1 }); g.text(`${z} km`, [x0 - 9, y], { size: 11.5, color: "muted", align: "right", baseline: "middle" }); }
+      const half = P([0, 5.5])[1];
+      g.line([x0, half], [x1 + 8, half], { stroke: "blue", width: 1, dash: [3, 3] });
+      g.text("half the air below", [x1 + 10, half], { size: 11.5, color: "blue", align: "left", baseline: "middle" });
+      const ev = P([0, 8.85])[1];
+      g.line([x1, ev], [x1 + 8, ev], { stroke: "muted", width: 1 });
+      g.text("Everest", [x1 + 10, ev], { size: 11.5, color: "muted", align: "left", baseline: "middle" });
+      const y = P([0, v.km])[1];
+      g.line([x0 - 2, y], [x1 + 2, y], { stroke: "green", width: 2.5 });
+      g.handle([P.cx, y], { color: "green" });
+      const Gr = g.graph({ box: B, x: [0, 50], y: [0, 105], axes: "frame", xLabel: "Altitude (km)", yLabel: "Pressure (kPa)", xTicks: [0, 10, 20, 30, 40, 50], yTicks: [0, 25, 50, 75, 100] });
+      Gr.fn(z => 101.325 * Math.exp(-z / 8.43), { color: "muted", width: 1.4, dash: [5, 4], label: "constant 15 °C", labelAt: 22 });
+      Gr.fn(z => AIR.atm(z * 1000).P / 1000, { color: "blue", width: 2.4 });
+      const pk = AIR.atm(v.km * 1000).P / 1000;
+      Gr.marker(v.km, pk, { color: "green", drop: true, label: `${pk.toFixed(pk < 10 ? 1 : 0)} kPa`, pos: "ne" });
+    },
+  });
+}
+</script>
+
+<p>The air above one square meter of sea weighs 10,330 kg, and the pressure at the bottom, 101 kPa, is that weight in newtons per square meter. Climb and you leave part of the load beneath you. At 5.5 km you have climbed past half the air and the pressure is half; at <button class="set" data-set="km=11">11 km</button>, where airliners cruise, three quarters of the air is below and the cabin has to be pumped up; on the summit of <button class="set" data-set="km=8.8">Everest</button> you stand above two thirds of it.</p>
+
+<p>The falloff isn't a straight line. The pressure at each height squeezes the air there, and squeezed air is denser, so the bottom layers hold more air per meter than the top ones. Each kilometer of climbing therefore removes the same fraction of what's left, not the same amount, and the result is close to an exponential. For a column at one temperature it is exactly one, the <dfn data-def="The pressure of a column of air at one temperature, falling by a factor e for every scale height H = RT/Mg climbed.">barometric formula</dfn>:</p>
+
+<div class="tex">P(z) = P_0\, e^{-z/H}, \qquad H = \frac{RT}{Mg} \approx 8.4\ \mathrm{km}</div>
+
+<p>The <dfn data-def="The height over which the pressure of an atmosphere falls by a factor of e, about 8.4 km for Earth's air at 15 °C.">scale height</dfn> H compares the energy of a molecule's motion, RT per mole, with the energy it takes to lift a mole of gas one meter, Mg. Here is a column of gas at one temperature, its molecules sorted by height as gravity and their motion balance, enlarged enormously so you can see them. Change the <span class="c-orange">temperature</span> to <span class="scrub" data-key="tc"></span> and swap the gas:</p>
+
+<figure class="demo" id="scale" aria-label="Left, a tall glass column standing for 60 kilometers of atmosphere, holding a couple of hundred molecules in 3D, crowded at the bottom and thinning upward. Right, a graph of density against height for the chosen gas, with dashed curves for the other gases. Warming the gas or choosing a lighter one stretches the column upward."></figure>
+<script>
+{
+  const GASES = { air: { M: AIR.Mair, label: "air", color: "blue" }, he: { M: 0.004003, label: "helium", color: "brass" }, co2: { M: 0.04401, label: "carbon dioxide", color: "muted" } };
+  const TOP = 60, CW = 0.24, CH = 1, U = 0.0045;              // column 60 km tall; molecules drawn about 10¹³ times too big
+  const r = AIR.rng(31), Q = Array.from({ length: 200 }, () => ({ u: Math.max(1e-9, r()), x: (r() - 0.5) * (CW - 0.04), z: (r() - 0.5) * (CW - 0.04), k: r() < 0.21 ? "O2" : "N2", rot: [r() * TAU, r() * TAU, 0] }));
+  const H = (tc, M) => AIR.R * AIR.K(tc) / (M * AIR.g0) / 1000;      // km
+  const scene = E3.scene({ look: "studio", shadow: { opacity: 0.16, strength: 0.3, softness: 1 } });
+  scene.add(E3.mesh.box(CW, CH, CW), { material: { base: "glass", roughness: 0.02 }, position: [0, CH / 2, 0], name: "column", pickable: false, castShadow: false });
+  const MAT = { he: { base: "plastic", color: "#d9b75a", roughness: 0.3 }, C: { base: "plastic", color: E3.ELEMENTS.C.color, roughness: 0.32 } };
+  const heMesh = E3.mesh.sphere(1.4 * U, { segments: 12 });
+  const oo = E3.mesh.merge(E3.mesh.transform(E3.mesh.sphere(1.52 * U, { segments: 12 }), E3.m4.translation([-1.16 * U, 0, 0])), E3.mesh.transform(E3.mesh.sphere(1.52 * U, { segments: 12 }), E3.m4.translation([1.16 * U, 0, 0])));
+  const pools = {
+    air: Q.map(q => scene.add(AIR.molMesh(q.k, U, 12), { material: AIR.MAT[q.k], rotation: q.rot })),
+    he: Q.map(() => scene.add(heMesh, { material: MAT.he })),
+    co2: Q.map(q => { const n = scene.add(oo, { material: AIR.MAT.O2, rotation: q.rot }); n.add(E3.mesh.sphere(1.7 * U, { segments: 12 }), { material: MAT.C }); return n; }),
+  };
+  demo("scale", {
+    aspect: w => (w < 560 ? 1 : 1.8),
+    orbit: { yaw: -0.5, pitch: 0.18, minPitch: -0.1, maxPitch: 0.8 },
+    controls: [
+      { key: "tc", label: "Temperature", min: -60, max: 60, step: 1, value: 15, unit: " °C", color: "orange" },
+      { key: "gas", label: "Gas", type: "choice", options: [{ value: "air", label: "air" }, { value: "he", label: "helium" }, { value: "co2", label: "carbon dioxide" }], value: "air" },
+    ],
+    caption: "A column of gas at one temperature under Earth's gravity, with the molecules hugely enlarged. Each molecule's height is drawn from the barometric distribution, so the density falls by a factor e every scale height H = RT/Mg (marked). A warmer gas, or a lighter one, reaches higher.",
+    status: (s, v) => `${GASES[v.gas].label} at ${v.tc} °C · scale height ${H(v.tc, GASES[v.gas].M).toFixed(1)} km · half the gas lies below ${(H(v.tc, GASES[v.gas].M) * Math.LN2).toFixed(1)} km`,
+    draw(g, s, v) {
+      const gs = GASES[v.gas], h = H(v.tc, gs.M), wide = g.w >= 560;
+      const A = wide ? [0, 0, g.w * 0.36, g.h] : [0, 0, g.w * 0.42, g.h], B = wide ? [g.w * 0.4, 6, g.w * 0.6 - 6, g.h - 12] : [g.w * 0.44, 6, g.w * 0.56 - 4, g.h - 12];
+      for (const [k, list] of Object.entries(pools)) list.forEach((n, i) => {
+        const z = -h * Math.log(Q[i].u);
+        n.visible = k === v.gas && z < TOP;
+        if (n.visible) n.position = [Q[i].x, Math.min(CH - 0.02, 0.012 + z / TOP * CH), Q[i].z];
+      });
+      const view = g.render3d(scene, { ...s.view, fov: 26, target: [0, CH / 2, 0] }, { box: A });
+      for (const z of [0, 20, 40, 60]) { const p = view.project([-CW / 2, z / TOP * CH, CW / 2]); g.text(`${z} km`, [p[0] - 8, p[1]], { size: 11.5, color: "muted", align: "right", baseline: "middle" }); }
+      const a = view.project([-CW / 2, h / TOP * CH, CW / 2]), b = view.project([CW / 2, h / TOP * CH, CW / 2]);
+      if (h < TOP) { g.line([a[0], a[1]], [b[0], b[1]], { stroke: "orange", width: 1.8, dash: [4, 3] }); g.tex("H", [b[0] + 8, b[1]], { size: 14, color: "orange", align: "left" }); }
+      const G = g.graph({ box: B, x: [0, 1], y: [0, TOP], axes: "frame", xLabel: "Density (share of the bottom's)", yLabel: "Height (km)", xTicks: [0, 0.5, 1], yTicks: [0, 20, 40, 60] });
+      for (const k of Object.keys(GASES)) if (k !== v.gas) { const hk = H(v.tc, GASES[k].M); G.parametric(z => [Math.exp(-z / hk), z], [0, TOP], { color: GASES[k].color, width: 1.2, dash: [5, 4] }); }
+      G.parametric(z => [Math.exp(-z / h), z], [0, TOP], { color: gs.color, width: 2.4 });
+      G.marker(1 / Math.E, h, { color: "orange", label: `H = ${h.toFixed(1)} km`, pos: "ne" });
+    },
+  });
+}
+</script>
+
+<p>Warm the gas and the column stands taller; swap air for <button class="set" data-set="gas=he">helium</button>, seven times lighter, and the scale height grows to about 60 km. Heavy <button class="set" data-set="gas=co2">carbon dioxide</button> on its own would sit lower, with a scale height of 5.5 km. The wind keeps the real atmosphere stirred, so its gases don't separate this way below about 80 km. The real column is also colder higher up, down to −56 °C above 11 km, so its pressure falls a little faster than the <span class="c-muted">dashed curve</span> of the last figure.</p>
+
+<p>Thin air changes what a body can do. Water boils when its vapor pressure matches the pressure of the air on it, so lower pressure means a lower boiling point. Each breath, too, takes in a fixed volume of air, so it carries fewer molecules of oxygen. Go to <button class="set" data-set="km=1.6">Denver</button>, <button class="set" data-set="km=3.64">La Paz</button>, or the summit of <button class="set" data-set="km=8.85">Everest</button>, or set the altitude <span class="scrub" data-key="km"></span>:</p>
+
+<figure class="demo" id="body" aria-label="Left, a pot of boiling water with a thermometer that reads the boiling point, which falls as the altitude rises. Right, a circle representing one breath, holding blue nitrogen and red oxygen molecules that thin out with altitude, and a bar for the oxygen in each breath compared with sea level."></figure>
+<script>
+{
+  const r = AIR.rng(21), mol = [];
+  for (let i = 0; i < 150; i++) { const a = r() * TAU, d = Math.sqrt(r()); mol.push([d * Math.cos(a), d * Math.sin(a), r() < 0.2095 ? "O2" : "N2", r() * TAU]); }
+  demo("body", {
+    aspect: w => (w < 560 ? 1 : 1.8),
+    state: () => ({ t: 1 }),
+    controls: [{ key: "km", label: "Altitude", min: 0, max: 9, step: 0.01, value: 3.64, unit: " km", color: "green", marks: [{ value: 0, label: "sea" }, { value: 8.85, label: "Everest" }] }],
+    caption: "Water's boiling point (left) and the air in one breath (right) at altitude, in the standard atmosphere. Air everywhere in this range is 21% oxygen; what falls is the number of molecules in each breath, and the pressure of the oxygen with it.",
+    status: (s, v) => { const A = AIR.atm(v.km * 1000); return `${(A.P / 1000).toFixed(1)} kPa · water boils at ${AIR.boil(A.P).toFixed(1)} °C · oxygen pressure ${(0.2095 * A.P / 1000).toFixed(1)} kPa`; },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      const A = AIR.atm(v.km * 1000), f = A.n / AIR.atm(0).n, Tb = AIR.boil(A.P), wide = g.w >= 560;
+      const L = wide ? [0, 0, g.w * 0.48, g.h] : [0, 0, g.w, g.h * 0.5], Rr = wide ? [g.w * 0.52, 0, g.w * 0.48, g.h] : [0, g.h * 0.5, g.w, g.h * 0.5];
+      // the pot
+      const pw = Math.min(L[2] * 0.42, L[3] * 0.55), ph = pw * 0.62, px = L[0] + L[2] * 0.36 - pw / 2, py = L[1] + L[3] * 0.82 - ph;
+      g.rect(px, py + ph * 0.18, pw, ph * 0.82, { fill: g.rgba("blue", 0.14) });
+      for (let i = 0; i < 26; i++) {
+        const u = (Fx.hash(i, 3, 1) % 1000) / 1000, rise = ((s.t * (0.5 + u) + u * 7) % 1);
+        g.circle([px + 8 + u * (pw - 16), py + ph - 4 - rise * ph * 0.78], 1.6 + 2.6 * rise, { stroke: "blue", width: 1.2, alpha: 0.75 });
+      }
+      g.path([[px, py], [px, py + ph], [px + pw, py + ph], [px + pw, py]], { stroke: "ink", width: 2.2 });
+      g.line([px - 14, py + 8], [px, py + 8], { stroke: "ink", width: 3 });
+      g.line([px + pw, py + 8], [px + pw + 14, py + 8], { stroke: "ink", width: 3 });
+      // thermometer, 60–100 °C
+      const tx = L[0] + L[2] * 0.8, ty0 = L[1] + L[3] * 0.84, ty1 = L[1] + L[3] * 0.1, ty = t => ty0 - (t - 60) / 40 * (ty0 - ty1);
+      g.rect(tx - 4, ty1 - 4, 8, ty0 - ty1 + 4, { stroke: "ink", width: 1.2, r: 4 });
+      g.circle([tx, ty0 + 7], 8, { fill: "red", stroke: "ink", width: 1.2 });
+      g.rect(tx - 2.2, ty(Tb), 4.4, ty0 - ty(Tb) + 2, { fill: "red" });
+      for (const t of [60, 70, 80, 90, 100]) { g.line([tx + 5, ty(t)], [tx + 10, ty(t)], { stroke: "ink", width: 1 }); g.text(`${t}`, [tx + 13, ty(t)], { size: 11, color: "muted", baseline: "middle" }); }
+      g.text(`boils at ${Tb.toFixed(0)} °C`, [px + pw / 2, py + ph + 18], { size: 13, color: "ink", align: "center" });
+      // one breath
+      const c = [Rr[0] + Rr[2] * 0.36, Rr[1] + Rr[3] * 0.46], R0 = Math.min(Rr[2] * 0.3, Rr[3] * 0.38);
+      g.circle(c, R0, { stroke: "ink", width: 1.5 });
+      const keep = Math.round(mol.length * f);
+      let nO = 0;
+      for (let i = 0; i < keep; i++) { const q = mol[i]; if (q[2] === "O2") nO++; AIR.molecule(g, [c[0] + q[0] * R0 * 0.93, c[1] + q[1] * R0 * 0.93], q[2], q[3] + s.t, Math.max(2.4, R0 * 0.035)); }
+      g.text("one breath", [c[0], c[1] + R0 + 16], { size: 12.5, color: "muted", align: "center" });
+      const bx = Rr[0] + Rr[2] * 0.76, bh = R0 * 1.8, by = c[1] + R0 * 0.9;
+      g.rect(bx, by - bh, 18, bh, { stroke: "muted", width: 1 });
+      g.rect(bx, by - bh * f, 18, bh * f, { fill: "red", alpha: 0.75 });
+      g.text(`${Math.round(f * 100)}%`, [bx + 9, by - bh * f - 8], { size: 12.5, color: "red", align: "center" });
+      g.text("oxygen", [bx + 9, by + 14], { size: 11.5, color: "muted", align: "center" });
+    },
+  });
+}
+</script>
+
+<p>In La Paz, at 3,640 m, water boils at about 88 °C, so pasta takes longer and a hard-boiled egg needs a few more minutes. On top of Everest it boils near 70 °C, too cool to cook rice properly. And each breath on the summit carries about a third of the oxygen it would at sea level<span class="sidenote">The standard atmosphere gives 31.4 kPa at 8,849 m, but the real summit pressure in the climbing months is about 33.7 kPa, because the air over the tropics is warmer and its column taller. That small difference matters a great deal to climbers without bottled oxygen <a class="cite" href="#ref-west"></a>.</span>, which is why most climbers there breathe bottled oxygen.</p>
+
+<aside class="callout mistake"><p>"There's less oxygen at altitude" is true, but not because the air changes its recipe. Up to about 80 km the air is mixed by the wind and stays 21% oxygen. There are fewer molecules of everything in each liter, oxygen included.</p></aside>
+
+<h2>Warm air rises</h2>
+
+<p>The weight of the column also explains the smoke. Pressure grows with depth, so anything in air feels a bigger push on its bottom than on its top, and the difference is the weight of the air it shoves aside. That is <dfn data-def="The upward push on a body in a fluid, equal to the weight of the fluid it displaces.">buoyancy</dfn>. Anything lighter than the air it displaces rises, and warm air is lighter: by the gas law, at the same pressure, air at 100 °C holds 293/373 as many molecules as air at 20 °C.</p>
+
+<p>A hot-air balloon is a bag of that lighter air. This one holds 2,800 m³ and, with its basket, burners, fuel, and five people, weighs 750 kg. Set the <span class="c-orange">air inside</span> to <span class="scrub" data-key="tin"></span> and watch where it settles:</p>
+
+<figure class="demo" id="balloon" aria-label="A hot-air balloon above the ground with an altitude scale beside it. Heating the air inside makes the balloon rise until it levels off at a height marked by a dashed line; cooling it makes it sink back down."></figure>
+<script>
+{
+  const V = 2800, MASS = 750, CD = 0.5, Rb = Math.cbrt(3 * V / (4 * Math.PI)), AREA = Math.PI * Rb * Rb, SPEED = 30;
+  const lift = (z, Tin) => { const A = AIR.atm(z); return (A.rho - A.P * AIR.Mair / (AIR.R * Tin)) * V; };   // kg
+  const floatAt = Tin => { if (lift(0, Tin) < MASS) return 0; let a = 0, b = 12000; for (let i = 0; i < 50; i++) { const m = (a + b) / 2; if (lift(m, Tin) > MASS) a = m; else b = m; } return a; };
+  demo("balloon", {
+    aspect: w => (w < 560 ? 0.8 : 1.45),
+    reset: true,
+    state: () => ({ z: 900, vz: 0, t: 0 }),
+    controls: [{ key: "tin", label: "Air inside", min: 15, max: 120, step: 1, value: 105, unit: " °C", color: "orange", marks: [{ value: 15, label: "cold" }, { value: 120, label: "fabric limit" }] }],
+    caption: `A ${V} m³ balloon weighing ${MASS} kg in the standard atmosphere, simulated with buoyancy, weight, and air drag; time runs ${SPEED} times faster than real. It floats where the lift of its hot air equals its weight (dashed line). The air outside thins with height, so each temperature has its own ceiling.`,
+    status: (s, v) => { const L = lift(s.z, AIR.K(v.tin)); return `lift ${L.toFixed(0)} kg against ${MASS} kg · ${(s.z / 1000).toFixed(2)} km · ${s.vz >= 0 ? "climbing" : "sinking"} ${Math.abs(s.vz).toFixed(1)} m/s`; },
+    step(dt, s, v) {
+      const T = AIR.K(v.tin), n = 20, h = dt * SPEED / n;
+      for (let i = 0; i < n; i++) {
+        const A = AIR.atm(s.z), rin = A.P * AIR.Mair / (AIR.R * T);
+        const F = (A.rho - rin) * V * AIR.g0 - MASS * AIR.g0 - 0.5 * A.rho * CD * AREA * s.vz * Math.abs(s.vz);
+        const inertia = MASS + rin * V + 0.5 * A.rho * V;            // the air inside, and air pushed aside, move with it
+        s.vz += F / inertia * h; s.z += s.vz * h;
+        if (s.z < 0) { s.z = 0; s.vz = Math.max(0, s.vz); }
+      }
+      s.t += dt;
+    },
+    draw(g, s, v) {
+      const P = g.fit(-1, 1.6, -0.3, 5.2, { pad: 10, uniform: false });
+      const T = AIR.K(v.tin), zf = floatAt(T) / 1000;
+      g.line(P([-1, 0]), P([1.6, 0]), { stroke: "ink", width: 2 });
+      for (let k = 1; k <= 5; k++) { const y = P([0, k])[1]; g.line([P([-0.92, 0])[0], y], [P([-0.86, 0])[0], y], { stroke: "ink", width: 1 }); g.text(`${k} km`, [P([-0.82, 0])[0], y], { size: 11.5, color: "muted", baseline: "middle" }); }
+      if (zf > 0.02) { const y = P([0, Math.min(zf, 5.1)])[1]; g.line([P([-0.6, 0])[0], y], [P([1.55, 0])[0], y], { stroke: "orange", width: 1.2, dash: [5, 4] }); g.text(zf > 5.1 ? "floats above 5 km" : "floats here", [P([1.55, 0])[0], y - 9], { size: 12, color: "orange", align: "right" }); }
+      // the balloon, not to scale: its basket sits at its altitude
+      const zc = Math.min(s.z / 1000, 5.1), u = Math.min(g.w, g.h) * 0.0042, cx = P([0.35, 0])[0], base = P([0, zc])[1], rb = 9 * u;
+      const env = Num.linspace(0, TAU, 60).map(a => { const x = Math.sin(a), y = -Math.cos(a); const w = y > 0 ? 1 : 1 - 0.45 * y * y; return [cx + x * rb * w, base - (6 * u + rb + y * rb * 1.12)]; });
+      const heat = clamp((v.tin - 15) / 105, 0, 1);
+      g.path(env, { fill: g.mix("panel", "orange", 0.15 + 0.6 * heat), stroke: "ink", width: 1.5, close: true });
+      for (const k of [-0.5, 0, 0.5]) g.line([cx + k * rb * 0.5, base - 6 * u - rb * 0.05], [cx + k * 1.6 * u, base - 2 * u], { stroke: "muted", width: 1 });
+      g.rect(cx - 1.6 * u, base - 2 * u, 3.2 * u, 2 * u, { fill: "brass", stroke: "ink", width: 1.2 });
+      g.text("balloon not to scale", [P([1.55, 0])[0], P([0, 0])[1] + 14], { size: 11, color: "muted", align: "right" });
+    },
+  });
+}
+</script>
+
+<p>At 96 °C the hot air lifts exactly 750 kg and the balloon sits on the ground. Hotter, it climbs, but the air outside thins as it goes, and so does the difference in weight between outside and inside. At <button class="set" data-set="tin=100">100 °C</button> it levels off near 1.6 km; at <button class="set" data-set="tin=120">120 °C</button>, about as hot as the fabric can take, near 4.3 km. Let the air cool and it sinks. Pilots fly by doing exactly this, a few seconds of burner at a time.</p>
+
+<p>A fire makes its own balloon of hot gas with no fabric around it. The flame heats the air and gases above it to several hundred degrees, making them a third as dense as the room, and they rise as a <dfn data-def="A rising column of hot gas, fed from below and widening as it mixes in the surrounding air.">plume</dfn>, carrying the soot we see as smoke. Turn the fire and set the <span class="c-blue">wind</span> to <span class="scrub" data-key="wind"></span>:</p>
+
+<figure class="demo" id="fire" aria-label="A small 3D campfire of crossed logs with flames and a column of grey smoke rising from it, widening as it climbs. A wind slider bends the smoke over sideways."></figure>
+<script>
+{
+  const { mesh } = E3;
+  const scene = E3.scene({ look: "studio", units: "m" });
+  // Four logs 8 to 10 cm thick and 60 cm long, crossed; units are meters.
+  const WOOD = { color: "#5a4030", roughness: 0.85 };
+  [[0.3, 0.05], [-0.3, 0.05], [0.25, 1.6], [-0.25, 1.6]].forEach(([dx, a], i) => {
+    const n = scene.add(mesh.cylinder(0.045 + 0.005 * (i % 2), 0.62, { segments: 16 }), { material: WOOD, name: "log" });
+    n.rotation = [Math.PI / 2, a, 0.35 * (i < 2 ? 1 : -1)];
+    n.position = [i < 2 ? dx * 0.3 : 0, 0.06 + 0.07 * (i % 2) + (i > 1 ? 0.1 : 0), i < 2 ? 0 : dx * 0.3];
+  });
+  const fire = scene.add(E3.particles({
+    matter: "fire", units: "m", count: 700, seed: 11, size: [0.09, 0.22], temperature: [1400, 950], volume: true,
+    emitter: { shape: "disk", radius: 0.18, position: [0, 0.14, 0], speed: [0.4, 0.9], spread: 0.25 },
+  }));
+  // Smoke leaves the flame tips hot; Archimedes' lift g(T - Ta)/T carries it up, and it slows as it mixes and cools.
+  const smoke = scene.add(E3.particles({
+    matter: "smoke", units: "m", count: 1200, seed: 12, life: [3, 5], size: [0.12, 1.1], opacity: 0.8, fade: [0.12, 0.45],
+    temperature: [650, 300], glow: 0.25, volume: { erosion: 0.6, bounds: [[-1.6, -0.1, -1.6], [5.5, 5, 1.6]] },
+    emitter: { shape: "disk", radius: 0.16, position: [0, 0.55, 0], speed: [0.6, 1.2], spread: 0.3 },
+  }));
+  demo("fire", {
+    aspect: w => (w < 560 ? 0.8 : 1.3),
+    orbit: { yaw: -0.4, pitch: 0.16, minPitch: -0.1, maxPitch: 0.8 },
+    state: () => ({ t: 6 }),
+    controls: [{ key: "wind", label: "Wind", min: 0, max: 3, step: 0.05, value: 0.3, unit: " m/s", color: "blue" }],
+    caption: "A campfire. Each puff of smoke is a parcel of hot gas moving by the physics of smoke: lifted in proportion to how much hotter it is than the air, slowed as it mixes in cool air, and carried by the wind and by eddies a meter across.",
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      g.rect(0, 0, g.w, g.h, { fill: "#141312" });
+      scene.time = s.t;
+      smoke.forces.wind = [v.wind, 0, 0];
+      fire.forces.wind = [v.wind * 0.5, 0, 0];
+      // The flames light the logs and the smoke: a glowing ball of a few hundred watts of visible light.
+      scene.lights = [{ type: "sphere", position: [0, 0.35, 0], radius: 0.15, power: 300, color: "#ff9a4a", visible: false }];
+      g.render3d(scene, { ...s.view, fov: 30, target: [0.4, 1.3, 0], distance: 7 });
+    },
+  });
+}
+</script>
+
+<p>In still air the smoke goes straight up and widens as it climbs, dragging room air in at its edges. Each meter up it is cooler and its lift weaker, so smoke slows and eventually spreads in a flat layer. In a <button class="set" data-set="wind=2">2 m/s breeze</button> the plume bends over: it rises as before, but drifts sideways faster than it climbs. Outdoors, where warm air rises and cool air sinks, the air also has to move sideways to replace it.</p>
+
+<h2>Wind</h2>
+
+<p>Where air is warmed it rises and spreads out aloft, and the column over that spot loses weight; where air cools it sinks and the column gains. The result is highs and lows of pressure a few percent apart. Air near the ground is pushed from high toward low. Here is a map of the pressure as color, <span class="c-red">high</span> and <span class="c-blue">low</span>. Drag the centers around, then release some air:</p>
+
+<figure class="demo" id="push" aria-label="A map colored by air pressure, red around a high and blue around a low, with thin lines of equal pressure. Dots of air released over the map accelerate straight from the high toward the low, crossing the lines of equal pressure at right angles."></figure>
+<script>
+{
+  const DOM = [10, 6];
+  let P;
+  const field = (s, x, y) => 14 * Math.exp(-((x - s.H[0]) ** 2 + (y - s.H[1]) ** 2) / 6) - 14 * Math.exp(-((x - s.L[0]) ** 2 + (y - s.L[1]) ** 2) / 6);
+  const grad = (s, x, y) => [(field(s, x + 0.01, y) - field(s, x - 0.01, y)) / 0.02, (field(s, x, y + 0.01) - field(s, x, y - 0.01)) / 0.02];
+  const release = s => { s.dots = []; for (let i = 0; i < 9; i++) for (let j = 0; j < 5; j++) s.dots.push({ x: 0.6 + i * 1.1, y: 0.7 + j * 1.15, vx: 0, vy: 0, age: 0 }); };
+  demo("push", {
+    aspect: 1.6,
+    reset: true,
+    state: () => { const s = { H: [2.6, 3.8], L: [7.3, 2.4], dots: [], grab: null }; release(s); for (let i = 0; i < 40; i++) adv(s, 1 / 60); return s; },
+    controls: [{ label: "Release air", type: "button", primary: true, action: s => release(s) }],
+    caption: "Air pushed by differences in pressure alone, as it would move on a planet that didn't spin. The colors are the pressure, red above average and blue below; the thin lines join places of equal pressure. Each dot moves away from high pressure, across the lines, straight into the low.",
+    step(dt, s) { adv(s, dt); },
+    drag: {
+      hit: (p, s) => P && (Math.hypot(...[0, 1].map(k => p[k] - P(s.H)[k])) < 24 || Math.hypot(...[0, 1].map(k => p[k] - P(s.L)[k])) < 24),
+      start(p, s) { s.grab = Math.hypot(...[0, 1].map(k => p[k] - P(s.H)[k])) < 24 ? "H" : "L"; },
+      move(p, s) { const q = P.inv(p); s[s.grab] = [clamp(q[0], 0.5, DOM[0] - 0.5), clamp(q[1], 0.5, DOM[1] - 0.5)]; },
+      end(s) { s.grab = null; },
+    },
+    draw(g, s) {
+      const top = 0, bh = g.h - 34;
+      P = g.graph({ box: [0, top, g.w, bh], x: [0, DOM[0]], y: [0, DOM[1]], axes: "none", grid: false, equal: true });
+      P.heat((x, y) => field(s, x, y), { map: "diverging", range: [-15, 15], res: 4 });
+      P.contour((x, y) => field(s, x, y), [-12, -8, -4, 0, 4, 8, 12], { color: "muted", width: 0.8 });
+      for (const d of s.dots) {
+        const a = clamp(1 - d.age / 6, 0, 1);
+        if (a <= 0) continue;
+        // a fading trail behind each parcel shows where it has just been (a long exposure)
+        const tr = (d.trail ?? []).map(q => P(q));
+        for (let k = 1; k < tr.length; k++) g.line(tr[k - 1], tr[k], { stroke: "ink", width: 2.2 * k / tr.length, alpha: a * 0.55 * k / tr.length });
+        AIR.ball(g, P([d.x, d.y]), 3.6, "ink", a);
+      }
+      g.text("H", P(s.H), { size: 20, weight: 700, color: "red", align: "center", baseline: "middle", halo: true });
+      g.text("L", P(s.L), { size: 20, weight: 700, color: "blue", align: "center", baseline: "middle", halo: true });
+      g.handle([P(s.H)[0] + 16, P(s.H)[1] + 14], { color: "red", r: 5 });
+      g.handle([P(s.L)[0] + 16, P(s.L)[1] + 14], { color: "blue", r: 5 });
+      g.colorbar(g.w - 230, bh + 12, 180, 8, { range: [-15, 15], map: "diverging", label: "pressure", ends: ["low", "high"] });
+    },
+  });
+  function adv(s, dt) {
+    for (const d of s.dots) {
+      const gr = grad(s, d.x, d.y);
+      d.vx += (-0.9 * gr[0] - 0.6 * d.vx) * dt; d.vy += (-0.9 * gr[1] - 0.6 * d.vy) * dt;
+      d.x = clamp(d.x + d.vx * dt, 0.1, DOM[0] - 0.1); d.y = clamp(d.y + d.vy * dt, 0.1, DOM[1] - 0.1); d.age += dt;
+      (d.trail ??= []).push([d.x, d.y]); if (d.trail.length > 14) d.trail.shift();
+      if (Math.hypot(d.x - s.L[0], d.y - s.L[1]) < 0.35) d.age = Math.max(d.age, 5.5);   // it reaches the low and rises
+    }
+  }
+}
+</script>
+
+<p>Every dot runs straight downhill on the pressure map, crossing the lines of equal pressure, the <dfn data-def="Lines on a weather map joining places of equal air pressure.">isobars</dfn>, at right angles, and piles into the low. On a planet that didn't turn, wind would fill any low within hours. On Earth, winds blow almost along the isobars, round the lows, and storms last for days, because we watch the air from a spinning ball.</p>
+
+<p>To see what spinning does, put a puck on a turntable. Launch it from the center and it slides off in a straight line, because nothing pushes it sideways. Spin the turntable at <span class="scrub" data-key="w"></span> and watch the puck from the room, then from the turntable:</p>
+
+<figure class="demo" id="turntable" aria-label="A turntable seen from above, turning counterclockwise, with a puck sliding outward from its center. Seen from the room the puck moves in a straight line while the turntable turns beneath it, and the chalk mark it leaves on the turntable is curved. Seen from the turntable the puck's path curves to the right."></figure>
+<script>
+{
+  const U = 0.45, LIFE = 1 / U;    // the puck crosses the 1 m radius in 2.2 s
+  demo("turntable", {
+    aspect: w => (w < 560 ? 1 : 1.6),
+    state: () => ({ t: 1.4, ang: 0 }),
+    controls: [
+      { key: "w", label: "Spin", min: 0, max: 1.4, step: 0.01, value: 0.7, unit: " rad/s", color: "orange" },
+      { key: "frame", label: "Watch from", type: "choice", options: [{ value: "room", label: "the room" }, { value: "table", label: "the turntable" }], value: "room" },
+    ],
+    caption: "A puck sliding without friction from the center of a turntable that turns counterclockwise. In the room it goes straight (grey line); the chalk mark it leaves on the turntable (orange) curves to the right. Riding the turntable you see only the orange path: the puck seems to be pushed sideways by a force that isn't there.",
+    step(dt, s, v) { s.t += dt; s.ang += v.w * dt; },
+    status: (s, v) => `${(v.w * 60 / TAU).toFixed(1)} turns a minute · the table turns ${(v.w * LIFE * 180 / Math.PI).toFixed(0)}° while the puck crosses it`,
+    draw(g, s, v) {
+      const P = g.fit(-1.25, 1.25, -1.25, 1.25, { pad: 10 });
+      const tl = s.t % (LIFE + 0.8), launch = s.t - tl, live = Math.min(tl, LIFE);
+      const turn = v.frame === "room" ? s.ang : 0;                    // how the table is drawn turned
+      const rot = (q, a) => [q[0] * Math.cos(a) - q[1] * Math.sin(a), q[0] * Math.sin(a) + q[1] * Math.cos(a)];
+      // the table
+      g.circle(P([0, 0]), P.sx, { fill: g.mix("panel", "ink", 0.05), stroke: "ink", width: 2 });
+      for (let k = 0; k < 8; k++) { const a = turn + k * TAU / 8; g.line(P([0, 0]), P([Math.cos(a), Math.sin(a)]), { stroke: "faint", width: 1 }); }
+      g.circle(P(rot([0.86, 0], turn)), 6, { fill: "muted" });
+      // the room, seen from the table, turns the other way: a door on the wall
+      const doorA = v.frame === "room" ? 0.6 : 0.6 - s.ang;
+      g.path(Num.linspace(doorA - 0.12, doorA + 0.12, 10).map(a => P([1.17 * Math.cos(a), 1.17 * Math.sin(a)])), { stroke: "ink", width: 5 });
+      g.text("door", P([1.3 * Math.cos(doorA), 1.3 * Math.sin(doorA)]), { size: 11.5, color: "muted", align: "center", baseline: "middle" });
+      // puck: in the room it moves along the launch direction (angle 0 at launch, in room coordinates)
+      const a0 = 0.6;                                                      // launched toward the door
+      const roomAt = t => [U * t * Math.cos(a0), U * t * Math.sin(a0)];
+      const tableAt = t => rot(roomAt(t), -v.w * t);                      // the same point in table coordinates, relative to launch
+      const N = 40, pts = Num.linspace(0, live, N);
+      if (v.frame === "room") {
+        g.path(pts.map(t => P(roomAt(t))), { stroke: "muted", width: 1.6, dash: [4, 3] });
+        g.path(pts.map(t => P(rot(tableAt(t), v.w * tl))), { stroke: "orange", width: 2.6 });   // the chalk turns with the table
+        g.circle(P(roomAt(live)), 8, { fill: "ink" });
+      } else {
+        const back = -(s.ang - v.w * tl);                                 // the table's angle at launch, undone
+        g.path(pts.map(t => P(rot(tableAt(t), back))), { stroke: "orange", width: 2.6 });
+        g.circle(P(rot(tableAt(live), back)), 8, { fill: "ink" });
+      }
+      g.arcArrow(P([0, 0]), P.sx * 1.08, -0.35, -1.1, { stroke: "orange", width: 1.8 });
+    },
+  });
+}
+</script>
+
+<p>Seen from the room, the puck goes straight; the table turns under it, and the <span class="c-orange">chalk mark</span> it leaves on the surface curves. Seen from the turntable, the puck is the thing that curves, always to the right of the way it's moving when the table turns counterclockwise. Someone riding the table would say a sideways force pushed it. That apparent force is the <dfn data-def="The apparent sideways force on anything moving across a rotating frame, such as the Earth's surface; to the right of the motion in the Northern Hemisphere, to the left in the Southern.">Coriolis force</dfn>, and it grows with the spin: <button class="set" data-set="w=0">stop the table</button> and it vanishes.</p>
+
+<p>The Earth is a turntable that turns once a day: counterclockwise seen from above the North Pole, so moving air there drifts to the right, and clockwise from above the South Pole, so air drifts left. The effect is strongest at the poles and zero on the equator. It is far too weak to steer the water in a sink, but air moving for hours across hundreds of kilometers feels it fully.</p>
+
+<p>Now release a parcel of air at rest on a slope of pressure, with the <span class="c-blue">low</span> to the north. The pressure pushes it north, and as soon as it moves the Coriolis force pushes it to the right. Set the <span class="c-green">latitude</span> to <span class="scrub" data-key="lat"></span> and follow it for two days:</p>
+
+<figure class="demo" id="balance" aria-label="A strip of map with pressure falling from south to north, shown as red at the bottom and blue at the top with horizontal isobars. A parcel released at rest starts moving north, curves to the right, overshoots, and ends up looping along the isobars toward the east. Arrows on it show the pressure force, the Coriolis force, and its velocity."></figure>
+<script>
+{
+  // Pressure falls 1 hPa per 100 km toward the north; air density 1.2 kg/m³.
+  const G = 100 / 1e5 / 1.2, OMEGA = 7.2921e-5, HOURS = 2.5;   // 1 s on screen is 2.5 hours
+  const DOM = [2400, 900];
+  const fresh = () => ({ x: 120, y: 90, u: 0, v: 0, t: 0, path: [[120, 90]] });
+  function adv(s, dt, lat, fric) {
+    const f = 2 * OMEGA * Math.sin(lat * Math.PI / 180), r = fric ? 1.5e-5 : 0, p = s.p, H = dt * HOURS * 3600, n = 40, h = H / n;
+    for (let i = 0; i < n; i++) {
+      const du = f * p.v - r * p.u, dv = -f * p.u + G - r * p.v;      // Coriolis to the right of the motion, pressure toward the north
+      p.u += du * h; p.v += dv * h; p.x += p.u * h / 1000; p.y += p.v * h / 1000;
+    }
+    p.t += H / 3600; p.path.push([p.x, p.y]);
+    if (p.path.length > 1500) p.path.shift();
+    if (p.x > DOM[0] || p.y > DOM[1] || p.y < 0 || p.t > 72) s.p = fresh();
+  }
+  demo("balance", {
+    aspect: w => (w < 560 ? 1.3 : 2.3),
+    reset: true,
+    state: () => { const s = { p: fresh() }; for (let i = 0; i < 360; i++) adv(s, 1 / 60, 45, false); return s; },
+    controls: [
+      { key: "lat", label: "Latitude", min: 20, max: 90, step: 1, value: 45, unit: "° N", color: "green", marks: [{ value: 23.4, label: "tropic" }, { value: 51.5, label: "London" }, { value: 90, label: "pole" }] },
+      { key: "fric", label: "Ground friction", type: "toggle", value: false, color: "muted" },
+    ],
+    change(key, s, v) { s.p = fresh(); for (let i = 0; i < 360; i++) adv(s, 1 / 60, v.lat, v.fric); },
+    caption: "A parcel of air released at rest where the pressure falls by 1 hPa every 100 km toward the north, in the Northern Hemisphere. The pressure pushes it north (blue arrow); the Coriolis force pushes it to the right of its motion (orange); its velocity is green. It loops around a steady drift along the isobars. With ground friction it settles into that drift, slanting a little toward the low.",
+    status: (s, v) => { const f = 2 * OMEGA * Math.sin(v.lat * Math.PI / 180), sp = Math.hypot(s.p.u, s.p.v); return `${s.p.t.toFixed(0)} h · wind ${sp.toFixed(1)} m/s · balanced wind ${(G / f).toFixed(1)} m/s · one loop every ${(TAU / f / 3600).toFixed(0)} h`; },
+    step(dt, s, v) { adv(s, dt, v.lat, v.fric); },
+    draw(g, s, v) {
+      const Gp = g.graph({ box: [0, 0, g.w, g.h], x: [0, DOM[0]], y: [0, DOM[1]], axes: "none", grid: false, equal: true });
+      Gp.heat((x, y) => 9 - 18 * y / DOM[1], { map: "diverging", range: [-13, 13], res: 6 });
+      for (let y = 100; y < DOM[1]; y += 100) Gp.hline(y, { color: "muted", dash: [] });
+      g.text("L", Gp([DOM[0] / 2, DOM[1] - 40]), { size: 18, weight: 700, color: "blue", align: "center", baseline: "middle", halo: true });
+      g.text("H", Gp([DOM[0] / 2, 30]), { size: 18, weight: 700, color: "red", align: "center", baseline: "middle", halo: true });
+      g.path(s.p.path.map(Gp), { stroke: "ink", width: 1.8 });
+      const p = Gp([s.p.x, s.p.y]), f = 2 * OMEGA * Math.sin(v.lat * Math.PI / 180), K = 26;
+      const sc = K / Math.max(G, 1e-9);
+      g.arrow(p, [p[0], p[1] - G * sc], { stroke: "blue", width: 2.5 });
+      const cf = [f * s.p.v, -f * s.p.u];
+      if (Math.hypot(...cf) * sc > 4) g.arrow(p, [p[0] + cf[0] * sc, p[1] - cf[1] * sc], { stroke: "orange", width: 2.5 });
+      const vs = 4;
+      if (Math.hypot(s.p.u, s.p.v) * vs > 4) g.arrow(p, [p[0] + s.p.u * vs, p[1] - s.p.v * vs], { stroke: "green", width: 2.5 });
+      g.circle(p, 6, { fill: "ink", stroke: "panel", width: 1.5 });
+      g.dimension(Gp([DOM[0] - 520, 40]), Gp([DOM[0] - 20, 40]), "500 km", { offset: 0 });
+    },
+  });
+}
+</script>
+
+<p>The parcel never reaches the low. The faster it goes, the harder the Coriolis force pushes it sideways, until the two forces balance: the <span class="c-blue">pressure force</span> pulling toward the low and the <span class="c-orange">Coriolis force</span> pushing away from it, with the <span class="c-green">velocity</span> at right angles to both, along the isobars. It overshoots that balance and loops around it, once every 17 hours at 45°, while drifting east. This balanced flow is the <dfn data-def="The wind in which the pressure force and the Coriolis force balance, blowing along the isobars with low pressure to the left in the Northern Hemisphere.">geostrophic wind</dfn> <a class="cite" href="#ref-holton"></a>:</p>
+
+<div class="tex">V_g = \frac{1}{\rho f}\frac{\Delta p}{\Delta n}, \qquad f = 2\Omega \sin\varphi</div>
+
+<p>Here Δp/Δn is how fast the pressure changes across the isobars, Ω is the Earth's spin, 7.29×10⁻⁵ radians per second, and φ the latitude. With 1 hPa per 100 km at 45° it gives 8 m/s, a fresh breeze. Closer to the <button class="set" data-set="lat=20">tropics</button> the same slope drives a faster wind, because f is smaller. Near the ground, <button class="set" data-set="fric=true">friction</button> slows the air, the Coriolis force weakens with it, and the wind slants across the isobars toward the low, by 10° to 20° over the sea and more over land.</p>
+
+<p>Put the balance around a low and the wind circles it. Drag the <span class="c-blue">low</span> around the globe, into the Southern Hemisphere and onto the equator:</p>
+
+<figure class="demo" id="storm" aria-label="A globe centered on the Atlantic Ocean with a low-pressure system drawn as blue rings of isobars and arrows of wind around it. In the Northern Hemisphere the wind circles the low counterclockwise, in the Southern clockwise. Near the equator the arrows point straight into the low. A switch adds friction, which tilts the arrows inward."></figure>
+<script>
+{
+  let M;
+  demo("storm", {
+    aspect: w => (w < 560 ? 1 : 1.45),
+    state: () => ({ low: [-32, 42] }),
+    controls: [{ key: "fric", label: "Friction near the ground", type: "toggle", value: true, color: "muted" }],
+    caption: "Winds around a low-pressure system. They blow along the isobars, counterclockwise around a low in the Northern Hemisphere and clockwise in the Southern, slanting inward near the ground where friction slows them. Within about 5° of the equator the Coriolis force is too weak to balance the pressure, and air flows into the low and fills it.",
+    status: s => { const lat = s.low[1]; return Math.abs(lat) < 5 ? `${lat.toFixed(0)}°: no balance, the low fills` : `${Math.abs(lat).toFixed(0)}° ${lat > 0 ? "N" : "S"}: winds turn ${lat > 0 ? "counterclockwise" : "clockwise"} around the low`; },
+    drag: {
+      hit: (p, s) => M && M.near(p, s.low, 26),
+      move(p, s) { const q = M.invert(p); if (q) s.low = [q[0], clamp(q[1], -60, 60)]; },
+    },
+    hints: [["Drag", "the low"]],
+    draw(g, s, v) {
+      M = g.map({ projection: "orthographic", center: [-30, 5], zoom: 1.05, graticule: 30 });
+      M.parallel(0, { color: "muted", label: "equator" });
+      const lat = s.low[1], sgn = Math.sign(lat) || 1, eq = Math.abs(lat) < 5;
+      for (const km of [600, 1200, 1800, 2400]) M.circle(s.low, km, { color: "blue", width: 1.5, alpha: 1 - km / 3200 });
+      const inflow = v.fric ? 25 : 0;
+      for (const km of [900, 1900]) for (let b = 0; b < 360; b += km > 1000 ? 24 : 40) {
+        const at = Geo.destination(s.low, b + (km > 1000 ? 12 : 0), km);
+        const dir = eq ? b + 180 : b - sgn * (90 + inflow);
+        const strength = eq ? 1 : clamp(0.35 / Math.max(0.2, Math.abs(Math.sin(lat * Math.PI / 180))), 0.6, 1.4);
+        const to = Geo.destination(at, dir, 520 * strength);
+        const a = M.project(at), c = M.project(to);
+        if (a && c) g.arrow(a, c, { stroke: "ink", width: 2, head: 8 });
+      }
+      const L = M.project(s.low);
+      if (L) { g.text("L", L, { size: 20, weight: 700, color: "blue", align: "center", baseline: "middle", halo: true }); g.handle([L[0] + 14, L[1] + 14], { color: "blue", r: 5 }); }
+    },
+  });
+}
+</script>
+
+<p>North of the equator the wind runs counterclockwise around the low, south of it clockwise, and on the equator there is no circling, only air pouring in. That is why hurricanes almost never form within about 5° of the equator, and why those of the two hemispheres spin opposite ways. The circling keeps a low alive for days; only the layer slowed by <span class="c-muted">friction</span> leaks inward, rising at the center into cloud and rain. With the wind at your back in the Northern Hemisphere, the low is on your left.</p>
+
+<h2>Flowing around things</h2>
+
+<p>Wind meets trees, buildings, and wires and has to go around them, and how it goes around depends on one number. A flowing fluid carries momentum, which keeps each bit of it going straight, and it has <dfn data-def="A fluid's resistance to being sheared: the friction between neighboring layers moving at different speeds.">viscosity</dfn>, an internal friction that evens out speeds. Their ratio is the <dfn data-def="Re = UD/ν: a flow's speed times the size of the body, divided by the fluid's kinematic viscosity. It compares how strongly the fluid's momentum carries it on with how strongly viscosity smooths it out.">Reynolds number</dfn>, Re = UD/ν: speed times size, divided by the kinematic viscosity, 1.5×10⁻⁵ m²/s for air <a class="cite" href="#ref-reynolds"></a>. Here is air past a cylinder, simulated from the equations of fluid motion, with lanes of smoke. Set the Reynolds number to <span class="scrub" data-key="re"></span>:</p>
+
+<figure class="demo" id="regimes" aria-label="A stream of air flowing from left to right past a round cylinder, made visible by white lanes of smoke. At a low Reynolds number the lanes close smoothly behind the cylinder; at a moderate one a pair of eddies sits in its wake; at a higher one the wake sways and sheds swirls that alternate from side to side."></figure>
+<script>
+{
+  // A 14 cm cylinder in a 1 m/s stream, so the smoke lanes re-form within a couple of seconds of a change.
+  const sim = Fx.fluid({ domain: [2.4, 0.8], speed: 1, re: 40, cpuCells: 48, obstacles: [{ shape: "circle", at: [0.42, 0.4], r: 0.07 }], streaks: 0.05 });
+  const ready = (s, fig) => { if (!s.warm && (!fig || fig.visible)) { sim.warm(s.t); s.warm = true; } };   // warmed when first drawn
+  demo("regimes", {
+    aspect: w => w / (w / 3 + 50),
+    reset: true,
+    state: () => ({ t: 7, warm: false }),
+    controls: [{ key: "re", label: "Reynolds number", min: 1, max: 250, step: 1, value: 40, color: "blue", marks: [{ value: 7, label: "7" }, { value: 47, label: "47" }] }],
+    presets: [{ label: "Re 2", set: { re: 2 } }, { label: "Re 25", set: { re: 25 } }, { label: "Re 150", set: { re: 150 } }],
+    drag: sim.interact,
+    caption: "Air past a cylinder, solved from the Navier–Stokes equations, with smoke released in lanes upstream. Below Re 7 the flow closes smoothly behind it; up to about 47 a pair of eddies sits in its wake; above that the wake sways and sheds eddies from alternate sides. Drag the cylinder, or drag in the air to stir it.",
+    step(dt, s, v) { ready(s); sim.set({ re: v.re }); s.t += dt; sim.advance(s.t); },
+    status: (s, v) => `Re ${v.re} · ${v.re < 7 ? "attached, steady" : v.re < 47 ? "two eddies behind, steady" : "shedding eddies"}`,
+    draw(g, s, v, fig) {
+      ready(s, fig);
+      const H = g.w / 3;
+      g.fx.fluid([0, 0, g.w, H], { sim, show: "dye" });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="re=2">Re 2</button> the air closes behind the cylinder as smoothly as it parted in front: viscosity wins, and the flow is the same seen backward. Around <button class="set" data-set="re=25">Re 25</button> two eddies sit in the cylinder's shelter, turning in place, because the air sliding along the back can no longer climb against the rising pressure there and peels away, or <dfn data-def="Flow leaving the surface of a body instead of following it, leaving a slow, eddying wake behind.">separates</dfn>. Past about 47 the pair can't stay put. The wake starts to sway, and eddies break off from the top and bottom by turns <a class="cite" href="#ref-williamson"></a>.</p>
+
+<p>Real flows sit far to the right of this slider: a 2 cm twig in a 5 m/s breeze is at Re 7,000, a walking person at 50,000. Their wakes are turbulent, eddies of every size down to a fraction of a millimeter. Resolving them all would take billions of cells, so this simulation stays at the gentle end, where the first steps toward turbulence happen.</p>
+
+<p>The alternating eddies have a rhythm of their own. Here they are shown by their spin, <span class="c-blue">one way</span> and <span class="c-red">the other</span>, with the simulation measuring how often they leave. Set the Reynolds number to <span class="scrub" data-key="re"></span>:</p>
+
+<figure class="demo" id="street" aria-label="A cylinder in a stream of air with two staggered rows of eddies trailing behind it, blue ones spinning one way and red ones the other, colored on a diverging scale. A readout gives the shedding frequency and the Strouhal number."></figure>
+<script>
+{
+  const sim = Fx.fluid({ domain: [2.4, 0.8], speed: 0.4, re: 150, obstacles: [{ shape: "circle", at: [0.42, 0.4], r: 0.05 }], track: true });
+  const ready = (s, fig) => { if (!s.warm && (!fig || fig.visible)) { sim.warm(s.t); s.warm = true; } };
+  demo("street", {
+    aspect: w => w / (w / 3 + 50),
+    reset: true,
+    state: () => ({ t: 9, warm: false }),
+    controls: [
+      { key: "re", label: "Reynolds number", min: 50, max: 250, step: 1, value: 150, color: "blue" },
+      { key: "show", label: "Show", type: "choice", options: [{ value: "vorticity", label: "spin" }, { value: "pressure", label: "pressure" }], value: "vorticity" },
+    ],
+    caption: "A von Kármán vortex street behind a cylinder at moderate Reynolds numbers. The color is the air's spin (or, switched, its pressure: blue low, red high). The simulation counts the eddies leaving and reports the Strouhal number St = fD/U, which Roshko measured as 0.212 − 4.5/Re in this range.",
+    step(dt, s, v) { ready(s); sim.set({ re: v.re }); s.t += dt; sim.advance(s.t); },
+    status: (s, v) => { const q = sim.shedding(); return q.frequency ? `St = fD/U = ${q.strouhal.toFixed(3)} measured · ${(0.212 - 4.5 / v.re).toFixed(3)} in Roshko's experiments` : "waiting for the wake to settle"; },
+    draw(g, s, v, fig) {
+      ready(s, fig);
+      const H = g.w / 3, r = g.fx.fluid([0, 0, g.w, H], { sim, show: v.show });
+      if (r.legend) g.fx.colorbar([g.w - 190, H + 26, 170, 8], r.legend);
+    },
+  });
+}
+</script>
+
+<p>The pattern is a <dfn data-def="Two staggered rows of eddies of opposite spin, shed alternately from either side of a blunt body.">von Kármán vortex street</dfn>, and its beat is set by the speed and the width of the body. Pairs leave at a frequency f with fD/U close to 0.2, a ratio called the <dfn data-def="St = fD/U, a body's shedding frequency times its width divided by the flow speed; about 0.2 for a cylinder over a wide range of Reynolds numbers.">Strouhal number</dfn>. The simulation measures 0.18 at Re 150, and Roshko's wind-tunnel measurements gave 0.182 <a class="cite" href="#ref-roshko"></a>; at higher Reynolds numbers it levels off near 0.2. Switch to <button class="set" data-set="show=pressure">pressure</button> and the eddies are <span class="c-blue">pockets of low pressure</span>, pulling the cylinder from side to side as they leave.</p>
+
+<p>Those pulls are why telephone wires sing in the wind. A wire 3 mm thick in a 10 m/s gust sheds eddies at 0.2 × 10 / 0.003, about 670 times a second, and the alternating push makes the wire hum at that pitch, the Aeolian tone; the <a href="../sound/">sound explainer</a> follows what the air does with it from there. The same pulls on a scale of meters can shake chimneys and bridges, so tall chimneys carry spiral fins to break up the rhythm.</p>
+
+<p>A body in a stream also gets pushed downstream: <dfn data-def="The force of a flowing fluid on a body, along the direction of the flow.">drag</dfn>. Most of it, for anything bigger than a grain of dust, comes from the low pressure in the wake. Every second the body shoves aside a volume of air proportional to its speed, and gives that air a velocity proportional to its speed, so the force grows as the speed squared. Pick a <span class="c-purple">body</span> and drive the speed to <span class="scrub" data-key="v"></span>:</p>
+
+<figure class="demo" id="drag" aria-label="A graph of drag force against speed from 0 to 70 meters per second: a parabola for the chosen body, with the current speed marked. A dashed straight line shows what a force proportional to speed would look like. For the skydiver a horizontal line marks body weight, crossed at terminal speed."></figure>
+<script>
+{
+  // Typical drag areas (Cd × frontal area): a family car, a cyclist on the hoods, a skydiver belly down.
+  const BODY = { car: { cda: 0.66, label: "car" }, bike: { cda: 0.32, label: "cyclist" }, sky: { cda: 0.45, label: "skydiver", weight: 80 } };
+  const rho = 1.2;
+  demo("drag", {
+    aspect: 1.7,
+    controls: [
+      { key: "v", label: "Speed", min: 0, max: 70, step: 0.5, value: 25, unit: " m/s", color: "green" },
+      { key: "body", label: "Body", type: "choice", options: [{ value: "car", label: "car" }, { value: "bike", label: "cyclist" }, { value: "sky", label: "skydiver" }], value: "car", color: "purple" },
+    ],
+    caption: "Drag F = ½ρv²C<sub>D</sub>A for typical bodies in air at 1.2 kg/m³: a car (C<sub>D</sub>A = 0.66 m²), a cyclist (0.32 m²), and a skydiver falling belly down (0.45 m²). Doubling the speed quadruples the drag. A falling skydiver speeds up until drag equals weight.",
+    status: (s, v) => { const b = BODY[v.body], F = 0.5 * rho * v.v * v.v * b.cda; return `${(v.v * 3.6).toFixed(0)} km/h · drag ${F.toFixed(0)} N · power to push through the air ${(F * v.v / 1000).toFixed(1)} kW`; },
+    draw(g, s, v) {
+      const b = BODY[v.body], F = x => 0.5 * rho * x * x * b.cda;
+      const G = g.graph({ x: [0, 70], y: [0, 1600], axes: "frame", xLabel: "Speed (m/s)", yLabel: "Drag (N)", xTicks: [0, 10, 20, 30, 40, 50, 60, 70], yTicks: [0, 400, 800, 1200, 1600] });
+      G.fn(x => F(25) * x / 25, { color: "muted", width: 1.3, dash: [5, 4], label: "if drag ∝ speed", labelAt: 55 });
+      G.fn(F, { color: "purple", width: 2.6, label: b.label, labelAt: Math.min(66, Math.sqrt(1500 / (0.5 * rho * b.cda))) });
+      if (b.weight) { const W = b.weight * 9.81, vt = Math.sqrt(W / (0.5 * rho * b.cda)); G.hline(W, { color: "ink", label: `weight of ${b.weight} kg` }); G.marker(vt, W, { color: "ink", label: `terminal ${(vt * 3.6).toFixed(0)} km/h`, pos: "nw" }); }
+      G.marker(v.v, F(v.v), { color: "green", drop: true, label: `${F(v.v).toFixed(0)} N`, pos: "se" });
+    },
+  });
+}
+</script>
+
+<p>At 50 km/h the car's drag is 76 N; at 100 km/h it is 305 N, four times as much, and the power, force times speed, eight times. That cube is why fuel use climbs so fast on the motorway, and why a cyclist working twice as hard goes only a quarter faster. For the <button class="set" data-set="body=sky">skydiver</button> the parabola meets the weight at about 190 km/h: the terminal speed. The drag coefficient C<sub>D</sub> barely changes at these Reynolds numbers, which is what makes the v² rule hold.</p>
+
+<aside class="callout key"><p>Air flowing past a body has to curve, and curving air needs a difference in pressure to bend it. Behind a blunt body the curve fails, the flow separates, and the low pressure left in the wake drags the body back.</p></aside>
+
+<h2>Lift</h2>
+
+<p>A wing is a body shaped so that the curving works for it instead of against it. Its rounded nose splits the stream gently, its long thin tail lets the flow leave smoothly from a sharp edge, and it meets the air tilted a few degrees nose up, its <dfn data-def="The angle between a wing's chord line, nose to tail, and the oncoming air.">angle of attack</dfn>. Here is a slice of a wing with tracers of air streaming past it. Turn it, and tilt it to <span class="scrub" data-key="alpha"></span>:</p>
+
+<figure class="demo wide" id="wing" aria-label="A 3D section of a wing, seen at an angle, with dark tracer streaks of air flowing past it from left to right. The streaks over the top bend down along the curved upper surface and leave the sharp trailing edge heading slightly downward; the streaks are paler where the air is fast, over the top."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", shadow: { opacity: 0.1 } });
+  // A wing section of chord 1 m, 12% thick with 4% camber, in an ideal stream of 1 m/s (the tracers are scaled time).
+  const FLOW = { type: "airfoil", chord: 1, thickness: 0.12, camber: 0.04, alpha: 6 * Math.PI / 180, U: 1 };
+  const build = alpha => E3.mesh.transform(E3.mesh.extrude(E3.flow.airfoil({ ...FLOW, alpha }).outline(140), 2.4, { bevel: 0.004 }), E3.m4.translation([0, 0, -1.2]));
+  const wing = scene.add(build(FLOW.alpha), { material: "aluminum", name: "wing" });
+  const air = scene.add(E3.particles({
+    matter: "air", units: "m", count: 1100, seed: 5, life: [3.2, 3.2], style: "streak", trail: 0.45, width: 0.007, segments: 14, color: "ink", colorBy: "speed", range: [0.5, 1.7], opacity: 0.9,
+    emitter: { shape: "box", size: [0.02, 1.5, 2.2], position: [-1.7, 0, 0], rake: 20, speed: 1 },
+    flow: FLOW, kill: { min: [-2, -2, -2], max: [2.3, 2, 2] },
+  }));
+  let last = FLOW.alpha;
+  demo("wing", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    orbit: { yaw: 0.35, pitch: 0.2, minPitch: -0.2, maxPitch: 0.9 },
+    state: () => ({ t: 4 }),
+    controls: [{ key: "alpha", label: "Angle of attack", min: -4, max: 12, step: 0.5, value: 6, unit: "°", color: "green" }],
+    caption: "Air tracers past a wing section, computed as ideal flow with the condition that the air leaves the sharp trailing edge smoothly. Pale streaks are fast air, dark ones slow. Above the wing the air speeds up and curves down along the surface; it leaves heading down, a little behind the wing.",
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      scene.time = s.t;
+      const alpha = v.alpha * Math.PI / 180;
+      if (alpha !== last) { wing.mesh = build(alpha); air.flow = { ...FLOW, alpha }; last = alpha; }
+      g.render3d(scene, { ...s.view, fov: 26 });
+    },
+  });
+}
+</script>
+
+<p>Notice three things. The air does not split at the nose and rejoin at the tail as two equal streams: the dividing point sits under the nose, so more air goes over the top. The air over the top runs faster, its streaks paler and longer. And the whole stream leaves the trailing edge pointing down. The wing has turned the air downward, and by Newton's third law the air pushes the wing up.</p>
+
+<p>Most people learned a different story at school: the top of the wing is longer, so the air over it must go faster to meet the air underneath at the trailing edge at the same time. Before you watch a line of smoke puffs go past the wing, decide:</p>
+
+<div class="quiz">
+  <p>Two puffs of smoke start side by side, one just above the stream that hits the wing's nose and one just below. Which reaches the trailing edge first?</p>
+  <div class="choices"><button>They arrive together</button><button data-correct>The one over the top, well ahead</button><button>The one underneath, because its path is shorter</button></div>
+  <p class="why">Nothing makes the two halves of the stream meet again. The top air is pulled into the low pressure above the wing and arrives far ahead of its partner, which never catches up.</p>
+</div>
+
+<figure class="demo" id="transit" aria-label="A wing section in side view with a vertical line of smoke puffs released upstream. As the line passes the wing, the puffs above race ahead and the line bends forward over the top, while the puffs below lag; two puffs that started side by side are highlighted, and the upper one reaches the trailing edge far ahead of the lower one."></figure>
+<script>
+{
+  const N = 29, X0 = -1.4, LOOP = 4.2;
+  const cache = new Map();
+  // Trace each puff of the release line through the ideal flow, once per angle (time in chord lengths / U).
+  function runs(alphaDeg) {
+    if (cache.has(alphaDeg)) return cache.get(alphaDeg);
+    const F = E3.flow.airfoil({ chord: 1, thickness: 0.12, camber: 0.04, alpha: alphaDeg * Math.PI / 180, U: 1 });
+    const out = F.outline(120), te = out.reduce((a, p) => (p[0] > a[0] ? p : a), [-9, 0]);
+    const vel = (x, y) => F.velocity([x, y, 0]) ?? [0, 0, 0];
+    const h = 1 / 200, steps = Math.round(LOOP / h), paths = [];
+    for (let k = 0; k < N; k++) {
+      let x = X0, y = -0.42 + 0.84 * k / (N - 1);
+      const pts = [[x, y]];
+      let tTE = null;
+      for (let i = 1; i <= steps; i++) {
+        const a = vel(x, y), b = vel(x + a[0] * h / 2, y + a[1] * h / 2);
+        x += b[0] * h; y += b[1] * h;
+        if (tTE == null && x >= te[0]) tTE = i * h;
+        if (i % 2 === 0) pts.push([x, y]);
+      }
+      paths.push({ pts, tTE, above: null });
+    }
+    // which side of the wing each puff passed: compare with the trailing edge when it got there
+    for (const p of paths) { const i = Math.max(0, Math.round(((p.tTE ?? LOOP) / h) / 2)); const q = p.pts[Math.min(i, p.pts.length - 1)]; p.above = q[1] > te[1]; }
+    const split = paths.findIndex(p => p.above);
+    const r = { out, te, paths, pair: [split - 1, split] };
+    cache.set(alphaDeg, r);
+    return r;
+  }
+  demo("transit", {
+    aspect: w => (w < 560 ? 1.15 : 2),
+    state: () => ({ t: 1.6 }),
+    controls: [
+      { key: "alpha", label: "Angle of attack", min: 0, max: 10, step: 1, value: 5, unit: "°", color: "green" },
+      { label: "Release smoke", type: "button", primary: true, action: s => { s.t = 0; } },
+    ],
+    caption: "A line of smoke puffs carried past a wing section by the same ideal flow as the last figure. The puffs over the top race ahead and never rejoin the ones below. The orange pair started side by side.",
+    status: (s, v) => { const R = runs(v.alpha), a = R.paths[R.pair[1]], b = R.paths[R.pair[0]]; if (!a || !b || a.tTE == null) return ""; const gap = (b.tTE ?? LOOP) - a.tTE; return `on a wing 1.5 m deep at 200 km/h, the top puff of the pair arrives ${b.tTE == null ? "more than " : ""}${(gap * 1.5 / (200 / 3.6) * 1000).toFixed(0)} ms ahead of the bottom one`; },
+    step(dt, s) { s.t += dt * 0.6; if (s.t > LOOP + 0.6) s.t = 0; },
+    draw(g, s, v) {
+      const R = runs(v.alpha), P = g.fit(-1.5, 1.6, -0.55, 0.55, { pad: 8 });
+      const k = Math.min(R.paths[0].pts.length - 1, Math.round(s.t * 100));
+      g.path(R.out.map(P), { fill: g.mix("panel", "ink", 0.08), stroke: "ink", width: 1.6, close: true });
+      for (const side of [false, true]) {
+        const row = R.paths.filter(p => p.above === side).map(p => P(p.pts[Math.min(k, p.pts.length - 1)]));
+        if (row.length > 1) g.path(row, { stroke: "muted", width: 1 });
+      }
+      R.paths.forEach((p, i) => { const q = P(p.pts[Math.min(k, p.pts.length - 1)]), pair = R.pair.includes(i); g.circle(q, pair ? 5.5 : 3.2, { fill: pair ? "orange" : "ink", stroke: "panel", width: 1 }); });
+      g.line(P([R.te[0], R.te[1] - 0.5]), P([R.te[0], R.te[1] + 0.5]), { stroke: "faint", width: 1, dash: [3, 3] });
+      g.text("trailing edge", P([R.te[0] + 0.03, 0.5]), { size: 11.5, color: "muted", align: "left", baseline: "middle" });
+    },
+  });
+}
+</script>
+
+<p>The puffs that go over the top arrive at the trailing edge long before their partners below, and the two halves of the line never meet again. The lower <span class="c-orange">puff</span>, which started nearer the dividing stream, crawls past the slow region under the nose and arrives later still. Babinsky filmed exactly this with real smoke in a wind tunnel <a class="cite" href="#ref-babinsky"></a>. Raise the angle to <button class="set" data-set="alpha=9">9°</button> and the lead grows, along with the lift.</p>
+
+<aside class="callout mistake"><p>Equal transit time is wrong: no law makes the air over a wing meet the air under it at the trailing edge, and it doesn't. A wing works because it bends the air, which needs low pressure on the outside of the bend. A flat sheet tilted to the wind lifts too, and planes fly upside down.</p></aside>
+
+<p>Air bends only when something pushes it sideways, and inside a fluid the only thing that can is a difference in pressure. Where air follows a curve, the pressure is lower on the inside of the curve than on the outside. Over a wing the stream curves down around the upper surface, so the pressure next to that surface must be below the pressure far away; under the wing the slowed, deflected air sits at higher pressure. Here is the pressure around a wing in a simulated stream, <span class="c-blue">low</span> and <span class="c-red">high</span>. Tilt it to <span class="scrub" data-key="alpha"></span>:</p>
+
+<figure class="demo" id="cp" aria-label="A wing section in a stream of air flowing from left to right, colored by pressure: a large blue region of low pressure over the top surface, a red spot of high pressure at the nose, and pale red underneath. Thin streamlines curve over the wing. Tilting the wing deepens the blue region above it."></figure>
+<script>
+{
+  const AF = { shape: "airfoil", at: [0.75, 0.45], chord: 0.8, thickness: 0.12, camber: 0.04, alpha: 0.087, fixed: true };
+  const sim = Fx.fluid({ domain: [2.4, 0.9], speed: 0.5, re: 2000, length: 0.8, cpuCells: 48, obstacles: [AF] });
+  let last = 5;
+  const ready = (s, fig) => { if (!s.warm && (!fig || fig.visible)) { sim.warm(s.t); s.warm = true; } };
+  demo("cp", {
+    aspect: w => w / (w * 0.9 / 2.4 + 50),
+    reset: true,
+    state: () => ({ t: 4, warm: false }),
+    controls: [{ key: "alpha", label: "Angle of attack", min: -4, max: 14, step: 0.5, value: 5, unit: "°", color: "green" }],
+    caption: "Pressure around a wing section in a simulated stream (Navier–Stokes at a chord Reynolds number of 2,000, far below a real wing's millions), as the pressure coefficient: the pressure above or below the far stream's, in units of ½ρU². Low pressure (blue) covers the curved top; high pressure (red) sits at the nose, where the air stops. The whole channel reads slightly blue because the air loses a little pressure to friction on its way through.",
+    step(dt, s, v) {
+      ready(s);
+      if (v.alpha !== last) { sim.obstacles[0].alpha = v.alpha * Math.PI / 180; sim.update(); last = v.alpha; }
+      s.t += dt; sim.advance(s.t);
+    },
+    change(key, s, v, fig) { ready(s); if (!fig.playing && v.alpha !== last) { sim.obstacles[0].alpha = v.alpha * Math.PI / 180; sim.update(); last = v.alpha; s.t += 1.5; sim.advance(s.t); } },
+    draw(g, s, v, fig) {
+      ready(s, fig);
+      const H = g.w * 0.9 / 2.4, r = g.fx.fluid([0, 0, g.w, H], { sim, show: "pressure", streamlines: 16 });
+      g.fx.colorbar([g.w - 190, H + 26, 170, 8], r.legend);
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-blue">low pressure</span> over the top is larger and deeper than anything underneath, and the difference across the wing, pressing on its whole area, is the lift. The red spot at the nose is the <dfn data-def="The point on a body's nose where the oncoming air comes to rest, and the pressure is highest.">stagnation point</dfn>, where the oncoming air stops. Fast air and low pressure over the top are two views of one fact, Bernoulli's equation, p + ½ρv² = constant along a streamline: air speeds up as it moves into lower pressure. The curvature sets the pressure, and the pressure sets the speed.</p>
+
+<p>So a steeper tilt bends the air more and makes more lift, but only up to a point. Lift is measured by the <dfn data-def="C_L = L / (½ρv²S): lift per unit wing area divided by the dynamic pressure of the oncoming air.">lift coefficient</dfn>, the lift per square meter of wing in units of ½ρv². Raise the angle of attack to <span class="scrub" data-key="alpha"></span>:</p>
+
+<figure class="demo" id="cl" aria-label="Left, a small wing section tilted at the chosen angle, with the airflow following its upper surface, or, past the stall, breaking away into a hatched wake. Right, a graph of lift coefficient against angle of attack: a straight rising line that rounds over at about 16 degrees and falls."></figure>
+<script>
+{
+  // A curve shaped like measured data for a NACA 2412 section: zero lift at −2.1°, about 0.105 per degree,
+  // a peak near 1.6 at 16°, then the stall.
+  const lin = a => 0.105 * (a + 2.1);
+  const CL = a => a <= 10 ? lin(a) : a <= 16 ? lin(10) + (1.6 - lin(10)) * Math.sin(Math.PI / 2 * (a - 10) / 6) : 1.6 - 0.55 * (1 - Math.exp(-(a - 16) / 1.6));
+  const W = 1100 * 9.81, S = 16, rho = 1.225;
+  demo("cl", {
+    aspect: w => (w < 560 ? 0.95 : 2),
+    controls: [{ key: "alpha", label: "Angle of attack", min: -4, max: 22, step: 0.5, value: 8, unit: "°", color: "green", marks: [{ value: 16, label: "stall" }] }],
+    caption: "Lift coefficient against angle of attack for a typical wing section (shaped after wind-tunnel data for the NACA 2412). Thin-airfoil theory gives the straight line, 2π per radian. Near 16° the air can no longer follow the upper surface; it separates, and the lift falls: the stall. The wake on the left is drawn, not computed.",
+    status: (s, v) => { const c = CL(v.alpha); return c <= 0.02 ? `lift coefficient ${c.toFixed(2)} · no lift to carry the plane` : `lift coefficient ${c.toFixed(2)} · a 1,100 kg plane with 16 m² of wing must fly at ${(Math.sqrt(2 * W / (rho * S * c)) * 3.6).toFixed(0)} km/h`; },
+    draw(g, s, v) {
+      const wide = g.w >= 560, a = v.alpha * Math.PI / 180, stalled = v.alpha > 16;
+      const A = wide ? [0, 0, g.w * 0.42, g.h] : [0, 0, g.w, g.h * 0.42], B = wide ? [g.w * 0.46, 6, g.w * 0.54 - 6, g.h - 12] : [0, g.h * 0.45, g.w, g.h * 0.55 - 4];
+      const P = g.fit(-0.75, 1.0, -0.5, 0.5, { box: A, pad: 8 });
+      const F = E3.flow.airfoil({ chord: 1, thickness: 0.12, camber: 0.04, alpha: Math.min(a, 16 * Math.PI / 180), U: 1 });
+      const out = E3.flow.airfoil({ chord: 1, thickness: 0.12, camber: 0.04, alpha: a, U: 1 }).outline(100);
+      for (let k = 0; k < 9; k++) {
+        let x = -0.72, y = -0.36 + 0.09 * k; const pts = [P([x, y])];
+        for (let i = 0; i < 260; i++) { const u = F.velocity([x, y, 0]); if (!u) break; x += u[0] * 0.007; y += u[1] * 0.007; if (x > 1) break; pts.push(P([x, y])); }
+        g.path(pts, { stroke: "ink", width: 1, alpha: 0.55 });
+      }
+      if (stalled) {
+        const te = out.reduce((m, p) => (p[0] > m[0] ? p : m), [-9, 0]), top = out.reduce((m, p) => (p[1] > m[1] ? p : m), [0, -9]);
+        const wake = [top, [top[0] + 0.25, top[1] + 0.14], [te[0] + 0.45, te[1] + 0.12], [te[0] + 0.5, te[1] - 0.06], te].map(P);
+        g.spline(wake, { fill: "panel", hatch: g.rgba("red", 0.5), stroke: "red", width: 1.2, close: true });
+        g.label("separated", P([te[0] + 0.1, te[1] + 0.25]), { color: "red" });
+      }
+      g.path(out.map(P), { fill: g.mix("panel", "ink", 0.1), stroke: "ink", width: 1.6, close: true });
+      const G = g.graph({ box: B, x: [-4, 22], y: [-0.4, 1.8], axes: "frame", xLabel: "Angle of attack (°)", yLabel: "Lift coefficient", xTicks: [-4, 0, 4, 8, 12, 16, 20], yTicks: [0, 0.5, 1, 1.5] });
+      G.fn(lin, { color: "muted", width: 1.2, dash: [5, 4], domain: [-4, 18], label: "2π per radian", labelAt: 2 });
+      G.fn(CL, { color: "green", width: 2.4 });
+      G.marker(v.alpha, CL(v.alpha), { color: stalled ? "red" : "green", drop: true, label: CL(v.alpha).toFixed(2), pos: "se" });
+    },
+  });
+}
+</script>
+
+<p>Up to about 10° the lift coefficient climbs in a straight line, about 0.1 for every degree, close to the 2π per radian (0.11 per degree) that thin-airfoil theory predicts <a class="cite" href="#ref-anderson"></a><a class="cite" href="#ref-abbott"></a>. A cambered section, curved like this one, still lifts at 0° and only stops at about −2°. Then the line rounds over. At about <button class="set" data-set="alpha=16">16°</button> the air over the top is asked to climb the steep rise in pressure toward the trailing edge, as it did behind the cylinder, and it can't: it separates, the low pressure on top collapses, and the lift falls. That is the <dfn data-def="The loss of lift when the angle of attack is so steep that the air separates from the upper surface of the wing.">stall</dfn>.</p>
+
+<p>The status line turns it into flying. Lift has to equal weight, ½ρv²SC<sub>L</sub> = mg, so a plane flies slowly only by flying at a high angle of attack, and the greatest lift coefficient sets the slowest it can fly. For a light airplane of 1,100 kg with 16 m² of wing, that is about 95 km/h. Flaps and slats, unfolded for takeoff and landing, change the wing's shape to push the peak higher.</p>
+
+<h2>Blue air</h2>
+
+<p>One more thing air does is visible every day: it is blue. Sunlight shakes each molecule's electrons, and the molecule re-sends a little of the light in other directions. For scatterers a thousand times smaller than a wavelength, that share grows as the inverse fourth power of the wavelength, so blue at 450 nm is scattered about five times as strongly as red at 700 nm <a class="cite" href="#ref-rayleigh"></a>. The <a href="../light/">light explainer</a> shows how the same scattering reddens the sunset. Here the sky is computed from it. Climb to <span class="scrub" data-key="km"></span>:</p>
+
+<figure class="demo" id="sky" aria-label="The view upward and toward the horizon, away from the sun, with a blue sky that pales toward the horizon. Climbing higher darkens the sky to deep blue and then nearly black, while a gauge shows the share of the air still above."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "outdoor", shadow: false, sky: { sun: { elevation: 40, azimuth: 0 }, altitude: 2 } });
+  scene.add(E3.mesh.box(6000, 1, 6000), { name: "ground", color: "#2f3326", position: [0, -0.5, 0] });
+  demo("sky", {
+    aspect: w => (w < 560 ? 1.1 : 1.9),
+    controls: [{ key: "km", label: "Altitude", min: 0, max: 40, step: 0.5, value: 0, unit: " km", color: "green", marks: [{ value: 11, label: "airliner" }, { value: 21, label: "U-2" }] }],
+    caption: "The sky looking away from the sun, 40° up, rendered from Rayleigh scattering by the air's molecules, a little haze, and ozone, as seen from each altitude. The bar on the right is the share of the atmosphere still above. With less air above to scatter sunlight, the sky darkens toward the black of space.",
+    status: (s, v) => { const f = AIR.atm(v.km * 1000).P / AIR.P0; return `${v.km} km · ${(f * 100).toFixed(f < 0.1 ? 1 : 0)}% of the air is still above you`; },
+    draw(g, s, v) {
+      scene.sky = { sun: { elevation: 40, azimuth: 0 }, altitude: Math.max(2, v.km * 1000), haze: 0.5, stars: 0 };
+      const el = 22 * Math.PI / 180;
+      g.render3d(scene, { yaw: Math.PI, pitch: -el, fov: 62, target: [0, 1.7 + 100 * Math.sin(el), 100 * Math.cos(el)], distance: 100 }, { box: [0, 0, g.w, g.h] });
+      const f = AIR.atm(v.km * 1000).P / AIR.P0, bx = g.w - 34, bh = g.h * 0.6, by = g.h * 0.2;
+      g.rect(bx, by, 14, bh, { stroke: "#ffffff", width: 1.2 });
+      g.rect(bx, by + bh * (1 - f), 14, bh * f, { fill: "rgba(255,255,255,0.75)" });
+      g.text("air above", [bx + 7, by + bh + 14], { size: 11.5, color: "#ffffff", align: "center" });
+    },
+  });
+}
+</script>
+
+<p>At the ground the whole column scatters light at you, and the sky is a bright blue, paler toward the horizon where you look through more air. At <button class="set" data-set="km=11">airliner height</button> three quarters of the air is below and the sky above is deeper. Above <button class="set" data-set="km=21">20 km</button>, where research balloons fly, 95% is below and the sky turns dark blue; by 40 km, with 0.3% left above, it is close to black. The blue of the sky is the air itself, lit by the sun.</p>
+
+<h2>The candle and the dust</h2>
+
+<p>Back to the dim room. Everything in it can now be named. Step through it:</p>
+
+<figure class="demo" id="room" aria-label="A dim corner of a room with a sunbeam falling across it, dust motes glinting in the beam, and a snuffed candle on the floor sending up a thread of smoke that breaks into curls. Stepping through labels each thing that the air is doing."></figure>
+<script>
+{
+  const DOM = [1.6, 1], FLOOR = 0.97, WICK = [1.12, 0.815];
+  const dust = Fx.particles({ matter: "dust", domain: DOM, count: 700, seed: 13, ground: FLOOR, pile: false,
+    emitter: { shape: "box", at: [0.8, 0.45], size: [1.6, 0.9], speed: [0, 0.02], spread: 3.14 },
+    forces: { turbulence: { strength: 0.03, scale: 0.25, speed: 0.08 } },
+    light: { from: [0.15, 0], dir: [0.55, 0.83], width: 0.32 } });
+  const smoke = Fx.particles({ matter: "smoke", domain: DOM, count: 900, seed: 14, size: [0.006, 0.07], temperature: [430, 300], opacity: 0.28, life: [2, 3.4],
+    // A candle's wisp mixes with the room air within centimeters, so it rises at a few tenths of a meter per second, not meters.
+    forces: { drag: 10, turbulence: { strength: 0.03, scale: 0.05, speed: 1 } },
+    emitter: { shape: "point", at: WICK, speed: [0.12, 0.2], dir: -Math.PI / 2, spread: 0.06 } });
+  const NOTES = [
+    null,
+    { at: "dust", text: "a mote 10 µm across is hit by about 10¹⁸ molecules a second, from all sides at once: that is the pressure" },
+    { at: "dust", text: "the motes sink at their terminal speed, where the air's drag balances their weight" },
+    { at: "smoke", text: "the smoke is warmer, so lighter, than the air it pushes aside: it is lifted" },
+    { at: "curl", text: "as the plume speeds up and widens its Reynolds number passes a few hundred, and it breaks into eddies" },
+    { at: "beam", text: "the motes scatter every color, so they glint white; the molecules scatter blue" },
+  ];
+  let P;
+  const ready = (s, fig) => { if (!s.warm && (!fig || fig.visible)) { dust.warm(s.t); smoke.warm(s.t); s.warm = true; } };
+  demo("room", {
+    aspect: 1.6,
+    reset: true,
+    state: () => ({ t: 8, warm: false }),
+    controls: [{ key: "k", label: "Name it", type: "stepper", min: 0, max: 5, step: 1, value: 0, format: n => (n ? `${n} of 5` : "all at once"), color: "brass" }],
+    caption: "The opening scene again: dust in a sunbeam and a snuffed candle, each particle moving by the physics of what it is. Stepping through names what the air is doing at each spot.",
+    step(dt, s) { ready(s); s.t += dt; dust.advance(s.t); smoke.advance(s.t); },
+    draw(g, s, v, fig) {
+      ready(s, fig);
+      P = g.fit(0, DOM[0], -DOM[1], 0, { pad: 0, uniform: false });
+      const W = q => P([q[0], -q[1]]);
+      g.rect(0, 0, g.w, g.h, { fill: g.mix("panel", "ink", 0.07) });
+      g.fx.particles(null, { sys: dust });
+      g.fx.particles(null, { sys: smoke });
+      const fy = W([0, FLOOR])[1];
+      g.rect(0, fy, g.w, g.h - fy, { fill: "panel" });
+      g.line([0, fy], [g.w, fy], { stroke: "ink", width: 1.5 });
+      const c0 = W([WICK[0] - 0.03, WICK[1] + 0.015]), c1 = W([WICK[0] + 0.03, FLOOR]);
+      g.rect(c0[0], c0[1], c1[0] - c0[0], c1[1] - c0[1], { fill: "#efe8da", stroke: "ink", width: 1.2 });
+      g.line(W([WICK[0], WICK[1] + 0.015]), W(WICK), { stroke: "ink", width: 1.5 });
+      const n = NOTES[v.k];
+      if (n) {
+        const at = { dust: W([0.55, 0.42]), smoke: W([WICK[0], 0.62]), curl: W([WICK[0] - 0.02, 0.3]), beam: W([0.4, 0.3]) }[n.at];
+        g.circle(at, 16, { stroke: "brass", width: 2 });
+        const tw = Math.min(g.w * 0.46, 260), left = at[0] > g.w / 2, tx = left ? at[0] - 26 - tw : at[0] + 26;
+        const lines = []; let line = "";
+        for (const w of n.text.split(" ")) { const t = line ? line + " " + w : w; if (g.measure(t, { size: 13 }) > tw) { lines.push(line); line = w; } else line = t; }
+        lines.push(line);
+        const ty = clamp(at[1] - lines.length * 9, 10, g.h - lines.length * 18 - 10);
+        g.line([left ? at[0] - 16 : at[0] + 16, at[1]], [left ? tx + tw + 4 : tx - 4, ty + 6], { stroke: "brass", width: 1 });
+        lines.forEach((l, i) => g.text(l, [tx, ty + 6 + i * 18], { size: 13, color: "ink", align: "left", baseline: "middle", halo: true }));
+      }
+    },
+  });
+}
+</script>
+
+<p>The room is full of molecules flying at 500 m/s, hitting a mote of dust a hundredth of a millimeter across about 10¹⁸ times a second, from every side: the air's pressure, the weight of the whole column of air over the house. The <span class="c-brass">dust</span> is heavier than the air it displaces, so it sinks, but so slowly that the room's faint drafts carry it anywhere. The smoke is warm, so lighter than the air it pushes aside, and is lifted. It rises as a smooth thread, then, as its Reynolds number grows past a few hundred, tears into curls, the instability that shed eddies behind the cylinder.</p>
+
+<p>The breath that blew out the flame was a pressure difference made by your lungs, pushing air out faster than the flame could hold its heat. And the beam is visible only because the motes scatter its light toward you; between them the molecules are scattering too, too weakly to see across a room but enough across tens of kilometers to turn the whole sky blue.</p>
+
+<p>The same few ideas run from this room up to the weather. Warm air rising and cool air sinking make the highs and lows, the spinning Earth turns the wind around them, and every wing, sail, and feather works by curving the air. What no figure here can do is follow turbulence all the way down, eddies inside eddies to a millimeter. Predicting it in detail, for a wing, a storm, or a candle's smoke, is still one of the hard unsolved problems of physics.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-ussa">NOAA, NASA, and U.S. Air Force, <em>U.S. Standard Atmosphere, 1976</em>, NOAA-S/T 76-1562, U.S. Government Printing Office, Washington, D.C. (1976). The composition of dry air, the temperature and pressure profile used throughout, and the sea-level number density (2.547×10²⁵ m⁻³), mean free path (66.3 nm), collision frequency (6.9×10⁹ s⁻¹), and kinematic viscosity.</li>
+  <li id="ref-maxwell">J. C. Maxwell, “Illustrations of the dynamical theory of gases. Part I. On the motions and collisions of perfectly elastic spheres,” <em>Philosophical Magazine</em> 19 (1860), 19–32. doi:10.1080/14786446008642818.</li>
+  <li id="ref-codata">E. Tiesinga, P. J. Mohr, D. B. Newell, and B. N. Taylor, “CODATA recommended values of the fundamental physical constants: 2018,” <em>Journal of Physical and Chemical Reference Data</em> 50 (2021), 033105. Boltzmann's constant and the gas constant.</li>
+  <li id="ref-west">J. B. West, “Barometric pressures on Mt. Everest: new data and physiological significance,” <em>Journal of Applied Physiology</em> 86 (1999), 1062–1066.</li>
+  <li id="ref-holton">J. R. Holton and G. J. Hakim, <em>An Introduction to Dynamic Meteorology</em>, 5th edition, Academic Press (2012). The Coriolis force, geostrophic balance, and the boundary layer.</li>
+  <li id="ref-reynolds">O. Reynolds, “An experimental investigation of the circumstances which determine whether the motion of water shall be direct or sinuous, and of the law of resistance in parallel channels,” <em>Philosophical Transactions of the Royal Society of London</em> 174 (1883), 935–982. doi:10.1098/rstl.1883.0029.</li>
+  <li id="ref-williamson">C. H. K. Williamson, “Vortex dynamics in the cylinder wake,” <em>Annual Review of Fluid Mechanics</em> 28 (1996), 477–539. doi:10.1146/annurev.fl.28.010196.002401.</li>
+  <li id="ref-roshko">A. Roshko, “On the development of turbulent wakes from vortex streets,” NACA Report 1191 (1954).</li>
+  <li id="ref-babinsky">H. Babinsky, “How do wings work?”, <em>Physics Education</em> 38 (2003), 497–503.</li>
+  <li id="ref-anderson">J. D. Anderson Jr., <em>Fundamentals of Aerodynamics</em>, 6th edition, McGraw-Hill (2017). Thin-airfoil theory, the lift curve, and the NACA 2412 data.</li>
+  <li id="ref-abbott">I. H. Abbott and A. E. von Doenhoff, <em>Theory of Wing Sections, Including a Summary of Airfoil Data</em>, Dover (1959).</li>
+  <li id="ref-rayleigh">J. W. Strutt (Lord Rayleigh), “On the light from the sky, its polarization and colour,” <em>Philosophical Magazine</em> 41 (1871), 107–120 and 274–279.</li>
+</ol>
+<!-- explainer:article:end -->
+</article>
+</main>
+</div>
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+</body>
+</html>
