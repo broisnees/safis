@@ -1843,6 +1843,7 @@ void main() {
   const G_SURFACE = `
 uniform mat4 uModel;
 uniform vec3 uColor; uniform vec3 uLight; uniform vec3 uEye;
+vec3 gBase; float gRough; // the part's color and roughness here (uColor and uMat.z, varied by a texture map or per grass blade)
 uniform float uSun;
 uniform vec4 uMat; uniform vec3 uF0; uniform vec4 uBrush; uniform vec4 uDetail; uniform vec3 uEmit;
 uniform vec4 uTissue; uniform vec3 uSssCol; // tissue: scattering, sheen, fibers on, _; scattered light color
@@ -1895,8 +1896,8 @@ vec3 lightPBR(vec3 N, vec3 V, vec3 L, vec3 Lc, vec3 diff, vec3 f0, float a, vec3
 }
 // N, V: unit normal and view vector; wp: world position; lp, ln: local position and normal.
 vec3 shadePBR(vec3 N, vec3 V, vec3 wp, vec3 lp, vec3 ln, float vis, out vec3 emission) {
-  vec3 base = toLin(uColor);
-  float metal = uMat.y, rough = clamp(uMat.z, 0.03, 1.0), cc = uMat.w;
+  vec3 base = toLin(gBase);
+  float metal = uMat.y, rough = clamp(gRough, 0.03, 1.0), cc = uMat.w;
   vec3 f0 = mix(vec3(0.04), uF0, metal);
   vec3 diff = base * (1.0 - metal);
   float aniso = uBrush.w;
@@ -2009,12 +2010,12 @@ vec3 shadeSoft(vec3 N, vec3 V, vec3 wp, float vis) {
   float sh = mix(1.0, vis, uHeat.w);
   if (uSun > 0.5) {
     float lit = smoothstep(-0.05, 0.25, ndl) * sh;
-    col = uColor * (0.12 + 0.95 * lit * (0.55 + 0.45 * max(ndl, 0.0)));
+    col = gBase * (0.12 + 0.95 * lit * (0.55 + 0.45 * max(ndl, 0.0)));
   } else {
     float wrap = clamp((ndl + 0.5) / 1.5, 0.0, 1.0);
     wrap = wrap * wrap * (3.0 - 2.0 * wrap);
-    vec3 cool = uColor * vec3(0.84, 0.86, 0.90);
-    col = mix(cool, uColor, wrap * sh);
+    vec3 cool = gBase * vec3(0.84, 0.86, 0.90);
+    col = mix(cool, gBase, wrap * sh);
     col *= (0.92 + 0.08 * (0.5 + 0.5 * N.y)) * (1.0 - 0.1 * (1.0 - sh));
     vec3 H = normalize(uLight + V);
     float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
@@ -2025,7 +2026,7 @@ vec3 shadeSoft(vec3 N, vec3 V, vec3 wp, float vis) {
     if (uPtPos[i].w <= 0.0) continue;
     vec3 d = uPtPos[i].xyz - wp;
     float r2 = dot(d, d), att = 1.0 / (1.0 + r2 / (uPtPos[i].w * uPtPos[i].w));
-    col += uColor * uPtCol[i] * att * max(dot(N, normalize(d)), 0.0) * 0.3;
+    col += gBase * uPtCol[i] * att * max(dot(N, normalize(d)), 0.0) * 0.3;
   }
   return col;
 }`;
@@ -3669,6 +3670,78 @@ void main() {
   // painted once into a 1024 x 512 canvas. Uploaded once per source, with mipmaps.
   const mapCache = new WeakMap();
   const imgCache = new Map();
+  function mapCanvas(src) {
+    // { lazy: () => canvas } is painted the first time it's drawn (the Earth's map).
+    if (src && src.lazy) return src.canvas || (src.canvas = src.lazy());
+    // A URL or data URL loads as an image; figures redraw once it arrives.
+    if (typeof src === "string") {
+      let e = imgCache.get(src);
+      if (!e) {
+        const img = new Image();
+        e = { img, ready: false };
+        img.onload = () => { e.ready = true; if (typeof window !== "undefined") window.dispatchEvent(new Event("safis:redraw")); };
+        img.onerror = () => console.error(`E3: couldn't load the map image ${src.slice(0, 60)}`);
+        img.src = src;
+        imgCache.set(src, e);
+      }
+      return e.ready ? e.img : null;
+    }
+    if (src && src.tagName === "IMG" && !(src.complete && src.naturalWidth)) { src.addEventListener("load", () => window.dispatchEvent(new Event("safis:redraw")), { once: true }); return null; }
+    if (typeof src !== "function") return src;
+    let c = mapCache.get(src);
+    if (c && c.canvas) return c.canvas;
+    const W = 1024, H = 512, cv = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(W, H) : Object.assign(document.createElement("canvas"), { width: W, height: H });
+    const ctx = cv.getContext("2d"), img = ctx.createImageData(W, H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const v = src((x + 0.5) / W, (y + 0.5) / H);
+      const rgb = Array.isArray(v) ? v : colorOf(v, true);
+      const k = (y * W + x) * 4;
+      img.data[k] = rgb[0] * 255; img.data[k + 1] = rgb[1] * 255; img.data[k + 2] = rgb[2] * 255; img.data[k + 3] = (rgb[3] ?? 1) * 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    mapCache.set(src, { canvas: cv });
+    return cv;
+  }
+  const strKeys = new Map();
+  function mapTexture(src) {
+    const { gl } = R;
+    let key = src;
+    if (typeof src === "string") { key = strKeys.get(src); if (!key) strKeys.set(src, (key = { url: src })); }
+    let e = mapCache.get(key);
+    const ver = src && src.version;
+    if (e && e.tex && e.gl === gl && e.ver === ver) return e.tex;
+    const img = mapCanvas(src);
+    if (!img) return R.dummyMap || (R.dummyMap = (() => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255])); return t; })());
+    const tex = (e && e.gl === gl && e.tex) || gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    if (img && img.data && img.width) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, img.width, img.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, img.data instanceof Uint8ClampedArray ? new Uint8Array(img.data.buffer) : img.data);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.BROWSER_DEFAULT_WEBGL);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const ext = gl.getExtension("EXT_texture_filter_anisotropic");
+    if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, 8);
+    mapCache.set(key, { ...(mapCache.get(key) || {}), tex, gl, ver });
+    return tex;
+  }
+
+  // A slide projector for mapping "project": the picture is cast from `position` toward `target`
+  // through a frustum `fov` degrees tall (aspect from `aspect`, default the picture's), onto whatever
+  // it lands on, the way a projector lights a wall or a model.
+  function projectorVP(pr) {
+    const view = m4.lookAt(pr.position, pr.target ?? [0, 0, 0], pr.up ?? [0, 1, 0]);
+    return m4.multiply(m4.perspective(((pr.fov ?? 30) * Math.PI) / 180, pr.aspect ?? 1.5, 0.01, 1e6), view);
+  }
+
+  // The Earth: an equirectangular picture of land and sea from the maps kit's coastlines (when
+  // Geo is on the page), with ice at the poles; the sea is glossy (alpha holds roughness), so the
+  // Sun glints off it. Returns a canvas for material.map with mapping "sphere".
+  let earthCanvas = null;
   function earthMap(o = {}) {
     if (earthCanvas && !o.redraw) return earthCanvas;
     const W = 2048, H = 1024;
@@ -3735,6 +3808,28 @@ void main() {
   // and the bright ray systems of Tycho and Copernicus; or pass `map` (an equirectangular photo, a
   // data URL) for the real thing. Longitude 0 (the center of the near side) faces +z.
   let moonCanvas = null;
+  function moonMap() {
+    if (moonCanvas) return moonCanvas;
+    const W = 1024, H = 512;
+    const cv = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(W, H) : Object.assign(document.createElement("canvas"), { width: W, height: H });
+    const ctx = cv.getContext("2d"), img = ctx.createImageData(W, H), d = img.data;
+    // [lat, lon, radius (deg), darkness]
+    const MARIA = [[34, -16, 10, 1], [27, 18, 7, 1], [8, 31, 8, 0.95], [17, 59, 4.5, 1], [-5, 52, 6, 0.85], [-21, -17, 6, 0.8], [20, -58, 11, 0.9], [5, -48, 12, 0.85], [-10, -35, 7, 0.8],
+      [-13, 8, 3.5, 0.6], [-25, -40, 5, 0.75], [-15, 35, 4, 0.75], [10, 2, 4, 0.7], [45, 3, 4, 0.6], [56, 0, 4, 0.55],
+      [30, -35, 8, 0.85], [12, -30, 7, 0.85], [-5, -25, 6, 0.75], [18, 10, 4, 0.8], [2, 20, 5, 0.85], [-2, 40, 4, 0.75], [40, -50, 6, 0.75], [-30, -20, 3.5, 0.6]];
+    const RAYS = [[-43.3, -11.4, 1.0, 35], [9.6, -20.1, 0.65, 18], [8.1, -38, 0.45, 12], [-8.9, 61.1, 0.3, 10], [23.7, -47.4, 0.4, 10]];
+  function moon(o = {}) {
+    const r = o.radius ?? 1;
+    const g = new Node(null, { name: o.name ?? "moon" });
+    g.globe = g.add(mesh.sphere(r, { segments: o.segments ?? 96 }), { name: "moon surface", material: { color: "#ffffff", metal: 0, roughness: 0.95, map: o.map ?? { lazy: moonMap }, mapping: "sphere" } });
+    g.at = (lat, lon, h = 0) => { const a = lat * Math.PI / 180, b = lon * Math.PI / 180, R = r + h; return [R * Math.cos(a) * Math.sin(b), R * Math.sin(a), R * Math.cos(a) * Math.cos(b)]; };
+    return g;
+  }
+
+  // Grass: thousands of tapered, curved blades rooted on a patch, each bending in the wind as a
+  // cantilever (gusts roll across the patch as waves, each blade flutters at its own rate) and
+  // pushed aside by anything that walks through. Blade sizes default to a lawn: 6 to 14 cm tall,
+  // 3 to 5 mm wide, in the units of `units`.
   // ---------- WebGL renderer ----------
   let R = null;
   function compile(gl, vs, fs, varyings) {
@@ -4734,7 +4829,8 @@ void main() {
     const drawSurface = (P, it, m) => {
       const g = upload(it.node.mesh);
       const cutOn = cut && it.node.cut ? 1 : 0;
-      if (cutOn) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
+      if (cutOn || it.node.twoSided) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
+      gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, m.map ? mapTexture(m.map.src) : R.dummyColor); gl.activeTexture(gl.TEXTURE0);
       const r = it.node.mesh.bounds.radius || 1, wr = it.radius || 1;
       const bb = it.node.mesh.bounds, sc = wr / r, minSide = Math.max(1e-6, Math.min(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1], bb.max[2] - bb.min[2]) * sc);
       const T = m.temp;
