@@ -784,7 +784,8 @@
     else if (m && m.base) m = { ...(MATERIALS[m.base] || {}), ...tissueOf(m.base), ...m };
     m = { ...(m || {}) };
     // Tissue only shades as tissue in the anatomy look; elsewhere it's the diagram color.
-    const tissue = look === "anatomy" && (m.sss != null || m.wet != null || m.sheen != null);
+    const tissue = (look === "anatomy" && (m.sss != null || m.wet != null || m.sheen != null)) || !!m.foliage;
+    if (m.foliage) { m.sss ??= 0.45; m.sssColor ??= "#9fbf3a"; m.sheen ??= 0.12; m.wet ??= 0.04; }
     if (tissue) {
       const wet = clamp01(m.wet ?? 0.3);
       m.roughness ??= 0.72 - 0.4 * wet;
@@ -1811,15 +1812,49 @@ vec3 atmosphere(vec3 d, vec3 sun) {
   const VS = `#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
+layout(location=2) in vec4 aBend;  // grass: root (x, y, z), height fraction along the blade
+layout(location=3) in vec2 aBlade; // grass: random number, blade length
 uniform mat4 uModel, uViewProj;
 uniform mat3 uNormalMat;
-out vec3 vWorld; out vec3 vNormal; out vec3 vLocal; out vec3 vLocalN;
+uniform vec4 uWind;  // grass: wind direction (x, z), bend at the steady wind, time
+uniform vec4 uWind2; // grass: gust wavenumber, gust speed, flutter, on
+uniform vec4 uPush;  // grass: a point (local) that pushes blades aside, radius
+out vec3 vWorld; out vec3 vNormal; out vec3 vLocal; out vec3 vLocalN; out vec4 vBlade;
 void main() {
-  vec4 w = uModel * vec4(aPos, 1.0);
+  vec3 p = aPos, nrm = aNormal;
+  vBlade = vec4(0.0);
+  if (uWind2.w > 0.5) {
+    // A blade bends as a cantilever: the tip moves most, the base not at all (deflection grows
+    // with the square of the height), and the blade keeps its length, so its tip drops as it leans.
+    float h = aBend.w, L = aBlade.y;
+    vec3 root = aBend.xyz;
+    vec2 dir = uWind.xy;
+    float ph = dot(root.xz, dir) * uWind2.x - uWind.w * uWind2.y;
+    float gust = 0.55 + 0.3 * sin(ph + aBlade.x * 0.7) + 0.15 * sin(ph * 2.3 + 1.7 + aBlade.x * 2.0);
+    float flutter = sin(uWind.w * (5.0 + 4.0 * aBlade.x) + aBlade.x * 40.0) * uWind2.z;
+    vec2 off = dir * (uWind.z * gust + flutter * uWind.z);
+    if (uPush.w > 0.0) {
+      vec2 q = root.xz - uPush.xz;
+      float dq = length(q), k = 1.0 - smoothstep(uPush.w * 0.5, uPush.w * 1.2, dq);
+      off += (dq > 1e-5 ? q / dq : vec2(1.0, 0.0)) * 1.4 * k * smoothstep(uPush.y - L, uPush.y, root.y + L);
+    }
+    float m = min(length(off), 1.45);
+    off = m > 0.0 ? normalize(off) * m : off;
+    vec3 rel = p - root;
+    float along = clamp(dot(rel, vec3(0.0, 1.0, 0.0)), 0.0, L * 2.0);
+    vec2 side = rel.xz;
+    float ang = m * h * h * 1.1;
+    vec2 od = m > 0.0 ? off / m : vec2(0.0);
+    vec3 leaned = vec3(side.x, 0.0, side.y) + vec3(od.x, 0.0, od.y) * sin(ang) * along + vec3(0.0, cos(ang) * along, 0.0);
+    p = root + leaned;
+    nrm = normalize(nrm + vec3(od.x, 0.0, od.y) * sin(ang) * 0.6);
+    vBlade = vec4(aBlade.x, h, 1.0, 0.0);
+  }
+  vec4 w = uModel * vec4(p, 1.0);
   vWorld = w.xyz;
-  vNormal = uNormalMat * aNormal;
-  vLocal = aPos;
-  vLocalN = aNormal;
+  vNormal = uNormalMat * nrm;
+  vLocal = p;
+  vLocalN = nrm;
   gl_Position = uViewProj * w;
 }`;
 
@@ -3830,6 +3865,67 @@ void main() {
   // cantilever (gusts roll across the patch as waves, each blade flutters at its own rate) and
   // pushed aside by anything that walks through. Blade sizes default to a lawn: 6 to 14 cm tall,
   // 3 to 5 mm wide, in the units of `units`.
+  function grass(o = {}) {
+    const units = unitsOf(o.units ?? "m");
+    const size = Array.isArray(o.size) ? o.size : [o.size ?? 0.4 * units, o.size ?? 0.4 * units];
+    const count = Math.max(1, Math.round(o.count ?? Math.min(24000, 9000 * (size[0] * size[1]) / (0.16 * units * units))));
+    const hR = o.height ?? [0.06 * units, 0.14 * units], wR = o.width ?? [0.003 * units, 0.005 * units];
+    const S = 4, seed = o.seed ?? 3, ground = o.ground ?? (() => 0);
+    const vpb = 2 * S + 1, tpb = 2 * S - 1;
+    const P = new Float32Array(count * vpb * 3), N = new Float32Array(count * vpb * 3), Bd = new Float32Array(count * vpb * 4), Bl = new Float32Array(count * vpb * 2);
+    const I = new Uint32Array(count * tpb * 3);
+    const rnd = (i, k) => rndU(i, k, 0, seed);
+    // Roots on a jittered grid, so the patch fills evenly without rows.
+    const cols = Math.ceil(Math.sqrt(count * size[0] / size[1])), rows = Math.ceil(count / cols);
+    for (let b = 0; b < count; b++) {
+      const gx = b % cols, gz = Math.floor(b / cols);
+      const x = ((gx + rnd(b, 1)) / cols - 0.5) * size[0], z = ((gz + rnd(b, 2)) / rows - 0.5) * size[1], y = ground(x, z);
+      const L = hR[0] + (hR[1] - hR[0]) * Math.pow(rnd(b, 3), 0.8), w = wR[0] + (wR[1] - wR[0]) * rnd(b, 4);
+      const face = rnd(b, 5) * Math.PI * 2, leanA = rnd(b, 6) * Math.PI * 2, lean = 0.15 + 0.5 * rnd(b, 7) ** 1.5;
+      const side = [Math.cos(face), 0, Math.sin(face)], ld = [Math.cos(leanA), 0, Math.sin(leanA)];
+      const r = rnd(b, 8);
+      for (let k = 0; k <= S; k++) {
+        const h = k / S, bend = lean * h * h;
+        const c = [x + ld[0] * Math.sin(bend) * L * h, y + Math.cos(bend) * L * h, z + ld[2] * Math.sin(bend) * L * h];
+        const half = k === S ? 0 : (w / 2) * (1 - Math.pow(h, 1.6));
+        const tan = v3.norm([ld[0] * Math.sin(bend * 2 + 1e-3), Math.cos(bend * 2), ld[2] * Math.sin(bend * 2 + 1e-3)]);
+        let fn = v3.norm(v3.cross(side, tan));
+        if (fn[1] < 0) fn = v3.scale(fn, -1);
+        const verts = k === S ? [c] : [v3.add(c, v3.scale(side, -half)), v3.add(c, v3.scale(side, half))];
+        verts.forEach((pt, j) => {
+          const vi = b * vpb + (k === S ? 2 * S : 2 * k + j);
+          P.set(pt, vi * 3);
+          const curl = k === S ? 0 : (j ? 0.35 : -0.35);
+          N.set(v3.norm(v3.add(fn, v3.scale(side, curl))), vi * 3);
+          Bd.set([x, y, z, h], vi * 4);
+          Bl.set([r, L], vi * 2);
+        });
+      }
+      let t = b * tpb * 3;
+      const v = k => b * vpb + k;
+      for (let k = 0; k < S - 1; k++) { I.set([v(2 * k), v(2 * k + 1), v(2 * k + 3), v(2 * k), v(2 * k + 3), v(2 * k + 2)], t); t += 6; }
+      I.set([v(2 * S - 2), v(2 * S - 1), v(2 * S)], t);
+    }
+    const m = makeMesh(P, N, I);
+    m.extra = { 2: [Bd, 4], 3: [Bl, 2] };
+    const g = new Node(null, { name: o.name ?? "grass" });
+    const blades = g.add(m, { name: "blades", material: o.material ?? { color: o.color ?? "#5f8a2f", metal: 0, roughness: 0.55, foliage: true }, twoSided: true, trace: false, pickable: o.pickable ?? true });
+    blades._grass = g;
+    g.blades = blades;
+    if (o.soil !== false) g.add(mesh.box(size[0], o.soilDepth ?? 0.03 * units, size[1], { round: 0.004 * units }), { name: "soil", position: [0, -(o.soilDepth ?? 0.03 * units) / 2, 0], material: { color: o.soilColor ?? "#4b3526", metal: 0, roughness: 0.95 } });
+    // Wind in m/s along wind direction [x, z]; the bend grows with the dynamic pressure (v²).
+    g.wind = o.wind ?? 3;
+    g.windDirection = o.windDirection ?? [1, 0.25];
+    g.units = units;
+    g.push = null; // [x, y, z, radius] in the group's coordinates: something parting the grass
+    return g;
+  }
+
+  // How big a light looks from a point on a surface: its solid angle (steradians), the share of it
+  // weighted by the cosine (the projected solid angle, which sets the irradiance), and two meshes
+  // for drawing it: the light's outline projected onto a hemisphere of `radius` around the point,
+  // and that patch flattened onto the hemisphere's base (where its area / (pi r²) is the share of
+  // light the point gets).
   // ---------- WebGL renderer ----------
   let R = null;
   function compile(gl, vs, fs, varyings) {
@@ -4098,9 +4194,16 @@ void main() {
     const bn = buf(gl.ARRAY_BUFFER, m.normals);
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    const extra = [];
+    // Extra per-vertex attributes (grass blades: root and height, random number and length).
+    for (const [loc, [data, size]] of Object.entries(m.extra || {})) {
+      extra.push(buf(gl.ARRAY_BUFFER, data));
+      gl.enableVertexAttribArray(+loc);
+      gl.vertexAttribPointer(+loc, size, gl.FLOAT, false, 0, 0);
+    }
     const bi = buf(gl.ELEMENT_ARRAY_BUFFER, m.indices);
     gl.bindVertexArray(null);
-    m._gpu = { gl, vao, buffers: [bp, bn, bi], count: m.indices.length, version: m.version };
+    m._gpu = { gl, vao, buffers: [bp, bn, bi, ...extra], count: m.indices.length, version: m.version };
     return m._gpu;
   }
 
@@ -4698,6 +4801,14 @@ void main() {
       if (prepareVolume(sys, V, lay, L, scene.time, points)) sys._volLay = lay;
     }
 
+    // Grass: the wind's steady bend grows with its dynamic pressure (v squared), gusts roll across
+    // the patch at the wind's speed (wavelength about 3 m), and each blade flutters on its own.
+    const grassU = node => {
+      const gr = node._grass;
+      if (!gr) return { uWind: [0, 0, 0, 0], uWind2: [0, 0, 0, 0], uPush: [0, 0, 0, 0] };
+      const v = Math.max(0, gr.wind ?? 0), d = v3.norm([gr.windDirection?.[0] ?? 1, 0, gr.windDirection?.[1] ?? 0]), k = (2 * Math.PI) / (3 * (gr.units ?? 1));
+      return { uWind: [d[0], d[2], Math.min(1.4, (v / 7) ** 2), scene.time ?? 0], uWind2: [k, k * Math.max(v, 0.5), 0.05 + 0.04 * Math.min(1, v / 5), 1], uPush: gr.push || [0, 0, 0, 0] };
+    };
     // Shadow maps from the key light, fitted around the scene.
     const sh = scene.shadow === false || room ? null : typeof scene.shadow === "object" ? scene.shadow : {};
     const shadowOn = !!sh && sh.cast !== false && items.length > 0;
@@ -4734,7 +4845,7 @@ void main() {
         for (const it of list) {
           if (it.node.castShadow === false) continue;
           const g = upload(it.node.mesh);
-          setAll(P, { uModel: it.world, uCutOn: cut && it.node.cut ? 1 : 0 });
+          setAll(P, { uModel: it.world, uCutOn: cut && it.node.cut ? 1 : 0, ...grassU(it.node) });
           gl.bindVertexArray(g.vao);
           gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
         }
