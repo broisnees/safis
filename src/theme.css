@@ -524,3 +524,55 @@ body { transition: background-color 0.3s ease, color 0.3s ease; }
   *, *::before, *::after { transition: none !important; }
   .safis-reveal figure.demo .plate { opacity: 1; translate: none; }
 }
+
+/* Bands: a full-width stretch of the page in the other theme (a dark room for figures about light,
+   a white bench in a dark article). The background runs edge to edge while the text keeps its
+   column; figures inside draw with the band's colors. <section class="band dark">...</section> */
+.band { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 100vmax var(--bg); clip-path: inset(0 -100vmax); padding: 2.6rem 0 2.2rem; margin: 3rem 0; }
+.band > :first-child { margin-top: 0; }
+.band > :last-child { margin-bottom: 0; }
+.band.dark {
+  --bg: #000000;
+  --panel: var(--bg);
+  --ink: #ededed;
+  --muted: #9a9a9a;
+  --faint: #3a3a3a;
+  --grid: #1a1a1a;
+  --rule: #222222;
+  --brass: #d9a548;
+  --red: #f47272;
+  --orange: #f59447;
+  --green: #4fd185;
+  --blue: #6aa5ff;
+  --purple: #ac8cff;
+  --track: color-mix(in srgb, var(--ink) 16%, transparent);
+  --thumb: #ffffff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 12px 32px -12px rgb(0 0 0 / 0.85);
+  color-scheme: dark;
+}
+.band.light {
+  --bg: #fcfcfc;
+  --panel: var(--bg);
+  --ink: #111111;
+  --muted: #666666;
+  --faint: #d4d4d4;
+  --grid: #efefef;
+  --rule: #e6e6e6;
+  --brass: #966111;
+  --red: #d22d2d;
+  --orange: #bd4f08;
+  --green: #18793e;
+  --blue: #2457d6;
+  --purple: #7438e0;
+  --accent: var(--ink);
+  --track: color-mix(in srgb, var(--ink) 13%, transparent);
+  --thumb: #ffffff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px -12px rgb(0 0 0 / 0.14);
+  /* Controls are soft chips of ink over the page, so they follow the theme on their own. */
+  color-scheme: light;
+}
+
+/* A text control: a quiet field on the chip surface, mono so tokens line up with the figure. */
+.textfield { width: 100%; min-width: 0; font: 500 15px/1.4 var(--font-mono); color: var(--ink); background: var(--chip); border: 0; border-radius: 10px; padding: 9px 12px; outline: none; transition: background-color 0.15s; }
+.textfield:hover { background: var(--chip-hover); }
+.textfield:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--c, var(--accent)) 70%, transparent); }

@@ -33,6 +33,7 @@
   }
   if (!root.dataset.theme && savedTheme() !== "auto") root.dataset.theme = savedTheme();
 
+  let themeEpoch = 0;
   function readTheme() {
     // Tokens live on :root in pages; framework hosts can scope them to a .safis element instead.
     let cs = getComputedStyle(root);
@@ -1447,7 +1448,25 @@
     render(d);
   }
 
+  // A figure inside a <section class="band dark"> (or "band light") draws with that band's colors:
+  // the shared palette is swapped to the band's tokens while it draws, then put back.
+  function bandPalette(d) {
+    if (d.bandKey === themeEpoch) return d.band;
+    d.bandKey = themeEpoch;
+    const band = d.el.closest(".band.dark, .band.light");
+    if (!band) return (d.band = null);
+    const cs = getComputedStyle(band), out = {};
+    for (const n of NAMES) out[n] = cs.getPropertyValue("--" + n).trim();
+    return (d.band = out);
+  }
   function render(d) {
+    const band = bandPalette(d);
+    if (!band) return renderInner(d);
+    const saved = { ...palette };
+    Object.assign(palette, band);
+    try { renderInner(d); } finally { Object.assign(palette, saved); }
+  }
+  function renderInner(d) {
     d.dirty = false;
     if (d.broken || !d.w) return;
     const ctx = d.ctx;
@@ -1518,7 +1537,9 @@
   }
   requestAnimationFrame(frame);
 
-  const refreshTheme = () => { readTheme(); for (const d of demos) d.dirty = true; };
+  const refreshTheme = () => { readTheme(); themeEpoch++; for (const d of demos) d.dirty = true; };
+  // Assets that finish loading after the first frame (a texture for a 3D model) ask for a redraw.
+  window.addEventListener("safis:redraw", () => { for (const d of demos) d.dirty = true; });
   darkQuery.addEventListener("change", refreshTheme);
   new MutationObserver(refreshTheme).observe(root, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
   document.fonts?.ready.then(refreshTheme);
