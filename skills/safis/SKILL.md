@@ -47,7 +47,7 @@ Defaults, unless the request says otherwise:
 - **Size:** in depth. A full explainer has about 25 figures in 7-12 sections, more when the topic needs them, the way the best long-form interactive articles are: every idea gets its own figure, and the page goes from the everyday phenomenon all the way to how it really works, including the complications. Main text (paragraphs and lists, not captions, sidenotes, deep dives, or references) runs 130-180 words per figure, so about 3,300-4,500 words at 25 figures. When the text runs longer, the fix is a figure for the paragraph that describes something the reader can't see, not more words. Write a short piece (8-12 figures, 1,000-2,000 words) only when the request asks for one.
 - **Furniture:** an "In brief" abstract, sidenotes for asides, predictions before the surprising figures, callouts for the key idea and the common mistake, collapsed "going deeper" sections for derivations and history, numbered citations to real sources, and a references list. See [references/article.md](references/article.md).
 - **Reader:** a curious adult with high-school math. Define every term, ideally while it's visible in a figure.
-- **Category:** one of Body, Biology, Chemistry, Physics, Machines, Engineering, Earth & Space, Computing, AI, Math.
+- **Category:** one of Body, Biology, Chemistry, Physics, Machines, Engineering, Earth & Space, Computing, AI, Math, History, Philosophy, Language, Economics & Society, Art & Music.
 - **Research pages:** when the subject is a paper, a study, or an open question, follow the research arc in [references/writing.md](references/writing.md): the question, what was known, the method as figures the reader runs, the results reproduced live, the limits, and references with DOIs.
 - **Location:** the path the request names; inside an existing site folder, `<root>/<slug>/index.html`; otherwise `./<slug>/index.html`.
 
@@ -63,7 +63,7 @@ Pin down the question the page answers ("What happens in the jaw joint when it l
 
 ### 2. Study the subject, then plan
 
-Read [references/craft.md](references/craft.md), [references/figures.md](references/figures.md), [references/writing.md](references/writing.md), and the section of [references/categories.md](references/categories.md) for the category. Get the facts right before drawing anything: dimensions, ranges, mechanisms, names. Leave out anything you can't stand behind.
+Read [references/craft.md](references/craft.md), [references/patterns.md](references/patterns.md) (paired views, magnifiers, accumulating particles, fields, waves, dark bands, trees, timelines), [references/motion.md](references/motion.md) (values that glide, staged steps, flowing data, animated tokens, bars, and matrices), [references/figures.md](references/figures.md), [references/writing.md](references/writing.md), and the section of [references/categories.md](references/categories.md) for the category. Get the facts right before drawing anything: dimensions, ranges, mechanisms, names. Leave out anything you can't stand behind.
 
 Write a short plan in the conversation:
 
@@ -86,15 +86,21 @@ Pick how each figure draws by what it has to show:
 | A shape that must turn freely in 3D, a surface, a molecule | E3 | engine3d.md |
 | Anything located on Earth | `Geo` | maps.md |
 | Light: rays, lenses, mirrors, the eye | `Optics` | optics.md |
+| Light and shadow in 3D: brightness, soft shadows, bounce light, color mixing, the sky, beams in dusty air | E3 physical lights (`look: "darkroom"`, `scene.lights` with `type` and `power`), `E3.photons`, `E3.solidAngle`, `g.inset` | engine3d.md "Physical light" |
+| The sky, sunsets, the globe, day and night; grass and plants in wind | E3 `scene.sky`, `E3.earth`, `E3.grass` | engine3d.md "Physical light" |
 | Fire, flow, water, glow (only where it shows something physical) | `Fx`, layered on one of the above | effects.md |
+| Air and water that really move: wakes and vortex streets, pressure, ripples, interference, dust settling or carried by the air | `Fx.fluid` (Navier–Stokes), `Fx.waves` (wave equation), `Fx.particles` (real matter): make the sim once, `sim.warm(t)` in `state()`, `sim.advance(s.t)` in `step()`, draw with `g.fx.fluid`/`waves`/`particles` and `g.fx.colorbar`; `drag: sim.interact` lets the reader stir or drop pebbles | effects.md |
 | Sound the reader should hear, pixels and filters | `Sound`, `Img` | sound.md, images.md |
 | Fixed structure: message sequences, states, code, a diff | Mermaid, Shiki | diagrams.md |
+| A tree (of life, a family, a decision, an argument, a sentence) or a timeline | `g.tree`, `g.timeline` | plots.md "Trees and timelines" |
 
 For a machine, list its named parts (40 or more for a whole machine) before writing any geometry. Most of a technical figure's quality comes from that list.
 
 Every 3D figure follows "Making 3D that looks real" in [references/engine3d.md](references/engine3d.md): real dimensions first, then the named parts list, then [`E3.parts`](references/parts3d.md) builders and assemblies, materials by what each real part is made of, a `scene.look` preset, and turntable checks at 2x. A 3D figure that looks like a toy (wrong proportions, flat metal, floating parts, one material everywhere) is a fault like any other: fix it before calling the page done. Show only the subject: no stands, tables, floors, or pads unless the idea needs them (a jet hitting a pad does; a model on a display stand doesn't), since E3 already grounds the object with its shadow.
 
-Every moving particle obeys the physics of what it is, in 3D and 2D alike. Smoke and steam rise because they are hot and slow as they cool; dust, sand, water, and sparks fall to their terminal speed and land; bubbles rise; sound moves air back and forth along the wave without carrying it away; light goes straight at its speed in each medium and bends only at a boundary. Use `matter` on `E3.particles` (with `units`) rather than hand-tuned forces, and the effects and optics kits rather than invented motion. Particles that pile up in one place, hang still mid-air, or move against their physics are a fault: fix them like a wrong number.
+Every moving particle obeys the physics of what it is, in 3D and 2D alike. Smoke and steam rise because they are hot and slow as they cool; dust, sand, water, and sparks fall to their terminal speed and land; bubbles rise; sound moves air back and forth along the wave without carrying it away; light goes straight at its speed in each medium and bends only at a boundary. Use `matter` on `E3.particles` (with `units`) rather than hand-tuned forces, and the effects and optics kits rather than invented motion. Particles that pile up in one place, hang still mid-air, or move against their physics are a fault: fix them like a wrong number. Light obeys its physics too: brightness from a real power falling with distance squared and the cosine, shadows that soften with the light's size, color from adding lights and filtering by surfaces. Use E3's physical lights for these, never a painted gradient.
+
+When a material, particle matter, or colormap you need doesn't exist, define it from its real numbers in a few lines instead of faking it: [references/extending.md](references/extending.md).
 
 When several figures show the same object, build one **shared model** first (geometry, kinematics, simulation) in a single script and have every figure draw from it. Side views and 3D views then always agree, and a fix in one place fixes every figure.
 

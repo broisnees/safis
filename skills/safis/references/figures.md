@@ -41,6 +41,8 @@ The strongest pages mix them: a 3D hero to show the whole thing, 2D sections to 
 - **Labels are quiet.** `g.callouts` and `g.label` draw small sentence-case sans with a halo; name things in lowercase ("key pin", "shear line"). Variables and formulas on the canvas go through `g.tex` in the serif italic. Never uppercase tracked labels.
 - **Figures sit on the page.** No card, border, or background of their own: the canvas is the page color, the controls sit under the drawing, and a numbered caption follows. Don't paint frames or panels inside the canvas either; group with space.
 - **Dark scenes when the subject is light or space.** Paint the canvas dark yourself and draw light on it.
+- **Draw the phenomenon, not an interface.** A figure is a model, a measurement, or a picture of the real thing, never a mock-up of an app: no phone frames, skeleton cards with gray placeholder lines, buttons drawn inside the canvas, chat bubbles, or browser windows. To show a feed, plot the session (each post a mark on a time line, its value as height, the reward signal under it); to show text, set it as type and color the spans that matter; to show a model's choices, show the numbers. Real controls go under the figure.
+- **No grids of outlined boxes.** Tokens, cells, and items are soft tinted chips or tinted cells with no outlines (`g.tokens`, `g.matrix`, motion.md); outline only the one being pointed at. A screen full of bordered rectangles reads as a form, not a figure.
 
 ## Patterns
 
