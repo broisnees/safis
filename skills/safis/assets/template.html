@@ -5296,10 +5296,11 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
 
   // ---------- WebGL renderer ----------
   let R = null;
-  // Both shaders compile and link before anything asks how it went, so the driver can work on
-  // them together instead of finishing each one while the page waits; the status (and the
-  // failing shader's log) is read only once, after the link.
-  function compile(gl, vs, fs, varyings) {
+  // Compiling only holds up the page when something reads a program's status, so a program
+  // starts (compileStart: both shaders and the link, nothing read back) well before its first
+  // frame needs it and finishes then (compileEnd); the status, and the failing shader's log, is
+  // read once, after the link.
+  function compileStart(gl, vs, fs, varyings) {
     const make = (type, src) => {
       const s = gl.createShader(type);
       gl.shaderSource(s, src);
@@ -5311,6 +5312,10 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
     gl.attachShader(p, f);
     if (varyings) gl.transformFeedbackVaryings(p, varyings, gl.SEPARATE_ATTRIBS);
     gl.linkProgram(p);
+    return { p, v, f };
+  }
+  function compile(gl, vs, fs, varyings) { return compileEnd(gl, compileStart(gl, vs, fs, varyings)); }
+  function compileEnd(gl, { p, v, f }) {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
       for (const s of [v, f]) if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader: ${gl.getShaderInfoLog(s)}`);
       throw new Error(`program: ${gl.getProgramInfoLog(p)}`);
@@ -5357,7 +5362,21 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
   // Programs compile the first time a frame needs them, so a page without particles never pays for them.
   // Compiling a program (or allocating a big target) makes a slow frame that says nothing about the
   // device; R.hitch tells the quality tiers to ignore it.
-  const prog = name => R.prog[name] || ((R.hitch = true), (R.prog[name] = compile(R.gl, ...PROGRAMS[name]())));
+  const prog = name => {
+    const P = R.prog[name];
+    if (P && !P.job) return P;
+    R.hitch = true;
+    return (R.prog[name] = P ? compileEnd(R.gl, P.job) : compile(R.gl, ...PROGRAMS[name]()));
+  };
+  // The programs every scene draws with start compiling as soon as the kit loads on a page with
+  // figures, alongside the figure scripts, so the first 3D frame doesn't wait for them.
+  const CORE_PROGRAMS = ["main", "depth", "ground", "composite", "present", "extract", "down", "up", "env", "prefilter"];
+  function startPrograms() {
+    try {
+      renderer();
+      for (const n of CORE_PROGRAMS) if (!R.prog[n] && PROGRAMS[n]) R.prog[n] = { job: compileStart(R.gl, ...PROGRAMS[n]()) };
+    } catch {}
+  }
 
   // One WebGL context serves every figure. It renders into an OffscreenCanvas and each
   // frame is handed over with transferToImageBitmap(), which is exact; reading a shared
@@ -8541,6 +8560,7 @@ void main() {
     // For tests: the pure functions the shaders mirror.
     _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS, buildBVH, traceCPU, bvhSplit, meshTree, bvhNearest, rayTri, walkT: () => walkT, lightRig, sunTransmittance, skyOf, waterOmega, waterIfft1, waterIfft2, waterPoolLine, oceanSetup, oceanHeightField, WATER_BODIES },
   };
+  if (typeof document !== "undefined" && document.createElement) startPrograms();
 })();
 </script>
 <script>
@@ -22477,8 +22497,23 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
   // `behind` until it gets there. A frame's ordinary steps (under 0.1 s of sim time) always run in
   // full, so a playing sim never drifts. Called from anywhere else, or while the page checker
   // runs, advance(t) gets all the way to t at once.
-  const STEP_BUDGET = 10;
+  const STEP_BUDGET = 8;
   let budgetFrom = -1e9;
+  // Sims that are behind keep catching up a slice a frame on their own, drawn or not, and the
+  // figures redraw when one gets there.
+  const lagging = new Set();
+  let pumping = false;
+  const pump = () => {
+    pumping = false;
+    const outer = window.__safisFrame;
+    window.__safisFrame = true;
+    let done = false;
+    try { for (const S of lagging) { S.advance(S.target); if (!S.behind) { lagging.delete(S); done = true; } } }
+    finally { window.__safisFrame = outer; }
+    if (done) window.dispatchEvent(new Event("safis:redraw"));
+    if (lagging.size) { pumping = true; requestAnimationFrame(pump); }
+  };
+  const lag = S => { lagging.add(S); if (!pumping && typeof requestAnimationFrame === "function") { pumping = true; requestAnimationFrame(pump); } };
   const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   const stepDeadline = () => {
     if (typeof window === "undefined" || !window.__safisFrame || document.documentElement.classList.contains("safis-checking")) return Infinity;
@@ -22506,6 +22541,7 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
         }
         mark();
         S.behind = S.time + S.dt <= t + 1e-9;
+        if (S.behind) lag(S);
         return S;
       },
       warm(t) {
@@ -25876,8 +25912,12 @@ void main() {
     try { fn(); return true; } catch (e) { fail(d, phase, e); return false; }
   }
 
+  // A figure's own code (its state, a control's change, its frame) runs "in a frame": simulations it
+  // steps keep to the per-frame budget (Fx), so a warm-up written into state() spreads over frames
+  // instead of holding up the page's load.
+  const inFrame = fn => { const outer = window.__safisFrame; window.__safisFrame = true; try { return fn(); } finally { window.__safisFrame = outer; } };
   const initialState = spec =>
-    typeof spec.state === "function" ? spec.state() : clone(spec.state ?? {});
+    typeof spec.state === "function" ? inFrame(() => spec.state()) : clone(spec.state ?? {});
 
   const node = (tag, cls, text) => {
     const e = document.createElement(tag);
@@ -26324,7 +26364,7 @@ void main() {
     d.v[key] = v;
     entry.sync();
     syncProse(d, key);
-    if (d.spec.change) guard(d, "change", () => d.spec.change(key, d.s, d.v, d.handle));
+    if (d.spec.change) guard(d, "change", () => inFrame(() => d.spec.change(key, d.s, d.v, d.handle)));
     d.dirty = true;
   }
 
@@ -26785,7 +26825,10 @@ void main() {
     d.canvas.style.height = `${h}px`;
     d.canvas.width = Math.round(w * dpr);
     d.canvas.height = Math.round(h * dpr);
-    render(d);
+    // A figure far from the screen draws when it comes near (the frame loop), not now: a page's
+    // load doesn't pay for 3D scenes nobody can see yet. The checker draws everything.
+    if (d.near || d.visible || document.documentElement.classList.contains("safis-checking")) render(d);
+    else d.dirty = true;
   }
 
   // A figure inside a <section class="band dark"> (or "band light") draws with that band's colors:
@@ -26800,11 +26843,11 @@ void main() {
     return (d.band = out);
   }
   function render(d) {
-    const band = bandPalette(d), outer = window.__safisFrame;
-    const saved = band && { ...palette };
-    if (band) Object.assign(palette, band);
-    window.__safisFrame = true;
-    try { renderInner(d); } finally { window.__safisFrame = outer; if (band) Object.assign(palette, saved); }
+    const band = bandPalette(d);
+    if (!band) return inFrame(() => renderInner(d));
+    const saved = { ...palette };
+    Object.assign(palette, band);
+    try { inFrame(() => renderInner(d)); } finally { Object.assign(palette, saved); }
   }
   function renderInner(d) {
     d.dirty = false;
@@ -26882,8 +26925,7 @@ void main() {
   function frame(now) {
     const dt = clamp((now - lastTime) / 1000, 0, 1 / 30);
     lastTime = now;
-    window.__safisFrame = true;
-    try { frameDemos(now, dt); } finally { window.__safisFrame = false; }
+    inFrame(() => frameDemos(now, dt));
     requestAnimationFrame(frame);
   }
   // Simulations stepped while this runs keep to a per-frame time budget (Fx), so a long warm-up
@@ -27385,7 +27427,9 @@ void main() {
 
   const Safis = { demo, mount: demo, enhance, setTheme, version: 3, get palette() { return palette; }, typeset: root => window.SafisTeX?.typeset(root) };
   Object.assign(window, { demo, palette, rgba, clamp, lerp, smoothstep, TAU, Safis });
-  window.__explainer = { check, describe, drive, ids: () => demos.map(d => d.id), version: 3 };
+  // A page that runs its figure scripts lazily (the website) runs the rest first, so the checker sees every figure.
+  const all = fn => (...a) => { window.__safisRunFigures?.(); return fn(...a); };
+  window.__explainer = { check: all(check), describe: all(describe), drive: all(drive), ids: () => demos.map(d => d.id), version: 3 };
 })();
 </script>
 <!-- explainer:runtime:end -->
