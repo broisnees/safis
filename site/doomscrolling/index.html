@@ -1,0 +1,1285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doomscrolling</title>
+<meta name="description" content="Why it is so hard to stop scrolling, especially through bad news: what the brain's reward, habit, and sleep systems are doing, and how much of the popular story the evidence actually supports.">
+<meta name="explainer:category" content="Body">
+<!-- explainer:runtime:start v3 shared -->
+<link rel="stylesheet" href="../safis.css?v=150b587b44">
+<script src="../safis.js?v=10959a5ba2"></script>
+<!-- explainer:runtime:end -->
+</head>
+<body>
+<div class="page has-toc">
+<nav class="toc" aria-label="All explainers"><!-- explainer:nav:start --><a class="site" href="../index.html">Safis</a><h2>Body</h2><ul><li><a href="../doomscrolling/index.html" aria-current="page">Doomscrolling</a></li><li><a href="../heart/index.html">How the Heart Pumps, and What Happens in a Heart Attack</a></li><li><a href="../jaw-joint/index.html">The Jaw Joint</a></li></ul><h2>Biology</h2><ul><li><a href="../protein/index.html">How a Cell Builds a Protein</a></li><li><a href="../neuron/index.html">How a Neuron Fires</a></li></ul><h2>Chemistry</h2><ul><li><a href="../battery/index.html">The Lithium-Ion Battery</a></li><li><a href="../reactions/index.html">Why Chemical Reactions Happen</a></li><li><a href="../ice/index.html">Why Ice Floats</a></li><li><a href="../water/index.html">Why water is so strange</a></li></ul><h2>Physics</h2><ul><li><a href="../pendulum/index.html">How a Pendulum Keeps Time</a></li><li><a href="../air/index.html">How air works</a></li><li><a href="../sound/index.html">How Sound Travels and How We Hear It</a></li><li><a href="../light/index.html">What Light Is</a></li></ul><h2>Machines</h2><ul><li><a href="../lock/index.html">How a Pin Tumbler Lock Knows Your Key</a></li><li><a href="../rocket-engine/index.html">How a Rocket Engine Makes Thrust</a></li><li><a href="../turbofan/index.html">How a Turbofan Moves Air</a></li></ul><h2>Earth &amp; Space</h2><ul><li><a href="../tides/index.html">Why There Are Two Tides a Day</a></li></ul><h2>Computing</h2><ul><li><a href="../cdn/index.html">How a CDN Makes a Faraway Site Fast</a></li><li><a href="../hash-table/index.html">How a Hash Table Finds Things</a></li><li><a href="../dns/index.html">How DNS Turns a Name into an Address</a></li><li><a href="../starlink/index.html">How Starlink Delivers Internet from Space</a></li></ul><h2>AI</h2><ul><li><a href="../next-word/index.html">How a Language Model Picks the Next Word</a></li><li><a href="../learning/index.html">How a Neural Network Learns</a></li><li><a href="../transformers/index.html">How a Transformer Works</a></li><li><a href="../attention/index.html">How Attention Works</a></li></ul><h2>Math</h2><ul><li><a href="../matrix/index.html">How a Matrix Transforms Space</a></li><li><a href="../fourier/index.html">How Spinning Circles Draw Anything</a></li><li><a href="../derivative/index.html">What a Derivative Measures</a></li></ul><!-- explainer:nav:end --></nav>
+<main>
+<!-- explainer:back:start --><a class="backlink" href="../index.html">← Safis</a><!-- explainer:back:end -->
+<header>
+  <p class="kicker">Body</p>
+  <h1>Doomscrolling</h1>
+  <p class="dek">Why it is so hard to stop scrolling, especially through bad news: what the brain's reward, habit, and sleep systems are doing, and how much of the popular story the evidence actually supports.</p>
+</header>
+<article>
+<!-- explainer:article:start -->
+<script>
+// Shared by the figures below. Everything here is a small model, stated in the text where it is used.
+window.DOOM = (() => {
+  // A deterministic random number for post i of a feed, so the same feed comes back every time.
+  const hash = (i, seed = 7) => { let x = Math.imul(i ^ (seed * 0x9e3779b1), 0x85ebca6b); x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae35); x ^= x >>> 16; return (x >>> 0) / 4294967296; };
+  // A feed: most posts are filler, about one in twelve is worth it. Value 0..1.
+  const GOOD = 0.08;
+  function post(i, seed = 7) {
+    const a = hash(i, seed), b = hash(i + 7919, seed), c = hash(i + 104729, seed);
+    const good = a < GOOD;
+    return { good, value: good ? 0.7 + 0.3 * b : 0.35 * b * c, lines: 2 + Math.floor(c * 3), img: b > 0.55 };
+  }
+
+  // Temporal-difference learning on one trial: cue at 1 s, reward at 3 s, time in 0.2 s steps.
+  // V[t] is the learned value of "t steps into the trial" (zero before the cue, which comes unannounced,
+  // and after the reward). delta[t] = r[t] + gamma V[t] - V[t-1] is the prediction error when step t arrives.
+  const TD = { dt: 0.2, N: 25, cue: 5, rew: 15, gamma: 0.98 };
+  function td({ trials = 0, alpha = 0.3, omit = false, gamma = TD.gamma } = {}) {
+    const { N, cue, rew } = TD, V = new Float64Array(N);
+    const errors = () => {
+      const d = new Float64Array(N);
+      d[cue] = gamma * V[cue];                        // the cue arrives: value jumps from 0 to V[cue]
+      for (let t = cue + 1; t < rew; t++) d[t] = gamma * V[t] - V[t - 1];
+      d[rew] = 1 - V[rew - 1];                        // reward of size 1
+      return d;
+    };
+    for (let k = 0; k < trials; k++) {
+      const d = errors();
+      for (let t = cue + 1; t <= rew; t++) V[t - 1] += alpha * d[t];
+    }
+    const delta = errors();
+    if (omit) delta[rew] = 0 - V[rew - 1];
+    return { V, delta };
+  }
+  // A dopamine neuron's firing rate (spikes/s) over the trial: about 4/s at rest, a burst or a pause
+  // about 0.1 s after each prediction error. t in seconds.
+  function rate(delta, t) {
+    let x = 0;
+    for (let k = 0; k < delta.length; k++) {
+      if (!delta[k]) continue;
+      const u = t - (k * TD.dt + 0.1);
+      x += delta[k] * Math.exp(-0.5 * (u / 0.06) ** 2);
+    }
+    return Math.max(0.3, 4 + 22 * x);
+  }
+  // Poisson spikes from a rate function, seeded.
+  function spikes(rateFn, t0, t1, r) {
+    const out = [], h = 0.002;
+    for (let t = t0; t < t1; t += h) if (r() < rateFn(t) * h) out.push(t);
+    return out;
+  }
+  return { hash, post, GOOD, TD, td, rate, spikes };
+})();
+</script>
+
+<div class="abstract">
+  <ul>
+    <li>A feed pays out rarely and at random. Dopamine neurons respond to rewards that are better than expected, and an unpredictable payout keeps that signal coming.</li>
+    <li>Repeated thousands of times, checking becomes a habit that runs on cues rather than on enjoyment.</li>
+    <li>Bad news gets a head start: threats grab attention, angry and out-group posts spread further, and a feed that never ends removes the natural place to stop.</li>
+    <li>At night the main cost is lost sleep time; screen light adds a smaller push on the body clock.</li>
+    <li>Measured effects on wellbeing are small, and "dopamine addiction" is not established. Design changes that give the feed an end shorten sessions.</li>
+  </ul>
+</div>
+
+<p class="lede">It starts with one look. Twenty minutes later you are still going, reading about a disaster in a country you cannot place. You don't feel better. You keep going anyway. Since around 2020 this has been called <dfn data-def="Continuing to scroll through bad news on a feed, often well past the point of being informed or entertained.">doomscrolling</dfn>, and researchers treat it as a distinct habit, more than interest in the news <a class="cite" href="#ref-sharma2022"></a>. This page builds up the brain's reward and habit systems with models you can run, then asks why bad news holds attention, what scrolling does to sleep, and which claims survive the studies.</p>
+
+<h2>The feed</h2>
+
+<p>Here is a scrolling session, plotted as it runs. Each stem is a post, its height how much it was worth: the <span class="c-orange" data-part="good">orange ones</span> are worth it, the rest is filler. The dark line is a running <span data-part="expect">expectation</span> of the next post, and the bars below show each post's surprise, <span class="c-green" data-part="pos">better</span> or <span class="c-red" data-part="neg">worse</span> than expected. Play it at <span class="scrub" data-key="rate"></span>:</p>
+
+<figure class="demo" id="feed" aria-label="A scrolling session plotted along a moving axis of posts. Each post is a stem whose height is its value; most are low and gray, rare high ones are orange at irregular gaps. A dark line tracks the expected value of the next post, and bars below show each post's surprise, green when better than expected and red when worse. A counter shows minutes and posts."></figure>
+<script>
+{
+  const WIN = 40, ALPHA = 0.15;
+  // The expectation V and the surprise d = value - V for posts 0..n-1, by the prediction-error rule V += 0.15 d.
+  const memo = { V: [0.3], d: [] };
+  const upTo = n => { while (memo.d.length < n) { const i = memo.d.length, v = DOOM.post(i).value, V = memo.V[i]; memo.d.push(v - V); memo.V.push(V + ALPHA * (v - V)); } };
+  demo("feed", {
+    aspect: w => (w < 560 ? 0.95 : 1.9),
+    state: () => ({ n: 42 }),
+    reset: true,
+    controls: [{ key: "rate", label: "Scroll speed", min: 4, max: 30, step: 1, value: 10, unit: " posts/min", color: "orange" }],
+    caption: "A simulated session: about one post in twelve is worth it (orange), at random. The dark line is a running expectation of the next post's value, updated by a fraction of each surprise; the bars below are the surprises. Time runs 15 times faster than life at the default speed.",
+    status: (s, v) => { const n = Math.floor(s.n); let good = 0; for (let i = 0; i < n; i++) if (DOOM.post(i).good) good++; return `${(n / v.rate).toFixed(1)} min · ${n} posts · ${good} worth it`; },
+    step(dt, s, v) { s.n += dt * v.rate * 0.25; },          // a quarter-minute of scrolling per second
+    draw(g, s, v) {
+      const n = Math.max(1, Math.floor(s.n)), frac = s.n - Math.floor(s.n);
+      upTo(n + 1);
+      const x1 = s.n, x0 = x1 - WIN, split = g.h * 0.6;
+      const A = g.graph({ box: [0, 4, g.w, split - 4], x: [x0, x1 + 1], y: [0, 1.05], axes: "frame", yLabel: "Value of each post", xTicks: false, yTicks: [0, 0.5, 1], grid: false });
+      const B = g.graph({ box: [0, split + 6, g.w, g.h - split - 6], x: [x0, x1 + 1], y: [-0.4, 0.9], axes: "frame", yLabel: "Surprise", xLabel: "Posts, as they scroll past", xTicks: false, yTicks: [0], grid: false });
+      const first = Math.max(0, Math.floor(x0));
+      // Stems for the posts already seen; the newest one rises as it arrives.
+      for (let i = first; i < n; i++) {
+        const p = DOOM.post(i), grow = i === n - 1 ? Math.min(1, frac * 4 + 0.25) : 1;
+        const x = A.xpx(i + 0.5), top = A.ypx(p.value * grow), lit = p.good && g.lit("good");
+        g.line([x, A.ypx(0)], [x, top], { stroke: p.good ? "orange" : "muted", width: p.good ? (lit ? 4 : 3) : 1.6, alpha: p.good ? 1 : 0.7 });
+        g.circle([x, top], p.good ? 5 : 2.5, { fill: p.good ? "orange" : "muted" });
+        const d = memo.d[i], bx = B.xpx(i + 0.15), bw = B.xpx(i + 0.85) - bx, c = d >= 0 ? "green" : "red";
+        g.rect(bx, Math.min(B.ypx(0), B.ypx(d * grow)), bw, Math.abs(B.ypx(d * grow) - B.ypx(0)), { fill: c, alpha: g.lit(d >= 0 ? "pos" : "neg") ? 0.95 : 0.7 });
+      }
+      // The expectation, as a step line just ahead of each post.
+      const pts = [];
+      for (let i = first; i <= n; i++) { pts.push([i, memo.V[i]]); pts.push([i + 1, memo.V[i]]); }
+      A.polyline(pts, { color: "ink", width: g.lit("expect") ? 3.2 : 2.2 });
+      A.label("expected next", [x1 + 0.6, memo.V[n]], { align: "right", dy: -12, color: "ink" });
+      g.text(`${(n / v.rate).toFixed(1)} min`, [g.w - 12, 18], { align: "right", size: 15, weight: 600, color: "ink" });
+    },
+  });
+}
+</script>
+
+<p>Notice the gaps between the <span class="c-orange">orange stems</span>: two arrive back to back, then forty posts pass with nothing. Each hit gives a big <span class="c-green">positive surprise</span> and lifts the expectation; through the filler it sags, and the next hit lifts it again. If good posts came like clockwork, you could stop right after one. At random, the next could always be one flick away. That surprise signal is, almost exactly, what a group of neurons computes.</p>
+<h2>Prediction error</h2>
+
+<p>In the 1980s and 1990s Wolfram Schultz and colleagues recorded single <dfn data-def="Neurons in the midbrain that release the chemical messenger dopamine onto the striatum and the frontal cortex.">dopamine neurons</dfn> in monkeys learning that a light meant juice a second or two later <a class="cite" href="#ref-schultz1997"></a>. Each row below is one trial, each tick one spike; I've rebuilt the recording with a small model. Raise the number of training trials and watch where the <span class="c-green" data-part="burst">burst</span> goes:</p>
+
+<figure class="demo" id="raster" aria-label="A spike raster of a simulated dopamine neuron, fifteen trials stacked, with a cue at one second and juice at three seconds. Below, the average firing rate. A slider sets how many training trials the animal has had; a switch withholds the juice."></figure>
+<script>
+{
+  const T0 = 0, T1 = 5, ROWS = 15;
+  let cache = { key: "" };
+  demo("raster", {
+    aspect: w => (w < 560 ? 1.0 : 1.75),
+    controls: [
+      { key: "trials", label: "Training trials", min: 0, max: 40, step: 1, value: 0, color: "orange", marks: [{ value: 0, label: "new" }, { value: 40, label: "trained" }] },
+      { key: "omit", label: "Withhold the juice", type: "toggle", value: false, color: "red" },
+    ],
+    presets: [
+      { label: "Unexpected juice", set: { trials: 0, omit: false } },
+      { label: "Learning", set: { trials: 8, omit: false } },
+      { label: "Trained", set: { trials: 40, omit: false } },
+      { label: "Trained, no juice", set: { trials: 40, omit: true } },
+    ],
+    caption: "A simulated dopamine neuron in the style of the recordings by Schultz and colleagues. Untrained, it bursts at the juice; trained, it bursts at the light instead and ignores the juice; when expected juice fails to come, it falls silent at the moment the juice was due.",
+    status: (s, v) => { const { delta } = DOOM.td({ trials: v.trials, omit: v.omit }); const c = delta[DOOM.TD.cue], r = delta[DOOM.TD.rew]; return `error at light ${c.toFixed(2)} · at juice ${r >= 0 ? "+" : ""}${r.toFixed(2)}`; },
+    draw(g, s, v) {
+      const key = `${v.trials}|${v.omit}`;
+      if (cache.key !== key) {
+        const { delta } = DOOM.td({ trials: v.trials, omit: v.omit });
+        const rng = Num.rng(11 + v.trials);
+        const rf = t => DOOM.rate(delta, t);
+        cache = { key, delta, rows: Array.from({ length: ROWS }, () => DOOM.spikes(rf, T0, T1, rng)), rf };
+      }
+      const { delta, rows, rf } = cache;
+      const top = 8, rasterH = g.h * 0.52, plotTop = top + rasterH + 8;
+      const P = g.graph({ box: [0, plotTop, g.w, g.h - plotTop], x: [T0, T1], y: [0, 30], axes: "frame", xLabel: "Time in trial (s)", yLabel: "Spikes/s", yTicks: [0, 10, 20, 30] });
+      const X = t => P.xpx(t);
+      // Windows where the error is positive (green) or negative (red).
+      for (let k = 0; k < delta.length; k++) {
+        const d = delta[k]; if (Math.abs(d) < 0.04) continue;
+        const t = k * DOOM.TD.dt + 0.1, c = d > 0 ? "green" : "red";
+        const lit = g.lit(d > 0 ? "burst" : "dip");
+        g.rect(X(t - 0.1), top, X(t + 0.1) - X(t - 0.1), rasterH, { fill: g.rgba(c, Math.min(0.35, 0.08 + Math.abs(d) * (lit ? 0.45 : 0.25))) });
+      }
+      const rowH = rasterH / ROWS;
+      rows.forEach((sp, i) => { const y = top + i * rowH; for (const t of sp) g.line([X(t), y + 1], [X(t), y + rowH - 1], { stroke: "ink", width: 1.1 }); });
+      // Cue and juice markers.
+      const tc = DOOM.TD.cue * DOOM.TD.dt, tr = DOOM.TD.rew * DOOM.TD.dt;
+      g.line([X(tc), top], [X(tc), g.h - 40], { stroke: "muted", width: 1, dash: [3, 3] });
+      g.line([X(tr), top], [X(tr), g.h - 40], { stroke: v.omit ? "red" : "orange", width: 1, dash: [3, 3] });
+      g.label("light", [X(tc), plotTop + 12], { color: "ink" });
+      g.label(v.omit ? "no juice" : "juice", [X(tr), plotTop + 12], { color: v.omit ? "red" : "orange" });
+      // Average rate.
+      P.fn(rf, { color: "orange", width: 2.5 });
+      P.hline(4, { color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>Untrained, the neuron ticks along at a few spikes a second, then bursts at the juice. With <button class="set" data-set="trials=40 omit=false">training</button> that burst fades and a new <span class="c-green">burst</span> appears at the light, though the juice is as sweet as ever. <button class="set" data-set="trials=40 omit=true">Withhold the juice</button> from a trained animal and the neuron goes quiet, a <span class="c-red" data-part="dip">dip</span> at the moment the juice was due.</p>
+
+<p>So the neuron signals the difference between what happened and what was expected: better, a burst; as expected, nothing; worse, a pause. This is a <dfn data-def="The difference between the reward that arrived (plus what is now expected next) and what was expected before.">reward prediction error</dfn>. After training the light gets the burst because the light is now the surprise: it comes unannounced and says juice is on the way.</p>
+
+<aside class="callout key"><p>Dopamine neurons respond to <em>better than expected</em>, not to good. A reward you fully expect produces almost no response; a cue that signals an unexpected reward produces a big one.</p></aside>
+
+<p>The pattern matched a learning rule from computer science, <dfn data-def="A learning rule that updates the predicted value of each moment using the error between successive predictions.">temporal-difference learning</dfn> <a class="cite" href="#ref-schultz1997"></a>. It keeps an estimate <span class="tex">V</span> of the reward to expect from each moment of the trial and, at every step, computes an error:</p>
+
+<div class="tex">\green{\delta} = \orange{r} + \gamma\, V(\text{next}) - V(\text{now})</div>
+
+<p>Here <span class="tex">\orange{r}</span> is the reward that just arrived and <span class="tex">\gamma</span>, slightly below 1, makes later rewards count a little less. Each estimate moves a fraction <span class="tex">\alpha</span>, the learning rate, toward what the next moment says. Here is the model behind the raster: learned value on top, error below. Step through the trials, then try a <button class="set" data-set="alpha=0.8">fast learner</button> and a <button class="set" data-set="alpha=0.1">slow one</button>:</p>
+
+<figure class="demo" id="tdmodel" aria-label="Temporal-difference learning on one trial. Top: the learned value of each moment, rising from the light to the juice. Bottom: the prediction error at each moment, green bars for positive and red for negative. Sliders set the number of training trials and the learning rate."></figure>
+<script>
+{
+  demo("tdmodel", {
+    aspect: w => (w < 560 ? 1.0 : 1.75),
+    controls: [
+      { key: "trials", label: "Training trials", type: "stepper", min: 0, max: 60, step: 1, value: 6 },
+      { key: "alpha", label: "Learning rate α", min: 0.05, max: 0.9, step: 0.05, value: 0.3, color: "ink" },
+      { key: "omit", label: "Withhold the juice", type: "toggle", value: false, color: "red" },
+    ],
+    caption: "The temporal-difference model. The value estimate (top) fills in backward from the juice to the light, one step per trial at first; the prediction error (bottom) travels backward with it until only the light carries it.",
+    status: (s, v) => { const { V } = DOOM.td(v); return `value at the light ${V[DOOM.TD.cue].toFixed(2)}`; },
+    draw(g, s, v) {
+      const { V, delta } = DOOM.td(v), { dt, N, cue, rew } = DOOM.TD;
+      const mid = g.h * 0.48;
+      const A = g.graph({ box: [0, 4, g.w, mid - 4], x: [0, N * dt], y: [0, 1.1], axes: "frame", yLabel: "Value V", yTicks: [0, 0.5, 1], xTicks: false });
+      const pts = []; for (let k = 0; k < N; k++) { pts.push([k * dt, V[k]]); pts.push([(k + 1) * dt, V[k]]); }
+      A.polyline(pts, { color: "ink", width: 2, fill: g.rgba("muted", 0.15) });
+      A.vline(cue * dt, { color: "muted", label: "light" });
+      A.vline(rew * dt, { color: v.omit ? "red" : "orange", label: v.omit ? "no juice" : "juice" });
+      const B = g.graph({ box: [0, mid + 4, g.w, g.h - mid - 4], x: [0, N * dt], y: [-1.1, 1.1], axes: "frame", xLabel: "Time in trial (s)", yLabel: "Error δ", yTicks: [-1, 0, 1] });
+      for (let k = 0; k < N; k++) {
+        const d = delta[k]; if (Math.abs(d) < 0.005) continue;
+        const x0 = B.xpx(k * dt - dt * 0.4), x1 = B.xpx(k * dt + dt * 0.4), y0 = B.ypx(0), y1 = B.ypx(d);
+        g.rect(x0, Math.min(y0, y1), x1 - x0, Math.abs(y1 - y0), { fill: d > 0 ? "green" : "red", alpha: 0.8 });
+      }
+    },
+  });
+}
+</script>
+
+<p>On the first trial the only error is at the juice, <span class="tex">\green{\delta = 1}</span>, because nothing predicted it. The model raises its estimate for the moment just before, so next time the error appears one step earlier, and value fills in backward until only the light is a surprise. Recordings often look as if the burst jumps straight to the cue, but a 2022 study in mice found the gradual backward shift the model predicts <a class="cite" href="#ref-amo2022"></a>.</p>
+
+<details class="deeper">
+  <summary>What the model leaves out <span class="hint">2 min</span></summary>
+  <p>The model here represents each 0.2-second moment after the light as its own state and has a single reward. Real dopamine neurons also respond to novelty, to some aversive events, and to how vigorous a movement will be, and different groups of them project to different targets with somewhat different signals. Timing is also uncertain for the animal: a cue that predicts juice "in about two seconds" leaves the expectation smeared out in time, which is part of why a reward that comes early still produces a small burst. None of this changes the core result. The prediction-error account explains most of the classic recordings with one equation, which is why it has lasted.</p>
+</details>
+
+<p>These neurons sit in two small clusters in the midbrain, under the cerebral hemispheres. Here is the brain at real size, its cortex see-through. Turn it, pick a pathway, and point at a structure, or its name here. The <span class="c-orange" data-part="vta">ventral tegmental area</span> sends dopamine to the <span class="c-purple" data-part="nac">nucleus accumbens</span> at the base of the striatum, the <span class="c-red" data-part="amy">amygdala</span>, and the <span class="c-blue" data-part="pfc">prefrontal cortex</span>; the <span class="c-orange" data-part="sn">substantia nigra</span> sends it to the upper <span class="c-purple" data-part="dstr">striatum</span>, the caudate and putamen <a class="cite" href="#ref-bjorklund2007"></a>:</p>
+
+<figure class="demo wide" id="brain" aria-label="A 3D human brain at real size with the cortex see-through and the prefrontal cortex tinted blue. Inside are the caudate nucleus, putamen and nucleus accumbens, the amygdala, the thalamus and hippocampus, and in the midbrain the ventral tegmental area and substantia nigra. Tubes with traveling pulses trace the mesolimbic, mesocortical and nigrostriatal dopamine pathways. The reader turns it, picks a pathway, and can cut along the midline."></figure>
+<script>
+{
+  // The anatomy kit's brain (167 mm long; +x is the patient's left, where the pathways are drawn), shared by
+  // every brain figure on the page through window.DOOM_BRAIN.
+  const scene = E3.scene({ look: "anatomy" });
+  const B = (window.DOOM_BRAIN ??= E3.bio.brain());
+  scene.add(B);
+  // Subject colors from the page's color plan.
+  for (const n of ["caudate nucleus", "putamen", "nucleus accumbens"]) B.parts[n]?.traverse(m => { m.material = E3.bio.tissue("tissue", { color: "purple" }); });
+  B.parts["amygdala"]?.traverse(m => { m.material = E3.bio.tissue("tissue", { color: "red" }); });
+  const KEY = { vta: ["ventral tegmental area"], sn: ["substantia nigra"], nac: ["nucleus accumbens"], amy: ["amygdala"], pfc: ["prefrontal cortex"], dstr: ["caudate nucleus", "putamen"] };
+  const LABELS = {
+    all: ["ventral tegmental area", "substantia nigra", "nucleus accumbens", "caudate nucleus", "putamen", "prefrontal cortex"],
+    mesolimbic: ["ventral tegmental area", "nucleus accumbens", "amygdala"],
+    mesocortical: ["ventral tegmental area", "prefrontal cortex"],
+    nigrostriatal: ["substantia nigra", "caudate nucleus", "putamen"],
+  };
+  const COLOR = { "ventral tegmental area": "orange", "substantia nigra": "orange", "nucleus accumbens": "purple", "caudate nucleus": "purple", putamen: "purple", amygdala: "red", "prefrontal cortex": "blue" };
+  const base = name => (name ? name.replace(/ \(right\)$/, "") : null);
+  let view = null;
+  demo("brain", {
+    aspect: w => (w < 560 ? 0.95 : 1.5),
+    orbit: { yaw: -0.95, pitch: 0.28 },
+    state: () => ({ t: 0.4, hover: null }),
+    controls: [
+      { key: "path", label: "Pathway", type: "choice", options: [{ value: "all", label: "all" }, { value: "mesolimbic", label: "mesolimbic" }, { value: "mesocortical", label: "mesocortical" }, { value: "nigrostriatal", label: "nigrostriatal" }], value: "all" },
+      { key: "cut", label: "Cut along the midline", type: "toggle", value: false, color: "ink" },
+    ],
+    caption: "The dopamine pathways in a 3D brain at real size (about 167 mm long), simplified from atlas anatomy and drawn on one side. Pulses run from the ventral tegmental area to the nucleus accumbens and amygdala (mesolimbic) and to the prefrontal cortex (mesocortical), and from the substantia nigra to the caudate and putamen (nigrostriatal). Pulse speed is not to scale.",
+    hover(p, s) { const hit = p && view ? view.pick(p, { ghosts: true }) : null; const k = hit ? base(hit.node.name) : null; if (k !== s.hover) { s.hover = k; return true; } return false; },
+    status: s => (s.hover && B.notes?.[s.hover] ? `${s.hover}: ${B.notes[s.hover]}` : "point at a structure to name it"),
+    step(dt, s) { s.t += dt * 0.6; },
+    // The section shows the left hemisphere's medial face, which looks toward the patient's right: turn to face it.
+    change(key, s, v) { if (key === "cut" && s.view) { s.view.yaw = v.cut ? 1.3 : -0.95; s.view.pitch = v.cut ? 0.15 : 0.28; } },
+    draw(g, s, v) {
+      const lit = g.highlight ? KEY[g.highlight] ?? [] : [];
+      for (const [name, node] of Object.entries(B.parts)) { const on = base(name) === s.hover || lit.includes(base(name)); node.traverse(m => { m.highlight = on; }); }
+      B.cutaway(v.cut).pose({ pulse: s.t % 1, pathways: v.path === "all" ? undefined : [v.path] });
+      view = g.render3d(scene, { ...s.view, fov: 28, target: [0, -2, 2], distance: 330 / (s.view.zoom ?? 1) });
+      // Labels for what the paragraph names, dropped when something else solid stands in front of the anchor.
+      const want = new Set([...LABELS[v.path], ...lit]);
+      const seen = l => { const q = view.project(l.at), hit = view.pick([q[0], q[1]]); return !hit || base(hit.node.name) === l.text || hit.distance >= q[2] - 3; };
+      g.callouts(B.labels().filter(l => want.has(l.text) && view.kept(l.at) && seen(l)).map(l => ({ at: view.project(l.at), text: l.text, color: COLOR[l.text] ?? "ink" })));
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-orange">orange fibers</span> are what people mean by "the reward system". The striatum is where actions get linked to the cues that precede them, which is why the same circuit turns up in learning, motivation, and habit. And the neurons fire for any better-than-expected outcome: food, money, a funny clip, a message from a friend.</p>
+
+<aside class="callout mistake"><p>"Dopamine is the pleasure chemical." Rats whose dopamine is almost completely depleted still show the facial reactions of liking a sweet taste; what they lose is the drive to work for it <a class="cite" href="#ref-berridge1998"></a>. Dopamine is better described as a learning and wanting signal than as the feeling of enjoyment.</p></aside>
+<h2>Unpredictable rewards</h2>
+
+<p>Long before anyone recorded a dopamine neuron, Charles Ferster and B. F. Skinner measured how the <em>timing</em> of rewards shapes behavior <a class="cite" href="#ref-ferster1957"></a>. An animal pressed a lever and a pen climbed one notch per press, so the slope of the line was the pressing rate. A <em>fixed ratio</em> pays every <span class="tex">n</span>th press; a <em>variable ratio</em> pays every <span class="tex">n</span> presses on average, so any press might pay. A <em>fixed interval</em> pays the first press after a set time; a <em>variable interval</em> after an unpredictable time. A simulated animal, following rules that summarize real animals, runs all four. Set the schedule to <span class="scrub" data-key="n"></span> presses (and twice that many seconds) and watch the <span class="c-orange" data-part="vr">variable ratio</span> line:</p>
+
+<figure class="demo" id="schedules" aria-label="Cumulative response records for four reward schedules over ten minutes: fixed ratio, variable ratio, fixed interval and variable interval. Each line climbs one step per press; small ticks mark rewards. The variable ratio line is steepest and smoothest."></figure>
+<script>
+{
+  const T = 600, cache = new Map();
+  // The simulated animal's rules (pressing rates in presses per second):
+  //   fixed ratio n:     pause after each reward (mean 0.25 n s), then press at 2/s until the nth press.
+  //   variable ratio n:  short pause (mean 0.5 s), then press at 2/s; each press pays with chance 1/n.
+  //   fixed interval I:  press at 2/s times a smooth step that rises around 0.65 I after the last reward.
+  //   variable interval: a reward is armed after a random wait (mean I); press steadily at 0.9/s.
+  function run(kind, n) {
+    const r = Num.rng(kind.length * 31 + n), I = 2 * n, h = 0.05, out = [[0, 0]], rew = [];
+    let t = 0, count = 0, since = 0, pressesSince = 0, pause = 0, armedAt = -Math.log(1 - r()) * I;
+    for (let step = 0; t < T; step++) {
+      t += h; since += h;
+      let rate = 0;
+      if (kind === "FR" || kind === "VR") { if (pause > 0) pause -= h; else rate = 2; }
+      else if (kind === "FI") rate = 2 / (1 + Math.exp(-(since - 0.65 * I) / (0.12 * I)));
+      else rate = 0.9;
+      if (r() < rate * h) {
+        count++; pressesSince++;
+        let paid = false;
+        if (kind === "FR") paid = pressesSince >= n;
+        else if (kind === "VR") paid = r() < 1 / n;
+        else if (kind === "FI") paid = since >= I;
+        else paid = t >= armedAt;
+        if (paid) {
+          rew.push([t, count]); since = 0; pressesSince = 0;
+          if (kind === "FR") pause = -Math.log(1 - r()) * 0.25 * n;
+          if (kind === "VR") pause = -Math.log(1 - r()) * 0.5;
+          if (kind === "VI") armedAt = t - Math.log(1 - r()) * I;
+        }
+      }
+      if (step % 10 === 0) out.push([t, count]);
+    }
+    return { line: out, rew };
+  }
+  const KINDS = [
+    { k: "VR", label: "variable ratio", color: "orange", dash: null },
+    { k: "FR", label: "fixed ratio", color: "ink", dash: null },
+    { k: "VI", label: "variable interval", color: "orange", dash: [6, 4] },
+    { k: "FI", label: "fixed interval", color: "ink", dash: [6, 4] },
+  ];
+  const get = n => { if (!cache.has(n)) cache.set(n, Object.fromEntries(KINDS.map(q => [q.k, run(q.k, n)]))); return cache.get(n); };
+  demo("schedules", {
+    aspect: w => (w < 560 ? 1.0 : 1.7),
+    state: () => ({ t: T * 0.96, hold: 0 }),
+    controls: [{ key: "n", label: "Schedule size", min: 5, max: 40, step: 1, value: 20, color: "orange", format: n => `${n} presses / ${2 * n} s` }],
+    caption: "Cumulative records from a simulated animal on four schedules (rules in the page source and summarized in the text). Variable ratio gives the steepest, steadiest pressing; fixed ratio pauses after each reward; fixed interval makes scallops that speed up as the reward comes due.",
+    status: (s, v) => { const R = get(v.n), at = q => { const L = R[q].line; let c = 0; for (const p of L) { if (p[0] > s.t) break; c = p[1]; } return c; }; return `${Math.round(s.t / 60 * 10) / 10} min · VR ${at("VR")} · FR ${at("FR")} · VI ${at("VI")} · FI ${at("FI")} presses`; },
+    step(dt, s) { if (s.t < T) s.t = Math.min(T, s.t + dt * 40); else if ((s.hold += dt) > 3) { s.t = 0; s.hold = 0; } },
+    draw(g, s, v) {
+      const R = get(v.n);
+      const P = g.graph({ x: [0, T / 60], y: [0, 1250], axes: "frame", xLabel: "Time (min)", yLabel: "Total presses", xTicks: 2, yTicks: [0, 400, 800, 1200] });
+      for (const q of KINDS) {
+        const lit = g.lit(q.k.toLowerCase());
+        const pts = R[q.k].line.filter(p => p[0] <= s.t).map(p => [p[0] / 60, p[1]]);
+        P.polyline(pts, { color: q.color, width: lit ? 3.5 : 2, dash: q.dash });
+        for (const [t, c] of R[q.k].rew) if (t <= s.t) { const a = P([t / 60, c]); g.line([a[0], a[1]], [a[0] + 5, a[1] + 5], { stroke: q.color, width: 1.2 }); }
+        const last = pts[pts.length - 1];
+        if (last) P.label(q.label, last, { dx: 6, dy: 0, align: "left", color: q.color });
+      }
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-orange">variable ratio</span> line is the steepest and smoothest. On a fixed ratio the animal pauses after each reward, since the next is a known distance away; on a fixed interval it speeds up as the reward comes due, drawing scallops. On a variable ratio there is never a good moment to stop. That is the schedule of a slot machine and, loosely, of a feed.</p>
+
+<p>"Loosely" matters: a feed's content is chosen by an algorithm, its rewards differ in size and kind, and nobody has measured scrolling with Skinner's precision. The comparison describes the payout's structure, not a proven mechanism. The dopamine results do suggest why unpredictability matters. First, a question:</p>
+
+<div class="quiz">
+  <p>A monkey learns several cues, each followed by juice with a different probability: never, one time in four, half the time, three in four, always. Between the cue and the moment the juice may come, at which probability do its dopamine neurons ramp up the most?</p>
+  <div class="choices"><button>Always (100%)</button><button data-correct>Half the time (50%)</button><button>Never (0%)</button></div>
+  <p class="why">The quick burst at the cue grows with the probability, but a slower ramp of activity between cue and outcome peaks when the outcome is least certain, at 50%.</p>
+</div>
+
+<p>Christopher Fiorillo, Philippe Tobler, and Wolfram Schultz ran this experiment <a class="cite" href="#ref-fiorillo2003"></a>. Set the chance of juice to <span class="scrub" data-key="p"></span> and compare the <span class="c-orange" data-part="phasic">burst at the cue</span> with the slow <span class="c-orange" data-part="ramp">ramp</span> after it:</p>
+
+<figure class="demo" id="fiorillo" aria-label="Left: average firing of a dopamine neuron after a cue that predicts juice with a chosen probability, for trials with and without juice. Right: the size of the cue burst, which rises with probability, and of the sustained ramp, which peaks at 50 percent."></figure>
+<script>
+{
+  const cueT = 0.5, outT = 2.5, gauss = (t, c, w) => Math.exp(-0.5 * ((t - c) / w) ** 2);
+  // Average rates (spikes/s), shaped after Fiorillo et al. 2003: a phasic cue response proportional to p,
+  // a ramp toward the outcome proportional to p(1-p), and an outcome error of (1 - p) or -p.
+  const rate = (t, p, got) => {
+    let x = 4 + 18 * p * gauss(t, cueT + 0.12, 0.06);
+    if (t > cueT + 0.2) x += 16 * p * (1 - p) * Math.min(1, (t - cueT - 0.2) / (outT - cueT - 0.2)) * (t > outT ? Math.exp(-(t - outT) / 0.08) : 1);
+    x += (got ? 18 * (1 - p) : -4 * p * 1.6) * gauss(t, outT + 0.12, 0.07);
+    return Math.max(0.3, x);
+  };
+  demo("fiorillo", {
+    aspect: w => (w < 560 ? 0.95 : 2.0),
+    controls: [{ key: "p", label: "Chance of juice", min: 0, max: 1, step: 0.25, value: 0.5, color: "orange", format: p => `${Math.round(p * 100)}%`, marks: [0, 0.25, 0.5, 0.75, 1].map(x => ({ value: x, label: `${x * 100}%` })) }],
+    caption: "Rebuilt from the pattern reported by Fiorillo, Tobler and Schultz (2003), not their data. The burst at the cue grows in step with the chance of juice; the ramp between cue and outcome is largest at 50%, when the outcome is most uncertain.",
+    status: (s, v) => `burst at cue ∝ ${v.p.toFixed(2)} · ramp ∝ ${(v.p * (1 - v.p)).toFixed(2)}`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, split = narrow ? null : g.w * 0.58;
+      const A = g.graph({ box: narrow ? [0, 0, g.w, g.h * 0.55] : [0, 0, split, g.h], x: [0, 3.5], y: [0, 26], axes: "frame", xLabel: "Time from cue (s)", yLabel: "Spikes/s", yTicks: [0, 10, 20] });
+      A.vline(cueT, { color: "muted", label: "cue" });
+      A.vline(outT, { color: "muted", label: "outcome" });
+      if (v.p > 0) A.fn(t => rate(t, v.p, true), { color: "orange", width: g.lit("phasic") || g.lit("ramp") ? 3 : 2.2, label: "juice", labelAt: 3.1 });
+      if (v.p < 1) A.fn(t => rate(t, v.p, false), { color: "red", width: 1.6, dash: [5, 4], label: "no juice", labelAt: 3.1, labelOffset: [0, 14] });
+      A.hline(4, { color: "faint" });
+      const B = g.graph({ box: narrow ? [0, g.h * 0.6, g.w, g.h * 0.4] : [split + 20, 0, g.w - split - 20, g.h], x: [0, 1], y: [0, 1.05], axes: "frame", xLabel: "Chance of juice", yLabel: "Response (scaled)", xTicks: [0, 0.5, 1], yTicks: false, xFormat: x => `${x * 100}%` });
+      B.fn(p => p, { color: "orange", width: g.lit("phasic") ? 3.5 : 2.2, label: "cue burst", labelAt: 0.85, labelOffset: [16, 10] });
+      B.fn(p => 4 * p * (1 - p), { color: "orange", width: g.lit("ramp") ? 3.5 : 2, dash: [6, 4], label: "ramp", labelAt: 0.22, labelOffset: [-18, -6] });
+      B.marker(v.p, v.p, { color: "orange" });
+      B.marker(v.p, 4 * v.p * (1 - v.p), { color: "orange" });
+    },
+  });
+}
+</script>
+
+<p>The same neurons carry two signals. The burst at the cue follows the probability. The <span class="c-orange">ramp</span> follows the uncertainty, <span class="tex">p(1-p)</span>: highest at <button class="set" data-set="p=0.5">50%</button>, gone at <button class="set" data-set="p=1">certain</button> or <button class="set" data-set="p=0">never</button>. Whether it has anything to do with the pull of a feed is unknown.</p>
+
+<p>Unpredictable rewards also make behavior hard to switch off. In 1939 Lloyd Humphreys found that people trained to blink to a light paired with a puff of air kept blinking longer after the puffs stopped if they had been puffed on only half the trials <a class="cite" href="#ref-humphreys1939"></a>. This <em>partial reinforcement extinction effect</em> appears across many species and tasks. Here is one account of it as a model: the animal presses while it still believes the old rules hold, and each unpaid press lowers that belief by an amount that depends on how often presses used to pay. Pick the training schedule:</p>
+
+<figure class="demo" id="extinction" aria-label="Cumulative presses after rewards stop, for animals trained with every press paid, half paid, a quarter paid, or one in ten paid. The always-paid animal stops within seconds; the one-in-ten animal keeps going for most of a minute."></figure>
+<script>
+{
+  const T = 60, PRIOR = 0.995, cache = new Map();
+  // Belief that the old rules still hold after k unpaid presses: Bayes with "nothing changed"
+  // (each press pays with chance p, capped at 0.85 for an imperfect memory) against "rewards stopped".
+  const belief = (p, k) => { const q = Math.pow(1 - Math.min(p, 0.85), k); return (PRIOR * q) / (PRIOR * q + (1 - PRIOR)); };
+  function run(p) {
+    const r = Num.rng(Math.round(p * 1000)), out = [[0, 0]]; let k = 0;
+    for (let t = 0; t < T; t += 0.05) { if (r() < (2 * belief(p, k) + 0.03) * 0.05) k++; out.push([t, k]); }
+    return out;
+  }
+  const PS = [1, 0.5, 0.25, 0.1];
+  const get = p => { if (!cache.has(p)) cache.set(p, run(p)); return cache.get(p); };
+  demo("extinction", {
+    aspect: w => (w < 560 ? 1.1 : 1.8),
+    state: () => ({ t: T * 0.96, hold: 0 }),
+    controls: [{ key: "p", label: "Presses paid in training", type: "choice", options: PS.map(p => ({ value: p, label: `${p * 100}%` })), value: 0.25 }],
+    caption: "A model of extinction: presses continue while the animal still believes rewards may come. Trained on every press paid, it notices the change almost at once; trained on rare payouts, a long run of unpaid presses looks normal, so it keeps going.",
+    status: (s, v) => { const L = get(v.p); let c = 0; for (const q of L) { if (q[0] > s.t) break; c = q[1]; } return `${Math.round(s.t)} s after rewards stopped · ${c} presses`; },
+    step(dt, s) { if (s.t < T) s.t = Math.min(T, s.t + dt * 8); else if ((s.hold += dt) > 3) { s.t = 0; s.hold = 0; } },
+    draw(g, s, v) {
+      const P = g.graph({ x: [0, T], y: [0, 80], axes: "frame", xLabel: "Seconds since the rewards stopped", yLabel: "Presses", yTicks: [0, 20, 40, 60, 80] });
+      for (const p of PS) {
+        const sel = p === v.p, pts = get(p).filter(q => q[0] <= s.t);
+        P.polyline(pts, { color: sel ? "orange" : "muted", width: sel ? 3 : 1.5, alpha: sel ? 1 : 0.7 });
+        const last = pts[pts.length - 1];
+        if (last) P.label(`${p * 100}%`, last, { dx: 6, align: "left", color: sel ? "orange" : "muted" });
+      }
+    },
+  });
+}
+</script>
+
+<p>Trained on <button class="set" data-set="p=1">every press paid</button>, the animal quits within a few presses: three misses in a row have never happened before. Trained on <button class="set" data-set="p=0.1">one in ten</button>, twenty misses are ordinary, and it keeps going for most of a minute. A feed that pays rarely and at random gives you very little evidence that it has stopped paying.</p>
+<h2>From goal to habit</h2>
+
+<p>People often keep scrolling after it stops being fun. Two ways of running an action explain that. A <dfn data-def="An action chosen because of what it is expected to get you right now; it stops when the outcome stops being worth it.">goal-directed</dfn> action is done for its result: you open the app to see your friend's post. A <dfn data-def="An action triggered by a situation or cue, run by a learned link between the cue and the action rather than by the current value of the outcome.">habit</dfn> is triggered by the situation: in bed, phone in hand, the thumb moves.</p>
+
+<p>Researchers tell them apart with <em>outcome devaluation</em>. Train a rat to press a lever for food, make the food unappealing (let it eat its fill, or pair the food with mild nausea), then offer the lever with no food delivered. A goal-directed rat barely presses; a habitual one presses anyway <a class="cite" href="#ref-adams1982"></a>. In this model a <span class="c-blue" data-part="goal">goal-directed controller</span> checks what the food is worth now and a <span class="c-purple" data-part="habit">habit controller</span> only remembers how often pressing paid. Give the rat more training:</p>
+
+<figure class="demo" id="devalue" aria-label="Lever presses in a test after training, for a rat whose food is still wanted and one whose food has been devalued. A slider sets how much training came first. Two meters show how much the goal-directed and the habit system each control the pressing."></figure>
+<script>
+{
+  // Model: share of control held by habit grows with training, w = n^3 / (n^3 + 250^3), so that about
+  // 100 paid presses leaves behavior goal-directed and about 500 makes it mostly habitual, as in Adams (1982).
+  const habitShare = n => (n * n * n) / (n * n * n + 250 ** 3);
+  demo("devalue", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    controls: [{ key: "n", label: "Paid presses in training", min: 50, max: 1000, step: 10, value: 100, color: "purple", marks: [{ value: 100, label: "brief" }, { value: 500, label: "extended" }] }],
+    presets: [{ label: "Brief training", set: { n: 100 } }, { label: "Extended training", set: { n: 500 } }],
+    caption: "A model of the outcome-devaluation test. After brief training, devaluing the food cuts pressing sharply (goal-directed); after extended training, pressing barely changes (habit). The meters show which system is in control, and the striatal region that animal lesion studies tie to each.",
+    status: (s, v) => { const w = habitShare(v.n); return `habit ${Math.round(w * 100)}% · devalued rat presses ${Math.round((1 - w) * 5 + w * 100)}% as much`; },
+    draw(g, s, v) {
+      const w = habitShare(v.n), dev = (1 - w) * 0.05 + w * 1;
+      const narrow = g.w < 560, split = narrow ? g.h * 0.56 : g.w * 0.5;
+      const P = g.graph({ box: narrow ? [0, 0, g.w, split] : [0, 0, split, g.h], x: [0, 2], y: [0, 110], axes: "frame", yLabel: "Presses in the test (%)", xTicks: false, yTicks: [0, 50, 100], grid: false });
+      const bar = (x, val, color, label) => { const a = P([x - 0.32, val]), b = P([x + 0.32, 0]); g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], { fill: color, alpha: 0.75, r: 2 }); g.label(label, [(a[0] + b[0]) / 2, P.ypx(0) + 14], { color: "ink" }); g.text(`${Math.round(val)}%`, [(a[0] + b[0]) / 2, a[1] - 10], { size: 12.5 }); };
+      bar(0.55, 100, "orange", "food still wanted");
+      bar(1.45, dev * 100, "red", "food devalued");
+      // Meters for the two controllers.
+      const bx = narrow ? 24 : split + 36, by = narrow ? split + 26 : g.h * 0.2, bw = narrow ? g.w - 48 : g.w - split - 60;
+      const goalLit = g.lit("goal") || g.lit("dms"), habLit = g.lit("habit") || g.lit("dls");
+      g.text("goal-directed (dorsomedial striatum)", [bx, by], { align: "left", size: 13, color: "blue", weight: goalLit ? 700 : 500 });
+      g.meter(bx, by + 12, bw, 14, 1 - w, { color: "blue" });
+      g.text("habit (dorsolateral striatum)", [bx, by + 54], { align: "left", size: 13, color: "purple", weight: habLit ? 700 : 500 });
+      g.meter(bx, by + 66, bw, 14, w, { color: "purple" });
+      g.text(w > 0.5 ? "pressing runs on the cue, not the food" : "pressing tracks what the food is worth now", [bx, by + 108], { align: "left", size: 12.5, color: "muted", italic: true });
+    },
+  });
+}
+</script>
+
+<p>After <button class="set" data-set="n=100">brief training</button> the devalued rat presses about a tenth as much. After <button class="set" data-set="n=500">extended training</button> it presses nearly as much as a rat whose food is still wanted: the behavior has come loose from its outcome. In rats, damage to the <span class="c-blue" data-part="dms">dorsomedial striatum</span> makes behavior habitual early, and damage to the <span class="c-purple" data-part="dls">dorsolateral striatum</span> keeps it goal-directed after long training <a class="cite" href="#ref-yin2006"></a>, so habit formation looks like control shifting from the first to the second.</p>
+
+<p>In people it is less tidy. One imaging study saw the human dorsolateral region grow more active with overtraining <a class="cite" href="#ref-tricomi2009"></a>, but a later paper reported five failed attempts to make volunteers habitual by overtraining in the lab <a class="cite" href="#ref-dewit2018"></a>. Everyday habits clearly exist; making them on cue has proved hard.</p>
+
+<p>How long do habits take? Phillippa Lally and colleagues had 96 volunteers pick a new daily behavior, like a glass of water after breakfast, and rate each day how automatic it felt <a class="cite" href="#ref-lally2010"></a>. Each person's ratings were fitted with a curve that rises and levels off. Here are 39 such curves, spread like the people whose data fitted well. Move the day to <span class="scrub" data-key="day"></span>:</p>
+
+<figure class="demo" id="lally" aria-label="Thirty-nine curves of how automatic a new daily habit feels, each rising and leveling off at a different speed. A marker moves along the days; the curve of the median person is highlighted. After day 84 the curves are dashed, because the study ended there."></figure>
+<script>
+{
+  // Each person's automaticity A(t) = a (1 - exp(-t / tau)); the day they reach 95% of their own plateau,
+  // t95 = 3 tau, is spread log-normally around the reported median of 66 days so that the 39 quantiles
+  // run from about 18 to 250 days, matching the reported range of 18-254. Plateaus a vary person to person.
+  const N = 39, people = [];
+  const r = Num.rng(5);
+  for (let i = 0; i < N; i++) {
+    const z = Math.SQRT2 * inverf(2 * ((i + 0.5) / N) - 1);
+    people.push({ t95: 66 * Math.exp(0.595 * z), a: 0.55 + 0.4 * r() });
+  }
+  function inverf(x) { const a = 0.147, l = Math.log(1 - x * x), b = 2 / (Math.PI * a) + l / 2; return Math.sign(x) * Math.sqrt(Math.sqrt(b * b - l / a) - b); }
+  const A = (p, t) => p.a * (1 - Math.exp((-3 * t) / p.t95));
+  demo("lally", {
+    aspect: w => (w < 560 ? 1.1 : 1.8),
+    controls: [{ key: "day", label: "Day", min: 0, max: 260, step: 1, value: 66, color: "purple", marks: [{ value: 84, label: "study ends" }] }],
+    caption: "Automaticity curves for 39 people, spread to match Lally et al. (2010): the median person (purple) reaches 95% of their plateau at day 66, the fastest at about 18, the slowest at about 250. Beyond day 84 the curves are extrapolations.",
+    status: (s, v) => { const k = people.filter(p => p.t95 <= v.day).length; return `day ${v.day}: ${k} of ${N} people at 95% of their plateau`; },
+    draw(g, s, v) {
+      const P = g.graph({ x: [0, 260], y: [0, 1], axes: "frame", xLabel: "Days of doing it daily", yLabel: "How automatic it feels", yTicks: false, xTicks: [0, 66, 84, 150, 200, 254] });
+      P.clip(() => g.rect(P.xpx(84), P.ypx(1), P.xpx(260) - P.xpx(84), P.ypx(0) - P.ypx(1), { fill: g.rgba("muted", 0.06) }));
+      people.forEach((p, i) => {
+        const med = i === (N - 1) / 2, done = p.t95 <= v.day;
+        if (med) return;
+        P.fn(t => A(p, t), { color: done ? "purple" : "muted", width: 1, domain: [0, 84], alpha: done ? 0.55 : 0.6 });
+        P.fn(t => A(p, t), { color: "muted", width: 0.8, dash: [3, 4], domain: [84, 260], alpha: 0.5 });
+        if (done) P.points([[p.t95, 0.95 * p.a]], { color: "purple", r: 3 });
+      });
+      const m = people[(N - 1) / 2];
+      P.fn(t => A(m, t), { color: "purple", width: 3.5, domain: [0, 84] });
+      P.fn(t => A(m, t), { color: "purple", width: 2.5, dash: [5, 4], domain: [84, 260] });
+      P.label("median person", [200, A(m, 200)], { dy: -10, color: "purple" });
+      P.vline(v.day, { color: "purple" });
+      P.label("study ended", [86, 0.06], { align: "left", color: "muted" });
+    },
+  });
+}
+</script>
+
+<p>The median was 66 days to reach 95% of the plateau, with a range of 18 to 254; anything past day 84, when the study ended, is extrapolated. The curves rise fastest early, and missing one day did not set people back. Checking a phone gets dozens of repetitions a day.</p>
+
+<aside class="callout key"><p>A habit is behavior that keeps going after its reward has lost its value. That is why "I don't even enjoy this" and "I can't stop" can both be true.</p></aside>
+<h2>Why bad news</h2>
+
+<p>None of this explains why the scrolling so often goes to bad news. Four more pieces help: where a stopping point would come from, what grabs attention, what spreads, and what checking does to worry.</p>
+
+<p>Start with stopping. A bird feeding on a berry bush gets less the longer it stays, so its <span class="c-orange" data-part="gain">gain</span> flattens, and moving to the next bush costs travel time. Eric Charnov's <dfn data-def="An animal feeding in patches should leave a patch when its rate of gain there falls to the best average rate it can get across the whole habitat, travel included.">marginal value theorem</dfn> says to leave where a line from the start of the journey just touches the gain curve <a class="cite" href="#ref-charnov1976"></a>. Drag the start of the trip, or set the travel time to <span class="scrub" data-key="T"></span>, then switch the patch to a feed:</p>
+
+<figure class="demo" id="mvt" aria-label="The marginal value theorem. A gain curve rises and flattens with time spent in a patch; a straight line from the travel time on the left touches it at the best moment to leave. For a feed that refills, the gain is a straight line and the touching point never comes."></figure>
+<script>
+{
+  const G = 10, TAU = 20;
+  const gain = (kind, t) => (kind === "bush" ? G * (1 - Math.exp(-t / TAU)) : 0.22 * t);
+  const slope = (kind, t) => (kind === "bush" ? (G / TAU) * Math.exp(-t / TAU) : 0.22);
+  let PM;
+  demo("mvt", {
+    drag: {
+      hit: (p, s, v) => PM && Math.hypot(p[0] - PM.xpx(-v.T), p[1] - PM.ypx(0)) < 24,
+      move: (p, s, v, d, fig) => fig.set("T", Math.round(clamp(-PM.inv(p)[0], 0, 60))),
+    },
+    aspect: w => (w < 560 ? 1.15 : 1.9),
+    controls: [
+      { key: "T", label: "Travel time", min: 0, max: 60, step: 1, value: 30, unit: " s", color: "ink" },
+      { key: "kind", label: "Patch", type: "choice", options: [{ value: "bush", label: "bush that runs out" }, { value: "feed", label: "feed that refills" }], value: "bush" },
+    ],
+    caption: "The marginal value theorem. The best time to leave is where the dashed line from the start of the trip touches the gain curve. Shorter travel means leaving sooner; a patch that never runs out has no touching point.",
+    status: (s, v) => { if (v.kind === "feed") return "best time to leave: never (the rate never drops)"; const t = Num.solve(t => slope("bush", t) * (v.T + t) - gain("bush", t), 0.01, 400); return `best time to leave: ${t.toFixed(0)} s in the patch`; },
+    draw(g, s, v) {
+      const P = (PM = g.graph({ x: [-62, 120], y: [0, 14], axes: "frame", xLabel: "Time (s): travel to the left of 0, in the patch to the right", yLabel: "Gain so far", yTicks: false, xTicks: [-60, -30, 0, 30, 60, 90, 120] }));
+      P.clip(() => g.rect(P.xpx(-v.T), P.ypx(14), P.xpx(0) - P.xpx(-v.T), P.ypx(0) - P.ypx(14), { fill: g.rgba("muted", 0.12) }));
+      P.label("travel", [-v.T / 2, 1], { color: "muted" });
+      P.fn(t => gain(v.kind, t), { color: "orange", width: g.lit("gain") ? 3.5 : 2.5, domain: [0, 120] });
+      if (v.kind === "bush") {
+        const t = Num.solve(t => slope("bush", t) * (v.T + t) - gain("bush", t), 0.01, 400), y = gain("bush", t);
+        P.segment([-v.T, 0], [t + (t + v.T) * 0.25, y * 1.25], { color: "ink", dash: [6, 4], width: 1.5 });
+        P.marker(t, y, { color: "ink", drop: true, label: "leave", pos: "nw" });
+      } else {
+        P.segment([-v.T, 0], [120, gain("feed", 120) * (120 + v.T) / 120 * 0.999], { color: "ink", dash: [6, 4], width: 1.5 });
+        P.label("never touches", [70, 4], { color: "ink" });
+      }
+      g.handle([P.xpx(-v.T), P.ypx(0)], { color: "ink", r: 6 });
+    },
+  });
+}
+</script>
+
+<p>A long trip means stay and strip the bush; a short one means take the easy berries and move on. On a feed, travel to the next post is a flick of the thumb, and the <button class="set" data-set="kind=feed">feed refills</button>: an algorithm keeps supplying posts, so the gain never flattens and the touching point that says "this patch is used up" never comes. Applying foraging theory to feeds is an analogy, but it names something real: a printed newspaper ends, a feed does not.</p>
+
+<p>Next, attention. Threatening things tend to be noticed faster than neutral ones. Arne Öhman and colleagues had people find the odd picture in a grid: a snake or spider among flowers was found faster than a flower among snakes, and finding the threat barely slowed as the grid grew <a class="cite" href="#ref-ohman2001"></a>. Here is that pattern with illustrative numbers. Enlarge the grid and compare the <span class="c-red" data-part="threat">threat</span> times with the <span class="c-muted" data-part="neutral">neutral</span> ones:</p>
+
+<figure class="demo" id="threat" aria-label="Left: a grid of flower pictures with one snake among them. Right: the distribution of times to find a threatening target and a neutral one. Making the grid larger slows the neutral search much more than the threat search."></figure>
+<script>
+{
+  // Illustrative ex-Gaussian reaction times: threat targets mean about 800 + 5n ms, neutral about 850 + 40n ms,
+  // where n is the number of pictures. The pattern (fast, flat threat search; slower, steeper neutral search)
+  // follows Ohman, Flykt and Esteves (2001); the numbers are made up to show it.
+  const sample = (n, threat, r) => { const mu = threat ? 650 + 5 * n : 700 + 40 * n; return mu + r.gauss(0, 70) - 150 * Math.log(1 - r()); };
+  const cache = new Map();
+  const get = n => { if (!cache.has(n)) { const r = Num.rng(n); cache.set(n, { t: Array.from({ length: 600 }, () => sample(n, true, r)), u: Array.from({ length: 600 }, () => sample(n, false, r)) }); } return cache.get(n); };
+  const snake = (g, c, r, col) => { const pts = []; for (let k = 0; k <= 24; k++) { const x = -r + (2 * r * k) / 24; pts.push([c[0] + x, c[1] + Math.sin(k * 0.65) * r * 0.32]); } g.spline(pts, { stroke: col, width: 3.5 }); g.circle(pts[pts.length - 1], 3.5, { fill: col }); };
+  const flower = (g, c, r) => { for (let k = 0; k < 6; k++) { const a = (k * TAU) / 6; g.circle([c[0] + Math.cos(a) * r * 0.5, c[1] + Math.sin(a) * r * 0.5], r * 0.32, { fill: g.rgba("muted", 0.25), stroke: "muted", width: 1 }); } g.circle(c, r * 0.24, { fill: "muted" }); };
+  demo("threat", {
+    aspect: w => (w < 560 ? 0.95 : 2.0),
+    controls: [{ key: "n", label: "Pictures in the grid", type: "choice", options: [{ value: 4, label: "2 × 2" }, { value: 9, label: "3 × 3" }, { value: 16, label: "4 × 4" }], value: 9 }],
+    caption: "Simulated search times with illustrative numbers, following the pattern Öhman and colleagues reported: a threatening target is found quickly whatever the grid size, a neutral one more slowly as the grid grows. The 4 × 4 grid goes beyond their experiment.",
+    status: (s, v) => { const d = get(v.n); return `mean: threat ${Math.round(Num.mean(d.t))} ms · neutral ${Math.round(Num.mean(d.u))} ms`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, side = Math.round(Math.sqrt(v.n));
+      const gb = narrow ? [g.w / 2 - g.h * 0.2, 6, g.h * 0.4, g.h * 0.4] : [10, g.h / 2 - g.w * 0.15, g.w * 0.3, g.w * 0.3];
+      const cell = gb[2] / side, targ = Math.floor(v.n * 0.6);
+      for (let i = 0; i < v.n; i++) {
+        const c = [gb[0] + (i % side + 0.5) * cell, gb[1] + (Math.floor(i / side) + 0.5) * cell];
+        if (i === targ) snake(g, c, cell * 0.32, g.lit("threat") ? "red" : "red"); else flower(g, c, cell * 0.36);
+      }
+      const d = get(v.n);
+      const P = g.graph({ box: narrow ? [0, g.h * 0.45, g.w, g.h * 0.55] : [g.w * 0.34, 0, g.w * 0.66, g.h], x: [400, 2600], y: [0, 0.0048], axes: "frame", xLabel: "Time to find the odd one out (ms)", yTicks: false, yLabel: "" });
+      P.histogram(d.u, { bins: 44, range: [400, 2600], density: true, color: "muted", alpha: g.lit("neutral") ? 0.4 : 0.22 });
+      P.histogram(d.t, { bins: 44, range: [400, 2600], density: true, color: "red", alpha: g.lit("threat") ? 0.45 : 0.25 });
+      P.vline(Num.mean(d.t), { color: "red", label: "threat" });
+      P.vline(Num.mean(d.u), { color: "muted", label: "neutral" });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="n=4">four pictures</button> the two are close; at <button class="set" data-set="n=16">sixteen</button> the neutral search is about half a second slower and the threat search has barely moved. Danger-flagging systems, including the <span class="c-red">amygdala</span>, are thought to steer attention before you have looked at everything. The size of the advantage is debated, and some may come from simple features like a snake's curves. The broader negativity bias is well replicated: across 17 countries, skin conductance and heart-rate variability responded more to negative news clips than to positive ones <a class="cite" href="#ref-soroka2019"></a>.</p>
+
+<p>Then, what spreads. In half a million tweets about gun control, same-sex marriage, and climate change, each <span class="c-red">moral-emotional word</span> ("outrage", "shameful") raised retweets by about 20% <a class="cite" href="#ref-brady2017"></a>. In 2.7 million posts from news outlets and members of Congress, each word about the political <span class="c-red">out-group</span> raised the odds of a share by about 67% <a class="cite" href="#ref-rathje2021"></a>. Build a post and watch the expected shares:</p>
+
+<figure class="demo" id="shares" aria-label="A short post built from word chips the reader adds: words about the other side, negative words, moral-emotional words, and positive words. A bar shows the expected number of shares relative to a neutral post that gets 100."></figure>
+<script>
+{
+  // Per-word multipliers on the odds of sharing. Rathje et al. 2021, pooled across eight datasets:
+  // out-group 1.67, negative 1.14, moral-emotional 1.10, positive 0.95. Brady et al. 2017: moral-emotional 1.20.
+  const WORDS = {
+    out: ["them", "their side", "those people"], neg: ["disaster", "shocking", "terrible"],
+    mor: ["shameful", "outrage", "evil"], pos: ["hopeful", "kind", "great"],
+  };
+  const MULT = { rathje: { out: 1.67, neg: 1.14, mor: 1.10, pos: 0.95 }, brady: { out: 1, neg: 1, mor: 1.2, pos: 1 } };
+  demo("shares", {
+    aspect: w => (w < 560 ? 1.25 : 2.1),
+    controls: [
+      { key: "out", label: "Other-side words", type: "stepper", min: 0, max: 3, step: 1, value: 1 },
+      { key: "neg", label: "Negative words", type: "stepper", min: 0, max: 3, step: 1, value: 1 },
+      { key: "mor", label: "Moral-emotional words", type: "stepper", min: 0, max: 3, step: 1, value: 0 },
+      { key: "pos", label: "Positive words", type: "stepper", min: 0, max: 3, step: 1, value: 0 },
+      { key: "study", label: "Estimates from", type: "choice", options: [{ value: "rathje", label: "Rathje 2021" }, { value: "brady", label: "Brady 2017" }], value: "rathje" },
+    ],
+    caption: "Expected shares of a post relative to a neutral one with 100, multiplying the per-word effects reported by Rathje et al. (2021, pooled estimates) or Brady et al. (2017, moral-emotional words only). Treating odds ratios as multipliers on shares is a simplification.",
+    status: (s, v) => { const m = MULT[v.study]; const x = 100 * m.out ** v.out * m.neg ** v.neg * m.mor ** v.mor * m.pos ** v.pos; return `about ${Math.round(x)} shares for every 100 a neutral post gets`; },
+    draw(g, s, v) {
+      const m = MULT[v.study], kinds = ["out", "neg", "mor", "pos"];
+      const toks = ["New", "report", "on", "the", "plan"];
+      const tags = [];
+      kinds.forEach(k => { for (let i = 0; i < v[k]; i++) toks.push(WORDS[k][i]), tags.push(k); });
+      // The post set as type; the loaded words sit in soft tinted chips, the new ones popping in.
+      const narrow = g.w < 560;
+      const TK = g.tokens(toks, { at: [12, 10], size: 15, font: "serif", showSpaces: false, id: "post", colors: toks.map((_, i) => (i < 5 ? null : tags[i - 5] === "pos" ? "muted" : "red")) });
+      const top = Math.max(narrow ? 110 : 84, (TK.height ?? 40) + 24), NAMES = { out: "other-side", neg: "negative", mor: "moral-emotional", pos: "positive" };
+      // A waterfall: start from a neutral post's 100 shares and multiply in each kind of word.
+      let run = 100; const rows = [["neutral post", 100, "muted"]];
+      for (const k of kinds) if (v[k] > 0 && m[k] !== 1) { run *= m[k] ** v[k]; rows.push([`+ ${v[k]} ${NAMES[k]} word${v[k] > 1 ? "s" : ""} (×${m[k].toFixed(2)} each)`, run, k === "pos" ? "muted" : "red"]); }
+      const MAX = 520, bx = 16, bw = g.w - 70, X = val => bx + (Math.min(val, MAX) / MAX) * bw;
+      const rowH = Math.min(46, (g.h - top - 10) / Math.max(rows.length, 3));
+      rows.forEach(([label, val, c], i) => {
+        const cy = top + 22 + rowH * i, last = i === rows.length - 1 && i > 0;
+        g.text(label, [bx, cy - 4], { size: 12, align: "left", color: last ? "ink" : "muted", weight: last ? 700 : 500 });
+        g.rect(bx, cy + 2, X(val) - bx, 14, { fill: c, alpha: last ? 0.85 : 0.45, r: 3 });
+        g.text(`${Math.round(val)}${val > MAX ? " →" : ""}`, [X(val) + 6, cy + 9], { size: 12.5, align: "left", weight: last ? 700 : 500 });
+      });
+      g.line([X(100), top + 14], [X(100), top + 22 + rowH * rows.length], { stroke: "muted", width: 1, dash: [3, 3] });
+    },
+  });
+}
+</script>
+
+<p>Words about the other side do the most: with <button class="set" data-set="out=3 neg=0 mor=0 pos=0 study=rathje">three of them</button> a post is expected to be shared more than four times as often as a neutral one. Negative and moral-emotional words add less, and positive words slightly reduce sharing. These are correlations, but they held across eight datasets. In 105,000 headline variants tested at random on Upworthy, each extra negative word raised clicks by about 2.3% <a class="cite" href="#ref-robertson2023"></a>. Feeds rank posts partly by engagement, so these effects shape what you see.</p>
+
+<p>Last, worry. After the 2013 Boston Marathon bombings, people who followed coverage six or more hours a day reported more acute stress than people who had been at the scene <a class="cite" href="#ref-holman2014"></a>. Following that sample for three years showed a cycle: exposure predicted distress, distress predicted worry about the future, and worry predicted heavier exposure to the next disaster <a class="cite" href="#ref-thompson2019"></a>. Checking is partly an attempt to resolve uncertainty, and dopamine neurons respond to advance information about a reward much as to the reward itself <a class="cite" href="#ref-brombergmartin2009"></a>. In this model of an evening, each check lowers <span class="c-muted" data-part="unc">uncertainty</span>, but bad news raises <span class="c-red" data-part="worry">worry</span>, which makes the next check likelier. Set the share of bad news to <span class="scrub" data-key="q"></span>:</p>
+
+<figure class="demo" id="loop" aria-label="A model of checking over a three-hour evening. A red line shows worry, a gray line shows uncertainty, and orange ticks mark each check of the phone. More bad news in the feed raises worry and the number of checks."></figure>
+<script>
+{
+  // Model (per minute): uncertainty U creeps up as events happen; the chance of a check is 0.04 + 0.5 W U.
+  // A check cuts U to 30% of its value; the item found is bad with chance q (worry W rises a quarter of the way
+  // to 1) or not (W falls by a tenth). Worry also fades by 1% a minute. All numbers illustrative.
+  function run(q) {
+    const r = Num.rng(3), W = [], U = [], checks = []; let w = 0.2, u = 0.3;
+    for (let m = 0; m <= 180; m++) {
+      u = Math.min(1, u + 0.02);
+      if (r() < 0.04 + 0.5 * w * u) { checks.push(m); u *= 0.3; if (r() < q) w += 0.25 * (1 - w); else w -= 0.1 * w; }
+      w *= 0.99; W.push([m, w]); U.push([m, u]);
+    }
+    return { W, U, checks };
+  }
+  demo("loop", {
+    aspect: w => (w < 560 ? 1.1 : 2.0),
+    controls: [{ key: "q", label: "Share of bad news", min: 0, max: 1, step: 0.05, value: 0.6, color: "red", format: q => `${Math.round(q * 100)}%` }],
+    caption: "A small model of the checking loop, with made-up parameters. Checking relieves uncertainty for a while, but bad news raises worry, and worry pulls the next check sooner. With mostly bad news the checks bunch together and worry stays high.",
+    status: (s, v) => { const R = run(v.q); return `${(R.checks.length / 3).toFixed(0)} checks an hour · average worry ${Num.mean(R.W.map(p => p[1])).toFixed(2)}`; },
+    draw(g, s, v) {
+      const R = run(v.q);
+      const P = g.graph({ x: [0, 180], y: [0, 1.08], axes: "frame", xLabel: "Minutes into the evening", yLabel: "Level (0 to 1)", yTicks: [0, 0.5, 1], xTicks: [0, 60, 120, 180] });
+      P.polyline(R.U, { color: "muted", width: g.lit("unc") ? 2.5 : 1.5 });
+      P.polyline(R.W, { color: "red", width: g.lit("worry") ? 3.5 : 2.5 });
+      for (const m of R.checks) g.line([P.xpx(m), P.ypx(1.08)], [P.xpx(m), P.ypx(0.98)], { stroke: "orange", width: 2 });
+      P.label("checks", [2, 1.03], { align: "left", color: "orange", dy: 0 });
+    },
+  });
+}
+</script>
+
+<p>With <button class="set" data-set="q=0.2">mostly neutral news</button> worry drifts down and checks spread out. With <button class="set" data-set="q=0.9">mostly bad news</button> they bunch together and worry stays high. The parameters are made up; only the shape of the loop is claimed, and that shape is what the Boston study found over years.</p>
+<h2>Self-control</h2>
+
+<p>At six in the evening most people would pick a good night's sleep over another hour on the phone; at eleven, many pick the phone. If the value of a reward fell by the same fraction for every hour of delay (<em>exponential discounting</em>), preferences between two fixed options would never flip. People and animals instead discount <em>hyperbolically</em>, steeply at short delays and gently at long ones <a class="cite" href="#ref-ainslie1975"></a>. Here are an <span class="c-orange" data-part="now">hour of scrolling at 11 pm</span> and <span class="c-brass" data-part="later">feeling rested at 7 am</span>, as seen at <span class="scrub" data-key="now"></span>:</p>
+
+<figure class="demo" id="discount" aria-label="The value of two options seen from different times of the evening: an hour of scrolling at 11 pm and feeling rested at 7 am. With hyperbolic discounting the curves cross, so the preference flips late in the evening; with exponential discounting they never cross."></figure>
+<script>
+{
+  // Hyperbolic V = A / (1 + k D), D in hours, k = 0.23 per hour (illustrative, chosen so the curves cross near 10 pm).
+  // Exponential V = A exp(-r D) with r = 0.08 per hour. Scrolling at 11 pm is worth 1, feeling rested at 7 am is worth 2.5.
+  const SS = { t: 23, A: 1 }, LL = { t: 31, A: 2.5 };
+  const val = (o, now, kind) => kind === "exp" ? o.A * Math.exp(-0.08 * (o.t - now)) : o.A / (1 + 0.23 * (o.t - now));
+  const clock = h => { const hh = Math.floor(h), mm = Math.round((h - hh) * 60); const h12 = ((hh + 11) % 12) + 1; return `${h12}:${String(mm).padStart(2, "0")} pm`; };
+  demo("discount", {
+    aspect: w => (w < 560 ? 1.05 : 1.9),
+    controls: [
+      { key: "now", label: "Time now", min: 18, max: 23, step: 0.25, value: 20, color: "orange", format: clock },
+      { key: "kind", label: "Discounting", type: "choice", options: [{ value: "hyp", label: "hyperbolic" }, { value: "exp", label: "exponential" }], value: "hyp" },
+    ],
+    caption: "Discounted value of two options as the evening goes on (illustrative numbers). With hyperbolic discounting the nearer, smaller reward overtakes the later, larger one as it gets close; with exponential discounting the ranking never changes.",
+    status: (s, v) => { const a = val(SS, v.now, v.kind), b = val(LL, v.now, v.kind); return `at ${clock(v.now)} you'd choose: ${a > b ? "keep scrolling" : "sleep on time"}`; },
+    draw(g, s, v) {
+      const P = g.graph({ x: [18, 23], y: [0, 1.3], axes: "frame", xLabel: "Time when you decide", yLabel: "Value as seen then", xTicks: [18, 19, 20, 21, 22, 23], xFormat: h => clock(h).replace(":00", ""), yTicks: false });
+      P.fn(t => val(SS, t, v.kind), { color: "orange", width: g.lit("now") ? 3.5 : 2.5, label: "scroll at 11 pm", labelAt: 22.2, labelOffset: [-10, -14] });
+      P.fn(t => val(LL, t, v.kind), { color: "brass", width: g.lit("later") ? 3.5 : 2.5, label: "rested at 7 am", labelAt: 19, labelOffset: [0, -14] });
+      if (v.kind === "hyp") { const tx = Num.solve(t => val(SS, t, "hyp") - val(LL, t, "hyp"), 18, 23); P.vline(tx, { color: "muted", label: "preference flips" }); }
+      P.marker(v.now, val(SS, v.now, v.kind), { color: "orange" });
+      P.marker(v.now, val(LL, v.now, v.kind), { color: "brass" });
+      P.vline(v.now, { color: "ink" });
+    },
+  });
+}
+</script>
+
+<p>At <button class="set" data-set="now=19 kind=hyp">7 pm</button> the <span class="c-brass">rested morning</span> wins. As 11 pm nears, the scrolling hour's value shoots up and overtakes it around 10 pm, though neither option changed. With <button class="set" data-set="kind=exp">exponential discounting</button> the curves never cross. The numbers are made up, but the reversal is robust, and it fits <em>bedtime procrastination</em>, going to bed later than intended for no outside reason, which one survey linked to too little sleep <a class="cite" href="#ref-kroese2014"></a>.</p>
+
+<p>Quick two-way choices are modeled as noisy evidence drifting toward one of two thresholds, a <dfn data-def="A model of quick two-choice decisions: evidence accumulates noisily until it reaches one of two thresholds, which sets both the choice and how long it took.">drift-diffusion model</dfn> <a class="cite" href="#ref-ratcliff2008"></a>. Treat each post as one: <span class="c-blue" data-part="stop">put the phone down</span> or <span class="c-orange" data-part="next">next post</span>. The goal pushes evidence up, the urge pulls it down, and if nothing is decided in a second and a half the thumb flicks, because swiping is the default. Set the urge and the goal:</p>
+
+<figure class="demo" id="ddm" aria-label="A drift-diffusion model of the decision on each post. Noisy paths start between two thresholds, stop the phone above and next post below. Sliders set the urge, which pulls paths down, and the goal, which pushes them up. Readouts give the chance of stopping on a post and how many posts that implies."></figure>
+<script>
+{
+  // Each post: x starts at z, dx = v dt + 0.45 dW, thresholds 0 (next post) and 1 (stop), deadline 1.5 s with
+  // "next post" as the default. Drift v = 2 (goal - urge) - 0.45, the small pull of an easy swipe;
+  // start z = 0.5 - 0.25 (urge - 0.5). Illustrative parameters.
+  const DT = 0.01, DEAD = 1.5;
+  function sim(urge, goal, n, seed) {
+    const r = Num.rng(seed), v = 2 * (goal - urge) - 0.45, z = 0.5 - 0.25 * (urge - 0.5), paths = []; let stops = 0;
+    for (let i = 0; i < n; i++) {
+      let x = z, t = 0; const p = i < 24 ? [[0, x]] : null;
+      while (t < DEAD && x > 0 && x < 1) { x += v * DT + 0.45 * r.gauss(0, Math.sqrt(DT)); t += DT; if (p) p.push([t, Math.min(1, Math.max(0, x))]); }
+      if (x >= 1) stops++;
+      if (p) paths.push({ p, end: x >= 1 ? "stop" : "next" });
+    }
+    return { paths, pStop: stops / n };
+  }
+  let cache = { key: "" };
+  demo("ddm", {
+    aspect: w => (w < 560 ? 1.05 : 1.9),
+    controls: [
+      { key: "urge", label: "Urge to keep going", min: 0, max: 1, step: 0.05, value: 0.6, color: "orange" },
+      { key: "goal", label: "Goal of stopping", min: 0, max: 1, step: 0.05, value: 0.5, color: "blue" },
+    ],
+    caption: "A drift-diffusion model of the choice on each post, with illustrative parameters. Paths that reach the top stop; paths that reach the bottom or run out of time go to the next post. Small changes in the chance of stopping per post make large changes in how many posts a session lasts.",
+    status: (s, v) => { const c = get(v); return `stop on a given post: ${(100 * c.pStop).toFixed(1)}% · typical session ≈ ${c.pStop > 0 ? Math.round(1 / c.pStop) : "∞"} posts`; },
+    draw(g, s, v) {
+      const c = get(v);
+      const P = g.graph({ x: [0, DEAD], y: [-0.08, 1.08], axes: "frame", xLabel: "Time looking at the post (s)", yLabel: "", yTicks: false, xTicks: [0, 0.5, 1, 1.5], grid: false });
+      P.hline(1, { color: "blue", label: "stop" });
+      P.hline(0, { color: "orange", label: "next post" });
+      P.vline(DEAD, { color: "muted", label: "thumb flicks" });
+      for (const q of c.paths) P.polyline(q.p, { color: q.end === "stop" ? "blue" : "orange", width: 1.2, alpha: 0.55 });
+    },
+  });
+  function get(v) { const key = `${v.urge}|${v.goal}`; if (cache.key !== key) cache = { key, ...sim(v.urge, v.goal, 1500, 9) }; return cache; }
+}
+</script>
+
+<p>The chance of stopping on any one post is small, and a small per-post chance means a long session: 3% per post means about 33 posts. Raise the <span class="c-blue">goal</span> a little and it climbs fast. Two features favor scrolling regardless of willpower: the default is to keep going, and every post is a fresh decision, so an urge that wins only sometimes still wins the session.</p>
+
+<p>The older explanation was <em>ego depletion</em>: willpower as a fuel that runs down, leaving you unable to resist the phone after a long day. A 2010 meta-analysis of 83 studies found a medium-sized effect <a class="cite" href="#ref-hagger2010"></a>. Before you reveal what came next:</p>
+
+<div class="quiz">
+  <p>In 2016, 23 laboratories ran the same preregistered ego-depletion experiment with over 2,000 participants. What did they find?</p>
+  <div class="choices"><button>About the same medium effect</button><button>A bigger effect</button><button data-correct>An effect close to zero</button></div>
+  <p class="why">The combined effect was d = 0.04, with a 95% confidence interval from −0.07 to 0.15, which includes zero.</p>
+</div>
+
+<figure class="demo" id="egodep" aria-label="A forest plot of ego-depletion effect sizes: the 2010 meta-analysis at about 0.6, and three large preregistered multi-lab replications close to zero."></figure>
+<script>
+{
+  const ROWS = [
+    { label: "Hagger et al. 2010, meta-analysis of 83 studies", d: 0.62, lo: 0.57, hi: 0.67, color: "muted", orig: true },
+    { label: "Hagger et al. 2016, 23 labs, N = 2,141", d: 0.04, lo: -0.07, hi: 0.15, color: "blue" },
+    { label: "Dang et al. 2021, 12 labs, N = 1,775 *", d: 0.10, lo: 0.01, hi: 0.19, color: "blue" },
+    { label: "Vohs et al. 2021, 36 labs, N = 3,531 *", d: 0.06, lo: -0.01, hi: 0.13, color: "blue" },
+  ];
+  demo("egodep", {
+    aspect: w => (w < 560 ? 0.95 : 2.0),
+    controls: [{ key: "show", label: "Show the replications", type: "toggle", value: false, color: "blue" }],
+    caption: "Ego-depletion effect sizes (Cohen's d) with 95% intervals. * Interval approximated from the sample size, since the abstract reports only the estimate. The large preregistered replications find effects between zero and about a tenth of a standard deviation.",
+    status: (s, v) => (v.show ? "replications: d = 0.04 to 0.10" : "original meta-analysis: d = 0.62"),
+    draw(g, s, v) {
+      const narrow = g.w < 560, rows = ROWS.filter(r => r.orig || v.show);
+      const labW = narrow ? 0 : Math.min(320, g.w * 0.48);
+      const P = g.graph({ box: [labW, 0, g.w - labW, g.h], x: [-0.2, 0.8], y: [ROWS.length + 0.2, 0.3], axes: "frame", xLabel: "Effect size d (bigger = more depletion)", yTicks: false, xTicks: [-0.2, 0, 0.2, 0.4, 0.6, 0.8], grid: false });
+      P.vline(0, { color: "ink" });
+      rows.forEach((r, i) => {
+        const y = i + 1;
+        P.segment([r.lo, y], [r.hi, y], { color: r.color, width: 2.5 });
+        P.points([[r.d, y]], { color: r.color, r: r.orig ? 6 : 5 });
+        if (narrow) P.label(r.label, [-0.18, y - 0.32], { align: "left", color: "ink" });
+        else g.text(r.label, [labW - 8, P.ypx(y)], { align: "right", size: 12.5, color: r.orig ? "muted" : "ink" });
+      });
+    },
+  });
+}
+</script>
+
+<p>The <button class="set" data-set="show=true">large replications</button> <a class="cite" href="#ref-hagger2016"></a><a class="cite" href="#ref-dang2021"></a><a class="cite" href="#ref-vohs2021"></a> land near zero; the most generous finds a tenth of a standard deviation. The original literature was many small studies, and small studies that happen to find big effects are the ones that get published. So "you scroll at night because your willpower is used up" is not well supported. Discounting and defaults are better candidates, and both suggest changing the situation rather than trying harder.</p>
+<h2>Attention</h2>
+
+<p>Scrolling rarely happens alone; it interrupts something else. What does a switch actually cost? The cleanest measurements come from the lab. In Robert Rogers and Stephen Monsell's version, people see a letter and a digit and classify one of them, and the task alternates in a fixed rhythm: two trials on letters, two on digits, and so on <a class="cite" href="#ref-rogers1995"></a>. Each bar below is one trial's reaction time. Give people more time to prepare between trials, from <span class="scrub" data-key="rsi"></span>, and watch the <span class="c-blue" data-part="switch">switch trials</span>:</p>
+
+<figure class="demo" id="switch" aria-label="Reaction times for 24 trials alternating two letter trials and two digit trials. Switch trials, drawn in blue, are slower than repeat trials. A slider sets the preparation time; the extra cost of switching shrinks with preparation but does not vanish. A small plot shows the switch cost against preparation time."></figure>
+<script>
+{
+  // Switch cost (ms) against the response-stimulus interval: over 200 ms at 150 ms, falling to a residual of about
+  // 115 ms by about 600 ms (Rogers and Monsell 1995; residual from Nieuwenhuis and Monsell 2002). Smooth fit.
+  const cost = rsi => 115 + 120 * Math.exp(-(rsi - 150) / 150);
+  demo("switch", {
+    aspect: w => (w < 560 ? 1.0 : 2.0),
+    controls: [{ key: "rsi", label: "Time to prepare", min: 150, max: 1200, step: 50, value: 150, unit: " ms", color: "blue" }],
+    caption: "Simulated trials in the alternating-runs task (two letter trials, two digit trials). The extra time on switch trials, the switch cost, falls from over 200 ms with little preparation to a residual of about 115 ms that preparation does not remove.",
+    status: (s, v) => `switch cost ${Math.round(cost(v.rsi))} ms`,
+    draw(g, s, v) {
+      const r = Num.rng(4), narrow = g.w < 560, n = 24;
+      const box = narrow ? [0, 0, g.w, g.h * 0.6] : [0, 0, g.w * 0.66, g.h];
+      const P = g.graph({ box, x: [0, n], y: [0, 1000], axes: "frame", xTicks: false, yLabel: "Reaction time (ms)", yTicks: [0, 250, 500, 750, 1000], xLabel: "Trial" });
+      for (let i = 0; i < n; i++) {
+        const sw = i % 2 === 0 && i > 0, rt = 520 + r.gauss(0, 35) + (sw ? cost(v.rsi) : 0);
+        const a = P([i + 0.15, rt]), b = P([i + 0.85, 0]);
+        g.rect(a[0], a[1], b[0] - a[0], b[1] - a[1], { fill: sw ? "blue" : "muted", alpha: sw ? (g.lit("switch") ? 0.95 : 0.75) : 0.35, r: 1 });
+        if (!narrow || i % 2 === 0) g.text(Math.floor(i / 2) % 2 ? "7" : "A", [(a[0] + b[0]) / 2, P.ypx(0) - 10], { size: 11, color: "muted", font: "mono" });
+      }
+      P.label("letter, letter, digit, digit, …", [0.2, 960], { align: "left", color: "muted" });
+      const Q = g.graph({ box: narrow ? [0, g.h * 0.66, g.w, g.h * 0.34] : [g.w * 0.7, g.h * 0.08, g.w * 0.3, g.h * 0.8], x: [150, 1200], y: [0, 260], axes: "frame", xLabel: "Prep (ms)", yLabel: "Cost (ms)", xTicks: [150, 600, 1200], yTicks: [0, 115, 235] });
+      Q.fn(cost, { color: "blue" });
+      Q.marker(v.rsi, cost(v.rsi), { color: "blue", drop: true });
+    },
+  });
+}
+</script>
+
+<p>With little time to prepare, a switch costs over a fifth of a second. With more than about half a second it drops, then stops at about 115 milliseconds no matter how long you wait <a class="cite" href="#ref-nieuwenhuis2002"></a>. That leftover, the <em>residual switch cost</em>, suggests part of the reconfiguration can only happen once the next task is actually in front of you <a class="cite" href="#ref-monsell2003"></a>. But note the scale: tenths of a second. If that were the whole cost, switching would be nearly free. Now add up an hour of them, and also count the time that a check pulls you away into something else. Set the switches per hour to <span class="scrub" data-key="sw"></span> and the minutes each detour lasts:</p>
+
+<figure class="demo" id="hour" aria-label="One hour drawn as a bar. Blue is time on the main task, a thin dark sliver is the time lost to switch costs, and orange is time spent in detours after a check. Sliders set the number of switches per hour and the minutes each detour lasts."></figure>
+<script>
+{
+  demo("hour", {
+    aspect: w => (w < 560 ? 1.4 : 2.6),
+    controls: [
+      { key: "sw", label: "Switches per hour", min: 0, max: 60, step: 1, value: 20, color: "blue" },
+      { key: "det", label: "Minutes per detour", min: 0, max: 5, step: 0.25, value: 1, color: "orange" },
+    ],
+    caption: "An hour split into time on the main task (blue), time lost to the measured switch cost of about 0.2 s per switch (dark), and time away in detours (orange, an assumption you set). The switch cost itself is a sliver; the detours are not.",
+    status: (s, v) => { const c = v.sw * 0.2, d = Math.min(3600 - c, v.sw * v.det * 60); return `switch costs ${c.toFixed(0)} s · detours ${(d / 60).toFixed(0)} min · on task ${((3600 - c - d) / 60).toFixed(0)} min`; },
+    draw(g, s, v) {
+      const c = v.sw * 0.2, d = Math.min(3600 - c, v.sw * v.det * 60), on = 3600 - c - d;
+      const x0 = 16, w = g.w - 32, y = g.h * 0.3, h = g.h * 0.28, X = sec => (sec / 3600) * w;
+      // Interleave: on-task blocks, each followed by a switch sliver and a detour.
+      const nSeg = Math.max(1, v.sw), onSeg = on / nSeg, dSeg = d / nSeg, cSeg = c / nSeg;
+      let x = x0;
+      for (let i = 0; i < nSeg; i++) {
+        g.rect(x, y, X(onSeg), h, { fill: "blue", alpha: 0.6 }); x += X(onSeg);
+        if (v.sw > 0) { g.rect(x, y, Math.max(1, X(cSeg)), h, { fill: "ink" }); x += X(cSeg); g.rect(x, y, X(dSeg), h, { fill: "orange", alpha: 0.65 }); x += X(dSeg); }
+      }
+      g.rect(x0, y, w, h, { stroke: "ink", width: 1.2 });
+      g.text("one hour", [x0, y - 12], { align: "left", size: 12.5, color: "muted" });
+      const ty = y + h + 26;
+      g.text(`on task ${(on / 60).toFixed(0)} min`, [x0, ty], { align: "left", size: 13, color: "blue" });
+      g.text(`switch costs ${c.toFixed(0)} s`, [x0 + w / 2, ty], { size: 13, color: "ink" });
+      g.text(`detours ${(d / 60).toFixed(0)} min`, [x0 + w, ty], { align: "right", size: 13, color: "orange" });
+    },
+  });
+}
+</script>
+
+<p>Twenty switches an hour cost about four seconds of measurable switch time. One minute of detour after each costs twenty minutes. The expensive part of an interruption is not the switch; it is what you switch to, and whether you come back. In a field study of 24 office workers, Gloria Mark and colleagues found that 57% of work episodes were interrupted, and interrupted work, when resumed the same day, was picked up again about 25 minutes later on average, usually after two other activities <a class="cite" href="#ref-mark2005"></a>.</p>
+
+<aside class="callout mistake"><p>"It takes 23 minutes to refocus after a distraction." The number comes from Mark's research on how long people took to <em>return</em> to an interrupted task, with other work in between, not from a measurement of lost concentration. Lab switch costs are measured in tenths of a second.</p></aside>
+<section class="band dark">
+<h2>Sleep</h2>
+
+<p>Much doomscrolling happens in bed, in the dark, with a bright rectangle a hand's length away. Light at night suppresses <span class="c-brass" data-part="mel">melatonin</span>, the hormone released in the evening as a darkness signal, and shifts the body clock later, mostly through <em>melanopsin</em>, a blue-sensitive pigment in a few retinal cells. So evening light is measured as <dfn data-def="Melanopic equivalent daylight illuminance: light at the eye weighted by how strongly it drives melanopsin, in lux of daylight that would drive it equally.">melanopic EDI</dfn>, lux weighted by how strongly they drive melanopsin.</p>
+
+<p>A screen of brightness <span class="tex">L</span> (candela per square meter) and area <span class="tex">A</span> at distance <span class="tex">d</span> puts about <span class="tex">E \approx L A / d^2</span> lux into the eye. Set the brightness, distance, and scrolling time, and try night mode:</p>
+
+<figure class="demo wide" id="light" aria-label="Left: a phone held in front of an eye, with the light reaching the eye in lux and in melanopic lux. Right: predicted melatonin suppression against melanopic light, for the chosen scrolling time, with recommended evening and sleep limits and the result of an e-reader study."></figure>
+<script>
+{
+  const AREA = 0.009;                    // m^2, a 6.1-inch phone screen
+  // Melanopic daylight efficacy ratio (melanopic EDI per photopic lux): about 0.85 for a typical white screen,
+  // about 0.35 with a warm night mode (assumption; it varies by phone and setting).
+  const DER = night => (night ? 0.35 : 0.85);
+  // Gimenez et al. 2022, equation 7 (no pupil dilation): suppression % = 100 - 100 / (1 + (log10(mEDI 1e6) / (9.002 - 0.008 t))^7.496), t in minutes.
+  const supp = (mel, mins) => { const x = Math.log10(Math.max(1e-6, mel) * 1e6), b = 9.002 - 0.008 * mins; return 100 - 100 / (1 + Math.pow(x / b, 7.496)); };
+  const lux = v => (v.L * AREA) / (v.d / 100) ** 2;
+  demo("light", {
+    aspect: w => (w < 560 ? 0.85 : 2.1),
+    controls: [
+      { key: "L", label: "Brightness", min: 5, max: 600, step: 5, value: 150, unit: " cd/m²", color: "brass" },
+      { key: "d", label: "Distance", min: 15, max: 60, step: 1, value: 30, unit: " cm", color: "ink" },
+      { key: "mins", label: "Scrolling time", min: 15, max: 240, step: 15, value: 60, unit: " min", color: "orange" },
+      { key: "night", label: "Night mode", type: "toggle", value: false, color: "orange" },
+    ],
+    presets: [
+      { label: "Dim, arm's length", set: { L: 30, d: 45, mins: 30, night: true } },
+      { label: "Typical", set: { L: 150, d: 30, mins: 60, night: false } },
+      { label: "Bright, close, 4 h", set: { L: 500, d: 20, mins: 240, night: false } },
+    ],
+    caption: "Light at the eye from a phone (small-source approximation) and the melatonin suppression predicted by a model fitted to 29 published studies (Giménez et al. 2022). Dashed lines mark the recommended limits: 10 melanopic lux in the three hours before bed, 1 lux during sleep. The point with an error bar is an e-reader study's measurement.",
+    status: (s, v) => { const E = lux(v), m = E * DER(v.night); return `${E.toFixed(0)} lux at the eye · ${m.toFixed(1)} melanopic lux · ≈${supp(m, v.mins).toFixed(0)}% suppression`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, E = lux(v), mel = E * DER(v.night), sp = supp(mel, v.mins);
+      // Left: eye and phone.
+      const lb = narrow ? [0, 0, g.w, g.h * 0.4] : [0, 0, g.w * 0.36, g.h];
+      g.clip(lb, () => {
+        const cy = lb[1] + lb[3] * (narrow ? 0.6 : 0.45), ex = lb[0] + lb[2] * 0.15, scale = (lb[2] * 0.62) / 60;
+        const px = ex + v.d * scale, ph = Math.min(lb[3] * (narrow ? 0.4 : 0.55), 15 * scale * 2.2);
+        // Eye.
+        g.circle([ex, cy], 16, { fill: g.rgba("muted", 0.15), stroke: "ink", width: 1.5 });
+        g.circle([ex + 10, cy], 5, { fill: "ink" });
+        // Light cone, brighter with more melanopic light.
+        const a = Math.min(0.55, 0.05 + 0.12 * Math.log10(1 + mel));
+        g.path([[px, cy - ph / 2], [px, cy + ph / 2], [ex + 14, cy + 4], [ex + 14, cy - 4]], { fill: g.rgba(v.night ? "orange" : "brass", a) });
+        g.rect(px - 4, cy - ph / 2, 8, ph, { fill: v.night ? "orange" : "brass", stroke: "ink", width: 1.2, r: 3 });
+        g.dimension([ex + 16, cy + ph / 2 + 16], [px, cy + ph / 2 + 16], `${v.d} cm`, {});
+        g.text(`${E.toFixed(0)} lux`, [lb[0] + lb[2] / 2, lb[1] + 18], { size: 14, color: "ink", weight: 600 });
+        g.text(`${mel.toFixed(1)} melanopic lux`, [lb[0] + lb[2] / 2, lb[1] + 38], { size: 13, color: "brass" });
+      });
+      // Right: dose-response.
+      const rb = narrow ? [0, g.h * 0.42, g.w, g.h * 0.58] : [g.w * 0.39, 0, g.w * 0.61, g.h];
+      const P = g.graph({ box: rb, x: [0.3, 1000], y: [0, 100], xScale: "log", axes: "frame", xLabel: "Melanopic light at the eye (lux)", yLabel: "Melatonin suppressed (%)", yTicks: [0, 25, 50, 75, 100] });
+      P.vline(1, { color: "muted", label: "sleep ≤ 1" });
+      P.vline(10, { color: "muted", label: "evening ≤ 10" });
+      P.fn(m => supp(m, v.mins), { color: "brass", width: g.lit("mel") ? 3.5 : 2.5, label: `${v.mins} min`, labelAt: 300 });
+      P.errorbars([[28, 55.1, 20.1]], { color: "ink" });
+      P.points([[28, 55.1]], { color: "ink", r: 4 });
+      P.label("e-reader, 4 h", [28, 80], { color: "ink" });
+      P.marker(mel, sp, { color: "orange", drop: true });
+    },
+  });
+}
+</script>
+
+<p>At a <button class="set" data-set="L=150 d=30 mins=60 night=false">typical evening brightness</button>, a phone at 30 cm gives about 15 lux, a dozen melanopic lux, already over the 10 recommended before bed <a class="cite" href="#ref-brown2022"></a>. A model fitted to 29 studies predicts a fifth of evening melatonin suppressed after an hour <a class="cite" href="#ref-gimenez2022"></a>, about double after <button class="set" data-set="L=150 d=30 mins=240 night=false">four hours</button>. The point with the error bar is a real experiment: four hours a night of full-brightness iPad reading, about 28 melanopic lux, suppressed melatonin by 55%, delayed sleep about 10 minutes, and after five nights shifted the melatonin rhythm over 90 minutes later <a class="cite" href="#ref-chang2015"></a>. People differ more than fiftyfold in sensitivity <a class="cite" href="#ref-phillips2019"></a>.</p>
+
+<p><button class="set" data-set="night=true">Night mode</button> cuts melanopic light at the same brightness, and lab studies that change only a display's melanopic content find less melatonin suppression and faster sleep <a class="cite" href="#ref-schollhorn2023"></a>. Yet a real-world trial of the iPhone's Night Shift found no difference in sleep; people who skipped the phone before bed slept best <a class="cite" href="#ref-duraccio2021"></a>.</p>
+
+<p>That points to the bigger cost. In Alexander Borbély's two-process model <a class="cite" href="#ref-borbely2016"></a><a class="cite" href="#ref-daan1984"></a>, <span class="c-brass" data-part="S">sleep pressure</span> builds while awake and drains during sleep, and a <span class="c-blue" data-part="C">daily clock</span> sets when sleep comes easily. With a fixed alarm, scrolling after lights-out comes straight out of sleep. Scroll for <span class="scrub" data-key="m"></span>:</p>
+
+<figure class="demo" id="twoproc" aria-label="Borbély's two-process model over one night. Sleep pressure rises during the evening and falls during sleep between an upper and lower threshold set by the daily clock. Scrolling after lights-out delays sleep onset while the alarm stays fixed, so less pressure drains before waking."></figure>
+<script>
+{
+  // Process S rises toward 1 with time constant 18.18 h awake and falls with 4.2 h asleep; the thresholds are
+  // 0.67 and 0.17 plus 0.12 times a daily cosine (values from Daan, Beersma and Borbely 1984). The cosine's phase
+  // (peak at 15:00) is set here so that the baseline night of an 11 pm to 7 am sleeper is self-consistent.
+  const TR = 18.18, TD = 4.2, C = t => Math.cos((2 * Math.PI * (t - 15)) / 24);
+  const UP = t => 0.67 + 0.12 * C(t), LO = t => 0.17 + 0.12 * C(t);
+  const WAKE0 = 7, LIGHTS = 23, ALARM = 31, LAT = 0.25;
+  function night(m, arousal) {
+    const onset = LIGHTS + m / 60 + LAT + (arousal ? 0.25 : 0);
+    // Sleep pressure at 7 am the previous morning after a normal night, then the day, then the night.
+    const S7 = 0.1, pts = [];
+    const Sawake = t => 1 - (1 - S7) * Math.exp(-(t - WAKE0) / TR);
+    const Son = Sawake(onset);
+    const S = t => (t < onset ? Sawake(t) : Son * Math.exp(-(t - onset) / TD));
+    for (let t = 18; t <= ALARM; t += 0.05) pts.push([t, S(t)]);
+    return { onset, S, pts, wakeS: S(ALARM), slept: ALARM - onset };
+  }
+  const clock = h => { const hh = Math.floor(h % 24), mm = Math.round((h - Math.floor(h)) * 60) % 60; return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`; };
+  demo("twoproc", {
+    aspect: w => (w < 560 ? 1.0 : 2.0),
+    controls: [
+      { key: "m", label: "Scrolling after lights-out", min: 0, max: 120, step: 5, value: 45, unit: " min", color: "orange" },
+      { key: "arousal", label: "Stirring content (+15 min to fall asleep, illustrative)", type: "toggle", value: false, color: "red" },
+    ],
+    caption: "The two-process model of sleep. Sleep pressure (brass) rises while awake and drains during sleep; the daily clock moves the thresholds (blue). Lights-out is at 23:00 and the alarm at 07:00. Scrolling delays sleep onset; the alarm does not move, so pressure is still high at waking.",
+    status: (s, v) => { const a = night(0, false), b = night(v.m, v.arousal); return `asleep at ${clock(b.onset)} · ${b.slept.toFixed(1)} h sleep (${Math.round((a.slept - b.slept) * 60)} min lost) · pressure at alarm ${b.wakeS.toFixed(2)} vs ${a.wakeS.toFixed(2)}`; },
+    draw(g, s, v) {
+      const base = night(0, false), cur = night(v.m, v.arousal);
+      const P = g.graph({ x: [18, 32], y: [0, 1], axes: "frame", xLabel: "Time", yLabel: "Sleep pressure S", xTicks: [18, 21, 24, 27, 30], xFormat: clock, yTicks: false });
+      P.clip(() => g.rect(P.xpx(cur.onset), P.ypx(1), P.xpx(ALARM) - P.xpx(cur.onset), P.ypx(0) - P.ypx(1), { fill: g.rgba("blue", 0.08) }));
+      if (v.m > 0 || v.arousal) P.clip(() => g.rect(P.xpx(LIGHTS), P.ypx(1), P.xpx(cur.onset) - P.xpx(LIGHTS), P.ypx(0) - P.ypx(1), { fill: g.rgba("orange", 0.14) }));
+      P.fn(UP, { color: "blue", width: g.lit("C") ? 2.5 : 1.5, dash: [5, 4], label: "upper threshold", labelAt: 20 , labelOffset: [0, -10] });
+      P.fn(LO, { color: "blue", width: g.lit("C") ? 2.5 : 1.5, dash: [5, 4], label: "lower threshold", labelAt: 20, labelOffset: [0, 12] });
+      P.polyline(base.pts, { color: "muted", width: 1.5, dash: [3, 3] });
+      P.polyline(cur.pts, { color: "brass", width: g.lit("S") ? 4 : 3 });
+      P.vline(LIGHTS, { color: "muted", label: "lights out" });
+      P.vline(ALARM, { color: "muted", label: "alarm" });
+      if (v.m > 0) P.label("scrolling", [(LIGHTS + cur.onset) / 2, 0.08], { color: "orange" });
+      P.marker(ALARM, cur.wakeS, { color: "brass" });
+    },
+  });
+}
+</script>
+
+<p>Forty-five minutes of scrolling costs forty-five minutes of sleep, or an hour if the content keeps you <button class="set" data-set="arousal=true">awake a little longer</button>, and <span class="c-brass">sleep pressure</span> is still high at the alarm. Time is the main mechanism; light adds a push on the clock, and how stirring the content is may matter as much, though it is less studied.</p>
+</section>
+<h2>What the evidence shows</h2>
+
+<p>How much do these mechanisms affect people? The most-cited evidence is surveys correlating screen time with wellbeing. Amy Orben and Andrew Przybylski noticed that one survey can be analyzed thousands of defensible ways, with results depending on the choice. So they ran them all, a <dfn data-def="Running every defensible analysis of the same data and reporting the whole range of results, instead of one chosen analysis.">specification curve analysis</dfn>, on three datasets covering over 355,000 adolescents, alongside other factors <a class="cite" href="#ref-orben2019"></a>. Pick a factor to see its association in 400 simulated teenagers:</p>
+
+<figure class="demo" id="orben" aria-label="Median associations between adolescent wellbeing and a range of factors from two large surveys, as horizontal bars. Technology use sits near zero, close to eating potatoes or wearing glasses; being bullied and getting enough sleep are several times larger. A scatter of 400 simulated teenagers shows what the chosen association looks like."></figure>
+<script>
+{
+  // Median standardized betas from Orben and Przybylski (2019).
+  const DATA = {
+    yrbs: { name: "US high-school survey (YRBS)", rows: [["being bullied", -0.212], ["getting into fights", -0.179], ["binge drinking", -0.144], ["smoking marijuana", -0.132], ["having asthma", -0.066], ["technology use", -0.049], ["eating potatoes", -0.042], ["eating vegetables", -0.013], ["drinking milk", 0.014], ["eating breakfast", 0.116], ["getting enough sleep", 0.15]] },
+    mcs: { name: "UK cohort (MCS)", rows: [["being bullied", -0.208], ["wearing glasses", -0.061], ["smoking marijuana", -0.048], ["technology use", -0.042], ["being left-handed", -0.004], ["height", 0.065], ["amount of sleep", 0.07], ["riding a bicycle", 0.08], ["eating breakfast", 0.14]] },
+  };
+  const PICK = { tech: () => "technology use", small: d => (d === "yrbs" ? "eating potatoes" : "wearing glasses"), bully: () => "being bullied", sleep: d => (d === "yrbs" ? "getting enough sleep" : "amount of sleep") };
+  const cloud = beta => { const r = Num.rng(17), out = []; for (let i = 0; i < 400; i++) { const x = r.gauss(0, 1), y = beta * x + Math.sqrt(1 - beta * beta) * r.gauss(0, 1); out.push([x, y]); } return out; };
+  demo("orben", {
+    aspect: w => (w < 560 ? 0.75 : 1.75),
+    controls: [
+      { key: "ds", label: "Survey", type: "choice", options: [{ value: "yrbs", label: "US (YRBS)" }, { value: "mcs", label: "UK (MCS)" }], value: "yrbs" },
+      { key: "pick", label: "Show", type: "choice", options: [{ value: "tech", label: "technology" }, { value: "small", label: "potatoes / glasses" }, { value: "bully", label: "bullied" }, { value: "sleep", label: "sleep" }], value: "tech" },
+    ],
+    caption: "Median associations with adolescent wellbeing (standardized β) from Orben and Przybylski (2019), and a scatter of 400 simulated teenagers with the chosen association. Technology use explains well under 1% of the variation, about as much as eating potatoes.",
+    status: (s, v) => { const name = PICK[v.pick](v.ds), b = DATA[v.ds].rows.find(r => r[0] === name)[1]; return `${name}: β = ${b.toFixed(3)} · explains ${(b * b * 100).toFixed(2)}% of the variation`; },
+    draw(g, s, v) {
+      const D = DATA[v.ds], name = PICK[v.pick](v.ds), b = D.rows.find(r => r[0] === name)[1];
+      const narrow = g.w < 560, split = narrow ? g.h * 0.55 : g.w * 0.6;
+      const box = narrow ? [0, 0, g.w, split] : [0, 0, split, g.h];
+      const colors = D.rows.map(r => (r[0] === name ? (r[0] === "technology use" ? "orange" : "ink") : r[0] === "technology use" ? "orange" : "muted"));
+      g.bars(D.rows.map(r => r[1]), { box: [box[0] + 4, box[1] + 6, box[2] - 8, box[3] - 12], labels: D.rows.map(r => r[0]), horizontal: true, range: [-0.25, 0.25], values: true, format: x => (x > 0 ? "+" : "") + x.toFixed(3), colors, highlight: D.rows.findIndex(r => r[0] === name) });
+      const Q = g.graph({ box: narrow ? [0, split + 6, g.w, g.h - split - 6] : [split + 16, 10, g.w - split - 16, g.h - 20], x: [-3, 3], y: [-3, 3], axes: "frame", xLabel: name, yLabel: "wellbeing", xTicks: false, yTicks: false, grid: false });
+      Q.points(cloud(b), { color: name === "technology use" ? "orange" : "ink", r: 2 });
+      Q.fn(x => b * x, { color: "red", width: 2 });
+    },
+  });
+}
+</script>
+
+<p>The <span class="c-orange">technology</span> bar is negative, but across all the analyses it explains at most about 0.4% of the variation in wellbeing. In the US data <button class="set" data-set="ds=yrbs pick=small">eating potatoes</button> comes out nearly as large; in the UK data <button class="set" data-set="ds=mcs pick=small">wearing glasses</button> is larger. <button class="set" data-set="ds=yrbs pick=bully">Being bullied</button> and <button class="set" data-set="ds=yrbs pick=sleep">enough sleep</button> are several times larger. At <span class="tex">\beta \approx -0.05</span> the scatter looks like no relationship at all. Averages can hide larger effects for some people, and these surveys measure time, not doomscrolling.</p>
+
+<p>Next, dopamine. A common claim is that phones flood the brain with it "like a drug". The best-known human measurement is a 1998 study in which eight men played a tank video game during a <em>PET</em> scan <a class="cite" href="#ref-koepp1998"></a>. The scan measures a radioactive tracer binding to dopamine receptors; released dopamine takes up receptors, so less tracer binds. Switch between this indirect measure in people and direct measurements in animals:</p>
+
+<figure class="demo" id="dopa" aria-label="Two views of how much dopamine different things release. PET view: the drop in tracer binding in people, for a video game, for intravenous amphetamine and methylphenidate, and the test-retest noise. Direct view: measured dopamine increases in animals for sex and two doses of amphetamine on a log scale, with the video game's inferred range."></figure>
+<script>
+{
+  demo("dopa", {
+    aspect: w => (w < 560 ? 0.9 : 1.9),
+    controls: [{ key: "view", label: "Measure", type: "choice", options: [{ value: "pet", label: "PET scans in people" }, { value: "direct", label: "direct, in animals" }], value: "pet" }],
+    caption: "Two kinds of dopamine measurement that should not be mixed. PET: drop in raclopride binding in the striatum (Koepp et al. 1998; Breier et al. 1997; methylphenidate as cited by Koepp). Direct: microdialysis in rats (Fiorino et al. 1997) and monkeys (Breier et al. 1997); the game's range is inferred from its PET drop, not measured.",
+    status: (s, v) => (v.view === "pet" ? "PET: game −13% vs low-dose amphetamine −15.5%" : "direct: amphetamine raised dopamine 5.6× to 14.7× baseline"),
+    draw(g, s, v) {
+      const narrow = g.w < 560, lab = narrow ? 0 : Math.min(300, g.w * 0.42);
+      if (v.view === "pet") {
+        const rows = [
+          { t: "video game, ventral striatum (n = 8)", d: 13, lo: -8, hi: 42, c: "orange" },
+          { t: "amphetamine 0.2 mg/kg IV", d: 15.5, lo: 13.7, hi: 17.3, c: "red" },
+          { t: "methylphenidate IV", d: 23, lo: -3, hi: 46, c: "red" },
+        ];
+        const P = g.graph({ box: [lab, 0, g.w - lab, g.h], x: [-10, 50], y: [rows.length + 0.6, 0.4], axes: "frame", xLabel: "Drop in tracer binding (%), range or ±SD", yTicks: false, grid: false, xTicks: [-10, 0, 10, 20, 30, 40, 50] });
+        P.clip(() => g.rect(P.xpx(4), P.ypx(0.4), P.xpx(6) - P.xpx(4), P.ypx(rows.length + 0.6) - P.ypx(0.4), { fill: g.rgba("muted", 0.25) }));
+        P.label("scan noise 4–6%", [5, rows.length + 0.45], { color: "muted" });
+        rows.forEach((r, i) => {
+          P.segment([r.lo, i + 1], [r.hi, i + 1], { color: r.c, width: 2 });
+          P.points([[r.d, i + 1]], { color: r.c, r: 6 });
+          if (narrow) P.label(r.t, [-9, i + 1 - 0.3], { align: "left", color: "ink" }); else g.text(r.t, [lab - 8, P.ypx(i + 1)], { align: "right", size: 12.5 });
+        });
+        P.vline(0, { color: "ink" });
+      } else {
+        const rows = [
+          { t: "sex, rats (peak)", d: 195, c: "orange" },
+          { t: "video game, inferred from PET", lo: 204, hi: 672, c: "orange", inferred: true },
+          { t: "amphetamine 0.2 mg/kg, monkeys", d: 559, c: "red" },
+          { t: "amphetamine 0.4 mg/kg, monkeys", d: 1465, c: "red" },
+        ];
+        const P = g.graph({ box: [lab, 0, g.w - lab, g.h], x: [80, 3000], xScale: "log", y: [rows.length + 0.6, 0.4], axes: "frame", xLabel: "Dopamine, % of baseline (log scale)", yTicks: false, grid: false });
+        P.vline(100, { color: "ink", label: "baseline" });
+        rows.forEach((r, i) => {
+          const y = i + 1;
+          if (r.inferred) { P.segment([r.lo, y], [r.hi, y], { color: r.c, width: 6, dash: [6, 4] }); }
+          else { const a = P([100, y]), b = P([r.d, y]); g.rect(a[0], a[1] - 9, b[0] - a[0], 18, { fill: r.c, alpha: 0.7, r: 2 }); P.label(`${r.d}%`, [r.d, y], { dx: 8, align: "left" }); }
+          if (narrow) P.label(r.t, [85, y - 0.32], { align: "left", color: "ink" }); else g.text(r.t, [lab - 8, P.ypx(y)], { align: "right", size: 12.5 });
+        });
+      }
+    },
+  });
+}
+</script>
+
+<p>On the <button class="set" data-set="view=pet">PET scale</button> the game's average 13% drop resembles a low intravenous dose of amphetamine, a comparison the original paper made. But the game's range ran from an 8% <em>rise</em> to a 42% drop across eight people, against scan noise of 4 to 6%, and head movement and blood-flow changes during a task can mimic the signal <a class="cite" href="#ref-egerton2009"></a>. Converting binding to dopamine is also uncertain: the authors estimated "at least a doubling", but in monkeys the same drop in binding went with very different dopamine increases <a class="cite" href="#ref-breier1997"></a>.</p>
+
+<p>The <button class="set" data-set="view=direct">direct measurements</button> are clearer. During sex, dopamine in a rat's nucleus accumbens roughly doubles <a class="cite" href="#ref-fiorino1997"></a>; a small intravenous dose of amphetamine raised a monkey's striatal dopamine more than fivefold, and twice the dose about fifteenfold. Natural rewards release dopamine; that is what the system is for. No measurement of feeds supports "like cocaine", and the drug comparisons that exist mix methods that do not convert cleanly.</p>
+
+<aside class="callout mistake"><p>"Phones are as addictive as drugs because of dopamine." Every rewarding experience involves dopamine release, so dopamine alone cannot tell a habit from an addiction. Problematic social media use is studied, and some people clearly struggle with it, but "social media addiction" is not a diagnosis in the main psychiatric manuals, and the dopamine numbers do not show a drug-like surge.</p></aside>
+
+<p>Finally, the strongest evidence: experiments that randomly assign people to cut back. In one, 143 students limited to ten minutes a day per platform for three weeks reported less loneliness and depression than controls <a class="cite" href="#ref-hunt2018"></a>. Larger trials paid people to deactivate Facebook or Instagram for weeks before US elections:</p>
+
+<figure class="demo" id="rcts" aria-label="A forest plot of randomized experiments in which people deactivated or reduced social media: effects on wellbeing between about 0.04 and 0.09 standard deviations, with a pooled meta-analytic estimate whose interval crosses zero, and a reference line for the effect of psychological interventions."></figure>
+<script>
+{
+  const ROWS = [
+    { t: "Facebook off 4 weeks, 2018 (N = 1,637)", d: 0.09, lo: 0.01, hi: 0.17, c: "green" },
+    { t: "Facebook off 6 weeks, 2020 (N = 17,802) *", d: 0.06, lo: 0.03, hi: 0.09, c: "green" },
+    { t: "Instagram off 6 weeks, 2020 (N = 13,480) *", d: 0.041, lo: 0.008, hi: 0.074, c: "green" },
+    { t: "Meta-analysis of 27 experiments", d: 0.088, lo: -0.018, hi: 0.197, c: "ink", diamond: true },
+  ];
+  demo("rcts", {
+    aspect: w => (w < 560 ? 0.95 : 2.0),
+    controls: [{ key: "ref", label: "Compare with psychological interventions", type: "toggle", value: false, color: "blue" }],
+    caption: "Effects of reducing social media on wellbeing in randomized experiments (positive = better), with 95% intervals. Allcott et al. 2020 and 2025; Ferguson 2024. * Interval reconstructed from the reported p-value or interval width. The blue line is the average effect of psychological interventions on wellbeing, about 0.34 SD (Bolier et al. 2013, as cited by Allcott et al.).",
+    status: (s, v) => "effects 0.04 to 0.09 SD; the pooled interval includes zero",
+    draw(g, s, v) {
+      const narrow = g.w < 560, lab = narrow ? 0 : Math.min(320, g.w * 0.5);
+      const P = g.graph({ box: [lab, 0, g.w - lab, g.h], x: [-0.1, 0.5], y: [ROWS.length + 0.5, 0.4], axes: "frame", xLabel: "Change in wellbeing (standard deviations)", yTicks: false, grid: false, xTicks: [-0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5] });
+      P.vline(0, { color: "ink" });
+      if (v.ref) P.vline(0.34, { color: "blue", label: "therapy-type interventions" });
+      ROWS.forEach((r, i) => {
+        const y = i + 1;
+        P.segment([r.lo, y], [r.hi, y], { color: r.c, width: 2.2 });
+        if (r.diamond) { const c = P([r.d, y]); g.path([[c[0] - 8, c[1]], [c[0], c[1] - 7], [c[0] + 8, c[1]], [c[0], c[1] + 7]], { close: true, fill: "ink" }); }
+        else P.points([[r.d, y]], { color: r.c, r: 5 });
+        if (narrow) P.label(r.t, [-0.095, y - 0.32], { align: "left", color: "ink" }); else g.text(r.t, [lab - 8, P.ypx(y)], { align: "right", size: 12.5 });
+      });
+    },
+  });
+}
+</script>
+
+<p>The big trials agree: weeks without Facebook or Instagram make people <span class="c-green">slightly happier</span>, by 0.04 to 0.09 standard deviations <a class="cite" href="#ref-allcott2020"></a><a class="cite" href="#ref-allcott2025"></a>, real but a fraction of what <button class="set" data-set="ref=true">psychological help</button> does on average. A meta-analysis of 27 experiments found a similar average with an interval that includes zero <a class="cite" href="#ref-ferguson2024"></a>, and which experiments belong in such a pool is disputed. One detail stands out: weeks after the 2018 trial, people who had deactivated still used Facebook about 11 minutes a day less. A break loosens the habit.</p>
+<h2>Breaking the loop</h2>
+
+<p>Now put the pieces back into the feed from the start. This simulated scroller updates its expectation of the feed with the prediction-error rule; a better-than-expected post gives it a burst of wanting that makes stopping unlikely for a few posts, and otherwise its chance of stopping grows as the session wears on. Switch on changes, one at a time, and watch the <span class="c-orange" data-part="tail">long sessions</span>:</p>
+
+<figure class="demo" id="breakloop" aria-label="A histogram of simulated scrolling session lengths, with a long tail of very long sessions. Switches add stopping cues every 25 posts, batch notifications, set the screen to grayscale, or make every post equally good. Readouts give the median session and the total minutes a day."></figure>
+<script>
+{
+  // The model (all parameters are assumptions, chosen to give sessions of several minutes):
+  //   a post is great (value 0.85-1) with chance 0.08, otherwise filler (0 to 0.35); about 6 s per post.
+  //   the scroller's estimate V moves 15% of the way to each post's value; the prediction error d = value - V.
+  //   "wanting" w jumps to 1.6 d after a better-than-expected post (capped at 1) and fades by 7% a post.
+  //   chance of stopping on post k: (0.01 + 0.0002 k) (1 - 0.92 w), so stopping gets likelier as the session
+  //   wears on, and unlikely right after a surprise.
+  //   stopping cues: every 25 posts the feed pauses, and the scroller stops there with chance 0.3.
+  //   grayscale: every post feels 25% less rewarding.  no variable rewards: every post is worth the old average.
+  //   sessions a day: 8 started by the person, plus 6 by notifications (3 when batched).
+  const AVG = 0.08 * 0.925 + 0.92 * 0.0875;
+  function session(r, o) {
+    let V = 0.2, w = 0, k = 0;
+    while (k < 3000) {
+      k++;
+      let val = r() < 0.08 ? 0.85 + 0.15 * r() : 0.35 * r() * r();
+      if (o.flat) val = AVG;
+      if (o.gray) val *= 0.75;
+      const d = val - V; V += 0.15 * d;
+      w = Math.min(1, Math.max(w * 0.93, 1.6 * Math.max(0, d)));
+      if (r() < (0.01 + 0.0002 * k) * (1 - 0.92 * w)) break;
+      if (o.cues && k % 25 === 0 && r() < 0.3) break;
+    }
+    return k / 10;                       // minutes
+  }
+  let cache = { key: "" };
+  const get = v => {
+    const key = [v.cues, v.batch, v.gray, v.flat].join();
+    if (cache.key !== key) { const r = Num.rng(21); const L = Array.from({ length: 3000 }, () => session(r, v)).sort((a, b) => a - b); cache = { key, L, med: L[1500], p90: L[2700], mean: Num.mean(L) }; }
+    return cache;
+  };
+  const perDay = v => (8 + (v.batch ? 3 : 6)) * get(v).mean;
+  demo("breakloop", {
+    aspect: w => (w < 560 ? 1.0 : 1.9),
+    controls: [
+      { key: "cues", label: "Stopping cues every 25 posts", type: "toggle", value: false, color: "blue" },
+      { key: "batch", label: "Notifications batched", type: "toggle", value: false, color: "blue" },
+      { key: "gray", label: "Grayscale screen", type: "toggle", value: false, color: "blue" },
+      { key: "flat", label: "No variable rewards", type: "toggle", value: false, color: "blue" },
+    ],
+    presets: [{ label: "As it is", set: { cues: false, batch: false, gray: false, flat: false } }, { label: "All four", set: { cues: true, batch: true, gray: true, flat: true } }],
+    caption: "Session lengths of a simulated scroller (3,000 sessions) built from this page's models. Every parameter is an assumption; the figure shows the direction of each change, not its real size. The dashed line marks the longest tenth of sessions.",
+    status: (s, v) => { const c = get(v); return `median ${c.med.toFixed(1)} min · longest 10% over ${c.p90.toFixed(0)} min · ≈${Math.round(perDay(v))} min a day`; },
+    draw(g, s, v) {
+      const c = get(v);
+      const P = g.graph({ x: [0, 40], y: [0, 0.3], axes: "frame", xLabel: "Session length (min)", yLabel: "Share of sessions", yTicks: false, xTicks: [0, 10, 20, 30, 40] });
+      P.histogram(c.L, { bins: 40, range: [0, 40], density: true, color: "orange", alpha: g.lit("tail") ? 0.4 : 0.25 });
+      P.vline(c.med, { color: "ink", label: `median ${c.med.toFixed(1)} min` });
+      P.vline(c.p90, { color: "orange", label: "longest 10%" });
+      const n = 8 + (v.batch ? 3 : 6);
+      P.label(`${n} sessions a day × ${c.mean.toFixed(1)} min ≈ ${Math.round(perDay(v))} min a day`, [39, 0.28], { align: "right", color: "ink" });
+    },
+  });
+}
+</script>
+
+<p>In this model, <button class="set" data-set="cues=true batch=false gray=false flat=false">stopping cues</button> and <button class="set" data-set="cues=false batch=false gray=false flat=true">removing the variable rewards</button> each cut the median session roughly in half and shrink the long tail. Cues work by turning "keep going" from the default into a decision, the drift-diffusion argument from before. Flat rewards work because a perfectly predictable feed stops producing prediction errors after a few posts, so nothing renews the pull. <button class="set" data-set="cues=false batch=false gray=true flat=false">Grayscale</button> shortens sessions a little, and <button class="set" data-set="cues=false batch=true gray=false flat=false">batching notifications</button> leaves sessions alone but starts fewer of them.</p>
+
+<p>The real evidence is thinner than the model's tidy histogram. Students who set their phones to grayscale for about a week cut daily screen time by roughly 38 minutes <a class="cite" href="#ref-holte2020"></a>. In a field experiment with 237 people, getting notifications in three batches a day lowered stress and raised wellbeing, while turning them off entirely raised anxiety <a class="cite" href="#ref-fitz2019"></a>. Personal versions of the same ideas: a phone charging outside the bedroom puts travel time back into the patch, and app limits give the feed an end.</p>
+
+<aside class="callout note" data-label="If it is hurting"><p>If scrolling is regularly costing you sleep, or leaving you anxious or low, or getting in the way of work or school, that is worth raising with a doctor or a mental-health professional.</p></aside>
+
+<h2>Summary</h2>
+
+<p>Doomscrolling is neither a mystery nor a drug addiction. Dopamine neurons signal outcomes better than expected; a feed that pays rarely and at random keeps that signal coming and hides when the payoff stops. Repetition turns checking into a habit. Bad news gets help: threats grab attention, outrage spreads, each frightening check raises the next question, and the feed never ends. At night the main cost is lost time.</p>
+
+<p>Effects on wellbeing are tiny in surveys and small in trials, the drug comparisons rest on indirect measures, and willpower does not run out like fuel. What remains is a well-understood mechanism for keeping people looking, aimed by fixable design choices at the worst news on the worst nights. The most promising fixes change the situation, not the person: give the feed an end.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-sharma2022">B. Sharma, S. S. Lee, B. K. Johnson, “The dark at the end of the tunnel: Doomscrolling on social media newsfeeds”, <em>Technology, Mind, and Behavior</em> 3(1) (2022). doi:10.1037/tmb0000059</li>
+  <li id="ref-schultz1997">W. Schultz, P. Dayan, P. R. Montague, “A neural substrate of prediction and reward”, <em>Science</em> 275 (1997), 1593–1599. doi:10.1126/science.275.5306.1593</li>
+  <li id="ref-amo2022">R. Amo, S. Matias, A. Yamanaka, K. F. Tanaka, N. Uchida, M. Watabe-Uchida, “A gradual temporal shift of dopamine responses mirrors the progression of temporal difference error in machine learning”, <em>Nature Neuroscience</em> 25 (2022), 1082–1092. doi:10.1038/s41593-022-01109-2</li>
+  <li id="ref-bjorklund2007">A. Björklund, S. B. Dunnett, “Dopamine neuron systems in the brain: an update”, <em>Trends in Neurosciences</em> 30 (2007), 194–202. doi:10.1016/j.tins.2007.03.006</li>
+  <li id="ref-berridge1998">K. C. Berridge, T. E. Robinson, “What is the role of dopamine in reward: hedonic impact, reward learning, or incentive salience?”, <em>Brain Research Reviews</em> 28 (1998), 309–369. doi:10.1016/S0165-0173(98)00019-8</li>
+  <li id="ref-ferster1957">C. B. Ferster, B. F. Skinner, <em>Schedules of Reinforcement</em>, Appleton-Century-Crofts (1957).</li>
+  <li id="ref-fiorillo2003">C. D. Fiorillo, P. N. Tobler, W. Schultz, “Discrete coding of reward probability and uncertainty by dopamine neurons”, <em>Science</em> 299 (2003), 1898–1902. doi:10.1126/science.1077349</li>
+  <li id="ref-humphreys1939">L. G. Humphreys, “The effect of random alternation of reinforcement on the acquisition and extinction of conditioned eyelid reactions”, <em>Journal of Experimental Psychology</em> 25 (1939), 141–158. doi:10.1037/h0058138</li>
+  <li id="ref-adams1982">C. D. Adams, “Variations in the sensitivity of instrumental responding to reinforcer devaluation”, <em>Quarterly Journal of Experimental Psychology</em> 34B (1982), 77–98.</li>
+  <li id="ref-yin2006">H. H. Yin, B. J. Knowlton, “The role of the basal ganglia in habit formation”, <em>Nature Reviews Neuroscience</em> 7 (2006), 464–476. doi:10.1038/nrn1919</li>
+  <li id="ref-tricomi2009">E. Tricomi, B. W. Balleine, J. P. O’Doherty, “A specific role for posterior dorsolateral striatum in human habit learning”, <em>European Journal of Neuroscience</em> 29 (2009), 2225–2232. doi:10.1111/j.1460-9568.2009.06796.x</li>
+  <li id="ref-dewit2018">S. de Wit et al., “Shifting the balance between goals and habits: Five failures in experimental habit induction”, <em>Journal of Experimental Psychology: General</em> 147 (2018), 1043–1065. doi:10.1037/xge0000402</li>
+  <li id="ref-lally2010">P. Lally, C. H. M. van Jaarsveld, H. W. W. Potts, J. Wardle, “How are habits formed: Modelling habit formation in the real world”, <em>European Journal of Social Psychology</em> 40 (2010), 998–1009. doi:10.1002/ejsp.674</li>
+  <li id="ref-charnov1976">E. L. Charnov, “Optimal foraging, the marginal value theorem”, <em>Theoretical Population Biology</em> 9 (1976), 129–136.</li>
+  <li id="ref-ohman2001">A. Öhman, A. Flykt, F. Esteves, “Emotion drives attention: Detecting the snake in the grass”, <em>Journal of Experimental Psychology: General</em> 130 (2001), 466–478. doi:10.1037/0096-3445.130.3.466</li>
+  <li id="ref-soroka2019">S. Soroka, P. Fournier, L. Nir, “Cross-national evidence of a negativity bias in psychophysiological reactions to news”, <em>PNAS</em> 116 (2019), 18888–18892. doi:10.1073/pnas.1908369116</li>
+  <li id="ref-brady2017">W. J. Brady, J. A. Wills, J. T. Jost, J. A. Tucker, J. J. Van Bavel, “Emotion shapes the diffusion of moralized content in social networks”, <em>PNAS</em> 114 (2017), 7313–7318. doi:10.1073/pnas.1618923114</li>
+  <li id="ref-rathje2021">S. Rathje, J. J. Van Bavel, S. van der Linden, “Out-group animosity drives engagement on social media”, <em>PNAS</em> 118 (2021), e2024292118. doi:10.1073/pnas.2024292118</li>
+  <li id="ref-robertson2023">C. E. Robertson, N. Pröllochs, K. Schwarzenegger, P. Pärnamets, J. J. Van Bavel, S. Feuerriegel, “Negativity drives online news consumption”, <em>Nature Human Behaviour</em> 7 (2023), 812–822. doi:10.1038/s41562-023-01538-4</li>
+  <li id="ref-holman2014">E. A. Holman, D. R. Garfin, R. C. Silver, “Media’s role in broadcasting acute stress following the Boston Marathon bombings”, <em>PNAS</em> 111 (2014), 93–98. doi:10.1073/pnas.1316265110</li>
+  <li id="ref-thompson2019">R. R. Thompson, N. M. Jones, E. A. Holman, R. C. Silver, “Media exposure to mass violence events can fuel a cycle of distress”, <em>Science Advances</em> 5 (2019), eaav3502. doi:10.1126/sciadv.aav3502</li>
+  <li id="ref-brombergmartin2009">E. S. Bromberg-Martin, O. Hikosaka, “Midbrain dopamine neurons signal preference for advance information about upcoming rewards”, <em>Neuron</em> 63 (2009), 119–126. doi:10.1016/j.neuron.2009.06.009</li>
+  <li id="ref-ainslie1975">G. Ainslie, “Specious reward: A behavioral theory of impulsiveness and impulse control”, <em>Psychological Bulletin</em> 82 (1975), 463–496. doi:10.1037/h0076860</li>
+  <li id="ref-kroese2014">F. M. Kroese, D. T. D. De Ridder, C. Evers, M. A. Adriaanse, “Bedtime procrastination: introducing a new area of procrastination”, <em>Frontiers in Psychology</em> 5 (2014), 611. doi:10.3389/fpsyg.2014.00611</li>
+  <li id="ref-ratcliff2008">R. Ratcliff, G. McKoon, “The diffusion decision model: theory and data for two-choice decision tasks”, <em>Neural Computation</em> 20 (2008), 873–922. doi:10.1162/neco.2008.12-06-420</li>
+  <li id="ref-hagger2010">M. S. Hagger, C. Wood, C. Stiff, N. L. D. Chatzisarantis, “Ego depletion and the strength model of self-control: A meta-analysis”, <em>Psychological Bulletin</em> 136 (2010), 495–525.</li>
+  <li id="ref-hagger2016">M. S. Hagger et al., “A multilab preregistered replication of the ego-depletion effect”, <em>Perspectives on Psychological Science</em> 11 (2016), 546–573. doi:10.1177/1745691616652873</li>
+  <li id="ref-dang2021">J. Dang et al., “A multilab replication of the ego depletion effect”, <em>Social Psychological and Personality Science</em> 12 (2021), 14–24. doi:10.1177/1948550619887702</li>
+  <li id="ref-vohs2021">K. D. Vohs et al., “A multisite preregistered paradigmatic test of the ego-depletion effect”, <em>Psychological Science</em> 32 (2021), 1566–1581. doi:10.1177/0956797621989733</li>
+  <li id="ref-rogers1995">R. D. Rogers, S. Monsell, “Costs of a predictable switch between simple cognitive tasks”, <em>Journal of Experimental Psychology: General</em> 124 (1995), 207–231.</li>
+  <li id="ref-nieuwenhuis2002">S. Nieuwenhuis, S. Monsell, “Residual costs in task switching: Testing the failure-to-engage hypothesis”, <em>Psychonomic Bulletin &amp; Review</em> 9 (2002), 86–92.</li>
+  <li id="ref-monsell2003">S. Monsell, “Task switching”, <em>Trends in Cognitive Sciences</em> 7 (2003), 134–140. doi:10.1016/S1364-6613(03)00028-7</li>
+  <li id="ref-mark2005">G. Mark, V. M. González, J. Harris, “No task left behind? Examining the nature of fragmented work”, <em>Proceedings of CHI 2005</em>, 321–330. doi:10.1145/1054972.1055017</li>
+  <li id="ref-brown2022">T. M. Brown et al., “Recommendations for daytime, evening, and nighttime indoor light exposure to best support physiology, sleep, and wakefulness in healthy adults”, <em>PLOS Biology</em> 20 (2022), e3001571. doi:10.1371/journal.pbio.3001571</li>
+  <li id="ref-gimenez2022">M. C. Giménez et al., “Predicting melatonin suppression by light in humans: Unifying photoreceptor-based equivalent daylight illuminances, spectral composition, timing and duration of light exposure”, <em>Journal of Pineal Research</em> 72 (2022), e12786. doi:10.1111/jpi.12786</li>
+  <li id="ref-chang2015">A.-M. Chang, D. Aeschbach, J. F. Duffy, C. A. Czeisler, “Evening use of light-emitting eReaders negatively affects sleep, circadian timing, and next-morning alertness”, <em>PNAS</em> 112 (2015), 1232–1237. doi:10.1073/pnas.1418490112</li>
+  <li id="ref-phillips2019">A. J. K. Phillips et al., “High sensitivity and interindividual variability in the response of the human circadian system to evening light”, <em>PNAS</em> 116 (2019), 12019–12024. doi:10.1073/pnas.1901824116</li>
+  <li id="ref-schollhorn2023">I. Schöllhorn et al., “Melanopic irradiance defines the impact of evening display light on sleep latency, melatonin and alertness”, <em>Communications Biology</em> 6 (2023), 228. doi:10.1038/s42003-023-04598-4</li>
+  <li id="ref-duraccio2021">K. M. Duraccio et al., “Does iPhone night shift mode reduce smartphone usage and improve sleep?”, <em>Sleep Health</em> 7 (2021).</li>
+  <li id="ref-borbely2016">A. A. Borbély, S. Daan, A. Wirz-Justice, T. Deboer, “The two-process model of sleep regulation: a reappraisal”, <em>Journal of Sleep Research</em> 25 (2016), 131–143. doi:10.1111/jsr.12371</li>
+  <li id="ref-daan1984">S. Daan, D. G. M. Beersma, A. A. Borbély, “Timing of human sleep: recovery process gated by a circadian pacemaker”, <em>American Journal of Physiology</em> 246 (1984), R161–R183.</li>
+  <li id="ref-orben2019">A. Orben, A. K. Przybylski, “The association between adolescent well-being and digital technology use”, <em>Nature Human Behaviour</em> 3 (2019), 173–182. doi:10.1038/s41562-018-0506-1</li>
+  <li id="ref-koepp1998">M. J. Koepp et al., “Evidence for striatal dopamine release during a video game”, <em>Nature</em> 393 (1998), 266–268. doi:10.1038/30498</li>
+  <li id="ref-egerton2009">A. Egerton et al., “The dopaminergic basis of human behaviors: A review of molecular imaging studies”, <em>Neuroscience &amp; Biobehavioral Reviews</em> 33 (2009), 1109–1132. doi:10.1016/j.neubiorev.2009.05.005</li>
+  <li id="ref-breier1997">A. Breier et al., “Schizophrenia is associated with elevated amphetamine-induced synaptic dopamine concentrations: Evidence from a novel positron emission tomography method”, <em>PNAS</em> 94 (1997), 2569–2574. doi:10.1073/pnas.94.6.2569</li>
+  <li id="ref-fiorino1997">D. F. Fiorino, A. Coury, A. G. Phillips, “Dynamic changes in nucleus accumbens dopamine efflux during the Coolidge effect in male rats”, <em>Journal of Neuroscience</em> 17 (1997), 4849–4855. doi:10.1523/JNEUROSCI.17-12-04849.1997</li>
+  <li id="ref-hunt2018">M. G. Hunt, R. Marx, C. Lipson, J. Young, “No more FOMO: Limiting social media decreases loneliness and depression”, <em>Journal of Social and Clinical Psychology</em> 37 (2018), 751–768. doi:10.1521/jscp.2018.37.10.751</li>
+  <li id="ref-allcott2020">H. Allcott, L. Braghieri, S. Eichmeyer, M. Gentzkow, “The welfare effects of social media”, <em>American Economic Review</em> 110 (2020), 629–676. doi:10.1257/aer.20190658</li>
+  <li id="ref-allcott2025">H. Allcott et al., “The effect of deactivating Facebook and Instagram on users’ emotional state”, NBER Working Paper 33697 (2025).</li>
+  <li id="ref-ferguson2024">C. J. Ferguson, “Do social media experiments prove a link with mental health: A methodological and meta-analytic review”, <em>Psychology of Popular Media</em> (2024). doi:10.1037/ppm0000541</li>
+  <li id="ref-holte2020">A. J. Holte, F. R. Ferraro, “True colors: Grayscale setting reduces screen time in college students”, <em>The Social Science Journal</em> (2020). doi:10.1080/03623319.2020.1737461</li>
+  <li id="ref-fitz2019">N. Fitz, K. Kushlev, R. Jagannathan, T. Lewis, D. Paliwal, D. Ariely, “Batching smartphone notifications can improve well-being”, <em>Computers in Human Behavior</em> 101 (2019), 84–94. doi:10.1016/j.chb.2019.07.016</li>
+</ol>
+<!-- explainer:article:end -->
+</article>
+</main>
+</div>
+<noscript><p style="text-align:center">The figures on this page are drawn with JavaScript.</p></noscript>
+</body>
+</html>
