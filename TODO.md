@@ -41,6 +41,37 @@ Pick these up later. The shared brief for page writers is `tools/explainer-brief
 - [ ] **Sound kit gaps the sound page found:** sliders have no log scale; the label helper's `prefer` takes a unit direction and silently misplaces labels given a pixel offset.
 - [ ] Publish the npm packages (needs your npm login). The website is deployed (2026-10-28, commit 2985818).
 
+## Done on 2026-10-29 (water, WebGPU, motion, four new pages)
+
+- **Water.** `E3.water({ mode: "pool" | "ocean" })`: a pool solved exactly in Fourier space (capillary-gravity dispersion, reflecting walls, drops, floating objects) and a Tessendorf sea, with Fresnel reflection, refraction, Beer-Lambert absorption, glints, foam, and caustics from the simulated surface. Lab: `tools/lab/water.html`.
+- **WebGPU.** Particles, `Fx.fluid`, `Fx.waves`, and `Fx.particles` step on WebGPU compute where it exists (fluid 2-4.5x, 2D particles ~40x); WebGL2 and the CPU stay the fallbacks. `npm run time:backends` measures; `tools/test-backends.mjs` checks parity.
+- **Motion.** `g.ease`, animated `g.tokens`, ranked `g.bars`, `g.matrix`, `g.flow`, a text control; references/motion.md; figures.md forbids UI mock-ups and grids of outlined boxes.
+- **Brain.** `E3.bio.brain()` with the reward circuit and dopamine pathways; lab `tools/lab/brain.html`.
+- **Pages.** Doomscrolling, How a transformer works, Why water is so strange, How air works: all verify PASS at <=180 words per figure.
+- **Website.** Redesign (dark, borderless), pure-black first paint, kits deferred so text paints at once, the hero rocket with its throttle and cut-away back, bio3d pages load parts3d.
+
+### Open from this pass
+
+- [ ] Sea foam is faint at sunset; only one water body per scene gets caustics; the water page's pool shows a step between the floor seen through the top and the side.
+- [ ] Pressure solver has no multigrid above about 300 rows.
+- [ ] A few citations on the four new pages come from secondary sources (listed in each page writer's report).
+
+## Done on 2026-10-28 (light, real physics in 2D, subjects)
+
+- **E3 physical light.** `scene.lights` with `type` (point, sphere, disk, rect, sun) and `power` in watts: inverse-square and cosine falloff, soft shadows traced against a BVH of the scene, `look: "darkroom"`, `bounces` (color bleeding), `sky` (uniform dome or the physical Rayleigh/Mie/ozone sky with stars), `haze` (light shafts), motes lit only inside a beam, progressive refinement of still frames (`view.converging`). Real depth of field (`focal`, `fNumber`, `focus`, `aperture`). Texture maps (`map`: canvas, image, URL, function; sphere, planar, box, projector with occlusion), `E3.earth`, `E3.moon`, `E3.grass` (wind as a cantilever bend, gusts, push), `E3.photons`, `E3.trace`, `E3.solidAngle`, `E3.define.material` / `matter`, matter `motes` and `pollen`. Lab: `tools/lab/light.html`; tests in test-engine3d-pro (BVH agrees with brute force).
+- **2D physics (Fx).** `Fx.fluid` (Navier–Stokes, St = 0.177 behind a cylinder), `Fx.waves` (wave equation: slits, pebbles, caustics), `Fx.particles` (E3 matter, coupled to the fluid), `Fx.matter.define`, `Fx.colormap.define`, `g.fx.colorbar`.
+- **Runtime and plots.** `g.inset` with true tangent lines (old form kept), `.band.dark` / `.band.light` sections with per-figure palettes, `safis:redraw` for late assets, `g.tree` (cards, phylogram, highlight path), `g.timeline` (lanes, eras, BCE, deep time).
+- **Skill.** references/extending.md (new materials and particles from real numbers), references/patterns.md (paired views, accumulation, fields, waves, bands), engine3d.md "Physical light", five new categories (History, Philosophy, Language, Economics & Society, Art & Music), scripts/embed-image.mjs.
+- **Light page.** The shadow figure is a traced darkroom with umbra and penumbra on the wall; the sky figure renders the physical sky.
+
+### Open from this pass
+
+- [ ] Website redesign (dark, own identity, few borders) is in progress in website/.
+- [ ] Rough in 2D: blotchy smoke puffs, smeared CPU vortex street, basic `section` water look, sim restarts on WebGL context loss.
+- [ ] Depth of field shows rings until about 40 frames have accumulated; consider a blue-noise aperture pattern.
+- [ ] The procedural Moon is a stand-in; embed a public-domain map where a page needs the real one.
+- [ ] More of the light page could move to darkroom figures (inverse square, colored lights, the sky dome).
+
 ## Done on 2026-10-27 (website redesign)
 
 - **Pages.** `/` (pitch, live rocket figure, four doors, newest explainers, install), `/what-it-makes/` (15 kinds of figure, each with a 2x light/dark capture from an explainer or a live figure from the references), `/how-it-works/` (principles, the 8-step pipeline, the spec, what verify and explore catch, the fix layers, the kits), `/usage/` (install per agent, `/safis`, prompt habits, 12 example prompts and what they get, options, sites, checks, npm in React/Vue/Svelte/Astro/plain JS), `/examples/` (search, category chips, `?category=`, `/` to search). A shared slim header and footer; explainers keep their article layout under the header.
