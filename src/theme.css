@@ -300,6 +300,29 @@ figure.demo.wide { width: min(calc(100vw - 40px), var(--wide)); margin-left: 50%
 .zoom button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: hover) { .zoom button:not(:disabled):hover { color: var(--ink); } }
 .safis-checking .stage .zoom { display: none; }
+/* Loading. Until its kit loads, a figure holds its place with a spinner; once live, its stage
+   shows one until the first frame is drawn, and a quiet chip while a 3D view is still refining
+   or a simulation is catching up (shown only if that lasts, so quick devices never see it). */
+@keyframes safis-spin { to { rotate: 1turn; } }
+figure.demo:not(.is-live) { position: relative; }
+figure.demo:not(.is-live)::before { content: ""; display: block; aspect-ratio: 1.6; border-radius: 4px; background: color-mix(in srgb, var(--panel) 70%, transparent); }
+figure.demo:not(.is-live)::after, .stage.loading::after, .stage.busy::after {
+  content: ""; position: absolute; width: 22px; height: 22px; box-sizing: border-box; border-radius: 50%; pointer-events: none;
+  border: 2px solid color-mix(in srgb, var(--muted) 30%, transparent); border-top-color: var(--muted); animation: safis-spin 0.9s linear infinite;
+}
+figure.demo:not(.is-live)::after { inset: 0; margin: auto; }
+.stage.loading { min-height: 120px; }
+.stage.loading::after { inset: 0; margin: auto; }
+.stage.busy::before {
+  content: attr(data-busy); position: absolute; inset-inline-start: 10px; bottom: 10px; z-index: 2; padding: 4px 10px 4px 32px; border-radius: 999px;
+  font: 500 12px/1.4 var(--sans, system-ui); color: var(--muted); background: color-mix(in srgb, var(--panel) 84%, transparent); pointer-events: none;
+  opacity: 0; animation: safis-show 0.2s 0.6s forwards;
+}
+.stage.busy::after { inset-inline-start: 18px; bottom: 15px; width: 14px; height: 14px; z-index: 3; opacity: 0; animation: safis-spin 0.9s linear infinite, safis-show 0.2s 0.6s forwards; }
+@keyframes safis-show { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { figure.demo:not(.is-live)::after, .stage.loading::after, .stage.busy::after { animation-duration: 2.4s; } }
+.safis-checking .stage.loading::after, .safis-checking .stage.busy::before, .safis-checking .stage.busy::after { display: none; }
+@media print { .stage.loading::after, .stage.busy::before, .stage.busy::after { display: none; } }
 @media print { .stage .zoom { display: none; } }
 
 figure.demo figcaption, figure.demo > .caption {

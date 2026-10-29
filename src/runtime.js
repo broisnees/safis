@@ -475,6 +475,7 @@
         if (bw * bh * (out * ss) ** 2 > budget) ss = 1;
         // The figure's `quality` ("low" | "medium" | "high") forces a tier; `still` tells the
         // engine this frame isn't part of a drag or animation, so it renders at full quality.
+        const t0 = performance.now();
         const view = E3.render(scene, { quality: g.quality, still: !g.interacting, ...cam }, bw, bh, out, ss);
         const s = view.source;
         ctx.save();
@@ -482,8 +483,10 @@
         ctx.drawImage(s.image, s.sx, s.sy, s.sw, s.sh, bx, by, bw, bh);
         ctx.restore();
         if (s.image.close) s.image.close();
+        // How long a still frame held the page tells the engine how much a still frame can afford.
+        if (!g.interacting) E3.quality.observe?.(performance.now() - t0);
         // Traced light refines over a few still frames; keep drawing until it settles.
-        if (view.converging) g.wantsFrame = true;
+        if (view.converging) g.wantsFrame = g.busy = true;
         return {
           ...view,
           box,
@@ -639,7 +642,8 @@
 
     el.classList.add("is-live");
     const plate = node("div", "plate");
-    const stage = node("div", "stage");
+    const stage = node("div", "stage loading");
+    d.loading = true;
     stage.tabIndex = 0;
     stage.setAttribute("role", "group");
     stage.setAttribute("aria-label", el.getAttribute("aria-label") || "interactive figure");
@@ -1484,11 +1488,11 @@
     return (d.band = out);
   }
   function render(d) {
-    const band = bandPalette(d);
-    if (!band) return renderInner(d);
-    const saved = { ...palette };
-    Object.assign(palette, band);
-    try { renderInner(d); } finally { Object.assign(palette, saved); }
+    const band = bandPalette(d), outer = window.__safisFrame;
+    const saved = band && { ...palette };
+    if (band) Object.assign(palette, band);
+    window.__safisFrame = true;
+    try { renderInner(d); } finally { window.__safisFrame = outer; if (band) Object.assign(palette, saved); }
   }
   function renderInner(d) {
     d.dirty = false;
@@ -1504,9 +1508,14 @@
     ctx.globalCompositeOperation = "source-over";
     ctx.setTransform(d.dpr, 0, 0, d.dpr, 0, 0);
     const interacting = !!(d.orbiting || d.dragging || d.spin || d.zoomEase || d.tweens.size || (d.playing && d.spec.step));
-    Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, quality: d.spec.quality, wantsFrame: false });
+    Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, quality: d.spec.quality, wantsFrame: false, busy: false });
     guard(d, "draw", () => d.spec.draw(d.g, d.s, d.v, d.handle));
     d.pulse = d.g.wantsFrame;
+    // The stage shows a spinner until its first frame, and a quieter one while a 3D view is
+    // still refining or a simulation is still catching up (g.busy).
+    if (d.loading) { d.loading = false; d.stage.classList.remove("loading"); }
+    const busy = d.g.busy ? (typeof d.g.busy === "string" ? d.g.busy : "Refining") : "";
+    if (d.busy !== busy) { d.busy = busy; d.stage.dataset.busy = busy; d.stage.classList.toggle("busy", !!busy); }
     if (d.statusEl && !d.broken) guard(d, "status", () => { d.statusEl.textContent = d.spec.status(d.s, d.v, d.handle) ?? ""; });
   }
 
@@ -1561,6 +1570,13 @@
   function frame(now) {
     const dt = clamp((now - lastTime) / 1000, 0, 1 / 30);
     lastTime = now;
+    window.__safisFrame = true;
+    try { frameDemos(now, dt); } finally { window.__safisFrame = false; }
+    requestAnimationFrame(frame);
+  }
+  // Simulations stepped while this runs keep to a per-frame time budget (Fx), so a long warm-up
+  // spreads over frames; called from anywhere else they finish at once.
+  function frameDemos(now, dt) {
     for (const d of demos) {
       if (d.needsResize) { d.needsResize = false; resize(d); }
       if (d.tweens.size && !d.broken) runTweens(d, now);
@@ -1585,7 +1601,6 @@
       if (d.pulse && d.visible) d.dirty = true;
       if (d.dirty && !d.released && (d.visible || d.near || !d.w)) render(d);
     }
-    requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
