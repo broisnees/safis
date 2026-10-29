@@ -820,7 +820,7 @@ window.LIGHT = (() => {
     caption: "The sky opposite the sun, as an observer sees it. The bow is a circle 42° around the point opposite the sun; the horizon hides its lower part. Red is on the outside. A second reflection inside each drop makes a fainter bow at 51° with the colors reversed.",
     status: (s, v) => (v.sun >= 42.3 ? "the whole primary bow is below the horizon" : `top of the bow ${(42.1 - v.sun).toFixed(1)}° above the horizon`),
     draw(g, s, v) {
-      g.rect(0, 0, g.w, g.h, { fill: "#24303f" });
+      if (!g.dark) g.rect(0, 0, g.w, g.h, { fill: "#24303f" });
       const deg = Math.min(g.w / 120, g.h / 64);           // px per degree of sky
       const hy = g.h * 0.82, cx = g.w / 2, anti = [cx, hy + v.sun * deg];
       // Sky: lighter inside the primary bow, darkest between the bows (Alexander's band).

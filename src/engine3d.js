@@ -4700,6 +4700,9 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
       distance = distance ?? scene._fit.distance;
       half = half ?? scene._fit.half;
     }
+    // pan moves what the camera looks at without changing the framing: the runtime sets it
+    // (view.pan) to zoom toward the point under the cursor.
+    if (cam.pan) target = v3.add(target, cam.pan);
     const zoom = cam.zoom ?? 1;
     if (fov > 0) distance /= zoom;
     const eye = v3.add(target, v3.scale(dir, distance));

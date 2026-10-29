@@ -226,7 +226,7 @@ window.AIR = (() => {
     step(dt, s) { ready(s); s.t += dt; dust.advance(s.t); },
     draw(g, s, v, fig) {
       ready(s, fig);
-      g.rect(0, 0, g.w, g.h, { fill: g.mix("panel", "ink", 0.07) });
+      if (!g.dark) g.rect(0, 0, g.w, g.h, { fill: g.mix("panel", "ink", 0.07) });
       g.fx.particles(null, { sys: dust, light: v.beam ? undefined : null });
       const fy = g.h * 2.46 / 2.5;
       g.rect(0, fy, g.w, g.h - fy, { fill: "panel" });
@@ -283,7 +283,7 @@ window.AIR = (() => {
       s.smoke = s.lit ? Fx.follow(s.smoke, 0, dt, 0.3) : Math.exp(-s.since / 4);
     },
     draw(g, s) {
-      g.rect(0, 0, g.w, g.h, { fill: "#11100f" });
+      if (!g.dark) g.rect(0, 0, g.w, g.h, { fill: "#11100f" });
       scene.time = s.t;
       fire.density = s.fire;
       fire.forces.wind = BREEZE(s);
@@ -886,7 +886,7 @@ window.AIR = (() => {
     caption: "A campfire. Each puff of smoke is a parcel of hot gas moving by the physics of smoke: lifted in proportion to how much hotter it is than the air, slowed as it mixes in cool air, and carried by the wind and by eddies a meter across.",
     step(dt, s) { s.t += dt; },
     draw(g, s, v) {
-      g.rect(0, 0, g.w, g.h, { fill: "#141312" });
+      if (!g.dark) g.rect(0, 0, g.w, g.h, { fill: "#141312" });
       scene.time = s.t;
       smoke.forces.wind = [v.wind, 0, 0];
       fire.forces.wind = [v.wind * 0.5, 0, 0];
@@ -1456,7 +1456,7 @@ window.AIR = (() => {
       ready(s, fig);
       P = g.fit(0, DOM[0], -DOM[1], 0, { pad: 0, uniform: false });
       const W = q => P([q[0], -q[1]]);
-      g.rect(0, 0, g.w, g.h, { fill: g.mix("panel", "ink", 0.07) });
+      if (!g.dark) g.rect(0, 0, g.w, g.h, { fill: g.mix("panel", "ink", 0.07) });
       g.fx.particles(null, { sys: dust });
       g.fx.particles(null, { sys: smoke });
       const fy = W([0, FLOOR])[1];

@@ -1615,7 +1615,7 @@ window.RX = (() => {
       s.smoke = s.lit ? Fx.follow(s.smoke, 0, dt, 0.3) : Math.exp(-s.since / 2.2);
     },
     draw(g, s) {
-      g.rect(0, 0, g.w, g.h, { fill: "#0f0d0c" });
+      if (!g.dark) g.rect(0, 0, g.w, g.h, { fill: "#0f0d0c" });
       scene.time = s.t;
       fire.density = s.fire;
       wisp.density = s.fire * 0.6;

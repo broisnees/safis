@@ -5706,6 +5706,9 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
       distance = distance ?? scene._fit.distance;
       half = half ?? scene._fit.half;
     }
+    // pan moves what the camera looks at without changing the framing: the runtime sets it
+    // (view.pan) to zoom toward the point under the cursor.
+    if (cam.pan) target = v3.add(target, cam.pan);
     const zoom = cam.zoom ?? 1;
     if (fov > 0) distance /= zoom;
     const eye = v3.add(target, v3.scale(dir, distance));
@@ -25487,6 +25490,9 @@ void main() {
 
     const g = {
       ctx, w: 0, h: 0, dpr: 1, color, rgba, mix,
+      // True on a dark page (or in a dark band). Its black is then every figure's backdrop:
+      // paint a scene's own dark sky only when this is false.
+      get dark() { return util.dark; },
       line(a, b, o = {}) {
         shape({ stroke: "ink", ...o }, () => { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); });
       },
@@ -25854,6 +25860,7 @@ void main() {
         if (s.image.close) s.image.close();
         // Traced light refines over a few still frames; keep drawing until it settles.
         if (view.converging) g.wantsFrame = g.busy = true;
+        g.views3d.push({ view, box, pan: cam.pan ?? null });
         return {
           ...view,
           box,
@@ -26584,10 +26591,40 @@ void main() {
   // Input sets a target and the frame loop eases toward it in log space; reduced motion and
   // the page checker jump straight there.
   const clampZoom = (d, z) => clamp(z, d.spec.orbit?.minZoom ?? 0.5, d.spec.orbit?.maxZoom ?? 4);
-  function setZoom(d, z, now = false) {
+  // Zooming keeps a point where it is on screen: the one under the cursor for the wheel or a
+  // pinch, else the point the view turns around. Zooming in moves what the camera looks at (view.pan)
+  // toward it by as much as the distance shrinks, so it stays under the cursor; zooming out eases
+  // the pan back, and the figure is centered again by the zoom it started at.
+  const add3 = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+  function zoomAnchor(d, p) {
+    const v = d.s.view, list = d.views3d ?? [];
+    const hit = (p && list.find(({ box: b }) => p[0] >= b[0] && p[0] <= b[0] + b[2] && p[1] >= b[1] && p[1] <= b[1] + b[3])) || list[0];
+    if (!v || !hit) return null;
+    const pan0 = v.pan ?? [0, 0, 0], T0 = add3(add3(hit.view.target, hit.pan ?? [0, 0, 0], -1), pan0);
+    let P = T0;
+    if (p) {
+      const q = [p[0] - hit.box[0], p[1] - hit.box[1]];
+      P = hit.view.pick(q)?.point;
+      if (!P) {   // nothing there: the point on the plane through the target, facing the camera
+        const { origin: o, dir: r } = hit.view.ray(q), n = add3(hit.view.eye, hit.view.target, -1);
+        const den = r[0] * n[0] + r[1] * n[1] + r[2] * n[2], t = den ? ((T0[0] - o[0]) * n[0] + (T0[1] - o[1]) * n[1] + (T0[2] - o[2]) * n[2]) / den : -1;
+        P = t > 0 ? add3(o, r, t) : T0;
+      }
+    }
+    return { P, T0, z0: v.zoom ?? 1, pan0 };
+  }
+  function panFor(d) {
+    const A = d.anchor, v = d.s.view;
+    if (!A || !v) return;
+    const z = v.zoom ?? 1, home = d.view0?.zoom ?? 1;
+    if (z >= A.z0) v.pan = add3(A.pan0, add3(A.P, A.T0, -1), 1 - A.z0 / z);
+    else { const w = A.z0 > home ? Math.max(0, Math.min(1, (z - home) / (A.z0 - home))) : 0; v.pan = A.pan0.map(x => x * w); }
+  }
+  function setZoom(d, z, now = false, at = undefined) {
     if (!d.s.view) return;
+    if (at !== false) d.anchor = zoomAnchor(d, at ?? null);
     d.zoomTo = clampZoom(d, Number.isFinite(z) ? z : 1);
-    if (now || motionQuery.matches || root.classList.contains("safis-checking")) { d.s.view.zoom = d.zoomTo; d.zoomEase = false; }
+    if (now || motionQuery.matches || root.classList.contains("safis-checking")) { d.s.view.zoom = d.zoomTo; d.zoomEase = false; panFor(d); }
     else d.zoomEase = true;
     d.touched = true;
     d.dirty = true;
@@ -26633,10 +26670,10 @@ void main() {
         if (d.broken || !(e.ctrlKey || e.metaKey)) return;
         e.preventDefault();
         const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
-        setZoom(d, d.zoomTo * Math.exp(-clamp(dy, -80, 80) * 0.006));
+        setZoom(d, d.zoomTo * Math.exp(-clamp(dy, -80, 80) * 0.006), false, pos(e));
       }, opt);
-      canvas.addEventListener("gesturestart", e => { e.preventDefault(); gesture0 = d.zoomTo; }, opt);
-      canvas.addEventListener("gesturechange", e => { e.preventDefault(); if (!d.broken) setZoom(d, gesture0 * e.scale, true); }, opt);
+      canvas.addEventListener("gesturestart", e => { e.preventDefault(); gesture0 = d.zoomTo; d.anchor = zoomAnchor(d, pos(e)); }, opt);
+      canvas.addEventListener("gesturechange", e => { e.preventDefault(); if (!d.broken) setZoom(d, gesture0 * e.scale, true, false); }, opt);
     }
     const spread = () => { const [a, b] = [...touches.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]) || 1; };
     const hits = p => {
@@ -26657,6 +26694,7 @@ void main() {
         d.orbiting = false;
         d.spin = null;
         pinch = { dist: spread(), zoom: d.zoomTo };
+        { const [a, b] = [...touches.values()]; d.anchor = zoomAnchor(d, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]); }
         try { canvas.setPointerCapture(e.pointerId); } catch {}
         e.preventDefault();
         return;
@@ -26679,7 +26717,7 @@ void main() {
       const p = pos(e);
       if (touches.has(e.pointerId)) touches.set(e.pointerId, p);
       if (mode === "pinch") {
-        if (touches.size === 2) setZoom(d, pinch.zoom * spread() / pinch.dist, true);
+        if (touches.size === 2) setZoom(d, pinch.zoom * spread() / pinch.dist, true, false);
         return;
       }
       if (!mode) {
@@ -26882,8 +26920,9 @@ void main() {
     ctx.globalCompositeOperation = "source-over";
     ctx.setTransform(d.dpr, 0, 0, d.dpr, 0, 0);
     const interacting = !!(d.orbiting || d.dragging || d.spin || d.zoomEase || d.tweens.size || (d.playing && d.spec.step));
-    Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, quality: d.spec.quality, wantsFrame: false, busy: false });
+    Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, quality: d.spec.quality, wantsFrame: false, busy: false, views3d: [] });
     guard(d, "draw", () => d.spec.draw(d.g, d.s, d.v, d.handle));
+    d.views3d = d.g.views3d;
     d.pulse = d.g.wantsFrame;
     // The stage shows a spinner until its first frame, and a quieter one while a 3D view is
     // still refining or a simulation is still catching up (g.busy).
@@ -26966,6 +27005,7 @@ void main() {
         const z = d.s.view.zoom ?? 1, k = 1 - Math.exp(-dt / 0.09);
         const next = Math.exp(lerp(Math.log(z), Math.log(d.zoomTo), k));
         if (Math.abs(next - d.zoomTo) < d.zoomTo * 2e-3) { d.s.view.zoom = d.zoomTo; d.zoomEase = false; } else d.s.view.zoom = next;
+        panFor(d);
         d.dirty = true;
       }
       if (d.spec.step && d.playing && d.visible && (!d.dragging || d.spec.drag?.live) && !d.broken) {
@@ -27257,7 +27297,17 @@ void main() {
       hash = Math.imul(hash ^ data[i], 16777619);
       if (data[i] !== first) varied = true;
     }
-    return { hash: hash >>> 0, varied };
+    const W = d.canvas.width, H = d.canvas.height;
+    return { hash: hash >>> 0, varied, corners: [data[0], data[W - 1], data[(H - 1) * W], data[H * W - 1]] };
+  }
+  // On a dark page the page's black is every figure's backdrop. Four corners of one dim color
+  // that isn't it mean the figure paints a box behind itself (a scene's dark sky belongs in the
+  // light theme only: if (!g.dark) ...).
+  function boxedOnDark(d, corners) {
+    if (!util.dark || new Set(corners).size !== 1) return null;
+    const c = corners[0], r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255, [br, bg, bb] = rgb("bg");
+    if (Math.max(Math.abs(r - br), Math.abs(g - bg), Math.abs(b - bb)) <= 6 || 0.2126 * r + 0.7152 * g + 0.0722 * b > 70) return null;
+    return `#${[r, g, b].map(x => x.toString(16).padStart(2, "0")).join("")}`;
   }
 
   function saveState(d) { return { s: clone(d.s), v: { ...d.v } }; }
@@ -27303,6 +27353,8 @@ void main() {
     if (!d.broken) {
       const base = snapshot(d);
       if (!d.broken && !base.varied) r.errors.push("canvas is blank after draw()");
+      const box = !d.broken && base.varied && boxedOnDark(d, base.corners);
+      if (box) r.warnings.push(`the figure paints a ${box} box behind itself on the dark page; let the page's black be its backdrop (paint a scene's own sky only when !g.dark)`);
     }
     if (!d.broken) {
       const saved = saveState(d);
@@ -27403,7 +27455,7 @@ void main() {
     d.touched = true;
     if (action.reset) {
       if (typeof d.spec.state === "function") d.handle.reset();
-      if (d.s.view && d.view0) { Object.assign(d.s.view, d.view0); d.zoomTo = d.view0.zoom; d.zoomEase = false; syncZoom(d); }
+      if (d.s.view && d.view0) { Object.assign(d.s.view, d.view0, { pan: null }); d.zoomTo = d.view0.zoom; d.zoomEase = false; d.anchor = null; syncZoom(d); }
       d.spin = null;
       d.tweens.clear();
     }
