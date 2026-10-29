@@ -41,6 +41,30 @@ Pick these up later. The shared brief for page writers is `tools/explainer-brief
 - [ ] **Sound kit gaps the sound page found:** sliders have no log scale; the label helper's `prefer` takes a unit direction and silently misplaces labels given a pixel offset.
 - [ ] Publish the npm packages (needs your npm login). The website is deployed (2026-10-28, commit 2985818).
 
+## Next improvements (planned 2026-10-29)
+
+Estimates are mine, testing in Chrome and Firefox included.
+
+- [ ] **No-WebGL fallback, simple** (about 30-45 min). When a browser has WebGL turned off, a 3D figure shows a red error box. Show a short note in the figure's place instead ("This 3D figure needs WebGL, which this browser has turned off") with how to turn it on.
+- [ ] **No-WebGL fallback with pictures** (about 2-3 h). The build captures a still of every 3D figure (about 80) and the fallback shows it with the note.
+- [ ] **Anatomy models built off the main thread** (about 2-4 h). The heart's model takes about 2 s to build the first time it is shown (`polygonize` and its SDF in bio3d); the brain about 0.9 s. Build in a worker, or cache the meshes.
+- [ ] **Firefox: each 3D figure draws into its own WebGL canvas** (most of a working day). Firefox blocks the main thread 5-10 ms per animated 3D frame in `transferToImageBitmap` (it waits for the GPU and copies); I measured every way of handing a frame to a 2D canvas and only a WebGL canvas on the page avoids it. Risks: shaders compiled per figure, GPU memory per figure, and keeping hover, labels and zoom working.
+- [ ] **Heavy figure scripts.** Rocket's fire, apart and inside figures take 0.5-0.7 s each to set up, water has chunks of about 1.1 s, the doomscrolling brain 0.9 s. They no longer hold up the first paint, but each is still one hitch when it runs.
+- [ ] **Optics leftovers.** The fiber entrance is near-white and hides its rays; the light page's `depth` figure draws its own orange lines instead of `g.optics`; light-theme wavefront crests look heavy; play and pause figures should pass `time: s.t` so their photons stop when paused.
+- [ ] Rocket plume looks soft when zoomed in (the volume renders at reduced resolution).
+- [ ] The ocean drops to the low tier while moving in Firefox.
+- [ ] The optics timing check "without partial reflections it's a third of that" fails now and then when the machine is busy.
+- [ ] The index panel on a skill-built site without a header: 64 px of room above the list, checked in the CSS only.
+- [ ] The self-check's box warning misses a box with a ground strip along its bottom (its corners differ).
+
+## Done on 2026-10-29 (afternoon: speed, loading, 3D quality, light, index)
+
+- **Picking.** `view.pick` and `view.hidden` walk a per-mesh tree built in a worker; the heart's label checks went from 23 ms to 0.5 ms a frame, its hero from 27 to 45-53 fps in Firefox and back on the high tier; the brain from 38 to 58.
+- **Loading.** Figure scripts run as the reader nears them, far figures draw when they come near, warm-ups run in slices, core shaders start compiling when the 3D kit loads. Blocking at load in Chrome: heart 4.4 s to 0.2 s, rocket's worst 2.3 s to 0.76 s, water's 5.3 s to 1.1 s.
+- **3D quality.** Every shader reads textures at highp; the banding on the turbofan, brain and Starlink dish came from 16-bit depth reads on Mesa.
+- **Light.** Optics draws light as light: glowing rays, beams, photons, wavefronts as crests.
+- **Zoom toward the cursor**, figures on the dark page's black (`g.dark`, a self-check warning), and an index that is hidden until asked for.
+
 ## Done on 2026-10-29 (water, WebGPU, motion, four new pages)
 
 - **Water.** `E3.water({ mode: "pool" | "ocean" })`: a pool solved exactly in Fourier space (capillary-gravity dispersion, reflecting walls, drops, floating objects) and a Tessendorf sea, with Fresnel reflection, refraction, Beer-Lambert absorption, glints, foam, and caustics from the simulated surface. Lab: `tools/lab/water.html`.
