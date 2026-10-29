@@ -72,7 +72,9 @@ function connect(url) {
 // Starts Chrome and opens one tab. Returns helpers bound to that tab. WebGL runs on the
 // SwiftShader software renderer, so screenshots match everywhere; gpu: true uses the machine's
 // GPU instead (for timing frames as a reader would see them).
-export async function openBrowser({ viewport, gpu = false }) {
+// webgpu: true exposes WebGPU in headless mode (on SwiftShader it's a software adapter, which
+// pages skip unless forced: useful for testing the WebGPU paths anywhere).
+export async function openBrowser({ viewport, gpu = false, webgpu = false }) {
   if (typeof WebSocket === "undefined") throw new Error("needs Node 22 or newer (it uses the built-in WebSocket)");
   const bin = findChrome();
   if (!bin) throw new Error("couldn't find Chrome, Chromium, or Edge; install one or set CHROME_PATH");
@@ -89,6 +91,7 @@ export async function openBrowser({ viewport, gpu = false }) {
     // WebGL in headless mode runs on the SwiftShader software renderer unless gpu is set.
     ...(gpu ? ["--enable-gpu", "--use-gl=angle"] : ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"]),
     "--ignore-gpu-blocklist",
+    ...(webgpu ? ["--enable-unsafe-webgpu"] : []),
     "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] });
   // If the script ends without close() (an error, a timeout, Ctrl-C), take Chrome down with it,

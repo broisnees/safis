@@ -943,11 +943,15 @@ void main() {
     return (R.progs[name] = P);
   }
   function uniforms(P, u) {
-    const gl = R.gl, FN = { [gl.FLOAT]: "uniform1fv", [gl.FLOAT_VEC2]: "uniform2fv", [gl.FLOAT_VEC3]: "uniform3fv", [gl.FLOAT_VEC4]: "uniform4fv" };
+    const gl = R.gl, FN = { [gl.FLOAT]: "uniform1fv", [gl.FLOAT_VEC2]: "uniform2fv", [gl.FLOAT_VEC3]: "uniform3fv", [gl.FLOAT_VEC4]: "uniform4fv", [gl.INT_VEC2]: "uniform2iv" };
+    let unit = 1;
     for (const [name, v] of Object.entries(u)) {
       const i = P.u[name], a = typeof v === "number" ? [v] : v;
       if (!i) continue;
-      if (v?.width !== undefined) {   // a canvas: the texture
+      if (v?.tex) {   // a simulation's float texture, on units 1 and up
+        gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, v.tex);
+        gl.uniform1i(i.loc, unit++);
+      } else if (v?.width !== undefined) {   // a canvas: the texture
         R.tex ??= gl.createTexture();
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.tex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
@@ -964,6 +968,7 @@ void main() {
     if (o.gpu === false || Fx.force2d || !context() || !program(name)) return null;
     const gl = R.gl, P = R.progs[name], k = min(g.dpr || 1, 2) * cn(o.res, 1, 0.25, 1), W = max(1, Math.round(box[2] * k)), Hh = max(1, Math.round(box[3] * k));
     if (W > R.w || Hh > R.h) { R.w = max(W, R.w); R.h = max(Hh, R.h); R.canvas.width = R.w; R.canvas.height = R.h; }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, W, Hh);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(P.p);
@@ -971,6 +976,445 @@ void main() {
     gl.bindVertexArray(R.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     return { img: R.off ? R.canvas.transferToImageBitmap() : R.canvas, sy: R.h - Hh, W, H: Hh };
+  }
+
+  // ---------- webgpu ----------
+  // WebGPU compute for the simulations. With a hardware WebGPU adapter, the fluid's solver, the
+  // wave equation, and 2D particles step as compute shaders on its queue (the same steps, in the
+  // same order, as the WebGL2 and CPU versions); the WebGL2 shaders still draw them, from a copy
+  // of the state that comes back without stalling. So while a simulation runs, what g.fx draws
+  // (and velocity(), heights(), alive()) is the newest state back from the GPU, a frame or so
+  // behind its clock; when nothing has stepped since a copy landed, a redraw is asked for, so a
+  // still frame settles on exactly time t. sim.sync() resolves once the copy has caught up.
+  // Detection runs once per page and is shared with E3 (window.__safisGPU). Fx.backend says what
+  // simulations step on: "webgpu", "webgl2", or "cpu"; setting it forces one ("auto" undoes it),
+  // as do ?backend=webgl2 in the page URL, window.SAFIS_BACKEND set before the scripts, and a
+  // simulation's own `backend` option. A software adapter (SwiftShader) is skipped unless forced.
+  const WG = (window.__safisGPU ||= (() => {
+    const S = { device: null, soft: false, state: "none", error: null, epoch: 0, force: null, errors: [], name: "", ready: Promise.resolve() };
+    try {
+      const m = /[?&]backend=(webgpu|webgl2|cpu)\b/.exec((typeof location !== "undefined" && location.search) || "");
+      S.force = (m && m[1]) || (["webgpu", "webgl2", "cpu"].includes(window.SAFIS_BACKEND) ? window.SAFIS_BACKEND : null);
+    } catch {}
+    const gpu = typeof navigator !== "undefined" ? navigator.gpu : null;
+    const redraw = () => { try { window.dispatchEvent(new Event("safis:redraw")); } catch {} };
+    S.start = () => {
+      if (!gpu || S.state === "pending" || S.state === "ready") return S.ready;
+      S.state = "pending";
+      return (S.ready = (async () => {
+        try {
+          const a = await gpu.requestAdapter({ powerPreference: "high-performance" });
+          if (!a) throw new Error("no WebGPU adapter");
+          const i = a.info || {};
+          S.name = [i.vendor, i.architecture, i.description].filter(Boolean).join(" ");
+          S.soft = !!a.isFallbackAdapter || /swiftshader|llvmpipe|software|basic render/i.test(S.name);
+          const L = a.limits, d = await a.requestDevice({ requiredLimits: { maxStorageBufferBindingSize: L.maxStorageBufferBindingSize, maxBufferSize: L.maxBufferSize } });
+          d.lost.then(r => { if (S.device === d) { S.device = null; S.state = "lost"; S.error = r.message; S.epoch++; redraw(); } });
+          d.addEventListener?.("uncapturederror", e => { if (S.errors.length < 20) S.errors.push(String(e.error?.message ?? e)); });
+          S.device = d; S.state = "ready"; S.epoch++;
+        } catch (e) { S.state = "failed"; S.error = String((e && e.message) || e); }
+        redraw();
+      })());
+    };
+    // The device to step on: a hardware adapter's, or any adapter's when "webgpu" is forced.
+    S.use = force => (S.device && (force === "webgpu" || !S.soft) ? S.device : null);
+    // Copies that land while nothing steps (a paused figure) ask for one redraw.
+    S.steps = 0;
+    S.settle = (get = () => S.steps) => { const at = get(), raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : f => setTimeout(f, 16); raf(() => raf(() => { if (get() === at) redraw(); })); };
+    if (S.force !== "webgl2" && S.force !== "cpu") S.start();
+    return S;
+  })());
+  let fxForce = null;
+  const forced = o => o.backend ?? (o.gpu === false ? "cpu" : null) ?? fxForce ?? WG.force;
+  // What a simulation steps on now: "webgpu", "webgl2" (or the CPU when there's no float WebGL2), or "cpu".
+  function pick(o) {
+    const f = forced(o);
+    if (f === "cpu") return "cpu";
+    return f !== "webgl2" && WG.use(f) ? "webgpu" : "webgl2";
+  }
+  const gpuForced = o => o.gpu === true || ["webgpu", "webgl2"].includes(forced(o));
+
+  // One device's kit: a bind group layout shared by every kernel (0: a uniform slot at a dynamic
+  // offset, 1 to 4: read-only storage, 5: read-write storage), pipelines made on first use.
+  const XK = new WeakMap(), XSL = 512, XBAD = {};
+  let xid = 0;
+  function xKit(d) {
+    let K = XK.get(d);
+    if (K) return K;
+    const C = GPUShaderStage.COMPUTE;
+    const bgl = d.createBindGroupLayout({ entries: [{ binding: 0, visibility: C, buffer: { type: "uniform", hasDynamicOffset: true } },
+      ...[1, 2, 3, 4].map(binding => ({ binding, visibility: C, buffer: { type: "read-only-storage" } })), { binding: 5, visibility: C, buffer: { type: "storage" } }] });
+    K = { d, bgl, layout: d.createPipelineLayout({ bindGroupLayouts: [bgl] }), mods: {}, pipes: {}, dummy: xBuf(d, 16, GPUBufferUsage.STORAGE) };
+    XK.set(d, K);
+    return K;
+  }
+  function xBuf(d, size, usage, data) {
+    const b = d.createBuffer({ size: Math.max(16, Math.ceil(size / 16) * 16), usage: usage | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+    b._xid = ++xid;
+    if (data) d.queue.writeBuffer(b, 0, data);
+    return b;
+  }
+  // A compute pipeline; a shader that fails to compile marks its kind bad, and simulations of
+  // that kind go back to WebGL2 or the CPU.
+  function xPipe(K, kind, code, entry) {
+    const key = kind + ":" + entry;
+    if (K.pipes[key]) return K.pipes[key];
+    let m = K.mods[kind];
+    if (!m) {
+      m = K.mods[kind] = K.d.createShaderModule({ code });
+      m.getCompilationInfo?.().then(info => { const e = info.messages.filter(x => x.type === "error"); if (e.length) { XBAD[kind] = true; errors.push(`webgpu ${kind}: ${e[0].message} (line ${e[0].lineNum})`); } }).catch(() => {});
+    }
+    return (K.pipes[key] = K.d.createComputePipeline({ layout: K.layout, compute: { module: m, entryPoint: entry } }));
+  }
+  // Records dispatches for one simulation. Each dispatch gets a 512-byte uniform slot, filled on
+  // the CPU and written to the GPU just before the commands that read it are submitted.
+  function xQueue(d, slots = 192) {
+    const ab = new ArrayBuffer(XSL * slots), K = xKit(d);
+    const Q = { d, K, f: new Float32Array(ab), i: new Int32Array(ab), u32: new Uint32Array(ab), n: 0, enc: null, pass: null, groups: new Map(), ubuf: d.createBuffer({ size: XSL * slots, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) };
+    Q.group = bufs => {
+      const key = bufs.map(b => (b ? b._xid : 0)).join(",");
+      let g = Q.groups.get(key);
+      if (!g) {
+        g = d.createBindGroup({ layout: K.bgl, entries: [{ binding: 0, resource: { buffer: Q.ubuf, size: XSL } }, ...bufs.map((b, j) => ({ binding: j + 1, resource: { buffer: b || K.dummy } }))] });
+        if (Q.groups.size > 256) Q.groups.clear();
+        Q.groups.set(key, g);
+      }
+      return g;
+    };
+    // run(pipeline, fill(f32 index of the slot, i32 view, f32 view), [S, X0, X1, X2, O], groups x, y)
+    Q.run = (pipe, fill, bufs, wx, wy = 1) => {
+      if (Q.n >= slots) Q.flush();
+      const s = Q.n++;
+      Q.f.fill(0, s * XSL / 4, (s + 1) * XSL / 4);
+      fill(s * XSL / 4);
+      if (!Q.pass) { Q.enc = d.createCommandEncoder(); Q.pass = Q.enc.beginComputePass(); }
+      Q.pass.setPipeline(pipe);
+      Q.pass.setBindGroup(0, Q.group(bufs), [s * XSL]);
+      Q.pass.dispatchWorkgroups(wx, wy);
+      WG.steps++; Q.runs = (Q.runs || 0) + 1;
+    };
+    Q.flush = () => {
+      if (!Q.pass) return;
+      Q.pass.end();
+      d.queue.writeBuffer(Q.ubuf, 0, ab, 0, Q.n * XSL);
+      d.queue.submit([Q.enc.finish()]);
+      Q.pass = Q.enc = null; Q.n = 0;
+    };
+    Q.copy = (pairs) => { Q.flush(); const e = d.createCommandEncoder(); for (const [a, b] of pairs) e.copyBufferToBuffer(a, 0, b, 0, Math.min(a.size, b.size)); d.queue.submit([e.finish()]); };
+    return Q;
+  }
+  // The copy back to the CPU: one in flight at a time; srcs() names the buffers holding the
+  // state now (ping-pong) and when() its time. land(bytes as Float32Array views, time) mirrors it.
+  function xMirror(Q, sizes, land) {
+    const total = sizes.reduce((a, b) => a + b, 0), st = Q.d.createBuffer({ size: total, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const M = { busy: false, again: null, at: -1, done: [] };
+    M.request = (srcs, when) => {
+      Q.flush();
+      if (M.busy) { M.again = [srcs, when]; return; }
+      M.busy = true;
+      const e = Q.d.createCommandEncoder(), list = srcs(), t = when();
+      let off = 0;
+      list.forEach((b, j) => { e.copyBufferToBuffer(b, 0, st, off, sizes[j]); off += sizes[j]; });
+      Q.d.queue.submit([e.finish()]);
+      st.mapAsync(GPUMapMode.READ).then(() => {
+        const all = new Float32Array(st.getMappedRange().slice(0));
+        st.unmap();
+        let o = 0;
+        land(sizes.map(n => { const v = all.subarray(o / 4, (o + n) / 4); o += n; return v; }), t);
+        M.at = t; M.busy = false;
+        if (M.again) { const [a, b] = M.again; M.again = null; M.request(a, b); }
+        else { WG.settle(() => Q.runs); const w = M.done; M.done = []; w.forEach(f => f()); }
+      }).catch(() => { M.busy = false; const w = M.done; M.done = []; w.forEach(f => f()); });
+    };
+    M.sync = () => (M.busy ? new Promise(r => M.done.push(r)) : Promise.resolve());
+    M.destroy = () => { try { st.destroy(); } catch {} };
+    return M;
+  }
+
+  // Fluid kernels: the flDye1 ... flProj shaders above as compute, over storage buffers laid out
+  // like their textures (texel (i, j) at i + j * width). The pressure sweep updates in place, which
+  // red-black ordering allows. X0 is always the velocity the step traces through.
+  const XFL_HEAD = `
+struct U { n: vec2<i32>, ws: f32, dt: f32, open: i32, mode: i32, color: i32, ns: i32, al: f32, uin: f32, eps: f32, uc: f32, stk: f32, fade: f32, om: f32, f0: f32, sp: array<vec4<f32>, 8>, sv: array<vec4<f32>, 8> }
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read> S: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> X0: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> X1: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read> X2: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read_write> O: array<vec4<f32>>;
+fn iF(c: vec2<i32>) -> i32 { return c.x + c.y * (u.n.x + 1); }
+fn iC(c: vec2<i32>) -> i32 { return c.x + c.y * u.n.x; }
+fn sol(c: vec2<i32>) -> bool { return c.x >= 0 && c.y >= 0 && c.x < u.n.x && c.y < u.n.y && S[iC(c)].x > 0.5; }
+`;
+  const xflFetch = b => `
+fn fu_${b}(c0: vec2<i32>) -> f32 { var c = c0; c.x = clamp(c.x, 0, u.n.x); var s = 1.0; if (c.y < 0 || c.y >= u.n.y) { s = u.ws; c.y = clamp(c.y, 0, u.n.y - 1); } return s * ${b}[iF(c)].x; }
+fn fv_${b}(c0: vec2<i32>) -> f32 { var c = c0; c.y = clamp(c.y, 0, u.n.y); var s = 1.0; if (c.x < 0) { s = -1.0; c.x = 0; } c.x = min(c.x, u.n.x - 1); return s * ${b}[iF(c)].y; }
+fn fd_${b}(c: vec2<i32>) -> vec4<f32> { return ${b}[iC(clamp(c, vec2<i32>(0), u.n - 1))]; }
+fn bu_${b}(q: vec2<f32>, m: ptr<function, vec2<f32>>) -> f32 { let p = q - vec2<f32>(0.0, 0.5); let i = vec2<i32>(floor(p)); let f = p - vec2<f32>(i);
+  let a = fu_${b}(i); let b2 = fu_${b}(i + vec2<i32>(1, 0)); let c = fu_${b}(i + vec2<i32>(0, 1)); let d = fu_${b}(i + vec2<i32>(1, 1));
+  *m = vec2<f32>(min(min(a, b2), min(c, d)), max(max(a, b2), max(c, d))); return mix(mix(a, b2, f.x), mix(c, d, f.x), f.y); }
+fn bv_${b}(q: vec2<f32>, m: ptr<function, vec2<f32>>) -> f32 { let p = q - vec2<f32>(0.5, 0.0); let i = vec2<i32>(floor(p)); let f = p - vec2<f32>(i);
+  let a = fv_${b}(i); let b2 = fv_${b}(i + vec2<i32>(1, 0)); let c = fv_${b}(i + vec2<i32>(0, 1)); let d = fv_${b}(i + vec2<i32>(1, 1));
+  *m = vec2<f32>(min(min(a, b2), min(c, d)), max(max(a, b2), max(c, d))); return mix(mix(a, b2, f.x), mix(c, d, f.x), f.y); }
+fn bd_${b}(q: vec2<f32>, lo: ptr<function, vec4<f32>>, hi: ptr<function, vec4<f32>>) -> vec4<f32> { let p = q - 0.5; let i = vec2<i32>(floor(p)); let f = p - vec2<f32>(i);
+  let a = fd_${b}(i); let b2 = fd_${b}(i + vec2<i32>(1, 0)); let c = fd_${b}(i + vec2<i32>(0, 1)); let d = fd_${b}(i + vec2<i32>(1, 1));
+  *lo = min(min(a, b2), min(c, d)); *hi = max(max(a, b2), max(c, d)); return mix(mix(a, b2, f.x), mix(c, d, f.x), f.y); }
+`;
+  const XFL = XFL_HEAD + xflFetch("X0") + xflFetch("X1") + xflFetch("X2") + `
+fn vel(p: vec2<f32>) -> vec2<f32> { var m: vec2<f32>; return vec2<f32>(bu_X0(p, &m), bv_X0(p, &m)); }
+fn trace(p: vec2<f32>, s: f32) -> vec2<f32> { return p - s * vel(p - 0.5 * s * vel(p)); }
+fn stir(x: vec2<f32>, w0: f32, k0: i32) -> f32 { var w = w0; for (var k = 0; k < u.ns; k++) { let d = x - u.sp[k].xy; let q = exp(-dot(d, d) / (u.sp[k].z * u.sp[k].z)) * u.sp[k].w; let t = select(u.sv[k].y, u.sv[k].x, k0 == 0); if (u.sv[k].w > 0.5) { w = w + q * t; } else { w = mix(w, t, q); } } return w; }
+fn wa(c: vec2<i32>) -> f32 { return X2[iF(clamp(c, vec2<i32>(0), u.n))].x; }
+fn conf(c: vec2<i32>, k: i32) -> f32 {
+  let e = vec2<i32>(1, 0); let f = vec2<i32>(0, 1); var w: f32; var gx: f32; var gy: f32;
+  if (k == 0) { w = 0.5 * (wa(c) + wa(c + f)); gx = 0.25 * (abs(wa(c + e)) + abs(wa(c + e + f)) - abs(wa(c - e)) - abs(wa(c - e + f))); gy = abs(wa(c + f)) - abs(wa(c)); }
+  else { w = 0.5 * (wa(c) + wa(c + e)); gx = abs(wa(c + e)) - abs(wa(c)); gy = 0.25 * (abs(wa(c + f)) + abs(wa(c + e + f)) - abs(wa(c - f)) - abs(wa(c + e - f))); }
+  return u.eps * u.uc * w * select(-gx, gy, k == 0) / (length(vec2<f32>(gx, gy)) + 1e-5);
+}
+fn fluU(c: vec2<i32>) -> bool { return c.y >= 0 && c.y < u.n.y && c.x > 0 && c.x <= u.n.x && !sol(c - vec2<i32>(1, 0)) && (c.x == u.n.x || !sol(c)); }
+fn fluV(c: vec2<i32>) -> bool { return c.x >= 0 && c.x < u.n.x && c.y > 0 && c.y < u.n.y && !sol(c - vec2<i32>(0, 1)) && !sol(c); }
+@compute @workgroup_size(8, 8) fn curlk(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x > u.n.x || c.y > u.n.y) { return; }
+  O[iF(c)] = vec4<f32>(fv_X0(c) - fv_X0(c - vec2<i32>(1, 0)) - fu_X0(c) + fu_X0(c - vec2<i32>(0, 1)), 0.0, 0.0, 0.0);
+}
+@compute @workgroup_size(8, 8) fn dye1(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x >= u.n.x || c.y >= u.n.y) { return; }
+  var lo: vec4<f32>; var hi: vec4<f32>;
+  O[iC(c)] = bd_X1(trace(vec2<f32>(c) + 0.5, u.dt), &lo, &hi);
+}
+@compute @workgroup_size(8, 8) fn dye2(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x >= u.n.x || c.y >= u.n.y) { return; }
+  let x = vec2<f32>(c) + 0.5; var lo: vec4<f32>; var hi: vec4<f32>; var l2: vec4<f32>; var h2: vec4<f32>;
+  let b = bd_X2(trace(x, -u.dt), &l2, &h2); _ = bd_X1(trace(x, u.dt), &lo, &hi);
+  var o = clamp(X2[iC(c)] + 0.5 * (X1[iC(c)] - b), lo, hi) * u.fade;
+  for (var k = 0; k < u.ns; k++) { let d = x - u.sp[k].xy; o.x += u.sv[k].z * exp(-dot(d, d) / (u.sp[k].z * u.sp[k].z)); }
+  if (u.stk > 0.0 && c.x < 2) { o.y = 1.0 - smoothstep(0.35, 1.1, abs(fract(x.y / u.stk) - 0.5) * u.stk); }
+  if (sol(c)) { o = vec4<f32>(0.0); }
+  O[iC(c)] = o;
+}
+@compute @workgroup_size(8, 8) fn adv1(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x > u.n.x || c.y > u.n.y) { return; }
+  var m: vec2<f32>; var o = X0[iF(c)];
+  if (c.y < u.n.y) { o.x = bu_X0(trace(vec2<f32>(c) + vec2<f32>(0.0, 0.5), u.dt), &m); }
+  if (c.x < u.n.x) { o.y = bv_X0(trace(vec2<f32>(c) + vec2<f32>(0.5, 0.0), u.dt), &m); }
+  O[iF(c)] = o;
+}
+@compute @workgroup_size(8, 8) fn adv2(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x > u.n.x || c.y > u.n.y) { return; }
+  var m: vec2<f32>; var m2: vec2<f32>; let w = X0[iF(c)]; let h = X1[iF(c)]; var o = w;
+  if (c.y < u.n.y) { let x = vec2<f32>(c) + vec2<f32>(0.0, 0.5); let b = bu_X1(trace(x, -u.dt), &m2); _ = bu_X0(trace(x, u.dt), &m); o.x = stir(x, clamp(h.x + 0.5 * (w.x - b), m.x, m.y), 0); if (u.eps > 0.0) { o.x += u.dt * conf(c, 0); } }
+  if (c.x < u.n.x) { let x = vec2<f32>(c) + vec2<f32>(0.5, 0.0); let b = bv_X1(trace(x, -u.dt), &m2); _ = bv_X0(trace(x, u.dt), &m); o.y = stir(x, clamp(h.y + 0.5 * (w.y - b), m.x, m.y), 1); if (u.eps > 0.0) { o.y += u.dt * conf(c, 1); } }
+  O[iF(c)] = o;
+}
+@compute @workgroup_size(8, 8) fn bnd(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x > u.n.x || c.y > u.n.y) { return; }
+  let e = vec2<i32>(1, 0); let f = vec2<i32>(0, 1); let w = X0[iF(c)]; var o = w;
+  if (c.y < u.n.y) {
+    let l = c.x > 0 && sol(c - e); let r = c.x < u.n.x && sol(c);
+    if (c.x == 0) { o.x = select(u.uin, 0.0, r); }
+    else if (l && r) {
+      let A = S[iC(c - e)]; let B = S[iC(c)]; let vo = 0.5 * (A.y + B.y); let sg = select(-1.0, 1.0, A.w > 0.5); var s = 0.0; var n = 0.0;
+      if (fluU(c - f)) { s += X0[iF(c - f)].x; n += 1.0; }
+      if (fluU(c + f)) { s += X0[iF(c + f)].x; n += 1.0; }
+      if (n > 0.0) { o.x = vo + sg * (s / n - vo); } else { o.x = vo; }
+    } else if (l || r) { o.x = S[iC(select(c, c - e, l))].y; }
+    else if (u.mode > 0) { let s = fu_X0(c - e) + fu_X0(c + e) + fu_X0(c - f) + fu_X0(c + f); if (u.mode == 1) { o.x = w.x + u.al * (s - 4.0 * w.x); } else { o.x = (X1[iF(c)].x + u.al * s) / (1.0 + 4.0 * u.al); } }
+  }
+  if (c.x < u.n.x) {
+    let t = c.y > 0 && sol(c - f); let b = c.y < u.n.y && sol(c);
+    if ((c.y == 0 || c.y == u.n.y) && u.open == 0) { o.y = 0.0; }
+    else if (t && b) {
+      let A = S[iC(c - f)]; let B = S[iC(c)]; let vo = 0.5 * (A.z + B.z); let sg = select(-1.0, 1.0, A.w > 0.5); var s = 0.0; var n = 0.0;
+      if (fluV(c - e)) { s += X0[iF(c - e)].y; n += 1.0; }
+      if (fluV(c + e)) { s += X0[iF(c + e)].y; n += 1.0; }
+      if (n > 0.0) { o.y = vo + sg * (s / n - vo); } else { o.y = vo; }
+    } else if (t || b) { o.y = S[iC(select(c, c - f, t))].z; }
+    else if (u.mode > 0) { let s = fv_X0(c - e) + fv_X0(c + e) + fv_X0(c - f) + fv_X0(c + f); if (u.mode == 1) { o.y = w.y + u.al * (s - 4.0 * w.y); } else { o.y = (X1[iF(c)].y + u.al * s) / (1.0 + 4.0 * u.al); } }
+  }
+  O[iF(c)] = o;
+}
+@compute @workgroup_size(8, 8) fn divk(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x >= u.n.x || c.y >= u.n.y) { return; }
+  let w = X0[iF(c)]; var o = vec4<f32>(0.0);
+  if (!sol(c)) { o.x = X0[iF(c + vec2<i32>(1, 0))].x - w.x + X0[iF(c + vec2<i32>(0, 1))].y - w.y; }
+  O[iC(c)] = o;
+}
+fn Pp(c: vec2<i32>) -> f32 { return O[iC(c)].x; }
+@compute @workgroup_size(8, 8) fn sor(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x >= u.n.x || c.y >= u.n.y || ((c.x + c.y) & 1) != u.color) { return; }
+  let e = vec2<i32>(1, 0); let f = vec2<i32>(0, 1); let p = Pp(c); var s = 0.0; var n = 0.0;
+  if (sol(c)) {
+    if (c.x > 0 && !sol(c - e)) { s += Pp(c - e); n += 1.0; } if (c.x < u.n.x - 1 && !sol(c + e)) { s += Pp(c + e); n += 1.0; }
+    if (c.y > 0 && !sol(c - f)) { s += Pp(c - f); n += 1.0; } if (c.y < u.n.y - 1 && !sol(c + f)) { s += Pp(c + f); n += 1.0; }
+    O[iC(c)] = vec4<f32>(select(0.0, s / max(n, 1.0), n > 0.0), 0.0, 0.0, 1.0); return;
+  }
+  if (c.x > 0 && !sol(c - e)) { s += Pp(c - e); n += 1.0; }
+  if (c.x < u.n.x - 1) { if (!sol(c + e)) { s += Pp(c + e); n += 1.0; } } else { n += 1.0; }
+  if (c.y > 0) { if (!sol(c - f)) { s += Pp(c - f); n += 1.0; } } else if (u.open == 1) { n += 1.0; }
+  if (c.y < u.n.y - 1) { if (!sol(c + f)) { s += Pp(c + f); n += 1.0; } } else if (u.open == 1) { n += 1.0; }
+  var q = p;
+  if (n > 0.0) { q = p + u.om * ((s - X0[iC(c)].x) / n - p); }
+  O[iC(c)] = vec4<f32>(q, 0.0, 0.0, 1.0);
+}
+fn Pq(c: vec2<i32>) -> f32 { return X1[iC(c)].x; }
+@compute @workgroup_size(8, 8) fn proj(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x > u.n.x || c.y > u.n.y) { return; }
+  let e = vec2<i32>(1, 0); let f = vec2<i32>(0, 1); var o = X0[iF(c)];
+  if (c.y < u.n.y && c.x > 0 && !sol(c - e)) { if (c.x == u.n.x) { o.x += Pq(c - e); } else if (!sol(c)) { o.x -= Pq(c) - Pq(c - e); } }
+  if (c.x < u.n.x) {
+    if (c.y > 0 && c.y < u.n.y) { if (!sol(c - f) && !sol(c)) { o.y -= Pq(c) - Pq(c - f); } }
+    else if (u.open == 1) { if (c.y == 0 && !sol(c)) { o.y -= Pq(c); } else if (c.y == u.n.y && !sol(c - f)) { o.y += Pq(c - f); } }
+  }
+  O[iF(c)] = o;
+}`;
+
+  // The wave equation: waLap and waStep as compute. S is the mask (wall, damping, sponge).
+  const XWA = `
+struct U { dt: f32, c2: f32, s4: f32, t0: f32, n: vec2<i32>, nsrc: i32, nd: i32, sa: array<vec4<f32>, 8>, sb: array<vec4<f32>, 8>, sc: array<vec4<f32>, 8>, dr: array<vec4<f32>, 4> }
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read> S: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> X0: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> X1: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read> X2: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read_write> O: array<vec4<f32>>;
+fn iC(c: vec2<i32>) -> i32 { return c.x + c.y * u.n.x; }
+fn hn(c: vec2<i32>, h0: f32, k: i32) -> f32 { if (c.x < 0 || c.y < 0 || c.x >= u.n.x || c.y >= u.n.y) { return h0; } if (S[iC(c)].x > 0.5) { return h0; } return X0[iC(c)][k]; }
+fn lap(c: vec2<i32>, k: i32) -> f32 { let h0 = X0[iC(c)][k]; return hn(c + vec2<i32>(1, 0), h0, k) + hn(c - vec2<i32>(1, 0), h0, k) + hn(c + vec2<i32>(0, 1), h0, k) + hn(c - vec2<i32>(0, 1), h0, k) - 4.0 * h0; }
+@compute @workgroup_size(8, 8) fn lapk(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x >= u.n.x || c.y >= u.n.y) { return; }
+  let w = X0[iC(c)]; O[iC(c)] = vec4<f32>(w.xy, lap(c, 0), 0.0);
+}
+@compute @workgroup_size(8, 8) fn stepk(@builtin(global_invocation_id) g: vec3<u32>) {
+  let c = vec2<i32>(g.xy); if (c.x >= u.n.x || c.y >= u.n.y) { return; }
+  let w = X0[iC(c)]; let m = S[iC(c)]; let x = vec2<f32>(c) + 0.5;
+  if (m.x > 0.5) { O[iC(c)] = vec4<f32>(0.0); return; }
+  var a = u.c2 * lap(c, 0);
+  if (u.s4 > 0.0) { a -= u.s4 * lap(c, 2); }
+  for (var k = 0; k < u.nsrc; k++) {
+    let A = u.sa[k].xy; let B = u.sa[k].zw; let d = x - A; let e = B - A; let t = clamp(dot(d, e) / max(dot(e, e), 1e-6), 0.0, 1.0); let r2 = dot(d - e * t, d - e * t); let age = u.t0 - u.sc[k].x;
+    if (age > 0.0) { a += u.sb[k].x * exp(-r2 / (u.sb[k].w * u.sb[k].w)) * sin(u.sb[k].y * u.t0 + u.sb[k].z) * smoothstep(0.0, u.sc[k].z, age) * exp(-age / u.sc[k].y); }
+  }
+  let v = (w.y + u.dt * a) * exp(-m.y * u.dt); var h = (w.x + u.dt * v) * exp(-m.z * u.dt);
+  for (var k = 0; k < u.nd; k++) { let d = x - u.dr[k].xy; h -= u.dr[k].w * exp(-dot(d, d) / (u.dr[k].z * u.dr[k].z)); }
+  O[iC(c)] = vec4<f32>(h, v, w.z, 0.0);
+}`;
+
+  // 2D particles: one thread per slot runs a run of steps (slots don't interact), the same
+  // physics as stepOnce below: rebirth on the seeded schedule, gravity, exact drag, lift, curl
+  // eddies, flutter, wind, segment / circle / polygon colliders, the ground, sticking. S holds each
+  // slot's phase, X0 the steps' end times, X1 the colliders (two vec4 each), X2 polygon points.
+  const XPA = `
+struct U { n: i32, steps: i32, emitting: i32, ncol: i32, hh: f32, period: f32, life0: f32, life1: f32,
+  seed: u32, shape: i32, density: f32, un: f32, gy: f32, lift: f32, kk: f32, ground: f32,
+  turb: vec4<f32>, wind: vec4<f32>, em0: vec4<f32>, em1: vec4<f32>, em2: vec4<f32>, dom: vec4<f32>, modes: array<vec4<f32>, 4>, ms: vec4<f32> }
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read> S: array<f32>;
+@group(0) @binding(2) var<storage, read> T: array<f32>;
+@group(0) @binding(3) var<storage, read> C: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read> Pt: array<vec2<f32>>;
+@group(0) @binding(5) var<storage, read_write> O: array<vec4<f32>>;
+const TAU = 6.283185307179586;
+fn hsh(a: u32, b: u32, c: u32) -> u32 {
+  var h = (a * 0x85ebca6bu) ^ ((b + 0x632be5abu) * 0xc2b2ae35u) ^ ((c + 0x27d4eb2fu) * 0x165667b1u);
+  h ^= h >> 15u; h *= 0x2c1b3c6du; h ^= h >> 12u; h *= 0x297a2d39u; h ^= h >> 15u; return h;
+}
+fn rr(i: i32, k: i32, c: u32) -> f32 { return f32(hsh(u.seed, u32(i * 7919 + k * 104729), c) >> 8u) / 16777216.0; }
+fn curl2(x: f32, y: f32, t: f32) -> vec2<f32> {
+  var cx = 0.0; var cy = 0.0;
+  for (var j = 0; j < 4; j++) { let M = u.modes[j]; let c2 = cos(M.x * x + M.y * y + M.z + M.w * t * TAU) * u.ms[j]; cx += c2 * M.y; cy -= c2 * M.x; }
+  return vec2<f32>(cx * 0.7, cy * 0.7);
+}
+fn emit(i: i32, k: i32) -> vec4<f32> {
+  var x = u.em0.x; var y = u.em0.y;
+  if (u.shape == 1) { let a = TAU * rr(i, k, 10u); let q = u.em0.z * sqrt(rr(i, k, 11u)); x += q * cos(a); y += q * sin(a); }
+  else if (u.shape == 2) { let t = rr(i, k, 10u); x = mix(u.em2.x, u.em2.z, t); y = mix(u.em2.y, u.em2.w, t); }
+  else if (u.shape == 3) { x = u.em0.x + (rr(i, k, 10u) - 0.5) * u.em2.x; y = u.em0.y + (rr(i, k, 11u) - 0.5) * u.em2.y; }
+  let a = u.em0.w + (rr(i, k, 13u) * 2.0 - 1.0) * u.em1.x;
+  let s0 = mix(u.em1.y, u.em1.z, rr(i, k, 15u));
+  return vec4<f32>(x, y, cos(a) * s0 * u.un, sin(a) * s0 * u.un);
+}
+fn meet(v: ptr<function, vec2<f32>>, flag: ptr<function, f32>, n: vec2<f32>, e: f32, fr: f32) {
+  let vn = dot(*v, n); if (vn >= 0.0) { return; }
+  *v -= (1.0 + e) * vn * n;
+  let vt = (*v).x * -n.y + (*v).y * n.x; (*v).x -= vt * fr * -n.y; (*v).y -= vt * fr * n.x;
+  if (fr >= 0.99 && e <= 0.01) { *flag = 1.0; *v = vec2<f32>(0.0); }
+}
+fn inPoly(o: i32, n: i32, x: f32, y: f32) -> bool {
+  var k = false; var j = n - 1;
+  for (var i = 0; i < n; i++) { let a = Pt[o + i]; let b = Pt[o + j]; if ((a.y > y) != (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) { k = !k; } j = i; }
+  return k;
+}
+// Signed distance from a body and the outward normal: [d, nx, ny].
+fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
+  if (c0.x < 1.5) { let dx = x - c1.x; let dy = y - c1.y; var d = length(vec2<f32>(dx, dy)); if (d == 0.0) { d = 1e-9; } return vec3<f32>(d - c0.w, dx / d, dy / d); }
+  let o = i32(c1.x); let n = i32(c0.w); var best = 1e18; var nx = 0.0; var ny = -1.0; var j = n - 1;
+  for (var i = 0; i < n; i++) {
+    let a = Pt[o + j]; let b = Pt[o + i]; let ex = b.x - a.x; let ey = b.y - a.y; var l2 = ex * ex + ey * ey; if (l2 == 0.0) { l2 = 1e-18; }
+    let t = clamp(((x - a.x) * ex + (y - a.y) * ey) / l2, 0.0, 1.0); let qx = x - a.x - ex * t; let qy = y - a.y - ey * t; let d = length(vec2<f32>(qx, qy));
+    if (d < best) { best = d; if (d > 1e-12) { nx = qx / d; ny = qy / d; } else { nx = ey; ny = -ex; } }
+    j = i;
+  }
+  if (inPoly(o, n, x, y)) { return vec3<f32>(-best, -nx, -ny); }
+  return vec3<f32>(best, nx, ny);
+}
+@compute @workgroup_size(64) fn pstep(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = i32(g.x); if (i >= u.n) { return; }
+  var A = O[i * 2]; var B = O[i * 2 + 1];
+  let ph = S[i]; let P = u.period;
+  for (var s = 0; s < u.steps; s++) {
+    let t1 = T[s]; let kf = floor((t1 - ph) / P); let age = t1 - ph - kf * P; let k = i32(kf);
+    let life = u.life0 + (u.life1 - u.life0) * rr(i, k, 1u);
+    var dtl = u.hh;
+    if (B.x != kf) {
+      if (age > u.hh + 1e-9) { B.x = kf; B.y = 2.0; continue; }
+      B.x = kf;
+      if (u.emitting == 0 || rr(i, k, 2u) >= u.density) { B.y = 2.0; continue; }
+      A = emit(i, k); B.y = 0.0; B.z = TAU * rr(i, k, 5u);
+      dtl = clamp(age, 0.0, u.hh);
+    }
+    if (B.y != 0.0 || age > life) { continue; }
+    var x = A.x; var y = A.y; var v = A.zw; let x0 = x; let y0 = y; var flag = 0.0;
+    var ax = 0.0; var ay = u.gy - u.lift * max(0.0, 1.0 - age / life);
+    if (u.turb.w > 0.0) { let c2 = curl2(x * u.turb.y, y * u.turb.y, t1 * u.turb.z); ax += c2.x * u.turb.x; ay += c2.y * u.turb.x; }
+    if (u.wind.w != 0.0) { ax += u.kk * u.wind.w * sin(TAU * u.wind.z * t1 + B.z); }
+    let wx = u.wind.x; let wy = u.wind.y;
+    if (u.kk > 0.0) {
+      let e = exp(-u.kk * dtl); let f = (1.0 - e) / u.kk; let Tx = wx + ax / u.kk; let Ty = wy + ay / u.kk;
+      x += Tx * dtl + (v.x - Tx) * f; y += Ty * dtl + (v.y - Ty) * f; v = vec2<f32>(Tx + (v.x - Tx) * e, Ty + (v.y - Ty) * e);
+    } else { v += vec2<f32>(ax, ay) * dtl; x += v.x * dtl; y += v.y * dtl; }
+    for (var c = 0; c < u.ncol; c++) {
+      let c0 = C[c * 2]; let c1 = C[c * 2 + 1];
+      if (c0.x < 0.5) {
+        let ex = c1.z - c1.x; let ey = c1.w - c1.y; let s0 = (x0 - c1.x) * ey - (y0 - c1.y) * ex; let s1 = (x - c1.x) * ey - (y - c1.y) * ex;
+        if ((s0 > 0.0) != (s1 > 0.0) && s0 != s1) {
+          let t = s0 / (s0 - s1); let qx = x0 + (x - x0) * t; let qy = y0 + (y - y0) * t; var l2 = ex * ex + ey * ey; if (l2 == 0.0) { l2 = 1e-18; }
+          let along = ((qx - c1.x) * ex + (qy - c1.y) * ey) / l2;
+          if (along >= 0.0 && along <= 1.0) {
+            var L = length(vec2<f32>(ex, ey)); if (L == 0.0) { L = 1.0; } let sg = select(-1.0, 1.0, s0 > 0.0); let n = vec2<f32>(sg * ey / L, -sg * ex / L);
+            x = qx + n.x * 1e-4 * u.un; y = qy + n.y * 1e-4 * u.un; meet(&v, &flag, n, c0.y, c0.z);
+          }
+        }
+      } else {
+        let s = surf(c0, c1, x, y);
+        if (s.x < 0.0) { x -= s.y * (s.x - 1e-4 * u.un); y -= s.z * (s.x - 1e-4 * u.un); meet(&v, &flag, s.yz, c0.y, c0.z); }
+      }
+      if (flag != 0.0) { break; }
+    }
+    if (u.em1.w > 0.5 && flag == 0.0) { if (y > u.ground) { y = u.ground; meet(&v, &flag, vec2<f32>(0.0, -1.0), u.dom.z, u.dom.w); } }
+    if (x < -0.05 * u.dom.x || x > 1.05 * u.dom.x || y < -0.5 * u.dom.y || y > 1.05 * u.dom.y) { flag = 2.0; }
+    B.y = flag; A = vec4<f32>(x, y, v.x, v.y);
+  }
+  O[i * 2] = A; O[i * 2 + 1] = B;
+}`;
+  const xWg = (n, k = 8) => Math.ceil(n / k);
+  // Wraps a simulation's clock: before stepping, move it onto the backend it should be on; after,
+  // ask for a copy of its state back. Returns the unwrapped reset (start again from rest).
+  function xClock(S, before, after) {
+    const adv = S.advance, warm = S.warm, reset = S.reset;
+    S.advance = t => { before(); adv(t); after(); return S; };
+    S.warm = t => { before(); warm(t); after(); return S; };
+    S.reset = () => { before(); reset(); after(); return S; };
+    return reset;
   }
 
   // ---------- simulations: fluid, waves, particles ----------
@@ -990,6 +1434,19 @@ void main() {
     }
     return R.float && (force || !R.soft) ? R : null;
   }
+  function ftex(w, h, data = null) {
+    const gl = R.gl, tex = gl.createTexture(), fb = gl.createFramebuffer();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, data);
+    for (const k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, k, gl.NEAREST);
+    for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, k, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!ok) throw new Error("float render target incomplete");
+    return { tex, fb, w, h };
+  }
   const upload = (T, data) => { const gl = R.gl; gl.bindTexture(gl.TEXTURE_2D, T.tex); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, T.w, T.h, gl.RGBA, gl.FLOAT, data); };
   function pass(name, T, u) {
     const gl = R.gl, P = program(name);
@@ -997,6 +1454,7 @@ void main() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, T.fb); gl.viewport(0, 0, T.w, T.h); gl.useProgram(P.p);
     uniforms(P, u); gl.bindVertexArray(R.vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
+  function readTex(T, out) { const gl = R.gl; gl.bindFramebuffer(gl.FRAMEBUFFER, T.fb); gl.readPixels(0, 0, T.w, T.h, gl.RGBA, gl.FLOAT, out); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return out; }
   function copyTex(A, B) {
     const gl = R.gl;
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, A.fb); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, B.fb);
@@ -1425,6 +1883,10 @@ void main() {
       }
       kicked = false; hist = []; serial++;
     }
+    const save = () => X ? (X.chk ??= { V: xBuf(X.d, NF * 16, GPUBufferUsage.STORAGE), P: xBuf(X.d, NC * 16, GPUBufferUsage.STORAGE), D: xBuf(X.d, NC * 16, GPUBufferUsage.STORAGE) }, X.Q.copy([[X.V, X.chk.V], [X.P, X.chk.P], [X.D, X.chk.D]]), { kicked, hist: hist.slice() })
+      : G ? (G.chk ??= { V: ftex(W, ny + 1), P: ftex(nx, ny), D: ftex(nx, ny) }, copyTex(G.V, G.chk.V), copyTex(G.P, G.chk.P), copyTex(G.D, G.chk.D), { kicked, hist: hist.slice() })
+      : { kicked, hist: hist.slice(), u: C.u.slice(), v: C.v.slice(), p: C.p.slice(), d: C.d.map(a => a.slice()) };
+    const load = k => { if (X) X.Q.copy([[X.chk.V, X.V], [X.chk.P, X.P], [X.chk.D, X.D]]); else if (G) { copyTex(k.V ?? G.chk.V, G.V); copyTex(G.chk.P, G.P); copyTex(G.chk.D, G.D); } else { C.u.set(k.u); C.v.set(k.v); C.p.set(k.p); C.d.forEach((a, i) => a.set(k.d[i])); } kicked = k.kicked; hist = k.hist.slice(); serial++; };
     function stepOnce(dt) {
       if (G && G.gl !== context()?.gl) { gpuInit(); init(); }   // the context was lost and came back: start again from rest
       for (const q of S.obstacles) if (q._v && S.time - q._mt > 0.06) { q._v = null; maskDirty = true; }
@@ -1439,6 +1901,58 @@ void main() {
       vsp = []; dsp = []; serial++;
       if (probe && (hist.length === 0 || S.time + dt - hist[hist.length - 1][0] > 1 / 61)) { hist.push([S.time + dt, sample(probe[0], probe[1])[1]]); if (hist.length > 900) hist.shift(); }
     }
+    // ----- the WebGPU solver: the GPU passes as compute (webgpu section). The WebGL2 textures
+    // become a mirror of its state, which g.fx draws and the readback grid reads. A fluid that
+    // something reads every step (tracked shedding, particles it carries) stays on WebGL2. -----
+    function xStep(dt) {
+      const { Q, p } = X, ws0 = ws(), op = open() ? 1 : 0, fw = xWg(nx + 1), fh = xWg(ny + 1), cw = xWg(nx), ch = xWg(ny);
+      const base = b => { Q.i[b] = nx; Q.i[b + 1] = ny; Q.f[b + 2] = ws0; Q.f[b + 3] = dt; Q.i[b + 4] = op; };
+      const splats = (b, list) => { const n = min(8, list.length); Q.i[b + 7] = n; for (let k = 0; k < n; k++) { Q.f.set(list[k].slice(0, 4), b + 16 + k * 4); Q.f.set(list[k].slice(4, 8), b + 48 + k * 4); } };
+      if (eps) Q.run(p.curlk, base, [X.S, X.V, null, null, X.Wn], fw, fh);
+      Q.run(p.dye1, base, [X.S, X.V, X.D, null, X.D2], cw, ch);
+      Q.run(p.dye2, b => { base(b); splats(b, dsp.map(s => [s[0], s[1], s[2], 0, 0, 0, s[3], 0])); Q.f[b + 12] = streaks; Q.f[b + 13] = exp(-fade * dt); }, [X.S, X.V, X.D, X.D2, X.D1], cw, ch);
+      [X.D, X.D1] = [X.D1, X.D];
+      Q.run(p.adv1, base, [X.S, X.V, null, null, X.V2], fw, fh);
+      Q.run(p.adv2, b => { base(b); splats(b, vsp); Q.f[b + 10] = eps; Q.f[b + 11] = U / h; }, [X.S, X.V, X.V2, X.Wn, X.V1], fw, fh);
+      [X.V, X.V1] = [X.V1, X.V];
+      const al = nu / (h * h) * dt, bu = (b, mode) => { base(b); Q.i[b + 5] = mode; Q.f[b + 8] = al; Q.f[b + 9] = U / h; };
+      if (al <= 0.2) { Q.run(p.bnd, b => bu(b, al > 0 ? 1 : 0), [X.S, X.V, X.V, null, X.V1], fw, fh); [X.V, X.V1] = [X.V1, X.V]; }
+      else {
+        const n = clamp(Math.ceil(6 + 10 * sqrt(al)), 6, 40), star = X.V, tg = [X.V1, X.V2];
+        let cur = X.V;
+        for (let k = 0; k < n; k++) { Q.run(p.bnd, b => bu(b, 2), [X.S, cur, star, null, tg[k & 1]], fw, fh); cur = tg[k & 1]; }
+        [X.V1, X.V2] = [star, X.V1, X.V2].filter(T => T !== cur); X.V = cur;
+      }
+      Q.run(p.divk, base, [X.S, X.V, null, null, X.Dv], cw, ch);
+      for (let k = 0; k < 2 * iters; k++) Q.run(p.sor, b => { base(b); Q.i[b + 6] = k & 1; Q.f[b + 14] = omega; }, [X.S, X.Dv, null, null, X.P], cw, ch);
+      Q.run(p.proj, base, [X.S, X.V, X.P, null, X.V1], fw, fh); [X.V, X.V1] = [X.V1, X.V];
+      Q.run(p.bnd, b => bu(b, 0), [X.S, X.V, X.V, null, X.V1], fw, fh); [X.V, X.V1] = [X.V1, X.V];
+    }
+    // Before stepping: onto WebGPU (the current state copied over from the WebGL2 textures), or
+    // back off it (start again, which gives the same frames).
+    function xCheck() {
+      const d = G && !probe && !S._sync && !XBAD.fluid && pick(o) === "webgpu" ? WG.use(forced(o)) : null;
+      if (X && X.d === d) return;
+      if (X) { const old = X; X = null; old.destroy(); rawReset(); }
+      if (!d) return;
+      const Q = xQueue(d, 512), B = n => xBuf(d, n * 16, GPUBufferUsage.STORAGE), from = T => readTex(T, new Float32Array(T.w * T.h * 4));
+      const p = Object.fromEntries(["curlk", "dye1", "dye2", "adv1", "adv2", "bnd", "divk", "sor", "proj"].map(e => [e, xPipe(Q.K, "fluid", XFL, e)]));
+      X = { d, Q, p, V: B(NF), V1: B(NF), V2: B(NF), Wn: B(NF), P: B(NC), Dv: B(NC), D: B(NC), D1: B(NC), D2: B(NC), S: B(NC), chk: null, at: S.time, req: -1 };
+      d.queue.writeBuffer(X.S, 0, sv);
+      d.queue.writeBuffer(X.V, 0, from(G.V)); d.queue.writeBuffer(X.P, 0, from(G.P)); d.queue.writeBuffer(X.D, 0, from(G.D));
+      if (G.chk && S.chk) { X.chk = { V: B(NF), P: B(NC), D: B(NC) }; for (const k of ["V", "P", "D"]) d.queue.writeBuffer(X.chk[k], 0, from(G.chk[k])); }
+      const me = X;
+      X.M = xMirror(Q, [NF * 16, NC * 16, NC * 16], ([v, pp, dd], t) => { if (X !== me || !G) return; upload(G.V, v); upload(G.P, pp); upload(G.D, dd); X.at = t; rbAt = -1; });
+      X.destroy = () => { me.Q.flush(); me.M.destroy(); for (const b of [me.V, me.V1, me.V2, me.Wn, me.P, me.Dv, me.D, me.D1, me.D2, me.S, ...Object.values(me.chk || {})]) b.destroy(); };
+    }
+    const xAfter = () => { if (X && X.req !== serial) { X.req = serial; X.M.request(() => [X.V, X.P, X.D], () => S.time); } };
+    try { if (want) gpuInit(); } catch (e) { G = null; errors.push(`fluid: ${e.message}`); }
+    S.gpu = !!G;
+    clock(S, stepOnce, save, load, init);
+    const rawReset = xClock(S, xCheck, xAfter);
+    S.sync = () => (X ? (xAfter(), X.M.sync()) : Promise.resolve());
+    Object.defineProperty(S, "backend", { get: () => (X ? "webgpu" : G ? "webgl2" : "cpu"), enumerable: true });
+
     // ----- what figures call -----
     S.velocity = q => { const s = sample(q[0], q[1]); return [s[0], s[1]]; };
     S.sample = q => { const s = sample(q[0], q[1]); return { u: s[0], v: s[1], speed: hypot(s[0], s[1]), solid: s[2] > 0.5, p: s[3] }; };
@@ -1684,12 +2198,82 @@ void main() {
       // Pebbles dropped at time 0 (before warm-up) belong to the start, so every restart drops them again.
       drops = pre.slice(); serial++;
     }
+    const save = () => (X ? (X.chk ??= xBuf(X.d, NC * 16, GPUBufferUsage.STORAGE), X.Q.copy([[X.H, X.chk]]), {}) : G ? (G.chk ??= ftex(nx, ny), copyTex(G.H, G.chk), {}) : { h: C.h.slice(), v: C.v.slice() });
+    const load = k => { if (X) X.Q.copy([[X.chk, X.H]]); else if (G) copyTex(G.chk, G.H); else { C.h.set(k.h); C.v.set(k.v); } serial++; };
     function stepOnce(dt) {
       if (G && G.gl !== context()?.gl) { gpuInit(); dirty = true; init(); }
       if (dirty) rasterize();
       if (X) xStep(dt); else if (G) gpuStep(dt); else cpuStep(dt);
       drops = []; serial++;
     }
+    // ----- WebGPU: waLap and waStep as compute (webgpu section); the WebGL2 height texture
+    // becomes a mirror of the state, for drawing and heights(). -----
+    function xStep(dt) {
+      const { Q } = X, u = srcU(S.time + dt), nd = min(4, drops.length);
+      const fill = b => {
+        Q.f[b] = dt; Q.f[b + 1] = (c / h) ** 2; Q.f[b + 2] = s4 / h ** 4; Q.f[b + 3] = u.uT0; Q.i[b + 4] = nx; Q.i[b + 5] = ny; Q.i[b + 6] = u.uNsrc; Q.i[b + 7] = nd;
+        Q.f.set(u.uSa, b + 8); Q.f.set(u.uSb, b + 40); Q.f.set(u.uSc, b + 72); Q.f.set(padTo(drops.flat(), 16), b + 104);
+      };
+      if (s4) { Q.run(X.lap, fill, [X.M, X.H, null, null, X.H1], xWg(nx), xWg(ny)); [X.H, X.H1] = [X.H1, X.H]; }
+      Q.run(X.step, fill, [X.M, X.H, null, null, X.H1], xWg(nx), xWg(ny)); [X.H, X.H1] = [X.H1, X.H];
+    }
+    function xCheck() {
+      const d = G && !XBAD.waves && pick(o) === "webgpu" ? WG.use(forced(o)) : null;
+      if (X && X.d === d) return;
+      if (X) { const old = X; X = null; old.destroy(); rawReset(); }
+      if (!d) return;
+      const Q = xQueue(d), B = () => xBuf(d, NC * 16, GPUBufferUsage.STORAGE);
+      X = { d, Q, H: B(), H1: B(), M: B(), chk: null, at: S.time, req: -1, lap: xPipe(Q.K, "waves", XWA, "lapk"), step: xPipe(Q.K, "waves", XWA, "stepk") };
+      d.queue.writeBuffer(X.M, 0, M); d.queue.writeBuffer(X.H, 0, readTex(G.H, new Float32Array(NC * 4)));
+      if (G.chk && S.chk) { X.chk = B(); d.queue.writeBuffer(X.chk, 0, readTex(G.chk, new Float32Array(NC * 4))); }
+      const me = X;
+      X.Mi = xMirror(Q, [NC * 16], ([hh], t) => { if (X !== me || !G) return; upload(G.H, hh); X.at = t; hbAt = -1; });
+      X.destroy = () => { me.Q.flush(); me.Mi.destroy(); for (const b of [me.H, me.H1, me.M, me.chk]) b?.destroy(); };
+    }
+    const xAfter = () => { if (X && X.req !== serial) { X.req = serial; X.Mi.request(() => [X.H], () => S.time); } };
+    try { if (want) { gpuInit(); upload(G.M, M); } } catch (e) { G = null; errors.push(`waves: ${e.message}`); }
+    S.gpu = !!G;
+    clock(S, stepOnce, save, load, init);
+    const rawReset = xClock(S, xCheck, xAfter);
+    S.sync = () => (X ? (xAfter(), X.Mi.sync()) : Promise.resolve());
+    Object.defineProperty(S, "backend", { get: () => (X ? "webgpu" : G ? "webgl2" : "cpu"), enumerable: true });
+    // A pebble: a dent of depth amp (m) and radius r (m) that springs back and spreads as rings.
+    S.drop = (at, k = {}) => {
+      const d = [at[0] / h, at[1] / h, max(0.8, num(k.r, max(1.5 * h, 0.012)) / h), num(k.amp, 0.003) / h];
+      if (drops.length < 4) drops.push(d);
+      if (S.time === 0 && pre.length < 4) pre.push(d);
+      return S;
+    };
+    S.update = () => { dirty = true; return S; };
+    S.toWorld = p => toWorld(S, p);
+    S.toScreen = q => toScreen(S, q);
+    S.interact = { live: true, start(p) { S.drop(toWorld(S, p)); }, move() {}, end() {} };
+    // Heights (m) over the grid; on the GPU one readback per change.
+    let hb = null, hbAt = -1;
+    S.heights = () => {
+      if (hbAt === serial && hb) return hb;
+      if (G) { const raw = readTex(G.H, new Float32Array(NC * 4)); hb = new Float32Array(NC); for (let k = 0; k < NC; k++) hb[k] = raw[k * 4] * h; }
+      else { hb = new Float32Array(NC); for (let k = 0; k < NC; k++) hb[k] = C.h[k] * h; }
+      hbAt = serial;
+      return hb;
+    };
+    S.height = q => { const H = S.heights(), X = clamp(q[0] / h - 0.5, 0, nx - 1.001), Y = clamp(q[1] / h - 0.5, 0, ny - 1.001), i = floor(X), j = floor(Y), fx = X - i, fy = Y - j, I = min(i + 1, nx - 1), J = min(j + 1, ny - 1);
+      return (H[i + j * nx] * (1 - fx) + H[I + j * nx] * fx) * (1 - fy) + (H[i + J * nx] * (1 - fx) + H[I + J * nx] * fx) * fy; };
+    S.wall = q => { const i = floor(q[0] / h), j = floor(q[1] / h); return i >= 0 && j >= 0 && i < nx && j < ny && wall[i + j * nx] === 1; };
+    S.range = () => max(1e-5, ...S.sources.map(q => num(q.amp, 0.002)), 0.6 * num(o.dropAmp, 0.003));
+    S.surfaceUniforms = () => { pass("waG1", G.G1, { uHt: G.H, uM: G.M, uN: [nx, ny] }); pass("waG2", G.G2, { uHt: G.H, uM: G.M, uN: [nx, ny] }); return { uG1: G.G1, uG2: G.G2, uHt: G.H, uM: G.M, uN: [nx, ny] }; };
+    S._cpu = () => C;
+    S._wall = wall;
+    return S;
+  }
+  // Slits in a straight barrier from a to b: gaps given as [center, width] along it, in m.
+  waves.slits = (a, b, gaps = [], width = 0) => {
+    const L = hypot(b[0] - a[0], b[1] - a[1]) || 1, d = [(b[0] - a[0]) / L, (b[1] - a[1]) / L], cuts = gaps.map(([s, w]) => [s - w / 2, s + w / 2]).sort((p, q) => p[0] - q[0]), out = [];
+    let s0 = 0;
+    for (const [s1, s2] of cuts.concat([[L, L]])) { if (s1 > s0) out.push({ from: [a[0] + d[0] * s0, a[1] + d[1] * s0], to: [a[0] + d[0] * s1, a[1] + d[1] * s1], width }); s0 = max(s0, s2); }
+    return out;
+  };
+
   // ---------- particles: things moving by the physics of what they are ----------
   // Slot i is reborn every life[1] seconds at a fixed phase (golden-ratio spacing); where and how
   // fast comes from a hash of (seed, slot, generation). Forces from the matter: gravity and the
@@ -1716,6 +2300,12 @@ void main() {
     const kk = F && P.gas ? max(k0, 8) : k0;
     const ed = fo.turbulence ?? (P.eddy ? { strength: P.eddy[0], scale: P.eddy[1], speed: P.eddy[2] } : null);
     const turb = ed ? [num(ed.strength, 0.5) * u * max(1, kk) * (F ? 0.5 : 1), 1 / (max(1e-6, num(ed.scale, 0.5)) * u), num(ed.speed, 0.3)] : null;
+    const wind = (fo.wind ?? [0, 0]).map(v => v * u);
+    // Up to a million slots on WebGPU; the CPU steps (and shows) the first 20,000.
+    const N = clamp(num(o.count, 400), 1, 1e6) | 0, NCPU = min(N, 20000), seed = num(o.seed, 1) | 0, period = lifeR[1];
+    const E = { shape: "point", at: [dom[0] / 2, dom[1] * 0.9], radius: 0.05 * u, dir: P.gas || P.rise ? -PI / 2 : 0, spread: 0.3, speed: 0, ...(o.emitter ?? {}) };
+    const bounce = num(o.bounce, P.bounce ?? 0.2), friction = num(o.friction, P.friction ?? 0.5);
+    const S = { isParticles: true, domain: dom, units: u, matter: name, style: P.style, count: N, view: null, fluid: F, light: o.light ?? null, density: cn(o.density, 1, 0, 1), dt: 1 / 60, emitting: true, ground: o.ground ?? null };
     const colliders = () => {
       const list = [];
       for (const c of o.colliders ?? []) {
@@ -1833,6 +2423,14 @@ void main() {
       }
     }
     // Prewarm a full life so the system starts full, unless it's driven by a fluid (which starts from rest).
+    function init() {
+      st = new Float64Array(N * 8); for (let i = 0; i < N; i++) st[i * 8 + 4] = -1e9;
+      sp.fill(0); spi = 0; pile = new Float32Array(NB);
+      if (X) X.reset();
+      // While WebGPU may still take the system, the warm-up waits for the first step (xCheck).
+      pre0 = !X && !F && !pileOn && !P.splash && forced(o) !== "cpu" && forced(o) !== "webgl2" && (WG.state === "pending" || (WG.state === "ready" && pick(o) === "webgpu"));
+      if (!pre0) prewarm();
+    }
     function prewarm() {
       pre0 = false;
       const pre = o.prewarm ?? !F;
@@ -1841,7 +2439,83 @@ void main() {
     const save = () => (X && X.save(), { st: st.slice(), sp: sp.slice(), spi, pile: pile.slice() });
     const load = k => { st.set(k.st); sp.set(k.sp); spi = k.spi; pile.set(k.pile); if (X) X.load(); };
     const step = dt => { if (F) F.advance(S.time + dt); if (X) X.pend.push(S.time + dt); else stepOnce(dt); };
+    // ----- WebGPU: every slot steps in its own thread through a run of steps (webgpu section);
+    // the state comes back to `st` for alive(). Heaps, splashes, and particles carried by a
+    // fluid need the CPU (they share state between particles, or read the fluid every step). -----
+    let X = null, pre0 = false;
+    if (F) F._sync = true;
     function xCheck() { xMove(); if (pre0) { if (X) X.reset(); prewarm(); } }
+    function xMove() {
+      const d = !F && !pileOn && !P.splash && !XBAD.particles && pick(o) === "webgpu" ? WG.use(forced(o)) : null;
+      if (X && X.d === d) return;
+      if (X) { const old = X; X = null; old.destroy(); rawReset(); }
+      if (!d) return;
+      const Q = xQueue(d, 64), cl = cols = colliders(), cbuf = [], pts = [];
+      for (const c of cl) {
+        if (c.seg) cbuf.push(0, c.e, c.fr, 0, c.seg[0][0], c.seg[0][1], c.seg[1][0], c.seg[1][1]);
+        else if (!c.body.kind) cbuf.push(1, c.e, c.fr, c.body.r, c.body.c[0], c.body.c[1], 0, 0);
+        else { cbuf.push(2, c.e, c.fr, c.body.pts.length, pts.length / 2, 0, 0, 0); for (const p of c.body.pts) pts.push(p[0], p[1]); }
+      }
+      const B = (n, data) => xBuf(d, n, GPUBufferUsage.STORAGE, data), TC = 1024;
+      const me = X = { d, Q, pend: [], at: S.time, req: -1, chk: null, pipe: xPipe(Q.K, "particles", XPA, "pstep"), state: B(N * 32, new Float32Array(st)), T: B(TC * 4),
+        ph: B(N * 4, Float32Array.from({ length: N }, (_, i) => ((i * 0.6180339887) % 1) * period)), C: B(max(1, cbuf.length) * 4, new Float32Array(cbuf.length ? cbuf : [0])), Pt: B(max(2, pts.length) * 4, new Float32Array(pts.length ? pts : [0, 0])) };
+      if (S.chk) { me.chk = B(N * 32, new Float32Array(S.chk.st)); }
+      me.flush = () => {
+        const E0 = E, at = E0.at, sh = { disk: 1, line: 2, box: 3 }[E0.shape] ?? 0, spd = Array.isArray(E0.speed) ? E0.speed : [num(E0.speed, 0), num(E0.speed, 0)];
+        const em2 = sh === 2 ? [...(E0.from ?? at), ...(E0.to ?? at)] : sh === 3 ? [...(E0.size ?? dom), 0, 0] : [0, 0, 0, 0];
+        while (me.pend.length) {
+          const run = me.pend.splice(0, TC);
+          Q.flush(); d.queue.writeBuffer(me.T, 0, new Float32Array(run));
+          Q.run(me.pipe, b => {
+            Q.i.set([N, run.length, S.emitting ? 1 : 0, cl.length], b); Q.f.set([S.dt, period, lifeR[0], lifeR[1]], b + 4);
+            Q.u32[b + 8] = seed >>> 0; Q.i[b + 9] = sh; Q.f.set([S.density, u, gy, lift, kk, num(o.ground, 0)], b + 10);
+            Q.f.set(turb ? [turb[0], turb[1], turb[2], 1] : [0, 1, 0, 0], b + 16); Q.f.set([wind[0], wind[1], P.flutter ? P.flutter[0] : 0, P.flutter ? P.flutter[1] * u : 0], b + 20);
+            Q.f.set([at[0], at[1], num(E0.radius, 0), Array.isArray(E0.dir) ? Math.atan2(E0.dir[1], E0.dir[0]) : num(E0.dir, 0)], b + 24);
+            Q.f.set([num(E0.spread, 0), spd[0], spd[1], o.ground != null ? 1 : 0], b + 28); Q.f.set(em2, b + 32); Q.f.set([dom[0], dom[1], bounce, friction], b + 36);
+            modes.forEach((m, j) => { Q.f.set(m.slice(0, 4), b + 40 + j * 4); Q.f[b + 56 + j] = m[4]; });
+          }, [me.ph, me.T, me.C, me.Pt, me.state], xWg(N, 64));
+          Q.flush();
+        }
+      };
+      me.reset = () => { me.pend = []; Q.flush(); const s0 = new Float32Array(N * 8); for (let i = 0; i < N; i++) s0[i * 8 + 4] = -1e9; d.queue.writeBuffer(me.state, 0, s0); me.at = S.time; };
+      me.save = () => { me.flush(); me.chk ??= B(N * 32); Q.copy([[me.state, me.chk]]); };
+      me.load = () => { me.pend = []; Q.copy([[me.chk, me.state]]); };
+      me.M = xMirror(Q, [N * 32], ([s], t) => { if (X !== me) return; st.set(s); me.at = t; });
+      me.destroy = () => { me.M.destroy(); for (const b of [me.state, me.T, me.ph, me.C, me.Pt, me.chk]) b?.destroy(); };
+    }
+    let xn = 0;
+    const xAfter = () => { if (!X) return; if (X.pend.length) { X.flush(); xn++; } if (X.req !== xn) { X.req = xn; X.M.request(() => [X.state], () => S.time); } };
+    clock(S, step, save, load, init);
+    const rawReset = xClock(S, xCheck, xAfter);
+    S.sync = () => (X ? (xAfter(), X.M.sync()) : Promise.resolve());
+    Object.defineProperty(S, "backend", { get: () => (X ? "webgpu" : "cpu"), enumerable: true });
+    if (F) {   // the fluid comes back in step with the particles
+      const adv = S.advance, warm = S.warm;
+      S.advance = t => { if (t < S.time - 1e-9) { adv(t); F.advance(S.time); return S; } return adv(t); };
+      S.warm = t => { if (S.chk?.at === t && F.chk?.at === t) { F.warm(t); return warm(t); } F.reset(); S.reset(); adv(t); F.warm(t); return warm(t); };
+    }
+    S.set = (k = {}) => { if (k.density != null) S.density = cn(k.density, 1, 0, 1); if (k.wind) { wind[0] = k.wind[0] * u; wind[1] = k.wind[1] * u; } if (k.emitter) Object.assign(E, k.emitter); if (k.light !== undefined) S.light = k.light; if (k.emitting != null) S.emitting = !!k.emitting; return S; };
+    // The live particles: { p, v, age, life, k (0-1 through its life), spin }.
+    S.alive = () => {
+      const out = [];
+      if (pre0) xCheck();
+      for (let i = 0, n = X ? N : NCPU; i < n; i++) {
+        const q = i * 8, [k, age] = slot(i, X ? X.at : S.time), life = lifeOf(i, k);
+        if (st[q + 4] !== k || st[q + 5] === 2 || age > life || age < 0) continue;
+        out.push({ i, p: [st[q], st[q + 1]], v: [st[q + 2], st[q + 3]], age, life, k: age / life, spin: st[q + 6], landed: st[q + 5] === 1 });
+      }
+      return out;
+    };
+    S.droplets = () => { const out = []; for (let j = 0; j < SPN; j++) if (sp[j * 6 + 5]) out.push({ p: [sp[j * 6], sp[j * 6 + 1]], v: [sp[j * 6 + 2], sp[j * 6 + 3]] }); return out; };
+    S.pile = () => (pileOn ? Array.from(pile, (v, i) => [(i + 0.5) * bw, o.ground - v]) : null);
+    S.terminal = () => (kk > 0 ? abs(gy - lift) / kk / u : Infinity);
+    S.params = { gravity: gy / u, drag: kk, lift: lift / u, size: size.map(v => v / u), turbulence: turb, bounce, friction };
+    S.colliders = () => cols;
+    S.toWorld = p => toWorld(S, p);
+    S.toScreen = q => toScreen(S, q);
+    return S;
+  }
+
   // ---------- 2D versions (no WebGL2, or gpu: false) ----------
   const trace = (c, pts) => { c.beginPath(); pts.forEach((q, i) => (i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]))); };
   const stroke = (c, pts, close) => { trace(c, pts); if (close) c.closePath(); c.stroke(); };
@@ -2381,6 +3055,11 @@ void main() {
     colormap: Object.defineProperties((name, t) => cmap(name, t), { define: { value: defineColormap }, names: { get: () => Object.keys(CMAPS) }, stops: { value: name => cmapStops(name).map(c => c.slice()) } }),
     force2d: false,
     get gpu() { return !this.force2d && !!context(); },
+    // What simulations step on: "webgpu", "webgl2", or "cpu". Set it to force one ("auto" undoes it).
+    get backend() { const b = pick({}); return b === "cpu" || !floatGL(gpuForced({})) ? "cpu" : b; },
+    set backend(v) { fxForce = ["webgpu", "webgl2", "cpu"].includes(v) ? v : null; if (fxForce === "webgpu") WG.start(); },
+    // The WebGPU device: { state: "none" | "pending" | "ready" | "failed" | "lost", name, soft, error, errors, ready (a promise) }.
+    get webgpu() { return { state: WG.state, name: WG.name, soft: WG.soft, error: WG.error, errors: WG.errors, ready: WG.ready }; },
     get still() { return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches; },
     errors,
   };

@@ -4556,7 +4556,11 @@ void main() {
   function stepParticles(sys, n) {
     const t = sys.time ?? sys.scene().time ?? 0;
     sys.prepare();
-    if (sys.cpu || sys.measure) { sys.simulate(t, n); sys._mode = "cpu"; return; }
+    // Which integrator holds the state (webgpu section); a change starts the state over.
+    const be = sys.cpu || sys.measure || backendOf(sys) === "cpu" ? "cpu" : xStepParticles(sys, -1) ? "webgpu" : "tf";
+    if (sys._xm !== be) { sys._xm = be; sys._n = null; if (be !== "webgpu" && sys._x) { sys._x.destroy(); sys._x = null; sys._state = null; } }
+    if (be === "cpu") { sys.simulate(t, n); sys._mode = "cpu"; return; }
+    if (be === "webgpu" && xStepParticles(sys, n, t)) { sys._mode = "cpu"; return; }
     sys._mode = "gpu";
     const { gl } = R;
     const G = particleGPU(sys, n);
@@ -4616,6 +4620,307 @@ void main() {
     return { uColA: a, uColB: b, uColorBy: [by, ...(sys.range || [0, 1]), 0] };
   }
 
+  // ---------- webgpu ----------
+  // WebGPU compute for particles. With a WebGPU device, a system steps in a compute shader: each
+  // slot is its own thread and runs a whole run of fixed steps in one dispatch (slots never
+  // interact), with the same physics, hashes, and time grid as the transform-feedback shader
+  // above, so the same seed gives the same picture within float rounding. WebGL2 still draws the
+  // particles: the state comes back without stalling (mapAsync) and is uploaded into the buffer
+  // the CPU integrator uses, so what's drawn is the newest state back from the GPU, a frame
+  // behind its clock while it runs (_t says which time it is); when nothing steps after a copy
+  // lands, a redraw is asked for, so a still frame settles on exactly time t.
+  // E3.backend says what particles step on: "webgpu", "webgl2" (transform feedback), or "cpu";
+  // setting it forces one ("auto" undoes it), as do ?backend= in the URL, window.SAFIS_BACKEND,
+  // and a system's own `backend` option. Systems that measure collider hits stay on the CPU.
+  // Detection runs once per page and is shared with the effects kit (window.__safisGPU).
+  const GPUX = (typeof window !== "undefined" ? (window.__safisGPU ||= (() => {
+    const S = { device: null, soft: false, state: "none", error: null, epoch: 0, force: null, errors: [], name: "", ready: Promise.resolve() };
+    try {
+      const m = /[?&]backend=(webgpu|webgl2|cpu)\b/.exec((typeof location !== "undefined" && location.search) || "");
+      S.force = (m && m[1]) || (["webgpu", "webgl2", "cpu"].includes(window.SAFIS_BACKEND) ? window.SAFIS_BACKEND : null);
+    } catch {}
+    const gpu = typeof navigator !== "undefined" ? navigator.gpu : null;
+    const redraw = () => { try { window.dispatchEvent(new Event("safis:redraw")); } catch {} };
+    S.start = () => {
+      if (!gpu || S.state === "pending" || S.state === "ready") return S.ready;
+      S.state = "pending";
+      return (S.ready = (async () => {
+        try {
+          const a = await gpu.requestAdapter({ powerPreference: "high-performance" });
+          if (!a) throw new Error("no WebGPU adapter");
+          const i = a.info || {};
+          S.name = [i.vendor, i.architecture, i.description].filter(Boolean).join(" ");
+          S.soft = !!a.isFallbackAdapter || /swiftshader|llvmpipe|software|basic render/i.test(S.name);
+          const L = a.limits, d = await a.requestDevice({ requiredLimits: { maxStorageBufferBindingSize: L.maxStorageBufferBindingSize, maxBufferSize: L.maxBufferSize } });
+          d.lost.then(r => { if (S.device === d) { S.device = null; S.state = "lost"; S.error = r.message; S.epoch++; redraw(); } });
+          d.addEventListener?.("uncapturederror", e => { if (S.errors.length < 20) S.errors.push(String(e.error?.message ?? e)); });
+          S.device = d; S.state = "ready"; S.epoch++;
+        } catch (e) { S.state = "failed"; S.error = String((e && e.message) || e); }
+        redraw();
+      })());
+    };
+    S.use = force => (S.device && (force === "webgpu" || !S.soft) ? S.device : null);
+    S.steps = 0;
+    S.settle = (get = () => S.steps) => { const at = get(), raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : f => setTimeout(f, 16); raf(() => raf(() => { if (get() === at) redraw(); })); };
+    if (S.force !== "webgl2" && S.force !== "cpu") S.start();
+    return S;
+  })()) : { use: () => null, start: () => Promise.resolve(), state: "none", force: null, errors: [], steps: 0 });
+  let e3Force = null, xBad = false;
+  const backendOf = sys => sys.backend ?? e3Force ?? GPUX.force;
+  // The integrator as compute: G_SLOT, G_FLOW, and VS_PUPDATE above, in WGSL. St holds two vec4
+  // per slot (position and generation, velocity and hits), T the end times of the steps to run.
+  const WGSL_PARTICLES = `
+struct U { n: i32, steps: i32, seed: u32, nattr: i32, nplane: i32, nsph: i32, kill: i32, pad: i32,
+  life: vec4<f32>, h: vec4<f32>, emitM: mat4x4<f32>, em0: vec4<f32>, em1: vec4<f32>, em2: vec4<f32>, em3: vec4<f32>, em4: vec4<f32>,
+  grav: vec4<f32>, wind: vec4<f32>, turb: vec4<f32>, vortA: vec4<f32>, vortB: vec4<f32>, vortC: vec4<f32>, attr: array<vec4<f32>, 4>, attrR: vec4<f32>,
+  plane: array<vec4<f32>, 8>, planeB: array<vec4<f32>, 8>, sph: array<vec4<f32>, 4>, sphB: array<vec4<f32>, 4>, killMin: vec4<f32>, killMax: vec4<f32>,
+  flowA: vec4<f32>, flowB: vec4<f32>, flowC: vec4<f32>, flowD: vec4<f32>, flowE: vec4<f32>, flowM: mat4x4<f32>, flowMI: mat4x4<f32> }
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read_write> St: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> T: array<f32>;
+@group(0) @binding(3) var<storage, read> Sm: array<f32>;
+@group(0) @binding(4) var<storage, read> Tb: array<vec4<f32>>;
+const PI = 3.141592653589793;
+fn hashu(x0: u32) -> u32 { var x = x0; x ^= x >> 16u; x *= 0x7feb352du; x ^= x >> 15u; x *= 0x846ca68bu; x ^= x >> 16u; return x; }
+fn hash3(p: vec3<i32>, s: u32) -> f32 { return f32(hashu((u32(p.x) * 73856093u) ^ (u32(p.y) * 19349663u) ^ (u32(p.z) * 83492791u) ^ s) >> 8u) / 8388608.0 - 1.0; }
+fn noised(x: vec3<f32>, s: u32) -> vec4<f32> {
+  let i = floor(x); let f = x - i; let p = vec3<i32>(i);
+  let uu = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); let du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  let a = hash3(p, s); let b = hash3(p + vec3<i32>(1, 0, 0), s); let c = hash3(p + vec3<i32>(0, 1, 0), s); let d = hash3(p + vec3<i32>(1, 1, 0), s);
+  let e = hash3(p + vec3<i32>(0, 0, 1), s); let g = hash3(p + vec3<i32>(1, 0, 1), s); let h = hash3(p + vec3<i32>(0, 1, 1), s); let k = hash3(p + vec3<i32>(1, 1, 1), s);
+  let k1 = b - a; let k2 = c - a; let k3 = e - a; let k4 = a - b - c + d; let k5 = a - c - e + h; let k6 = a - b - e + g; let k7 = -a + b + c - d + e - g - h + k;
+  return vec4<f32>(a + k1 * uu.x + k2 * uu.y + k3 * uu.z + k4 * uu.x * uu.y + k5 * uu.y * uu.z + k6 * uu.z * uu.x + k7 * uu.x * uu.y * uu.z,
+    du * vec3<f32>(k1 + k4 * uu.y + k6 * uu.z + k7 * uu.y * uu.z, k2 + k5 * uu.z + k4 * uu.x + k7 * uu.z * uu.x, k3 + k6 * uu.x + k5 * uu.y + k7 * uu.x * uu.y));
+}
+fn curl(p: vec3<f32>) -> vec3<f32> {
+  let a = noised(p, 0u); let b = noised(p + vec3<f32>(31.4, 17.2, 5.9), 0u); let c = noised(p + vec3<f32>(-11.3, 47.1, 23.7), 0u);
+  return vec3<f32>(c.z - b.w, a.w - c.y, b.y - a.z);
+}
+fn rnd(i: i32, k: f32, c: u32) -> f32 { return f32(hashu((u32(i) * 0x9E3779B1u) ^ hashu(u32(i32(k)) + c * 0x632BE5ABu + u.seed)) >> 8u) / 16777216.0; }
+fn lifeOf(i: i32, k: f32) -> f32 { if (u.life.y <= 0.0) { return 1e9; } return mix(u.life.x, u.life.y, rnd(i, k, 1u)); }
+fn m3(m: mat4x4<f32>) -> mat3x3<f32> { return mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz); }
+fn cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> { return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+fn cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> { let d = max(dot(b, b), 1e-30); return vec2<f32>(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / d; }
+fn csqrt(a: vec2<f32>) -> vec2<f32> { let r = length(a); let t = atan2(a.y, a.x) * 0.5; return sqrt(r) * vec2<f32>(cos(t), sin(t)); }
+fn tubeFlow(pw: vec3<f32>) -> vec4<f32> {
+  let q = (u.flowMI * vec4<f32>(pw, 1.0)).xyz; let M = m3(u.flowM);
+  let r = length(q.xz); let fi = (q.y - u.flowD.x) / u.flowD.y; let n = i32(u.flowD.z + 0.5);
+  if (fi < 0.0 || fi > f32(n - 1)) { return vec4<f32>(M * vec3<f32>(0.0, u.flowD.w, 0.0), 1.0); }
+  let i = min(n - 2, i32(floor(fi))); let f = fi - f32(i);
+  let A = Tb[i]; let B = Tb[i + 1]; let ra = Tb[n + i].xy; let rb = Tb[n + i + 1].xy;
+  let heat = mix(ra.y, rb.y, f); let v = mix(A, B, f); let d = (B - A) / u.flowD.y; let x0 = mix(ra.x, rb.x, f); let dx0 = (rb.x - ra.x) / u.flowD.y;
+  var a: f32; var b: f32; var da: f32; var db: f32; var Q: f32;
+  if (r < v.x - 1e-4) { return vec4<f32>(0.0); }
+  if (r <= v.y) { a = v.x; b = v.y; da = d.x; db = d.y; Q = u.flowE.x * heat; }
+  else if (r < v.z) { return vec4<f32>(0.0); }
+  else if (r <= v.w) { a = v.z; b = v.w; da = d.z; db = d.w; Q = u.flowE.y; }
+  else if (r < x0) { return vec4<f32>(0.0); }
+  else { let uy = u.flowD.w; let ur = select(0.0, uy * x0 * dx0 / r, r > 1e-4); let lv = vec3<f32>(select(0.0, ur * q.x / r, r > 1e-4), uy, select(0.0, ur * q.z / r, r > 1e-4)); return vec4<f32>(M * lv, 1.0); }
+  let den = max(b * b - a * a, 1e-6); let uy = Q / den; let eta = (r * r - a * a) / den;
+  let ur = select(0.0, uy * (a * da * (1.0 - eta) + b * db * eta) / r, r > 1e-4);
+  return vec4<f32>(M * vec3<f32>(select(0.0, ur * q.x / r, r > 1e-4), uy, select(0.0, ur * q.z / r, r > 1e-4)), 1.0);
+}
+fn flowAt(p: vec3<f32>) -> vec4<f32> {
+  let kind = i32(u.flowA.x + 0.5); let Uf = u.flowA.y;
+  if (kind == 0) { return vec4<f32>(Uf, 0.0, 0.0, 1.0); }
+  if (kind == 3) { return tubeFlow(p); }
+  let al = u.flowA.z; let ca = cos(al); let sa = sin(al);
+  let x = (p.xy - u.flowB.xy) / u.flowA.w; let g = u.flowC.w / (2.0 * PI);
+  if (kind == 1) {
+    let R = u.flowC.z;
+    if (dot(x, x) < R * R) { return vec4<f32>(0.0); }
+    let t = cdiv(vec2<f32>(R * R, 0.0), cmul(x, x)); let w = vec2<f32>(Uf * (1.0 - t.x), -Uf * t.y) + cdiv(vec2<f32>(0.0, g), x);
+    return vec4<f32>(w.x, -w.y, 0.0, 1.0);
+  }
+  let z = vec2<f32>(x.x * ca - x.y * sa + u.flowB.w, x.x * sa + x.y * ca);
+  let s = csqrt(vec2<f32>(z.x * z.x - z.y * z.y - 4.0, 2.0 * z.x * z.y));
+  let z1 = (z + s) * 0.5; let z2 = (z - s) * 0.5; let mu = u.flowC.xy; let d1 = length(z1 - mu); let d2 = length(z2 - mu);
+  let ze = select(z2, z1, d1 >= d2);
+  if (max(d1, d2) < u.flowC.z * 1.002) { return vec4<f32>(0.0); }
+  let zm = ze - mu;
+  let t = cdiv(cmul(vec2<f32>(u.flowC.z * u.flowC.z, 0.0), vec2<f32>(cos(al), sin(al))), cmul(zm, zm));
+  let dW = Uf * (vec2<f32>(cos(al), -sin(al)) - t) + cdiv(vec2<f32>(0.0, g), zm);
+  let iz = cdiv(vec2<f32>(1.0, 0.0), cmul(ze, ze)); let dw = cdiv(dW, vec2<f32>(1.0 - iz.x, -iz.y));
+  let uu = dw.x; let vv = -dw.y;
+  return vec4<f32>(uu * ca + vv * sa, -uu * sa + vv * ca, 0.0, 1.0);
+}
+fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32>>) {
+  let shape = u.em0.x; let R = u.em0.y; let dir = normalize(u.em2.xyz);
+  let tmp = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(dir.y) < 0.9);
+  let uu = normalize(cross(dir, tmp)); let w = cross(dir, uu); let lanes = u.em0.w;
+  var n = dir; var p = vec3<f32>(0.0);
+  if (shape > 0.5 && shape < 3.5) {
+    let a = 6.2831853 * rnd(i, k, 10u);
+    var rr = R * sqrt(rnd(i, k, 11u));
+    if (shape > 1.5 && shape < 2.5) { rr = R + u.em0.z * (rnd(i, k, 11u) - 0.5); }
+    let radial = uu * cos(a) + w * sin(a);
+    p = radial * rr;
+    if (shape > 2.5) { n = normalize(dir + radial * tan(u.em0.z) * select(1.0, rr / R, R > 0.0)); }
+    if (shape > 1.5 && shape < 2.5 && u.em3.z > 1.5) { n = radial; }
+  } else if (shape > 3.5 && shape < 4.5) {
+    let z = 2.0 * rnd(i, k, 10u) - 1.0; let a = 6.2831853 * rnd(i, k, 11u); let q = sqrt(1.0 - z * z);
+    n = vec3<f32>(q * cos(a), z, q * sin(a));
+    p = n * select(R * pow(rnd(i, k, 12u), 1.0 / 3.0), R, u.em3.w > 0.5);
+  } else if (shape > 4.5 && shape < 5.5) {
+    var ry = rnd(i, k, 11u);
+    if (lanes > 0.5) { ry = (floor(ry * lanes) + 0.5) / lanes; }
+    p = (vec3<f32>(rnd(i, k, 10u), ry, rnd(i, k, 12u)) - 0.5) * u.em4.xyz;
+  } else if (shape > 5.5 && shape < 6.5) {
+    var t = rnd(i, k, 10u);
+    if (lanes > 0.5) { t = (floor(t * lanes) + 0.5) / lanes; }
+    p = (u.em4.xyz - u.em1.xyz) * t;
+  } else if (shape > 6.5) {
+    let j = min(i32(u.em4.w) - 1, i32(rnd(i, k, 10u) * u.em4.w));
+    p = vec3<f32>(Sm[j * 6], Sm[j * 6 + 1], Sm[j * 6 + 2]) - u.em1.xyz;
+    n = vec3<f32>(Sm[j * 6 + 3], Sm[j * 6 + 4], Sm[j * 6 + 5]);
+  }
+  p += u.em1.xyz;
+  var d = dir;
+  if (u.em3.z > 0.5 || (shape > 2.5 && shape < 3.5)) { d = n; }
+  let spread = u.em1.w;
+  if (spread > 0.0) {
+    let ct = 1.0 - rnd(i, k, 13u) * (1.0 - cos(spread)); let st = sqrt(max(0.0, 1.0 - ct * ct)); let a = 6.2831853 * rnd(i, k, 14u);
+    let du = normalize(cross(d, select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(d.y) < 0.9))); let dw = cross(d, du);
+    d = d * ct + du * st * cos(a) + dw * st * sin(a);
+  }
+  var v = d * mix(u.em2.w, u.em3.x, rnd(i, k, 15u));
+  if (u.em3.y > 0.0) {
+    var gs: vec3<f32>;
+    for (var c = 0u; c < 3u; c++) { gs[c] = sqrt(-2.0 * log(max(1e-7, rnd(i, k, 16u + c * 2u)))) * cos(6.2831853 * rnd(i, k, 17u + c * 2u)); }
+    v += gs * u.em3.y;
+  }
+  *po = (u.emitM * vec4<f32>(p, 1.0)).xyz;
+  *vo = m3(u.emitM) * v;
+}
+@compute @workgroup_size(64) fn pstep(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = i32(gid.x); if (i >= u.n) { return; }
+  var A = St[i * 2]; var B = St[i * 2 + 1];
+  for (var s = 0; s < u.steps; s++) {
+    let tT = T[s]; let P = u.life.y;
+    var k = 0.0; var age = tT;
+    if (P > 0.0) { let ph = fract(f32(i) * 0.6180339887) * P; k = floor((tT - ph) / P); age = tT - (ph + k * P); }
+    let life = lifeOf(i, k);
+    var p = A.xyz; var v = B.xyz; var gen = A.w; var hit = 0.0; var h = u.h.x;
+    if (floor(gen) != k) {
+      if (age > u.h.x + 1e-5 && P > 0.0) { A = vec4<f32>(p, k + 0.5); B = vec4<f32>(v, 0.0); continue; }
+      emit(i, k, &p, &v); gen = k; h = clamp(age, 0.0, u.h.x);
+    }
+    if (gen != k || age > life) { A = vec4<f32>(p, gen); B = vec4<f32>(v, 0.0); continue; }
+    if (u.flowA.x > -0.5) {
+      let f1 = flowAt(p);
+      if (f1.w < 0.5) { A = vec4<f32>(p, k + 0.5); B = vec4<f32>(v, 0.0); continue; }
+      let f2 = flowAt(p + f1.xyz * h * 0.5);
+      v = select(f1.xyz, f2.xyz, f2.w > 0.5);
+      if (u.turb.x > 0.0) { v += curl(p * u.turb.y + vec3<f32>(0.0, 0.0, tT * u.turb.z)) * u.turb.x; }
+      p += v * h;
+    } else {
+      var acc = u.grav.xyz;
+      acc.y += u.wind.w * max(0.0, 1.0 - age / life);
+      if (u.turb.x > 0.0) { acc += curl(p * u.turb.y + vec3<f32>(0.0, 0.0, tT * u.turb.z)) * u.turb.x; }
+      if (u.vortC.y > 0.5) { let r = p - u.vortA.xyz; let ax = u.vortB.xyz; let rp = r - ax * dot(r, ax); acc += u.vortA.w * cross(ax, rp) / (dot(rp, rp) + u.vortB.w * u.vortB.w) - rp * u.vortC.x; }
+      for (var j = 0; j < u.nattr; j++) { let d = u.attr[j].xyz - p; acc += d * u.attr[j].w / pow(dot(d, d) + u.attrR[j] * u.attrR[j], 1.5); }
+      let kd = u.grav.w;
+      if (kd > 0.0) { let e = exp(-kd * h); let f = (1.0 - e) / kd; let vt = u.wind.xyz + acc / kd; p += vt * h + (v - vt) * f; v = vt + (v - vt) * e; }
+      else { v += acc * h; p += v * h; }
+    }
+    for (var j = 0; j < u.nplane; j++) {
+      let n = u.plane[j].xyz; let sd = dot(n, p) - u.plane[j].w;
+      if (sd >= 0.0) { continue; }
+      p -= n * sd;
+      let vn = dot(n, v) - u.planeB[j].z;
+      if (vn < 0.0) { let jj = -(1.0 + u.planeB[j].x) * vn; v += n * jj; if (u.planeB[j].y > 0.0) { let vn2 = dot(n, v); v -= (v - n * vn2) * u.planeB[j].y; } hit += jj; }
+    }
+    for (var j = 0; j < u.nsph; j++) {
+      let d = p - u.sph[j].xyz; let L = max(length(d), 1e-9); let sg = u.sphB[j].y; let sd = (L - u.sph[j].w) * sg;
+      if (sd >= 0.0) { continue; }
+      let n = d * (sg / L); p -= n * sd;
+      let vn = dot(n, v);
+      if (vn < 0.0) { let jj = -(1.0 + u.sphB[j].x) * vn; v += n * jj; hit += jj; }
+    }
+    if (u.kill > 0 && (any(p < u.killMin.xyz) || any(p > u.killMax.xyz))) { gen = k + 0.5; }
+    A = vec4<f32>(p, gen); B = vec4<f32>(v, hit);
+  }
+  St[i * 2] = A; St[i * 2 + 1] = B;
+}`;
+  // A system's WebGPU state: the slots, the uniforms, the steps queued since the last flush,
+  // and the copy coming back. Made per device and count; mesh samples and tube tables ride along.
+  function xParticles(sys, d) {
+    const N = sys.count, mk = (size, usage, data) => { const b = d.createBuffer({ size: Math.max(16, Math.ceil(size / 16) * 16), usage: usage | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC }); if (data) d.queue.writeBuffer(b, 0, data); return b; };
+    const ST = GPUBufferUsage.STORAGE, TC = 2048;
+    const mod = d.createShaderModule({ code: WGSL_PARTICLES });
+    mod.getCompilationInfo?.().then(info => { const e = info.messages.filter(m => m.type === "error"); if (e.length) { xBad = true; GPUX.errors.push(`particles: ${e[0].message} (line ${e[0].lineNum})`); } }).catch(() => {});
+    const pipe = d.createComputePipeline({ layout: "auto", compute: { module: mod, entryPoint: "pstep" } });
+    const X = { d, count: N, pipe, state: mk(N * 32, ST), T: mk(TC * 4, ST), U: mk(1024, GPUBufferUsage.UNIFORM), Sm: mk(16, ST), Tb: mk(16, ST), stage: d.createBuffer({ size: N * 32, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+      pend: [], reset: false, busy: false, again: false, shown: null, shownT: 0, shownN: 0, groups: null, samples: null, table: null, ab: new ArrayBuffer(1024) };
+    X.group = () => {
+      const S = sys._samples, F = sys.flow ? flowSpec(sys.flow) : null, tab = F && F.kind === 3 ? F.data : null;
+      if (S !== X.samples) { X.samples = S; X.Sm.destroy(); X.Sm = mk(S ? S.byteLength : 16, ST, S || null); X.groups = null; }
+      if (tab !== X.table) { X.table = tab; X.Tb.destroy(); X.Tb = mk(tab ? tab.byteLength : 16, ST, tab || null); X.groups = null; }
+      return (X.groups ||= d.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [X.U, X.state, X.T, X.Sm, X.Tb].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
+    };
+    // Uniforms from the system now: its emitter and forces packed as the transform feedback's.
+    X.uniforms = (n, steps) => {
+      const f = new Float32Array(X.ab), I = new Int32Array(X.ab), U32 = new Uint32Array(X.ab), F = sys.params(), E = emitterUniforms(sys);
+      f.fill(0);
+      I.set([n, steps], 0); U32[2] = sys.seed >>> 0; I.set([F.attractors.length, F.planes.length, F.spheres.length, F.kill ? 1 : 0], 3);
+      f.set([sys.lifeRange[0], sys.period, 0, 0], 8); f[12] = sys.step; f.set(sys.world(), 16);
+      f.set(E.uEm0, 32); f.set(E.uEm1, 36); f.set(E.uEm2, 40); f.set(E.uEm3, 44); f.set(E.uEm4, 48);
+      f.set([...F.g, F.drag], 52); f.set([...F.wind, F.buoyancy], 56); f.set([...F.turb, 0], 60);
+      if (F.vortex) { f.set([...F.vortex.c, F.vortex.s], 64); f.set([...F.vortex.a, F.vortex.core], 68); f.set([F.vortex.pull, 1, 0, 0], 72); } else f.set([0, 1, 0, 0.2], 68);
+      F.attractors.forEach((a, j) => { f.set([...a.p, a.s], 76 + j * 4); f[92 + j] = a.r; });
+      for (let j = F.attractors.length; j < 4; j++) f[92 + j] = 0.1;
+      F.planes.forEach((c, j) => { f.set([...c.n, c.d], 96 + j * 4); f.set([c.e, c.fr, c.u, 0], 128 + j * 4); });
+      F.spheres.forEach((c, j) => { f.set([...c.c, c.r], 160 + j * 4); f.set([c.e, c.inside, 0, 0], 176 + j * 4); });
+      if (F.kill) { f.set([...F.kill.min, 1], 192); f.set([...F.kill.max, 0], 196); }
+      const fl = F.flow;
+      f.set(fl ? [fl.kind, fl.U, fl.alpha, fl.S] : [-1, 0, 0, 1], 200);
+      if (fl) { f.set([...fl.center, fl.mid], 204); f.set([fl.mu[0], fl.mu[1], fl.kind === 1 ? fl.R : fl.a, fl.gamma], 208); }
+      if (fl && fl.kind === 3) { f.set([fl.y0, fl.dy, fl.n, fl.U0], 212); f.set([fl.q[0], fl.q[1], 0, 0], 216); f.set(fl.M, 220); f.set(fl.MI, 236); }
+      d.queue.writeBuffer(X.U, 0, X.ab);
+    };
+    // Runs the queued steps: one dispatch per 2048 steps, every slot looping through them.
+    X.flush = n => {
+      if (X.reset) { X.reset = false; const s0 = new Float32Array(N * 8); for (let i = 0; i < N; i++) s0[i * 8 + 3] = -1e6; d.queue.writeBuffer(X.state, 0, s0); }
+      const g = X.group();
+      while (X.pend.length) {
+        const run = X.pend.splice(0, TC);
+        X.uniforms(n, run.length);
+        d.queue.writeBuffer(X.T, 0, new Float32Array(run));
+        const e = d.createCommandEncoder(), p = e.beginComputePass();
+        p.setPipeline(pipe); p.setBindGroup(0, g); p.dispatchWorkgroups(Math.ceil(n / 64)); p.end();
+        d.queue.submit([e.finish()]);
+        GPUX.steps++; X.runs = (X.runs || 0) + 1;
+      }
+    };
+    // The copy back: one in flight; when it lands it becomes what's drawn.
+    X.mirror = (t, n) => {
+      if (X.busy) { X.again = [t, n]; return; }
+      X.busy = true;
+      const e = d.createCommandEncoder();
+      e.copyBufferToBuffer(X.state, 0, X.stage, 0, N * 32);
+      d.queue.submit([e.finish()]);
+      X.stage.mapAsync(GPUMapMode.READ).then(() => {
+        X.shown = new Float32Array(X.stage.getMappedRange().slice(0)); X.stage.unmap();
+        X.shownT = t; X.shownN = n; X.busy = false;
+        if (sys._x === X) { sys._state = X.shown; sys._t = t; sys._count = n; }
+        if (X.again) { const [a, b] = X.again; X.again = false; X.mirror(a, b); } else { GPUX.settle(() => X.runs); const w = X.waiting || []; X.waiting = []; w.forEach(r => r()); }
+      }).catch(() => { X.busy = false; });
+    };
+    X.sync = () => (X.busy ? new Promise(r => (X.waiting ||= []).push(r)) : Promise.resolve());
+    X.destroy = () => { for (const b of [X.state, X.T, X.U, X.Sm, X.Tb, X.stage]) try { b.destroy(); } catch {} };
+    return X;
+  }
+  // Steps a system on WebGPU when it should be; returns false to leave it to transform feedback.
+  // The drawn state is the newest copy back (sys._state, at time sys._t).
+  // n = -1 only asks whether it should.
+  function xStepParticles(sys, n, t) {
+    const f = backendOf(sys), d = f !== "webgl2" && f !== "cpu" && !xBad ? GPUX.use(f) : null;
+    if (n < 0) return !!d;
+    if (!d) return false;
+    let X = sys._x;
+    if (!X || X.d !== d || X.count !== sys.count) { if (X) X.destroy(); X = sys._x = xParticles(sys, d); X.n = null; }
+    // The clock's bookkeeping (steps taken, settings, count, time) is the WebGPU state's own, so
+    // transform feedback can keep its own and draw the frames before the first copy is back.
   // ---------- volumetric media on the GPU ----------
   // `volume: true` (or options) on a "smoke" or "fire" system draws it as a medium (see the shaders).
   //   density   extinction scale [1]             erosion  how much billow noise eats the edges [0.6]
@@ -6896,6 +7201,11 @@ void main() {
     // The last frame's tier, supersampling, MSAA samples, size, and triangle and particle counts.
     get stats() { return E3stats; },
     available() { try { renderer(); return true; } catch { return false; } },
+    // What particles step on: "webgpu", "webgl2" (transform feedback), or "cpu". Set it to force one ("auto" undoes it).
+    get backend() { const f = e3Force ?? GPUX.force; return f === "cpu" || typeof document === "undefined" ? "cpu" : f !== "webgl2" && !xBad && GPUX.use(f) ? "webgpu" : "webgl2"; },
+    set backend(v) { e3Force = ["webgpu", "webgl2", "cpu"].includes(v) ? v : null; if (e3Force === "webgpu") GPUX.start(); },
+    // The WebGPU device ({ state, name, soft, error, errors, ready }) and sync(system): resolves once a system's copy back has landed.
+    get webgpu() { return { state: GPUX.state, name: GPUX.name, soft: GPUX.soft, error: GPUX.error, errors: GPUX.errors, ready: GPUX.ready, sync: sys => (sys && sys._x ? sys._x.sync() : Promise.resolve()) }; },
     // For tests: the pure functions the shaders mirror.
     _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS, buildBVH, traceCPU, lightRig, sunTransmittance, skyOf, waterOmega, waterIfft1, waterIfft2, waterPoolLine, oceanSetup, oceanHeightField, WATER_BODIES },
   };
