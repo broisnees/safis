@@ -544,6 +544,14 @@
 
   // ---------- Figures ----------
   function fail(d, phase, e) {
+    // A passing problem (the 3D engine waiting for the graphics card after a reset) keeps the
+    // figure: it shows its spinner and tries again in a moment.
+    if (e && e.transient) {
+      d.loading = true;
+      d.stage?.classList.add("loading");
+      d.retryAt = performance.now() + 500;
+      return;
+    }
     d.broken = true;
     d.playing = false;
     syncPlay(d);
@@ -557,7 +565,7 @@
       d.plate.after(box);
       d.nodes.push(box);
     }
-    box.textContent = `This figure stopped: ${phase}() threw "${message}"`;
+    box.textContent = e && e.paused ? message : `This figure stopped: ${phase}() threw "${message}"`;
   }
 
   function guard(d, phase, fn) {
@@ -1639,6 +1647,7 @@
         if (guard(d, "step", () => d.spec.step(dt * d.speed, d.s, d.v, d.handle))) d.dirty = true;
       }
       if (d.pulse && d.visible) d.dirty = true;
+      if (d.retryAt && now >= d.retryAt) { d.retryAt = 0; d.dirty = true; }
       if (d.dirty && !d.released && (d.visible || d.near || !d.w)) render(d);
     }
   }

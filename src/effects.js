@@ -905,9 +905,23 @@ void main() {
   };
 
   let R = null, noGPU = false;
+  const onLost = new Set();
   const errors = [];
+  // A lost context takes the simulations' textures with it: each moves to its CPU solver and
+  // starts again from rest (catching up in slices), and the effects get a new context. Chrome
+  // sends no event for an OffscreenCanvas, so every step and draw also checks (checkLost).
+  function lostNow() {
+    if (!R || R.lostNoted) return;
+    R.lostNoted = true;
+    R = null;
+    for (const f of onLost) try { f(); } catch {}
+    onLost.clear();
+    setTimeout(() => window.dispatchEvent(new Event("safis:redraw")), 700);
+  }
+  const checkLost = () => { if (R && R.gl.isContextLost()) lostNow(); };
   function context() {
     if (R && !R.gl.isContextLost()) return R;
+    lostNow();
     R = null;
     if (noGPU || typeof document === "undefined") return null;
     try {
@@ -915,10 +929,7 @@ void main() {
       const gl = canvas.getContext("webgl2", { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: !off, depth: false, stencil: false });
       if (!gl) { noGPU = true; return null; }
       R = { canvas, gl, off, w: 1, h: 1, progs: {}, vao: gl.createVertexArray() };
-      canvas.addEventListener?.("webglcontextlost", e => {
-        e.preventDefault(); R = null;
-        setTimeout(() => window.dispatchEvent(new Event("safis:redraw")), 250);
-      });
+      canvas.addEventListener?.("webglcontextlost", e => { e.preventDefault(); if (R && R.canvas === canvas) lostNow(); });
     } catch (e) { noGPU = true; errors.push(String(e.message || e)); }
     return R;
   }
@@ -1509,6 +1520,7 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
       reset() { restart(); S.chk = null; S.warmTo = null; return S; },
       advance(t) {
         t = num(t, 0);
+        checkLost();
         if (t < S.time - 1e-9) { if (S.chk && t >= S.chk.time - 1e-9) { load(S.chk); S.time = S.chk.time; } else restart(); }
         const end = t - S.time > 0.1 ? stepDeadline() : Infinity;
         S.target = t;
@@ -2024,6 +2036,7 @@ void main() {
     const xAfter = () => { if (X && X.req !== serial) { X.req = serial; X.M.request(() => [X.V, X.P, X.D], () => S.time); } };
     try { if (want) gpuInit(); } catch (e) { G = null; errors.push(`fluid: ${e.message}`); }
     S.gpu = !!G;
+    if (G) onLost.add(() => { X?.destroy?.(); X = null; G = null; S.gpu = false; rbq = null; rbAt = -1; S.reset(); });
     clock(S, stepOnce, save, load, init);
     const rawReset = xClock(S, xCheck, xAfter);
     S.sync = () => (X ? (xAfter(), X.M.sync()) : Promise.resolve());
@@ -2309,6 +2322,7 @@ void main() {
     const xAfter = () => { if (X && X.req !== serial) { X.req = serial; X.Mi.request(() => [X.H], () => S.time); } };
     try { if (want) { gpuInit(); upload(G.M, M); } } catch (e) { G = null; errors.push(`waves: ${e.message}`); }
     S.gpu = !!G;
+    if (G) onLost.add(() => { X?.destroy?.(); X = null; G = null; S.gpu = false; hbAt = -1; S.reset(); });
     clock(S, stepOnce, save, load, init);
     const rawReset = xClock(S, xCheck, xAfter);
     S.sync = () => (X ? (xAfter(), X.Mi.sync()) : Promise.resolve());
@@ -2692,7 +2706,7 @@ void main() {
       S.advance(S.target);
       if (S.behind) { g.wantsFrame = true; g.busy = "Simulating"; }
     };
-    const fx = {}, def = (name, fn) => { fx[name] = (b, o = {}) => { catchUp(o.sim ?? o.sys); const box = boxOf(b); return { box, ...fn(box, DEF[name](box, o), o, isDark()) }; }; };
+    const fx = {}, def = (name, fn) => { fx[name] = (b, o = {}) => { checkLost(); catchUp(o.sim ?? o.sys); const box = boxOf(b); return { box, ...fn(box, DEF[name](box, o), o, isDark()) }; }; };
 
     // Hot specks with a glowing streak (sparks and embers share the look).
     const flecks = (c, list, width, dk) => {

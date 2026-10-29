@@ -83,7 +83,8 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       for (const e of entries) if (e.isIntersecting) runTo(queue.findIndex(s => anchor(s) === e.target));
     }, { rootMargin: "150% 0px" });
     for (const s of queue.slice(next)) near.observe(anchor(s));
-    const idle = window.requestIdleCallback ?? (f => setTimeout(() => f({ timeRemaining: () => 10 }), 30));
+    // Safari has no requestIdleCallback: give it a real 10 ms slice, so scripts still run one at a time.
+    const idle = window.requestIdleCallback ?? (f => setTimeout(() => { const end = performance.now() + 10; f({ timeRemaining: () => Math.max(0, end - performance.now()) }); }, 30));
     const drip = d => {
       do runTo(next); while (next < queue.length && d.timeRemaining() > 8);
       if (next < queue.length) idle(drip, { timeout: 1500 }); else near.disconnect();

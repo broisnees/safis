@@ -4390,12 +4390,35 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
   // One WebGL context serves every figure. It renders into an OffscreenCanvas and each
   // frame is handed over with transferToImageBitmap(), which is exact; reading a shared
   // WebGL canvas with drawImage() can return a stale buffer in some browsers.
+  // Losing the context (a GPU reset, the browser reclaiming memory, a phone switching apps) is
+  // survivable: a later frame makes a new one. Right after a loss the browser can refuse a new
+  // context for a moment, so frames throw a transient error (the runtime keeps the figure and
+  // tries again) and ask again at most once a second. A browser that resets its GPU three times
+  // in a minute gets no more 3D this visit, so a struggling device isn't pushed into a crash.
+  const LOSS = { at: [], retryAt: 0, off: false, had: false };
+  const transient = message => Object.assign(new Error(message), { transient: true });
+  // Counts each lost context once, whether its event arrived or a frame found it dead first.
+  function noteLoss(r) {
+    if (!r || r.lostNoted) return;
+    r.lostNoted = true;
+    const t = typeof performance !== "undefined" ? performance.now() : Date.now();
+    LOSS.at = LOSS.at.filter(x => t - x < 60000).concat(t);
+    if (LOSS.at.length >= 3) LOSS.off = true;
+    LOSS.retryAt = t + 600;
+    if (typeof window !== "undefined") setTimeout(() => window.dispatchEvent(new Event("safis:redraw")), 700);
+  }
   function renderer() {
-    if (R) return R;
+    if (R && !R.gl.isContextLost()) return R;
+    if (R) { noteLoss(R); R = null; }
+    if (LOSS.off) throw Object.assign(new Error("3D is paused here: the browser reset its graphics three times in a minute. Reload the page to try again."), { paused: true });
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (now < LOSS.retryAt) throw transient("waiting for the graphics card");
     const offscreen = typeof OffscreenCanvas !== "undefined";
     const canvas = offscreen ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
     const gl = canvas.getContext("webgl2", { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: !offscreen, depth: true });
+    if (!gl && LOSS.had) { LOSS.retryAt = now + 1000; throw transient("waiting for the graphics card"); }
     if (!gl) throw new Error("this figure needs WebGL 2, which this browser doesn't provide");
+    LOSS.had = true;
     const hdr = !!gl.getExtension("EXT_color_buffer_float");
     R = {
       canvas, gl, offscreen, hdr, prog: {}, env: new Map(), cw: 0, ch: 0,
@@ -4418,11 +4441,13 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
     R.sRaw = sampler(false, gl.NEAREST);
     R.dummyDepth = texture(1, 1, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST);
     R.dummyColor = texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
-    // After a lost context (a GPU reset, or the browser reclaiming it) the next frame makes a new
-    // one; every figure redraws then, since the frames they were showing may never have finished.
+    // After a loss every figure redraws once the browser has had a moment, since the frames they
+    // were showing may never have finished.
+    const self = R;
     if (canvas.addEventListener) canvas.addEventListener("webglcontextlost", e => {
-      e.preventDefault(); R = null;
-      if (typeof window !== "undefined") setTimeout(() => window.dispatchEvent(new Event("safis:redraw")), 250);
+      e.preventDefault();
+      noteLoss(self);
+      if (R === self) R = null;
     });
     return R;
   }
@@ -5413,12 +5438,19 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
   // composite pass, so the result can be copied to the page 1:1 with no resampling.
   // For the page checker and screenshots, a traced view is refined to its final look in one call.
   function render(scene, cam, cssW, cssH, outScale, ss) {
-    let view = renderFrame(scene, cam, cssW, cssH, outScale, ss);
-    for (let k = 0; view.converging && checking() && k < 16; k++) {
-      if (view.source.image.close) view.source.image.close();
-      view = renderFrame(scene, cam, cssW, cssH, outScale, ss);
+    try {
+      let view = renderFrame(scene, cam, cssW, cssH, outScale, ss);
+      for (let k = 0; view.converging && checking() && k < 16; k++) {
+        if (view.source.image.close) view.source.image.close();
+        view = renderFrame(scene, cam, cssW, cssH, outScale, ss);
+      }
+      return view;
+    } catch (e) {
+      // A context that dies mid-frame hands back nothing from its calls, and the frame trips on
+      // that: it's the reset, not the figure, so the figure waits and tries again.
+      if (!e.transient && !e.paused && LOSS.had && (!R || R.gl.isContextLost())) { noteLoss(R); R = null; throw transient("the graphics card was reset"); }
+      throw e;
     }
-    return view;
   }
   // GPU memory held for one scene (its refinement buffer, its BVH textures) goes back when the
   // scene hasn't drawn for a while: a long page keeps only what's on screen. They're rebuilt
