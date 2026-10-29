@@ -5302,8 +5302,29 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     }
     return view;
   }
+  // GPU memory held for one scene (its refinement buffer, its BVH textures) goes back when the
+  // scene hasn't drawn for a while: a long page keeps only what's on screen. They're rebuilt
+  // on the scene's next frame.
+  const live = new Set();
+  function trimIdle(now) {
+    if (now - (R.lastTrim ?? 0) < 4000) return;
+    R.lastTrim = now;
+    const { gl } = R;
+    for (const sc of live) {
+      if (now - (sc._usedAt ?? 0) < 20000) continue;
+      const A = sc._acc;
+      if (A && A.tex && A.gl === gl) { gl.deleteFramebuffer(A.fb); gl.deleteTexture(A.tex); A.tex = A.fb = null; A.n = 0; A.sig = null; }
+      const Tr = sc._trace;
+      if (Tr && Tr.gpu && Tr.gpu.gl === gl) { for (const t of [Tr.gpu.nodes, Tr.gpu.tris, Tr.gpu.mats]) gl.deleteTexture(t); Tr.gpu = null; }
+      live.delete(sc);
+    }
+  }
   function renderFrame(scene, cam = {}, cssW, cssH, outScale = 1, ss = 2) {
     renderer();
+    {
+      const t = typeof performance !== "undefined" ? performance.now() : Date.now();
+      scene._usedAt = t; live.add(scene); trimIdle(t);
+    }
     const { gl } = R;
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     const q = qualityFor(scene, cam, Math.max(1, Math.min(3, Math.round(ss))), now);
