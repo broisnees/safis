@@ -1752,6 +1752,58 @@ vec3 scatterAt(vec3 x, vec3 wo, float g, vec2 r) {
   // The sky: single scattering in a real atmosphere (Rayleigh for the blue, Mie for the haze
   // around the Sun, ozone for the deep blue of twilight), marched along the view ray with the
   // sunlight reaching each point attenuated on its way in; stars come out after sunset.
+  const G_SKY = `
+uniform vec3 uSunDir; uniform vec4 uSkyP; // sun intensity, haze (Mie multiplier), observer altitude (m), stars
+const float RE_ = 6360e3, RA_ = 6460e3;
+const vec3 BR_ = vec3(5.802e-6, 13.558e-6, 33.1e-6), BO_ = vec3(0.65e-6, 1.881e-6, 0.085e-6);
+vec2 sphHit(vec3 o, vec3 d, float R) {
+  float b = dot(o, d), c = dot(o, o) - R * R, h = b * b - c;
+  if (h < 0.0) return vec2(1e30, -1e30);
+  h = sqrt(h); return vec2(-b - h, -b + h);
+}
+vec3 extinctionAt(float h) {
+  float r = exp(-h / 8000.0), m = exp(-h / 1200.0), oz = max(0.0, 1.0 - abs(h - 25000.0) / 15000.0);
+  return BR_ * r + vec3(4.4e-6 * uSkyP.y) * m + BO_ * oz;
+}
+vec3 atmosphere(vec3 d, vec3 sun) {
+  vec3 o = vec3(0.0, RE_ + max(uSkyP.z, 1.0), 0.0);
+  vec2 ta = sphHit(o, d, RA_), tg = sphHit(o, d, RE_);
+  float tmax = ta.y;
+  bool ground = tg.x > 0.0 && tg.x < 1e29;
+  if (ground) tmax = tg.x;
+  const int N = 16;
+  float ds = tmax / float(N);
+  vec3 odR = vec3(0.0), sumR = vec3(0.0), sumM = vec3(0.0);
+  vec3 od = vec3(0.0);
+  for (int i = 0; i < N; i++) {
+    vec3 p = o + d * (ds * (float(i) + 0.5));
+    float h = length(p) - RE_;
+    float dr = exp(-h / 8000.0) * ds, dm = exp(-h / 1200.0) * ds;
+    od += extinctionAt(h) * ds;
+    vec2 ls = sphHit(p, sun, RA_), lg = sphHit(p, sun, RE_);
+    if (lg.x > 0.0 && lg.x < 1e29) continue;
+    float dl = ls.y / 8.0;
+    vec3 odl = vec3(0.0);
+    for (int j = 0; j < 8; j++) { float hl = length(p + sun * (dl * (float(j) + 0.5))) - RE_; odl += extinctionAt(hl) * dl; }
+    vec3 att = exp(-(od + odl));
+    sumR += att * dr; sumM += att * dm;
+  }
+  float mu = dot(d, sun), g = 0.76;
+  float pR = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+  float pM = 3.0 / (8.0 * PI) * ((1.0 - g * g) * (1.0 + mu * mu)) / ((2.0 + g * g) * pow(max(1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5));
+  vec3 col = (sumR * BR_ * pR + sumM * 3.996e-6 * uSkyP.y * pM) * uSkyP.x;
+  vec3 trans = exp(-od);
+  if (!ground) col += trans * smoothstep(0.99996, 0.99999, mu) * uSkyP.x * 4.0;
+  else col += trans * vec3(0.06, 0.055, 0.05) * max(sun.y, 0.0) * uSkyP.x * 0.12;
+  if (uSkyP.w > 0.0 && !ground) {
+    vec3 q = d * 420.0; vec3 c = floor(q);
+    float h = fract(sin(dot(c, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float star = step(0.9965, h) * smoothstep(0.42, 0.0, length(q - c - 0.5)) * (0.4 + 0.6 * fract(h * 97.0));
+    col += vec3(star) * uSkyP.w * trans * smoothstep(-0.02, -0.12, sun.y);
+  }
+  return col;
+}`;
+
   const VS = `#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
@@ -2488,6 +2540,7 @@ void main() {
   // neutral sweep (studio), a dark room with cool rim strips (night), or a sky (outdoor).
   const FS_ENV = `#version 300 es
 ${G_COMMON}
+${G_SKY}
 uniform vec2 uSize; uniform int uKind; uniform float uDark; uniform vec3 uSun; uniform float uOutScale;
 out vec4 o;
 float softbox(vec3 d, vec3 c, vec3 up, vec2 size, float soft) {
@@ -2501,6 +2554,7 @@ float softbox(vec3 d, vec3 c, vec3 up, vec2 size, float soft) {
 }
 vec3 env(vec3 d) {
   float y = d.y;
+  if (uKind == 3) return atmosphere(normalize(vec3(d.x, max(d.y, -0.2), d.z)), normalize(uSun));
   if (uKind == 2) {
     vec3 zen = vec3(0.16, 0.32, 0.72), hor = vec3(0.78, 0.84, 0.92), gnd = vec3(0.26, 0.24, 0.21);
     if (uDark > 0.5) { zen *= 0.35; hor *= 0.35; gnd *= 0.4; }
@@ -3429,6 +3483,36 @@ void main() {
     return [U, V];
   }
   // The sunlight that gets through the air at this elevation, as a color (relative to space).
+  function sunTransmittance(dir, haze = 1) {
+    const RE = 6360e3, RA = 6460e3, o = [0, RE + 2, 0], d = v3.norm(dir);
+    const b = v3.dot(o, d), c = v3.dot(o, o) - RA * RA, tmax = -b + Math.sqrt(Math.max(0, b * b - c));
+    const cg = v3.dot(o, o) - RE * RE, hg = b * b - cg;
+    if (hg > 0 && -b - Math.sqrt(hg) > 0) return [0, 0, 0];
+    const od = [0, 0, 0], N = 48, ds = tmax / N;
+    for (let i = 0; i < N; i++) {
+      const pnt = v3.add(o, v3.scale(d, ds * (i + 0.5))), h = v3.len(pnt) - RE;
+      const r = Math.exp(-h / 8000), m = Math.exp(-h / 1200) * 4.4e-6 * haze, oz = Math.max(0, 1 - Math.abs(h - 25000) / 15000);
+      const br = [5.802e-6, 13.558e-6, 33.1e-6], bo = [0.65e-6, 1.881e-6, 0.085e-6];
+      for (let k = 0; k < 3; k++) od[k] += (br[k] * r + m + bo[k] * oz) * ds;
+    }
+    return od.map(v => Math.exp(-v));
+  }
+  // scene.sky: true, or { sun: [x, y, z] or { elevation, azimuth } in degrees, haze, intensity,
+  // altitude, stars } for the physical sky, or { color, intensity } for light coming evenly from
+  // every direction (a white sky, an overcast day, the inside of a lamp shade).
+  function skyOf(scene) {
+    const s = scene.sky;
+    if (!s) return null;
+    const o = s === true ? {} : s;
+    if (o.color != null && o.sun == null) return { kind: 1, rgb: toLinear(colorOf(o.color, true)).map(v => v * (o.intensity ?? 1)), o };
+    let sun = o.sun ?? (Array.isArray(scene.light) ? scene.light : [0.3, 0.6, 0.5]);
+    if (!Array.isArray(sun)) {
+      const el = (sun.elevation ?? 30) * Math.PI / 180, az = (sun.azimuth ?? 0) * Math.PI / 180;
+      sun = [Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)];
+    }
+    sun = v3.norm(sun);
+    return { kind: 2, sun, haze: o.haze ?? 1, intensity: o.intensity ?? 1, altitude: o.altitude ?? 2, stars: o.stars ?? 1, o };
+  }
   function lightRig(scene, addSun = false) {
     const units = unitsOf(scene.units);
     const list = (scene.lights || []).filter(p => isPhysical(p) && p.on !== false).map(p => {
@@ -3578,6 +3662,72 @@ void main() {
   // painted once into a 1024 x 512 canvas. Uploaded once per source, with mipmaps.
   const mapCache = new WeakMap();
   const imgCache = new Map();
+  function earthMap(o = {}) {
+    if (earthCanvas && !o.redraw) return earthCanvas;
+    const W = 2048, H = 1024;
+    const cv = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(W, H) : Object.assign(document.createElement("canvas"), { width: W, height: H });
+    const ctx = cv.getContext("2d");
+    const sea = o.sea ?? "#1d4f7a", land = o.land ?? "#7c8d55", dry = o.dry ?? "#b39b6b", ice = o.ice ?? "#eef2f4";
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#2a5a80"); g.addColorStop(0.5, sea); g.addColorStop(1, "#2a5a80");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    const X = lon => (lon + 180) / 360 * W, Y = lat => (90 - lat) / 180 * H;
+    const Geo = typeof window !== "undefined" ? window.Geo : null;
+    const lg = ctx.createLinearGradient(0, 0, 0, H);
+    lg.addColorStop(0.0, "#e8ecef"); lg.addColorStop(0.12, "#8d8f78"); lg.addColorStop(0.22, land); lg.addColorStop(0.36, dry);
+    lg.addColorStop(0.5, "#5f7a3c"); lg.addColorStop(0.64, dry); lg.addColorStop(0.75, land); lg.addColorStop(0.86, "#8d8f78"); lg.addColorStop(1, ice);
+    if (Geo && Geo.countries) {
+      ctx.fillStyle = lg;
+      for (const c of Geo.countries) for (const poly of c.polygons || []) {
+        ctx.beginPath();
+        for (const ring of poly) {
+          // Unwrap longitudes so a ring that crosses the date line stays whole, and close a
+          // ring that goes all the way around (Antarctica) along the pole.
+          const pts = []; let prev = null, off = 0;
+          for (const [lon, lat] of ring) { if (prev != null && Math.abs(lon + off - prev) > 180) off += prev > lon + off ? 360 : -360; pts.push([lon + off, lat]); prev = lon + off; }
+          const span = Math.max(...pts.map(q => q[0])) - Math.min(...pts.map(q => q[0]));
+          for (const shift of [-360, 0, 360]) {
+            pts.forEach(([lon, lat], i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, X(lon + shift), Y(lat)));
+            if (span > 350) { const last = pts[pts.length - 1], first = pts[0], pole = first[1] < 0 ? -90 : 90; ctx.lineTo(X(last[0] + shift), Y(pole)); ctx.lineTo(X(first[0] + shift), Y(pole)); }
+            ctx.closePath();
+          }
+        }
+        ctx.fill("evenodd");
+      }
+    }
+    // Polar ice and sea ice.
+    ctx.fillStyle = ice;
+    ctx.fillRect(0, 0, W, H * 0.035);
+    ctx.fillRect(0, H * 0.94, W, H * 0.06);
+    // Roughness in alpha: glossy sea, rough land.
+    const img = ctx.getImageData(0, 0, W, H), d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], gg = d[i + 1], b = d[i + 2];
+      const isSea = b > r + 25 && b > gg;
+      d[i + 3] = isSea ? 80 : 225;
+    }
+    ctx.putImageData(img, 0, 0);
+    earthCanvas = cv;
+    return cv;
+  }
+  // E3.earth({ radius, atmosphere }): a group with the globe (north up, longitude 0 toward +z,
+  // east toward +x) and a thin glow of air at its rim.
+  function earth(o = {}) {
+    const r = o.radius ?? 1;
+    const g = new Node(null, { name: o.name ?? "earth" });
+    const ball = g.add(mesh.sphere(r, { segments: o.segments ?? 96 }), { name: "globe", material: { color: "#ffffff", metal: 0, roughness: 0.6, map: { lazy: () => earthMap(o) }, mapping: "sphere", mapRoughness: true } });
+    if (o.atmosphere !== false) g.add(mesh.sphere(r * 1.018, { segments: 64 }), { name: "air", material: { color: "#8fb8ff", opacity: 0.22 }, pickable: false, castShadow: false, trace: false });
+    g.globe = ball;
+    // A point on the surface at a latitude and longitude (degrees), in the group's coordinates.
+    g.at = (lat, lon, h = 0) => { const a = lat * Math.PI / 180, b = lon * Math.PI / 180, R = r + h; return [R * Math.cos(a) * Math.sin(b), R * Math.sin(a), R * Math.cos(a) * Math.cos(b)]; };
+    return g;
+  }
+
+  // The Moon: a procedural map with the near side's real maria in their places (Imbrium,
+  // Serenitatis, Tranquillitatis, Crisium, Fecunditatis, Nubium, Procellarum), highland craters,
+  // and the bright ray systems of Tycho and Copernicus; or pass `map` (an equirectangular photo, a
+  // data URL) for the real thing. Longitude 0 (the center of the near side) faces +z.
+  let moonCanvas = null;
   // ---------- WebGL renderer ----------
   let R = null;
   function compile(gl, vs, fs, varyings) {
@@ -3766,8 +3916,10 @@ void main() {
 
   // The environment for a look and theme, made on the GPU the first time it's needed:
   // a 512x256 lat-long source, then six prefiltered roughness levels and an irradiance map.
-  function environment(kind, dark, sun) {
-    const key = `${kind}|${dark ? 1 : 0}|${kind === 2 ? sun.map(v => v.toFixed(2)).join(",") : ""}`;
+  function environment(kind, dark, sun, sky = null) {
+    const key = `${kind}|${dark ? 1 : 0}|${kind >= 2 ? sun.map(v => v.toFixed(2)).join(",") : ""}|${sky ? [sky.haze, sky.intensity, sky.altitude].join(",") : ""}`;
+    // A physical sky changes with the Sun; keep only the last few.
+    if (kind === 3 && R.env.size > 24) for (const [k, E0] of R.env) if (k.startsWith("3|")) { R.gl.deleteTexture(E0.spec); R.gl.deleteTexture(E0.irr); R.env.delete(k); break; }
     let E = R.env.get(key);
     if (E) return E;
     const { gl } = R;
@@ -3781,7 +3933,7 @@ void main() {
     gl.viewport(0, 0, 512, 256);
     const pe = prog("env");
     gl.useProgram(pe.p);
-    setAll(pe, { uSize: [512, 256], uKind: kind, uDark: dark ? 1 : 0, uSun: sun, uOutScale: enc });
+    setAll(pe, { uSize: [512, 256], uKind: kind, uDark: dark ? 1 : 0, uSun: sun, uOutScale: enc, uSunDir: sun, uSkyP: sky ? [20 * sky.intensity, sky.haze, sky.altitude, 0] : [20, 1, 2, 0] });
     gl.bindVertexArray(R.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.deleteFramebuffer(fb);
@@ -4405,8 +4557,9 @@ void main() {
     const ex = v3.norm(v3.cross([0, 1, 0], ez));
     const envRot = new Float32Array([ex[0], 0, ez[0], ex[1], 1, ez[1], ex[2], 0, ez[2]]);
     const sunEnv = [v3.dot(L, ex), L[1], v3.dot(L, ez)];
-    const env = environment(look.env, dark, sunEnv);
-    const kc = look.keyColor.map(v => v * look.key), fc = look.fillColor.map(v => v * look.fill), rc = [1, 1, 1].map(v => v * look.rim);
+    const env = physSky ? environment(3, dark, sunEnv, sky) : environment(look.env, dark, sunEnv);
+    const sunTr = physSky ? sunTransmittance(sky.sun, sky.haze) : null;
+    const kc = (sunTr ? sunTr.map(v => v * 1.15 * sky.intensity) : look.keyColor).map(v => v * look.key), fc = look.fillColor.map(v => v * look.fill), rc = [1, 1, 1].map(v => v * look.rim);
     const fillDir = viewToWorld(C, [0.8, 0.1, 0.55]), rimDir = viewToWorld(C, [0.25, 0.5, -0.85]);
     const points = [];
     for (const f of fxNodes) if (f.node.isPlume) points.push(...f.node.glowLights());
