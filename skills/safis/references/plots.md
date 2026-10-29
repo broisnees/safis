@@ -86,6 +86,23 @@ The graph draws its grid and axes as soon as it's created; every later call draw
 | `P.crosshair(x, curves, o)` | A hover readout at data x: a guide line, a dot on each curve, and value tags that keep clear of each other. `curves: [{ f } or { data }, color, label, format]`; `o.xFormat`, `o.xLabel: false`. Returns the hits. |
 | `P.interp(data, x)` | y on `[x, y]` pairs by straight lines between them; `NaN` outside the data. |
 
+## Trees and timelines
+
+**`g.tree(root, o)`** lays out any tree tidily: a phylogeny, a family tree, a decision tree, an argument map, a parse tree, an org chart, a file system. `root = { label, children, color, length, note, italic }`.
+
+| option | |
+|---|---|
+| `orient` | `"down"` (default), `"right"` (phylogenies, file trees), `"radial"` (big trees of life) |
+| `lengths` | `true`: depth by each node's `length` (a phylogram in millions of years) |
+| `edges` | `"elbow"`, `"curve"`, `"straight"` |
+| `style: "cards"` | Each node a rounded card with wrapped text: argument maps, decision trees, org charts |
+| `highlight` | A label or a function: that node and its path to the root in color, the rest faint |
+| `collapsed` | Labels whose children are hidden (draw them hollow; toggle on click with `hit`) |
+
+Returns `{ nodes, at(label), hit(p) }` for labels, hover, and clicks. Long labels wrap and stay inside the box.
+
+**`g.timeline(events, o)`** is a time axis: `events = [{ t, end, label, color }]` as dots (spans as bars) with labels stacked in lanes so none overlap, `eras = [{ from, to, label, color }]` as tinted bands, and `now` as a marker (drive it from a slider; events after it fade). Years before 0 read "BCE"; `format: "ago"` writes "65 Ma" for deep time, with `log: true` and `ref` spacing by time before `ref`. Returns `{ x(t), t(x), hit(p), axisY }`.
+
 ## Num
 
 Pure functions with no dependencies, usable in `state()`, `step()`, and `draw()` alike.

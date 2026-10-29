@@ -4,6 +4,7 @@ The effects kit (`src/effects.js`) draws what lines can't: a flame with embers a
 
 - **`g.fx.<name>(box, o)`** draws one effect into `box = [x, y, w, h]` (figure px; `null` for the whole canvas) and returns what the figure needs to label it.
 - **`Fx`** is the global namespace: easing (`Fx.follow`), camera matching (`Fx.ellipse`), black-body color, and the bare models for labels and tests.
+- **`Fx.fluid`, `Fx.waves`, `Fx.particles`** are simulations: real Navier-Stokes air, a simulated water surface, and particles moving by the physics of what they are. Each is made once per figure, stepped from its time, and drawn by `g.fx.fluid`, `g.fx.waves`, `g.fx.particles` (see Simulations).
 
 Every effect is a pure function of the time `t` and a `seed` passed in. Shaders run on one shared WebGL2 context; without WebGL2 each effect draws a simpler 2D version, with no errors.
 
@@ -34,6 +35,9 @@ Leave effects out when they are decoration. A glow behind a title, smoke that no
 | An arc, a spark gap, a Jacob's ladder | `g.fx.arc` |
 | Hot air bending light above a surface | `g.fx.shimmer` |
 | Air drawn into an inlet and blown out of a nozzle, on any drawing | `g.fx.flow` |
+| A real flow: a wake that sheds only above the right Reynolds number, pressure on a body, dye the reader stirs | `Fx.fluid` + `g.fx.fluid` |
+| Waves that reflect, diffract through slits, interfere, spread as rings from a pebble | `Fx.waves` + `g.fx.waves` |
+| Dust, smoke, rain, sand, sparks moving by their physics: settling, piling, splashing, riding a simulated wind | `Fx.particles` + `g.fx.particles` |
 
 ## Rules
 
@@ -222,10 +226,142 @@ Smoke renders at `res: 0.5` by default; pass `res: 1` for a small, sharp figure.
 | `density`, `trail`, `width` | 1, 0.45, 1.1 | Streak count (0 to 4), streak length in seconds, line width. Each streak tapers from its head to a hairline tail. |
 | `intake`, `exhaust` | true, true | Turn either stream off. |
 
+## Simulations: fluid, waves, particles
+
+`g.fx.wind`, `g.fx.water`, and `g.fx.dust` are models drawn from formulas. When the figure must behave like the real thing (a wake that sheds only above the right Reynolds number, waves that diffract through the slit the reader moved, dust that piles where it lands), simulate it. A simulation is made **once**, in the figure's block, stepped from the figure's time, and drawn by its `g.fx` call:
+
+```js
+{
+  const sim = Fx.fluid({ domain: [2.4, 0.9], speed: 0.5, re: 60, obstacles: [{ shape: "rect", at: [0.6, 0.45], size: [0.16, 0.16] }] });
+  demo("channel", {
+    aspect: w => w / (w * 0.9 / 2.4 + 50),
+    reset: true,
+    state: () => ({ t: 5 }),                           // 5 s in, the wake has formed; reset comes back here
+    controls: [
+      { key: "speed", label: "Inflow speed", min: 0.1, max: 1, step: 0.01, value: 0.5, unit: " m/s", color: "orange" },
+      { key: "re", label: "Reynolds number", min: 5, max: 250, step: 1, value: 60, color: "blue" },
+    ],
+    drag: sim.interact,                                 // drag the square, or stir the air
+    step(dt, s, v) { sim.set({ speed: v.speed, re: v.re }); s.t += dt; sim.advance(s.t); },
+    draw(g, s, v) {
+      const H = g.w * 0.9 / 2.4, r = g.fx.fluid([0, 0, g.w, H], { sim, arrows: true });
+      g.fx.colorbar([g.w - 190, H + 26, 170, 8], r.legend);
+    },
+  });
+}
+```
+
+- **Meters, y down.** Positions are meters from the top left of `domain: [width, height]`; the `g.fx` call maps the domain onto its box, so give the box the domain's aspect. `sim.toWorld(p)` and `sim.toScreen(q)` convert with the box it was last drawn in.
+- **Settings from `v`, in `step`.** Call `sim.set(...)` from the controls at the top of `step`, so the simulation always matches the sliders (also after the checker's probes).
+- **Time.** `sim.advance(t)` steps in fixed sub-steps up to `t`. `sim.warm(t)` does it once and keeps a checkpoint, so the still frame (reduced motion, the checker) shows a developed flow and going back in time (reset, the checker's probes) reloads it instead of recomputing. Warm lazily, the first time the figure is on screen: `draw(g, s, v, fig) { if (!s.warmed && fig.visible) { sim.warm(s.t); s.warmed = true; } ... }`. Figures draw once as the page loads even when they're far down, and several warm-ups on the CPU fallback can take seconds, so warming in `state()` slows every page load. `sim.reset()` starts from rest. The same history gives the same picture.
+- **GPU or not.** Fluid and waves run in float textures on the shared WebGL2 context (`sim.gpu`), or as WebGPU compute where there's a hardware adapter (Backends, below); without float render targets, or on a software WebGL (SwiftShader, as in the checker's screenshots), the same steps run on the CPU on a coarser grid. `gpu: true` forces the shaders, `gpu: false` the CPU. Particles run on the CPU (a few thousand is fine) or on WebGPU. The CPU reads back a small velocity grid only when arrows, streamlines, particles, or `sim.velocity` need it.
+- **Cost** (laptop GPU, step and redraw): the channel above 7 ms a frame, a vortex street 6 ms, a ripple tank 1.5 ms, 1,400 dust motes 1.5 ms, smoke in a simulated wind 9 ms (software WebGL, on the CPU: 11 to 15 ms). Keep to one fluid per figure.
+
+**`Fx.fluid(o)`**: incompressible Navier-Stokes on a staggered grid: MacCormack advection, viscosity (implicit when it's strong), and a pressure projection (red-black SOR) that leaves the divergence at a solver residual. Bodies are no-slip (or free-slip); air flows in on the left at `speed` and out on the right. It gives the real regimes: steady attached flow at Re 2, a recirculation bubble behind a cylinder from about Re 7, and a von Kármán street above about 47, shedding at St = fD/U near 0.18 at Re 150.
+
+| option | default | |
+|---|---|---|
+| `domain`, `speed` | [2.4, 0.9], 0.5 | m; inflow m/s. |
+| `re` or `nu` | `re: 100` | Reynolds number U L / ν on `length` (default the first body's size across the stream), or the viscosity in m²/s (air 1.5e-5, water 1e-6). With `re`, changing `speed` keeps Re. Real air past a 10 cm cylinder at 1 m/s is Re 6,700, past what a grid resolves: write "at Re 150" in the caption. |
+| `obstacles` | none | `{ shape: "circle", at, r }`, `{ shape: "rect", at, size, angle }`, `{ shape: "polygon", points }`, `{ shape: "airfoil", at, chord, thickness, camber, alpha }` (NACA 4-digit, `alpha` nose up). `slip: "free"`; `fixed: true` so the reader can't drag it. Keep a body 10 or more cells across (`sim.h` is a cell). |
+| `walls` | `"slip"` | Top and bottom: `"slip"`, `"no-slip"`, `"open"`. |
+| `dye`, `streaks`, `fade` | none, 0, 0 | Dye sources `[{ at, r, rate }]`; `streaks: 0.05` releases dye lanes 5 cm apart at the inflow (streaklines); dye loss per second. |
+| `vorticity` | 0 | Vorticity confinement. Not physical (it keeps eddies the grid would smear): leave it off unless the caption says so. |
+| `cells`, `cpuCells`, `iterations`, `track` | 96, 40, 24, false | Grid rows on the GPU and CPU; SOR iterations per step; record the wake for `shedding()`. |
+
+Methods: `set({ speed, re, nu, length, vorticity, iterations, dye, streaks })`, `velocity(q)` (m/s), `sample(q)` (`{ u, v, speed, p, solid }`), `solidAt(q)`, `stir(a, b, { radius, strength, dye })`, `inject(q, { radius, amount })`, `paint(q, r, on)` and `clearPaint()` (a solid the figure paints), `move(i, at)` (its motion pushes the air), `update()` after editing `sim.obstacles`, `shedding()` (`{ frequency, strouhal }`), `interact` (a `drag` spec: drag a body or stir), and `re`, `nu`, `speed`, `time`, `gpu`, `grid`, `h`.
+
+**`g.fx.fluid(box, { sim, show, ... })`** returns `{ legend, toWorld, toScreen }`.
+
+| option | default | |
+|---|---|---|
+| `show` | `"speed"` | `"speed"` (magma, m/s), `"pressure"` (coolwarm, the pressure coefficient Cp against the inflow), `"vorticity"` (coolwarm, ωD/U), `"dye"` (dye on the paper), `"none"`. |
+| `map`, `range` | by `show` | Any colormap; `[lo, hi]`. |
+| `arrows` | false | `true` or `{ spacing: 26, scale, color, width }`: arrows on a grid, length by speed up to `scale` (1.5 × inflow). |
+| `streamlines`, `bodies` | 0, true | Streamlines from the inflow edge; draw the bodies (`bodyColor`, `dyeColor`). |
+
+`g.fx.colorbar(box, { map, range, label, ticks })` draws the legend `g.fx.fluid` returns, in either theme.
+
+**`Fx.waves(o)`**: the water surface by the 2D wave equation (height and its rate, symplectic steps): walls reflect, gaps diffract, sources interfere, and a sponge along the edges absorbs what reaches it.
+
+| option | default | |
+|---|---|---|
+| `domain` | [1.6, 1] | m |
+| `speed` or `depth` | `depth: 0.01` | Wave speed m/s, or the depth: shallow water runs at c = √(g h) (`gravity` 9.81). |
+| `tension` | 0 | Surface tension over density, m³/s² (water 7.3e-5): short ripples outrun long ones, so a pebble's rings spread into a train. |
+| `damping`, `edges`, `sponge` | 0.15/s, `"absorb"`, 10% of the short side | `"reflect"` makes the box edge a wall. |
+| `walls` | none | `{ from, to, width }`, `{ points, width }`, `{ polygon }`. `Fx.waves.slits(a, b, [[center, width], ...], thickness)` is a barrier from a to b with gaps. |
+| `sources` | none | `{ at, to, freq, amp, phase, start, dur, r }`: a point (a line with `to`: plane waves) at `freq` Hz; `amp` is the wave height one wavelength out, m. |
+
+Methods: `drop(q, { amp, r })` (a pebble), `height(q)`, `heights()`, `set({ speed, depth, tension, damping, walls, sources })`, `interact` (a click drops a pebble).
+
+**`g.fx.waves(box, { sim, look })`**: `"pool"` (from above: the floor refracted by the surface, lit by the caustics it focuses, Fresnel sky), `"height"` (crests `high`, troughs `low` on the paper, or a `map`), `"caustics"` (the floor light alone), `"section"` (the surface along the row `at`, exaggerated). Pool options as for `g.fx.water`, in m: `depth` (to the floor, 0.3), `tile`, `floor`, `clarity`, `tilt`, `n`. `g.fx.water`, `g.fx.ripples`, and `g.fx.caustics` given `{ sim }` draw the simulation.
+
+**`Fx.particles(o)`**: the same physics as `E3.particles`: the matter sets gravity and the drag that gives its terminal speed (solved exactly over each step), a hot gas's lift g(T - Ta)/T fading as it mixes, curl-noise eddies, and how it meets the ground. Slots are reborn on a seeded schedule, so a time shows the same particles.
+
+| option | default | |
+|---|---|---|
+| `matter` | `"dust"` | smoke, exhaust, steam, fire, dust, mist, sand, water, rain, snow, spark, ember, bubble, air, pollen, grass-seed, leaf (`Fx.matter(name)` shows the numbers). |
+| `domain`, `units` | [4, 2.25], `"m"` | World size; world units per meter (`"cm"`, `"mm"`, or a number). |
+| `count`, `seed`, `life`, `size` | 400, 1, matter | Slots; size `[birth, end]` in m. |
+| `emitter` | a point low in the middle | `{ shape: "point", "disk", "line", "box", at, radius, from, to, size, dir (radians), spread, speed: [a, b] m/s }` |
+| `forces` | the matter's | `gravity` (m/s², down), `drag` (1/s), `buoyancy`, `wind: [x, y]` m/s, `turbulence: { strength m/s, scale m, speed }` |
+| `ground`, `colliders` | none | The floor's y; `[{ from, to }, { circle: [x, y, r] }, { points }]` with `bounce`, `friction`. |
+| `fluid` | none | An `Fx.fluid`: particles drag toward its velocity, so smoke and dust go round bodies and into the eddies, and hit its bodies. The domain is the fluid's. |
+| `pile`, `heap`, `splash` | dust, sand; 1; water, rain | Grains at rest roll down the heap to their angle of repose (`heap` scales their volume to be seen); drops break into droplets. |
+| `light` | none | `{ from, dir, width }`: a beam. Particles in it scatter it toward the eye (the Tyndall effect): motes glint, the rest stay faint. |
+| `density`, `temperature`, `color`, `opacity`, `style` | | Share drawn (a throttle), `[birth, end]` K, look. |
+
+Methods: `set({ density, wind, emitter, light, emitting })`, `alive()` (`[{ p, v, age, life, landed }]`), `droplets()`, `pile()`, `terminal()`, and the clock (with a `fluid`, `warm` and `advance` drive both).
+
+**`g.fx.particles(box, { sys })`** draws by style: lit puffs that shade themselves (smoke, steam), additive glow (fire), streaks (rain, water, air), hot ribbons (spark, ember), motes that glint in the beam (dust, pollen), dots, bubbles, leaves, and the heap. `light` (`null` hides the beam), `lightAngle` (the puffs' light), `opacity`, `color`, `trail`.
+
+### Backends
+
+Each simulation steps on WebGPU compute, WebGL2 shaders, or the CPU: the same steps in the same order, so a history gives the same picture on each, within float rounding. WebGL2 (or 2D) still draws them.
+
+| backend | used | |
+|---|---|---|
+| `"webgpu"` | with a hardware WebGPU adapter (the default there) | Fluid and waves as compute passes (the pressure sweep runs in place); particles one thread per slot through a whole run of steps, so the warm-up of 20,000 takes 4 ms instead of 570 and up to a million slots run. The state comes back without stalling: while it runs, what's drawn (and `velocity`, `heights`, `alive`) is a frame behind its clock; a still figure settles on exactly time t. `await sim.sync()` waits for it. |
+| `"webgl2"` | without WebGPU; the checker (SwiftShader has none) | Float textures on the shared context. |
+| `"cpu"` | `gpu: false`, no float render targets, software WebGL | Fluid and waves on a coarser grid (`cpuCells`); particles show their first 20,000 slots. |
+
+`Fx.backend` reads what new simulations use; setting it forces one (`"auto"` undoes it), and a running fluid or wave field moves between WebGPU and WebGL2 at its next step without changing its frames. A simulation's `backend` option overrides it, `?backend=webgl2` in the page URL (or `window.SAFIS_BACKEND` set before the scripts) forces one for a test, and `sim.backend` says where it runs. Some stay put because they share state every step: a fluid that tracks shedding or carries `Fx.particles`, and particles with a heap, splashes, or a fluid run on WebGL2 and the CPU. A software adapter is skipped unless forced. `Fx.webgpu` describes the device.
+
+Measured on an M3 Pro (ms per 1/60 s of simulated time, to the end of the GPU work): the 96-row channel 0.6 on WebGPU, 2.7 on WebGL2, 49 on the CPU; 192 rows 3.7 and 7.7, and with 80 pressure iterations 9.9 and 23. Waves cost under 0.1 ms on either GPU backend at 160 rows. 20,000 snowflakes 0.03 ms on WebGPU, 1.3 on the CPU. `node tools/time-backends.mjs --gpu` times every lab figure on each backend.
+
+## Adding a new effect, matter, or colormap
+
+Define it in the page's first script; it is checked as it's made, and a bad key or number throws saying what it should be.
+
+```js
+Fx.matter.define("ash", { base: "dust", vt: 0.5, color: "#777" });            // like dust, falls at 0.5 m/s
+Fx.matter.define("fluff", { vt: 0.25, style: "mote", eddy: [0.4, 0.6, 0.3], life: [6, 10], size: [0.01, 0.01] });
+Fx.colormap.define("ocean", ["#03051a", "#1d4e89", "#2fa4c9", "#d8f3f0"]);   // low to high, evenly spaced
+Fx.colormap.define("signed", [[0, "#2b59c3"], [0.5, "#f2f2f2"], [1, "#c0392b"]]);
+// then: Fx.particles({ matter: "ash", ... }); g.fx.fluid(box, { sim, map: "ocean" })
+```
+
+| matter key | |
+|---|---|
+| `vt`, `rise`, or `drag` (one) | Terminal speed falling in still air, m/s (Stokes for fine grains: (ρp - ρair) g d² / 18μ); a bubble's rise, m/s; a gas's mixing rate, 1/s |
+| `base` | A matter to copy and change |
+| `gas`, `temperature`, `lift` | Hot gas: lift g (T - 293) / T at `[birth K, end K]`; or a fixed lift in g |
+| `eddy` | `[speed m/s, size m, change rate]` of the air it rides: indoors [0.03, 0.4, 0.1], outdoors [1, 1, 0.3] |
+| `life`, `size`, `opacity`, `color`, `fade` | `[min, max]` s; `[birth, end]` m; 0 to 1; CSS color or palette name; `[in, out]` as shares of life |
+| `style` | `puff`, `glow`, `mote`, `dot`, `streak`, `spark`, `bubble`, `leaf` (E3's `smoke`, `fire`, `sphere` work too) |
+| `bounce`, `friction`, `pile`, `splash`, `flutter` | 0 to 1; 0 to 1; heaps at this angle of repose (degrees); drops break up; `[sway Hz, sway m/s]` |
+
+A colormap is 2 to 64 stops, `"#rrggbb"` or `[r, g, b]` (all 0-1 or all 0-255), even or as `[position, color]` from 0 to 1. Make a diverging map pale in the middle. `Fx.colormap(name, t)` reads one back; `Fx.colormap.names` and `Fx.matter.names` list them.
+
+A new effect is a function of `s.t` drawn with `g`: seed every random number with `Fx.hash`, ease its settings with `Fx.follow`, and look at it in `tools/check-2d.mjs`. For anything stepped on a grid, copy the shape of `Fx.fluid`: made once, `advance(t)` in fixed steps, `warm(t)` the first time the figure is visible.
+
 ## Fx
 
 | call | |
 |---|---|
+| `Fx.fluid(o)`, `Fx.waves(o)`, `Fx.particles(o)` | Simulations (above). `Fx.waves.slits(a, b, gaps, thickness)` makes a slit barrier. |
+| `Fx.matter(name)`, `Fx.matter.define(name, o)`, `Fx.colormap(name, t)`, `Fx.colormap.define(name, stops)` | Particle matter and colormaps: read, add. |
 | `Fx.follow(cur, target, dt, tau = 0.3)` | Eases `cur` toward `target` with time constant `tau` seconds. Returns `target` when `cur` isn't a number yet. |
 | `Fx.ellipse(project, center, normal, r)` | The screen ellipse of a circle (world `center`, `normal`, radius `r`) under any projector: `g.view3d`'s `P` or an E3 view's `project`. Returns `{ center, rx, ry, angle, axis, along }`, ready for `nozzle` / `inlet` with `axis` and `along`. Exact for parallel views; close for mild perspective. |
 | `Fx.frame(e, axis, along)`, `Fx.project(F, [s, y, z])` | The affine map an ellipse fixes, and a point in part coordinates (rim radii, `s` along the axis) on screen. Use it to place a label in a plume or a flow. |
@@ -236,6 +372,7 @@ Smoke renders at `res: 0.5` by default; pass `res: 1` for a small, sharp figure.
 | `Fx.sparks(box, o)`, `Fx.arc(box, o)`, `Fx.flow(box, o)`, `Fx.embers(box, o)`, `Fx.grains(box, o)`, `Fx.wind(box, o)` | The models' output without drawing. |
 | `Fx.windVelocity(box, o, [x, y])`, `Fx.waterLevel(box, o, x)` | The wind's velocity at a point (`null` inside a body); the surface's screen y in section. |
 | `Fx.gpu`, `Fx.force2d`, `Fx.errors` | WebGL2 is in use; set to draw every effect in 2D; shader compile messages. |
+| `Fx.backend`, `Fx.webgpu` | What simulations step on (`"webgpu"`, `"webgl2"`, `"cpu"`; set to force, `"auto"` to undo); the WebGPU device (`state`, `name`, `errors`, `ready`). |
 | `Fx.still` | The reader prefers reduced motion. |
 | `Fx.hash(a, b, c)`, `Fx.noise(x, seed)` | Seeded integer hash and smooth 1D noise, for a custom effect. |
 
@@ -370,3 +507,8 @@ The duct's rims come from the same projector as its outline, so the streaks ente
 - **Shimmer distorts the labels.** Shimmer redraws whatever is already in its box. Draw it right after the background, before labels and foreground parts.
 - **The page gets slow.** Too many shader effects, or boxes far bigger than the effect. Shrink boxes, add `res: 0.5` to soft effects, and keep to about four per figure.
 - **Choosing an effect for mood.** If no control changes it and no sentence refers to it, it is decoration. Cut it.
+- **A simulation starts over every frame, or the page crawls.** It's made inside `draw` or `state`. Make it once in the figure's block, and warm it the first time the figure is visible (see Time, above).
+- **The still frame shows an empty channel.** No `warm`: the flow starts from rest at t = 0. Warm to a time when the wake or the waves have formed (a few crossing times).
+- **The wake never sheds.** Re is below about 47 for a cylinder, or the body is under 10 cells across (`D / sim.h`) and the grid smears it.
+- **Smoke goes through the building.** The particles aren't coupled: give them `fluid: sim`.
+- **Stirring does nothing until the drag ends.** The figure's `drag` lacks `live: true`; `sim.interact` has it.

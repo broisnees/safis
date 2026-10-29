@@ -28,7 +28,7 @@ Checklist (verify and explore can't catch these):
 - One material everywhere reads as a toy; real assemblies mix two to four.
 - Dark mode: metals still read and glowing parts stay the brightest thing.
 
-Contents: [making 3D that looks real](#making-3d-that-looks-real), [scenes](#scenes-and-nodes), [meshes](#meshes), [materials](#materials), [looks](#looks), [cuts, ghosts, shadows](#cuts-ghosts-shadows-and-light), [particles and plumes](#particles-and-plumes), [camera](#camera), [picking and labels](#picking-and-labels), [molecules](#molecules), [math helpers](#math-helpers), [recipes](#recipes), [limits](#limits).
+Contents: [making 3D that looks real](#making-3d-that-looks-real), [scenes](#scenes-and-nodes), [meshes](#meshes), [materials](#materials), [looks](#looks), [cuts, ghosts, shadows](#cuts-ghosts-shadows-and-light), [particles and plumes](#particles-and-plumes), [water](#water), [camera](#camera), [picking and labels](#picking-and-labels), [molecules](#molecules), [math helpers](#math-helpers), [recipes](#recipes), [limits](#limits).
 
 ## Scenes and nodes
 
@@ -118,7 +118,7 @@ A mesh whose shape changes every frame (a deforming disc, a filling balloon) can
 | `concrete` | Rough grey, for pads and floors |
 | `glass` | Refracts the scene behind it, with dispersion across six wavelengths (soft fringes at strong edges only), Fresnel edges, ink on its edges, a lighter shadow. `dispersion` (0.008, crown glass) and `ior` tune it |
 | `frosted` | Glass that blurs what's behind it (`roughness` sets how much) |
-| `water` | A water surface and volume: refracts with water's index (1.333), turns blue-green with depth, and its top carries moving swells and chop that wobble the refracted picture and break the sun into glints (drive `scene.time`). `ripples` (0.35), `wavelength` (world units), `depthColor` (0.5), `thickness` (default: the body's depth). With a node `opacity` it is an x-ray ghost as before |
+| `water` | A water surface and volume: refracts with water's index (1.333), turns blue-green with depth, and its top carries moving swells and chop that wobble the refracted picture and break the sun into glints (drive `scene.time`). `ripples` (0.35), `wavelength` (world units), `depthColor` (0.5), `thickness` (default: the body's depth). With a node `opacity` it is an x-ray ghost as before. For water that is the subject (a pool, a glass, the sea) use [`E3.water`](#water) |
 | `ghost` | See-through x-ray parts (clear in the middle, denser at the edges) |
 | `hot` | Oxidized metal glowing by `temperature` (default 1400 K) |
 | any `#rrggbb` | Diagram shading in that color |
@@ -162,6 +162,93 @@ Quality is automatic. Still frames are supersampled 2x with full shadow and volu
 
 Section cuts work best on closed meshes that don't overlap each other. For an "x-ray" view, give the outer parts `opacity: 0.3` and keep the inner parts solid.
 
+## Physical light
+
+For figures *about* light (shadows, brightness, color mixing, bounce light, the sky), use real lights instead of the studio rig. A light with a `type` or a `power` is physical: brightness falls with the square of the distance and the cosine of the angle, its shadow has a dark core and soft edges that harden as the light shrinks, and every shadow, bounce, and beam is ray traced against the scene's triangles. Still frames refine over about half a second (the runtime keeps drawing until `view.converging` is false); dragging shows a lighter, slightly grainy preview.
+
+```js
+const scene = E3.scene({ look: "darkroom", units: "m" });           // black room, only these lights
+scene.add(E3.mesh.box(2, 0.01, 2), { name: "floor" });
+scene.add(E3.mesh.box(0.8, 0.8, 0.02), { name: "wall", position: [0, 0.4, 0] });
+scene.lights = [{ type: "rect", position: [0.3, 1.3, -0.3], size: [0.5, 0.25], power: 120 }];
+// in draw: light.size = [v.size, v.size / 2]; g.render3d(scene, { ...s.view });
+```
+
+| light (`scene.lights`, up to 8) | |
+|---|---|
+| `{ type: "point", position, power, visible }` | A point; `visible: 0.02` draws a dot of that radius |
+| `{ type: "sphere", position, radius, power }` | A glowing ball (a bulb) |
+| `{ type: "disk", position, radius, normal or target, power, twoSided }` | A round panel shining toward `normal` (default down) |
+| `{ type: "rect", position, size: [w, h], normal or target or rotation, power, twoSided }` | A panel, a window, a screen |
+| `{ type: "sun", direction, power, angle }` | Parallel light from far away; `power` is W/m² |
+
+`power` is in watts (default 100), `color` any color (the power stays the same), `on: false` switches it off, `visible: false` hides its shape. Distances use `scene.units` (world units per meter: `"m"`, `"cm"`, `"mm"`, or a number), so a 100 W bulb gives P / (4πr²) W/m² at r meters. The shapes draw themselves at their real brightness: a 1 W bulb looks dim, a one-sided panel is gray from behind. Old `{ position, color, intensity, range }` lights stay the studio's soft point lights.
+
+| scene property | |
+|---|---|
+| `look: "darkroom"` | Black background (`scene.background` to change, `"none"` for the page), nothing but the scene's lights and sky, diagram materials as ideal matte (Lambertian) surfaces. Other looks add physical lights on top of the studio rig. `exposure` (0.15 in the darkroom) is the camera's: keep it fixed so the reader sees power and distance change brightness. |
+| `bounces` | 0 (default) to 6: light bounced between surfaces. 1 to 2 shows a red wall tinting a white floor; each bounce costs another ray. |
+| `sky` | `{ color, intensity }`: light from every direction (an overcast sky, the inside of a lampshade); with a tile above a floor it gives the soft, distance-dependent shadow. Or the physical sky (below). |
+| `haze` | `{ density, g, color }` (density per meter, 0.05 to 0.5; `g` 0 to 0.9 forward scattering): air that scatters, so beams show and are blocked where something stands in the light. Pair with `matter: "motes"` particles for dust glinting in a beam (motes are dark outside it). |
+| `samples` | Frames to refine over (48). |
+
+**Physical sky.** `scene.sky = { sun: { elevation, azimuth } (degrees, or a direction), haze, intensity, altitude, stars }` draws the real sky behind the scene (Rayleigh and Mie scattering, ozone, stars after dusk), lights the scene with it (metals reflect it), and makes the key light the Sun at its real color: white at noon, orange and dim at sunset. Use it with `look: "outdoor"`; in the darkroom it adds the Sun as a traced light. `E3.sunlight(dir)` is the Sun's color for a 2D label.
+
+**Helpers for teaching light.**
+
+| call | gives |
+|---|---|
+| `E3.photons(scene, light, { count, direction, cone, seed })` | Rays from a light traced through the scene, `[{ from, to, hit }]`; draw with `g.line(view.project(a), view.project(b))` and mark `hit.point` |
+| `view.trace(origin, dir)`, `E3.trace(scene, origin, dir)` | The first surface along a ray: `{ t, point, normal, node }` or null |
+| `E3.solidAngle(point, normal, light, { radius })` | `omega` (sr), `projected` (cosine-weighted), `share` of the hemisphere's light, and meshes `cap` (the light projected on a hemisphere) and `disk` (that patch flattened on its base) |
+| `g.inset([x, y, r], [fx, fy, fr], box => ..., { background })` | A round magnifier joined to the spot it enlarges; draw a closer `g.render3d(..., { box })` inside |
+
+**The Moon.** `E3.moon({ radius, map })`: a procedural near side (the maria in their real places, craters, Tycho's rays) that needs no file, or `map` a real equirectangular photo as a data URL. `moon.at(lat, lon)` as for the Earth.
+
+**The Earth and textures.** `E3.earth({ radius, atmosphere })` is a globe with coastlines (from the maps kit, when Geo is on the page), ice caps, glossy seas that glint, and a thin glow of air; `earth.at(lat, lon)` is a surface point (north +y, longitude 0 toward +z, east +x). Light it with `lighting: "sun"` and `scene.light` toward the Sun. Any part can carry a picture (texture mapping): `material: { map, mapping, mapBox, mapRoughness }`. `map` is a canvas, an image, ImageData, `(u, v) => color`, or a URL / data URL (the figure redraws when it loads). `mapping` is `"sphere"` (an equirectangular map, longitude 0 toward +z: planets, moons, a globe), `"planar"` (the local x-z plane over `mapBox: [x, z, w, d]`: floors, maps, a painting), `"box"` (each face by its axis), or `"project"` with `projector: { position, target, fov, aspect }` (projective texture mapping: the picture is cast like a slide projector onto whatever it hits, blocked by what stands in the way). `mapRoughness: true` reads roughness from the alpha (glossy seas). Pages stay one file: embed a photo with `node scripts/embed-image.mjs photo.jpg --max 1024` and paste the data URL; public-domain maps (NASA's CGI Moon Kit, Blue Marble) are the usual sources, credited in the references.
+
+**Water.** See [water](#water) for a simulated pool or sea.
+
+**Grass.** `E3.grass({ size, count, height, width, color, units, seed, soil, ground })` is a lawn of tapered, curved blades on a block of soil (6 to 14 cm tall by default); `lawn.wind` is the wind in m/s (the bend grows with v², gusts roll across at the wind's speed), `lawn.windDirection` `[x, z]`, `lawn.push = [x, y, z, radius]` parts the blades around something passing through. Drive `scene.time`. About 9,000 blades per 40 cm square; blades are two-sided and translucent when backlit.
+
+## Water
+
+`E3.water(options)` is a body of water with a simulated surface, for any figure where the water itself is the subject: a pool, a pond, a glass, the open sea. The `water` material is still the cheap choice for water that only needs to look wet in passing.
+
+```js
+const scene = E3.scene({ look: "outdoor", units: "m" });
+scene.sky = { sun: { elevation: 58, azimuth: 35 } };
+const pool = scene.add(E3.water({ size: [4, 2.6], depth: 1.4, ripples: 0.0005 }));  // a tiled pool, level at y = 0
+const ball = scene.add(E3.mesh.sphere(0.13), { material: { color: "#e2533b", roughness: 0.35 } });
+pool.objects = [ball];                                  // it pushes the water aside as it moves
+pool.drop([0.6, -0.4], { r: 0.03, amp: -0.006 });       // in draw or a click: a drop, now
+// in draw: scene.time = s.t;
+const sea = E3.water({ mode: "ocean", size: 600, wind: 9, windDirection: [0.3, 1] });
+```
+
+Both modes solve linear waves exactly in Fourier space, so every wavelength travels at the speed water gives it, ω² = (g k + σk³/ρ) tanh(k h): a drop spreads as a ring whose short ripples and long waves separate as they should, and long waves in shallow water run at √(g h). A pool's walls reflect (its field is mirrored at the walls); waves die by water's viscosity plus `damping`. The sea is Tessendorf's statistical ocean: a Phillips spectrum for the wind, scaled to the fully developed sea (significant height 0.21 U²/g), choppy crests, two cascades so nothing visibly repeats, and the slopes too small to draw become roughness (Cox and Munk's measured slope variance). Everything is deterministic: the same `seed`, drops, and `scene.time` give the same water, and scrubbing time backward replays the drops.
+
+| option | |
+|---|---|
+| `mode` | `"pool"` (default) or `"ocean"` |
+| `size`, `depth`, `units` | Width or `[w, d]` and depth in world units; `units` as for particles (`"m"`, `"cm"`). Default pool 2 x 2 x 1.5 m, sea 400 m |
+| `shape`, `meniscus` | `"round"` for water in a glass or a round tank (the surface is a disk); `meniscus: { height, length }` lifts it at the wall (about 0.3 cm over the capillary length, 0.27 cm, for clean glass) |
+| `basin` | A pool's tiled shell, coping, and paved deck (default on for square pools; `deck`, `coping`, `tile`, `freeboard` tune it). The water ray-traces its own basin, so refraction shows floor that the walls hide from a dry view |
+| `ripples`, `rippleLength` | A pool's standing wind ripples: rms height (0.0005 m is a breezy day) and typical wavelength (8 cm) |
+| `rain` | Drops per second over the whole surface |
+| `wind`, `windDirection`, `waveHeight`, `choppy`, `patch` | The sea: wind in m/s and its direction `[x, z]`; `waveHeight` overrides the significant height |
+| `body` | `"clear"` (pool), `"sea"`, `"pond"` (dissolved plant matter and silt), or set `absorb` and `scatter` per meter |
+| `caustics`, `reflections`, `foam`, `shore` | Caustics on the floor (pool, default on), screen-space reflections (on), foam on breaking crests (sea), foam where the water thins to `shore` world units |
+| `resolution`, `seed`, `tension`, `damping` | Sim cells across (256 on desktops, 128 on phones), random seed, surface tension, extra damping per second |
+
+`depth` and the node's `position` can change every frame (a glass filling, a level that rises as water warms).
+
+`water.drop(point, { r, amp, time })` drops a crater of radius `r` and depth `amp` (negative is a dip) at `[x, z]` in the water's own coordinates or a world point; `water.objects` lists nodes that push the water as they move; `water.heightAt(x, z, t)` is the CPU height for labels; `water.clear()` removes the drops. `E3.water.omega(k, depth)` is the dispersion relation.
+
+How it looks: Fresnel (n = 1.333) between reflection (the sky or studio, the physical `scene.sky`, and the scene where a reflected ray finds it on screen) and refraction of what's below (marched against the depth buffer, so a straw or a leg bends at the surface); Beer–Lambert absorption by water's measured spectrum along the real path, down from the surface and back up (Pope and Fry 1997: red about 0.45 /m, green 0.07, blue 0.015), so depth turns a white floor cyan and then blue; light scattered back out of the water; sharp sun glints; caustics computed from the simulated surface (each cell's sunlight spread over the area it lands on) on the floor and on anything under the surface. Anything under the water's level is dimmed and tinted by the water the light crossed on its way down. Seen through a tank's side from below the level, the surface is a mirror outside Snell's window. Where nothing is drawn behind the water (a glass on an empty page), it refracts the page itself.
+
+Keep the water unrotated (move it, don't turn it). One water body per scene lights what's under it (caustics and tint). A pool with a basin and the sea turn off the ground's contact shadow. Use `"outdoor"` with a `scene.sky` or a fixed `scene.light`: caustics follow the Sun, and a camera-locked studio light would move them as the view turns. Cost at 1280 x 800 on a laptop GPU: about 1.6 ms to simulate a 256² pool and 2 ms to shade it; the sea about 3.5 ms in all. Moving frames use fewer ray-march steps and a coarser drawn grid. Needs float render targets; without them the surface falls back to the `water` material.
+
 ## Camera
 
 `g.render3d(scene, camera)` takes:
@@ -174,6 +261,7 @@ Section cuts work best on closed meshes that don't overlap each other. For an "x
 | `distance` | Camera distance. Default: fitted so the scene fills `margin` [0.86] of the frame. |
 | `zoom` | Multiplier on the fitted framing. |
 | `fit` | `"once"` (default: fit on the first draw and keep it, so turning doesn't zoom) or `"always"`. |
+| `focal`, `fNumber`, `focus` | A real lens: focal length in mm (sets the field of view on a 36 x 24 mm sensor when `fov` isn't given), f-number, and focus distance (world units; default the target). Depth of field is rendered for real (the view is averaged over the aperture), so blur grows with distance from the focus plane, with occlusion right. At real sizes it's subtle; `aperture` (diameter, world units) exaggerates it for teaching. |
 
 When a big context part (a ghost shell, a ground plate) makes the subject small, set `target` and `distance` explicitly.
 
@@ -257,6 +345,18 @@ Particles run on the GPU (transform feedback) and are depth tested against the s
 `E3.plume({ radius, length, throttle, temperature, fuel, cells, spread, turbulence, intensity, expansion })` is a ray-marched exhaust: exit at its origin, flowing down -y, with a hot core, Mach diamonds every `cells` exit diameters, a mixing layer whose eddies grow downstream, an afterburning sheath where fuel-rich exhaust meets air, soot that absorbs, a slow flicker, and emission by temperature (`fuel`: `"kerosene"`, `"methane"`, `"hydrogen"`, `"solid"`). `expansion` is exit pressure over ambient (0.8): below 1 the jet necks in and the diamonds are strong, at 1 they nearly vanish, above 1 the plume balloons; throttling down lowers it. The plume lights nearby parts and smoke with two point lights (one at the nozzle, one down the jet). Smoke in front of a plume's midplane draws over it and smoke behind draws under it, so the flame sits inside its smoke; the same particle system is split in two draws.
 
 Keep particle counts to what the figure needs: a pad firing reads well with about 2,000 smoke sprites at opacity 0.2 to 0.3, a campfire with 900. Each ribbon costs its `segments` twice over in vertices.
+
+### Backends
+
+Particles step on one of three integrators with the same physics, hashes, and time grid, so a seed gives the same picture on each, within float rounding. WebGL2 draws all of them.
+
+| backend | used | |
+|---|---|---|
+| `"webgpu"` | with a hardware WebGPU adapter (the default there) | A compute shader: each slot is a thread that runs a whole run of steps in one dispatch. Re-simulating (a jump in time, a slider that changes the forces) is 2 to 2.7 times faster than transform feedback; a running frame costs about the same. The state comes back without stalling, so a running system is drawn a frame behind its clock and a still one settles on exactly its time. Transform feedback draws it until the first copy is back. |
+| `"webgl2"` | everywhere else, and in the checker (SwiftShader has no WebGPU) | Transform feedback. |
+| `"cpu"` | `cpu: true`, `measure: true`, Node | The reference integrator. |
+
+`E3.backend` reads what's in use; setting it forces one for the page (`"auto"` undoes it). A system's `backend` option overrides it, and `?backend=webgl2` in the page URL (or `window.SAFIS_BACKEND` set before the scripts) forces one for a test. A software adapter is skipped unless forced. `E3.webgpu` describes the device (`state`, `name`, `errors`, `ready`), and `await E3.webgpu.sync(system)` waits for a system's copy. On an M3 Pro, 100,000 smoke particles step and draw at 60 fps on either GPU backend with small puffs; big lit puffs are limited by fill rate, not stepping. `node tools/time-backends.mjs --gpu` times every lab figure on each backend.
 
 ## Science and math builders
 

@@ -33,7 +33,7 @@ Each figure is drawn straight onto the page, with its controls beneath it (slide
 | `quality` | `"low"`, `"medium"`, or `"high"` forces the 3D engine's quality tier for this figure (render scale, shadow map size, particle count, plume steps). Leave it unset to let the engine adapt to the device; the page checker always renders at `high`. |
 | `reset` | `true` adds a reset button (needs `state` as a function). A function `(s, v, fig)` runs after every reset (the button, `fig.reset()`, the checker), so a figure can stop what it started. |
 | `destroy` | `(s, v, fig)` runs when the figure is removed: stop sounds, timers, and anything outside the canvas. |
-| `drag` | `{ hit(p, s, v, fig), start(p, s, v, fig), move(p, s, v, delta, fig), end(s, v, fig) }`. `hit` returns truthy when `p` is on something draggable (omit to drag anywhere). Points are `[x, y]` CSS pixels, origin top-left. Draw what can be dragged with `g.handle`. |
+| `drag` | `{ hit(p, s, v, fig), start(p, s, v, fig), move(p, s, v, delta, fig), end(s, v, fig) }`. `hit` returns truthy when `p` is on something draggable (omit to drag anywhere). Points are `[x, y]` CSS pixels, origin top-left. Draw what can be dragged with `g.handle`. `live: true` keeps `step` running during the drag (stirring a simulated fluid, as `sim.interact` does). |
 | `orbit` | `{ yaw, pitch, minPitch, maxPitch, minYaw, maxYaw, speed, zoom, minZoom, maxZoom, zoomButtons }`, angles in radians; `speed` is radians per pixel of drag [0.01], lower for big globes so the surface keeps up with the pointer. Dragging (where `drag.hit` doesn't claim it) turns `s.view = { yaw, pitch, zoom }`, with momentum after release. Arrow keys turn it too when there are no number controls. **Zoom**: `s.view.zoom` [1] multiplies the fitted framing, between `minZoom` [0.5] and `maxZoom` [4]. The reader zooms with Ctrl or Cmd and the wheel or a trackpad pinch (a plain wheel still scrolls the page), a two-finger pinch on touch, `+` / `-` / `0` with the figure focused, or the buttons in the figure's corner; it eases, and the figure's reset brings it back. `g.render3d(scene, { ...s.view })`, `g.iso(scene, { view: s.view })`, and `g.view3d({ ...s.view })` all honor it, so spread the view into the camera. `zoomButtons: false` turns zoom off for a figure whose framing must stay fixed. The self-check warns when zooming changes nothing. |
 | `hover(p, s, v, fig)` | Called on pointer moves while not dragging, with `null` when the pointer leaves. Return `true` when something changed and the figure should redraw. |
 | `highlight(name, s, v, fig)` | Called when a linked term in the prose lights a part (or `null` when it goes out). Usually you don't need it: read `g.lit("part")` in `draw`. |
@@ -141,7 +141,7 @@ Callbacks get it as their last argument (`fig`); `demo()` returns it.
 | `g.labels(items, o)` | Labels beside crowded points. Each takes the first nearby spot that overlaps no other label or point and stays on the canvas; one pushed further out gets a leader line. `items: [{ at, text, color, r, size, prefer: [dx, dy] }]`. Use it instead of hand-placed `g.label` calls whenever points can crowd. |
 | `g.bead(c, r, text, o)` | A disc with a short name inside (residues on a chain, nodes, atoms by name). The text shrinks to fit the disc instead of spilling out; the fill follows the theme. `o.color`, `fill`, `stroke`, `textColor`, `size`. |
 | `g.dimension(a, b, text, o)` | A measurement line with end ticks and a centered value; `o.offset` moves it off the object. |
-| `g.inset({ from, to, radius, zoom }, draw)` | A circular magnifier: calls `draw(g)` again zoomed around `from`, shown in a circle at `to`, connected by lines. |
+| `g.inset([x, y, r], [fx, fy, fr], box => ..., { background, stroke })` | A round magnifier at `[x, y]` joined by its two tangent lines to the spot it enlarges; draw the close-up into `box` (already clipped), for example a nearer `g.render3d(scene, cam, { box })`. The older `g.inset({ from, to, radius, zoom }, draw)` redraws `draw(g)` scaled up around `from`. |
 
 ## Instruments and fields
 
@@ -169,6 +169,10 @@ Callbacks get it as their last argument (`fig`); `demo()` returns it.
 - `view.hidden(p)` says whether something solid is in front of `p`.
 
 `g.gizmo(view, { at, size })` draws a small X/Y/Z marker showing the current orientation. Camera options and everything else about scenes are in [engine3d.md](engine3d.md).
+
+## Bands
+
+`<section class="band dark">...</section>` (or `band light`) turns a stretch of the page into the other theme, edge to edge, while the text keeps its column: a dark room for figures about light on a light page, or a white bench in a dark article. Figures and controls inside draw with the band's colors automatically (the palette is swapped while they draw). Use one or two per page, around the figures that need the dark (lights, glow, the night sky, a screen), with their lead-in and follow-up paragraphs inside the band.
 
 ## Globals
 
