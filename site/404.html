@@ -80,7 +80,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0a0a0a;
+    --bg: #000000;
     --panel: var(--bg);
     --ink: #ededed;
     --muted: #9a9a9a;
@@ -100,7 +100,7 @@
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0a0a0a;
+  --bg: #000000;
   --panel: var(--bg);
   --ink: #ededed;
   --muted: #9a9a9a;
@@ -219,21 +219,21 @@ main { max-width: var(--measure); margin: 0 auto; padding: 88px 0 128px; }
 .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: hover) { .theme-toggle:hover { color: var(--ink); } }
 
-/* Masthead */
-header { margin-bottom: 56px; }
+/* Masthead: a quiet label line, a large tight title, and a one-paragraph summary in plain type.
+   No rules or boxes; space does the separating. */
+header { margin-bottom: 72px; }
 .kicker {
-  font: 600 15px/1.2 var(--font-serif); font-variant-caps: all-small-caps; letter-spacing: 0.07em;
-  color: var(--accent); margin: 0 0 22px;
+  font: 600 12.5px/1.2 var(--font-text); text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--ink); margin: 0 0 26px;
 }
-.kicker .meta { color: var(--muted); font-weight: 400; }
-.kicker .meta::before { content: "·"; margin: 0 0.6em; color: var(--faint); }
+.kicker .meta { color: var(--muted); font-weight: 500; }
+.kicker .meta::before { content: ""; display: inline-block; width: 3px; height: 3px; border-radius: 50%; background: var(--faint); vertical-align: middle; margin: -2px 0.85em 0; }
 h1 {
-  font: 560 clamp(2.4rem, 6.4vw, 3.5rem)/1.04 var(--font-display);
-  letter-spacing: -0.012em; margin: 0 0 22px; text-wrap: balance;
+  font: 560 clamp(2.6rem, 7vw, 4.1rem)/1.0 var(--font-display);
+  letter-spacing: -0.028em; margin: 0 0 26px; text-wrap: balance;
   font-variant-numeric: lining-nums;
 }
-.dek { font: italic 400 1.32rem/1.45 var(--font-serif); color: var(--muted); margin: 0; text-wrap: pretty; max-width: 34rem; }
-header::after { content: ""; display: block; width: 72px; height: 1px; background: var(--ink); opacity: 0.5; margin-top: 40px; }
+.dek { font: 400 1.2rem/1.55 var(--font-text); letter-spacing: -0.004em; color: var(--muted); margin: 0; text-wrap: pretty; max-width: 35rem; }
 
 /* Article */
 article { counter-reset: section figure; }
@@ -566,6 +566,58 @@ body { transition: background-color 0.3s ease, color 0.3s ease; }
   .safis-reveal figure.demo .plate { opacity: 1; translate: none; }
 }
 
+/* Bands: a full-width stretch of the page in the other theme (a dark room for figures about light,
+   a white bench in a dark article). The background runs edge to edge while the text keeps its
+   column; figures inside draw with the band's colors. <section class="band dark">...</section> */
+.band { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 100vmax var(--bg); clip-path: inset(0 -100vmax); padding: 2.6rem 0 2.2rem; margin: 3rem 0; }
+.band > :first-child { margin-top: 0; }
+.band > :last-child { margin-bottom: 0; }
+.band.dark {
+  --bg: #000000;
+  --panel: var(--bg);
+  --ink: #ededed;
+  --muted: #9a9a9a;
+  --faint: #3a3a3a;
+  --grid: #1a1a1a;
+  --rule: #222222;
+  --brass: #d9a548;
+  --red: #f47272;
+  --orange: #f59447;
+  --green: #4fd185;
+  --blue: #6aa5ff;
+  --purple: #ac8cff;
+  --track: color-mix(in srgb, var(--ink) 16%, transparent);
+  --thumb: #ffffff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 12px 32px -12px rgb(0 0 0 / 0.85);
+  color-scheme: dark;
+}
+.band.light {
+  --bg: #fcfcfc;
+  --panel: var(--bg);
+  --ink: #111111;
+  --muted: #666666;
+  --faint: #d4d4d4;
+  --grid: #efefef;
+  --rule: #e6e6e6;
+  --brass: #966111;
+  --red: #d22d2d;
+  --orange: #bd4f08;
+  --green: #18793e;
+  --blue: #2457d6;
+  --purple: #7438e0;
+  --accent: var(--ink);
+  --track: color-mix(in srgb, var(--ink) 13%, transparent);
+  --thumb: #ffffff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px -12px rgb(0 0 0 / 0.14);
+  /* Controls are soft chips of ink over the page, so they follow the theme on their own. */
+  color-scheme: light;
+}
+
+/* A text control: a quiet field on the chip surface, mono so tokens line up with the figure. */
+.textfield { width: 100%; min-width: 0; font: 500 15px/1.4 var(--font-mono); color: var(--ink); background: var(--chip); border: 0; border-radius: 10px; padding: 9px 12px; outline: none; transition: background-color 0.15s; }
+.textfield:hover { background: var(--chip-hover); }
+.textfield:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--c, var(--accent)) 70%, transparent); }
+
 /* Math. TeX in .tex elements becomes MathML (src/tex.js), set in a subset of
    STIX Two Math (SIL Open Font License, src/fonts/STIXTwoMath-OFL.txt). */
 @font-face {
@@ -701,16 +753,14 @@ article :is(h2, h3) { scroll-margin-top: 24px; }
 article :is(h2, h3):hover .anchor, .anchor:focus-visible { opacity: 1; }
 .anchor:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
-/* In brief: a short abstract under the masthead */
-.abstract {
-  margin: 0 0 2.4em; padding: 18px 22px; border-radius: 8px;
-  background: color-mix(in srgb, var(--ink) 4%, transparent);
-  font-size: 0.92em; line-height: 1.55;
-}
-.abstract::before { content: attr(data-label); display: block; margin-bottom: 6px; font: 600 14px/1.2 var(--font-serif); font-variant-caps: all-small-caps; letter-spacing: 0.07em; color: var(--accent); }
+/* In brief: the page's few key findings, set as a quiet list under a small label. No box. */
+.abstract { margin: 0 0 3.2em; font-size: 0.97em; line-height: 1.6; }
+.abstract::before { content: attr(data-label); display: block; margin-bottom: 14px; font: 600 12.5px/1.2 var(--font-text); text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); }
 .abstract:not([data-label])::before { content: "In brief"; }
 .abstract > :last-child { margin-bottom: 0; }
-.abstract ul { margin: 0; }
+.abstract ul, .abstract ol { margin: 0; padding: 0; list-style: none; counter-reset: brief; }
+.abstract li { position: relative; padding-left: 2.1em; margin: 0 0 0.75em; }
+.abstract li::before { counter-increment: brief; content: counter(brief, decimal-leading-zero); position: absolute; left: 0; top: 0.28em; font: 500 0.72em/1.4 var(--font-mono); color: var(--muted); letter-spacing: 0.02em; }
 
 /* Contents, built for long articles */
 .contents { margin: 0 0 2.6em; font-size: 0.92em; }
