@@ -772,6 +772,7 @@
       }
 
       d.v[c.key] = type === "toggle" ? !!c.value
+        : type === "text" ? String(c.value ?? "")
         : type === "choice" ? (c.value ?? options(c)[0]?.value)
         : clamp(c.value ?? c.min, c.min, c.max);
       const entry = { c, type, sync: () => {} };
@@ -796,6 +797,23 @@
       const row = node("div", "ctl");
       row.style.setProperty("--c", color);
       const name = node("span", "name", label);
+      if (type === "text") {
+        // A line of text the figure reads (a prompt, a word, a formula): updates as the reader types.
+        row.classList.add("wide-widget");
+        const input = node("input", "textfield");
+        input.type = "text";
+        input.spellcheck = false;
+        input.autocomplete = "off";
+        input.setAttribute("aria-label", label);
+        if (c.placeholder) input.placeholder = c.placeholder;
+        if (c.maxLength) input.maxLength = c.maxLength;
+        on(input, "input", () => userSet(d, c.key, input.value));
+        entry.sync = () => { if (input.value !== d.v[c.key]) input.value = d.v[c.key]; };
+        row.append(name, input);
+        box.append(row);
+        entry.sync();
+        continue;
+      }
       if (type === "choice") {
         row.classList.add("wide-widget");
         const seg = node("div", "segmented");
@@ -969,6 +987,7 @@
     const { c, type } = entry;
     let v;
     if (type === "toggle") v = typeof value === "string" ? value === "true" || value === "on" : !!value;
+    else if (type === "text") v = String(value ?? "");
     else if (type === "choice") {
       const opts = options(c);
       const hit = opts.find(o => o.value === value) ?? opts.find(o => String(o.value) === String(value));
@@ -1843,6 +1862,7 @@
     const type = typeOf(c);
     if (type === "button") return [];
     if (type === "toggle") return [[c.key, [false, true]]];
+    if (type === "text") return [[c.key, c.examples ?? [c.value ?? ""]]];
     if (type === "choice") return [[c.key, options(c).map(o => o.value)]];
     if (type === "pad") return [[c.keys[0], [c.x.min, (c.x.min + c.x.max) / 2, c.x.max]], [c.keys[1], [c.y.min, (c.y.min + c.y.max) / 2, c.y.max]]];
     return [[c.key, [c.min, (c.min + c.max) / 2, c.max]]];
@@ -1948,6 +1968,8 @@
         return { key, label: `${label} (${axis ? "y" : "x"})`, type: "slider", min: r.min, max: r.max, value: d.v[key] };
       });
       if (type === "choice") return [{ key: c.key, label, type, options: options(c).map(o => o.value), value: d.v[c.key] }];
+      // Explore tries a text control's examples as if they were choices.
+      if (type === "text") return c.examples?.length ? [{ key: c.key, label, type: "choice", options: c.examples, value: d.v[c.key] }] : [];
       return [{ key: c.key, label, type: NUMERIC.has(type) ? "slider" : type, min: c.min, max: c.max, value: d.v[c.key] }];
     });
     for (const p of d.spec.presets ?? []) controls.push({ label: p.label, type: "button", preset: true });
