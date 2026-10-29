@@ -156,6 +156,22 @@ check("smoke defaults: no glow, segments unset", E3.particles({}).glow === 0 && 
     if ((h === null && b === Infinity) || (h && Math.abs(h.t - b) < 1e-6)) agree++;
   }
   check("trace: the BVH agrees with brute force on 200 rays", agree === 200, `${agree}/200`);
+  // Picking walks a tree of each big mesh in its own space (built in a worker on the page); it
+  // must find the same nearest hit as testing every triangle.
+  {
+  const n = 90, P = new Float32Array((n + 1) * (n + 1) * 3), I = new Uint32Array(n * n * 6);
+  for (let j = 0, k = 0; j <= n; j++) for (let i = 0; i <= n; i++, k += 3) { const x = i / n * 2 - 1, y = j / n * 2 - 1; P.set([x, y, 0.15 * Math.sin(7 * x) * Math.cos(5 * y)], k); }
+  for (let j = 0, k = 0; j < n; j++) for (let i = 0; i < n; i++, k += 6) { const a = j * (n + 1) + i, c = a + n + 1; I.set([a, a + 1, c + 1, a, c + 1, c], k); }
+  const tree = _.meshTree(P, I, _.bvhSplit);
+  const all = (o, d) => { let best = Infinity; for (let k = 0; k < I.length; k += 3) { const a = I[k] * 3, b = I[k + 1] * 3, c = I[k + 2] * 3; const t = _.rayTri(...o, ...d, P[a], P[a + 1], P[a + 2], P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2], P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2], 1e-12); if (t > 0 && t < best) best = t; } return best; };
+  let same = 0;
+  for (let i = 0; i < 300; i++) {
+    const o = [Math.sin(i * 1.3) * 1.4, Math.cos(i * 0.7) * 1.4, 2 + (i % 3)], d = E3.v3.norm([Math.sin(i) * 0.4 - o[0] * 0.3, Math.cos(i * 2.1) * 0.4 - o[1] * 0.3, -1]);
+    const hit = _.bvhNearest(tree.nodes, tree.tris, o, d, 0, Infinity, false, 1e-12, null), t = hit >= 0 ? _.walkT() : Infinity, b = all(o, d);
+    if (t === b || Math.abs(t - b) < 1e-5) same++;
+  }
+  check("pick: the mesh tree agrees with every triangle on 300 rays", same === 300, `${same}/300`);
+  }
 
   // Radiometry: a 100 W point light 2 m above a floor gives P / (4 pi r^2) under it.
   const rig = _.lightRig({ units: "m", lights: [{ type: "point", position: [0, 2, 0], power: 100 }] });

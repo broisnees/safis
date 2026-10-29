@@ -864,28 +864,8 @@
     high: { rank: 2, ss: 3, scale: 1, msaa: 4, shadow: 2048, particles: 1, steps: 48, bloom: true, vsteps: 88, vscale: 0.5 },
   };
   const TIER_NAMES = ["low", "medium", "high"];
-  // Still frames have their own level, since a weak or software GPU can spend seconds on one at
-  // full quality and as long again on each of the refinement passes after it: 2 is full quality,
-  // 1 drops the supersampling and caps refinement, 0 also renders at 3/4 size with the low tier's
-  // shadows and volumes. The runtime reports how long each still frame blocked (observe), and the
-  // level steps down when they run long and back up when they're quick.
-  const STILL = [
-    { ss: 1, scale: 0.75, samples: 8, lensSamples: 12 },
-    { ss: 1, scale: 1, samples: 24, lensSamples: 36 },
-  ];
-  const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null, still: null, stillEma: 0, stillDownAt: -1e9, stillQuick: 0, hitch: false };
-  function startStill() { return R && R.soft ? 0 : 2; }
-  function observeStill(ms) {
-    if (Q.hitch || !(ms >= 0) || checking()) return;
-    if (Q.still == null) Q.still = startStill();
-    Q.stillEma = Q.stillEma ? Q.stillEma * 0.6 + ms * 0.4 : ms;
-    const now = performance.now();
-    if (Q.stillEma > 90 && Q.still > 0) { Q.still--; Q.stillDownAt = now; Q.stillEma = 0; Q.stillQuick = 0; }
-    else if (Q.stillEma < 22 && Q.still < 2 && now - Q.stillDownAt > 10000) { if (++Q.stillQuick >= 6) { Q.still++; Q.stillEma = 0; Q.stillQuick = 0; } }
-    else Q.stillQuick = 0;
-  }
+  const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null };
   function startRank() {
-    if (R && R.soft) return 0;
     try {
       const coarse = matchMedia("(pointer: coarse)").matches;
       const small = Math.min(screen.width, screen.height) < 600;
@@ -910,7 +890,6 @@
     }
     const hitch = typeof R !== "undefined" && R && R.hitch;
     if (hitch) R.hitch = false;
-    Q.hitch = !!hitch;
     if (moving && dt < 250 && !hitch) {
       Q.ema = Q.ema * 0.9 + Math.min(dt, 250) * 0.1;
       if (Q.ema > 30 && Q.rank > 0 && now - Q.downAt > 800) { Q.rank--; Q.downAt = now; Q.ema = 20; Q.quickSince = now; }
@@ -920,11 +899,6 @@
       } else Q.quickSince = 0;
     }
     const name = TIER_NAMES[Q.rank], t = TIERS[name];
-    if (Q.still == null) Q.still = startStill();
-    if (!moving && Q.still < 2) {
-      const lite = STILL[Q.still], hi = Q.still ? TIERS.high : TIERS.low;
-      return { ...t, name, ss: Math.min(ss, lite.ss), scale: lite.scale, shadow: hi.shadow, steps: hi.steps, vsteps: hi.vsteps, vscale: hi.vscale, moving, lite };
-    }
     if (!moving) return { ...t, name, ss, scale: 1, shadow: TIERS.high.shadow, steps: TIERS.high.steps, vsteps: TIERS.high.vsteps, vscale: TIERS.high.vscale, moving };
     return { ...t, name, ss: Math.min(ss, t.ss), moving };
   }
@@ -3724,33 +3698,10 @@ void main() {
   const meshIds = new WeakMap();
   let meshSeq = 0;
   const meshId = m => { let i = meshIds.get(m); if (!i) meshIds.set(m, (i = ++meshSeq)); return i; };
-  function buildBVH(list, matOf) {
-    let nt = 0;
-    for (const it of list) nt += it.node.mesh.indices.length / 3;
-    const V0 = new Float32Array(nt * 3), E1 = new Float32Array(nt * 3), E2 = new Float32Array(nt * 3);
-    const lo = new Float32Array(nt * 3), hi = new Float32Array(nt * 3), cen = new Float32Array(nt * 3);
-    const matI = new Int32Array(nt), cutF = new Uint8Array(nt), itemI = new Int32Array(nt), mats = [];
-    let t = 0;
-    list.forEach((it, ii) => {
-      const m = matOf(it), alb = toLinear(m.rgb), Wm = it.world, P = it.node.mesh.positions, I = it.node.mesh.indices;
-      mats.push(alb[0], alb[1], alb[2], m.metal || 0);
-      const wp = new Float32Array(P.length);
-      for (let i = 0; i < P.length; i += 3) {
-        const x = P[i], y = P[i + 1], z = P[i + 2];
-        wp[i] = Wm[0] * x + Wm[4] * y + Wm[8] * z + Wm[12];
-        wp[i + 1] = Wm[1] * x + Wm[5] * y + Wm[9] * z + Wm[13];
-        wp[i + 2] = Wm[2] * x + Wm[6] * y + Wm[10] * z + Wm[14];
-      }
-      for (let k = 0; k < I.length; k += 3, t++) {
-        const a = I[k] * 3, b = I[k + 1] * 3, c = I[k + 2] * 3;
-        for (let d = 0; d < 3; d++) {
-          const A = wp[a + d], B = wp[b + d], C = wp[c + d];
-          V0[t * 3 + d] = A; E1[t * 3 + d] = B - A; E2[t * 3 + d] = C - A;
-          lo[t * 3 + d] = Math.min(A, B, C); hi[t * 3 + d] = Math.max(A, B, C); cen[t * 3 + d] = (A + B + C) / 3;
-        }
-        matI[t] = ii; cutF[t] = it.node.cut ? 1 : 0; itemI[t] = ii;
-      }
-    });
+  // The split itself: a binned surface area heuristic over nt triangles given their bounds (lo,
+  // hi) and centroids, at most 16 triangles a leaf. It names nothing outside itself, so the pick
+  // worker can run it from its source.
+  function bvhSplit(lo, hi, cen, nt) {
     const idx = new Uint32Array(nt);
     for (let i = 0; i < nt; i++) idx[i] = i;
     const nodes = new Float32Array(Math.max(2, 2 * nt) * 8);
@@ -3811,6 +3762,36 @@ void main() {
       nodes[ni * 8 + 3] = l; nodes[ni * 8 + 7] = 0;
       stack.push([l, s, mid], [l + 1, mid, e]);
     }
+    return { idx, nodes, count };
+  }
+  function buildBVH(list, matOf) {
+    let nt = 0;
+    for (const it of list) nt += it.node.mesh.indices.length / 3;
+    const V0 = new Float32Array(nt * 3), E1 = new Float32Array(nt * 3), E2 = new Float32Array(nt * 3);
+    const lo = new Float32Array(nt * 3), hi = new Float32Array(nt * 3), cen = new Float32Array(nt * 3);
+    const matI = new Int32Array(nt), cutF = new Uint8Array(nt), itemI = new Int32Array(nt), mats = [];
+    let t = 0;
+    list.forEach((it, ii) => {
+      const m = matOf(it), alb = toLinear(m.rgb), Wm = it.world, P = it.node.mesh.positions, I = it.node.mesh.indices;
+      mats.push(alb[0], alb[1], alb[2], m.metal || 0);
+      const wp = new Float32Array(P.length);
+      for (let i = 0; i < P.length; i += 3) {
+        const x = P[i], y = P[i + 1], z = P[i + 2];
+        wp[i] = Wm[0] * x + Wm[4] * y + Wm[8] * z + Wm[12];
+        wp[i + 1] = Wm[1] * x + Wm[5] * y + Wm[9] * z + Wm[13];
+        wp[i + 2] = Wm[2] * x + Wm[6] * y + Wm[10] * z + Wm[14];
+      }
+      for (let k = 0; k < I.length; k += 3, t++) {
+        const a = I[k] * 3, b = I[k + 1] * 3, c = I[k + 2] * 3;
+        for (let d = 0; d < 3; d++) {
+          const A = wp[a + d], B = wp[b + d], C = wp[c + d];
+          V0[t * 3 + d] = A; E1[t * 3 + d] = B - A; E2[t * 3 + d] = C - A;
+          lo[t * 3 + d] = Math.min(A, B, C); hi[t * 3 + d] = Math.max(A, B, C); cen[t * 3 + d] = (A + B + C) / 3;
+        }
+        matI[t] = ii; cutF[t] = it.node.cut ? 1 : 0; itemI[t] = ii;
+      }
+    });
+    const { idx, nodes, count } = bvhSplit(lo, hi, cen, nt);
     const tris = new Float32Array(Math.max(1, nt) * 12);
     const triItem = new Int32Array(nt);
     for (let k = 0; k < nt; k++) {
@@ -3820,52 +3801,116 @@ void main() {
     }
     return { nodes: nodes.subarray(0, count * 8), tris, mats: new Float32Array(mats.length ? mats : [0, 0, 0, 0]), nNodes: count, nTris: nt, triItem, list };
   }
-  // The same walk as the shader's trace(), on the CPU: { t, point, normal, node } or null.
-  function traceCPU(B, o, d, tmax = Infinity, any = false, cut = null) {
-    if (!B || !B.nTris) return null;
-    const N = B.nodes, T = B.tris;
-    const inv = d.map(x => 1 / (Math.abs(x) < 1e-12 ? 1e-12 : x));
+  // A ray against one triangle (a corner and two edges), Moller-Trumbore, without allocating:
+  // the distance along the ray, or Infinity for a miss.
+  function rayTri(ox, oy, oz, dx, dy, dz, ax, ay, az, e1x, e1y, e1z, e2x, e2y, e2z, eps) {
+    const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
+    const det = e1x * px + e1y * py + e1z * pz;
+    if (det > -eps && det < eps) return Infinity;
+    const tx = ox - ax, ty = oy - ay, tz = oz - az, u = (tx * px + ty * py + tz * pz) / det;
+    if (u < 0 || u > 1) return Infinity;
+    const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x, v = (dx * qx + dy * qy + dz * qz) / det;
+    if (v < 0 || u + v > 1) return Infinity;
+    return (e2x * qx + e2y * qy + e2z * qz) / det;
+  }
+  // The nearest triangle of a BVH the ray hits with tmin < t < tmax that ok(j, t) accepts (any:
+  // the first one found): its index, with its t in walkT, or -1.
+  const walkStack = [];
+  let walkT = Infinity;
+  function bvhNearest(N, T, o, d, tmin, tmax, any, eps, ok) {
+    const ox = o[0], oy = o[1], oz = o[2], dx = d[0], dy = d[1], dz = d[2];
+    const ix = 1 / (Math.abs(dx) < 1e-12 ? 1e-12 : dx), iy = 1 / (Math.abs(dy) < 1e-12 ? 1e-12 : dy), iz = 1 / (Math.abs(dz) < 1e-12 ? 1e-12 : dz);
     const boxT = (i, best) => {
-      let t0 = 0, t1 = best;
-      for (let k = 0; k < 3; k++) {
-        const a = (N[i * 8 + k] - o[k]) * inv[k], b = (N[i * 8 + 4 + k] - o[k]) * inv[k];
-        t0 = Math.max(t0, Math.min(a, b)); t1 = Math.min(t1, Math.max(a, b));
-      }
+      const b = i * 8;
+      let a = (N[b] - ox) * ix, c = (N[b + 4] - ox) * ix, t0 = Math.max(0, Math.min(a, c)), t1 = Math.min(best, Math.max(a, c));
+      a = (N[b + 1] - oy) * iy; c = (N[b + 5] - oy) * iy; t0 = Math.max(t0, Math.min(a, c)); t1 = Math.min(t1, Math.max(a, c));
+      a = (N[b + 2] - oz) * iz; c = (N[b + 6] - oz) * iz; t0 = Math.max(t0, Math.min(a, c)); t1 = Math.min(t1, Math.max(a, c));
       return t0 <= t1 ? t0 : Infinity;
     };
-    let best = tmax, hit = -1;
-    if (boxT(0, best) === Infinity) return null;
-    const stack = [0];
-    while (stack.length) {
-      const ni = stack.pop(), cnt = N[ni * 8 + 7];
+    let best = tmax, hit = -1, sp = 0;
+    walkT = Infinity;
+    if (boxT(0, best) === Infinity) return -1;
+    walkStack[sp++] = 0;
+    while (sp) {
+      const ni = walkStack[--sp], cnt = N[ni * 8 + 7];
       if (cnt > 0) {
         const first = N[ni * 8 + 3];
         for (let j = first; j < first + cnt; j++) {
-          const q = j * 12, e1 = [T[q + 4], T[q + 5], T[q + 6]], e2 = [T[q + 8], T[q + 9], T[q + 10]];
-          const pv = v3.cross(d, e2), det = v3.dot(e1, pv);
-          if (Math.abs(det) < 1e-14) continue;
-          const tv = [o[0] - T[q], o[1] - T[q + 1], o[2] - T[q + 2]], u = v3.dot(tv, pv) / det;
-          if (u < 0 || u > 1) continue;
-          const qv = v3.cross(tv, e1), v = v3.dot(d, qv) / det;
-          if (v < 0 || u + v > 1) continue;
-          const t = v3.dot(e2, qv) / det;
-          if (t <= 1e-9 || t >= best) continue;
-          if (cut && T[q + 7] > 0.5 && v3.dot(v3.add(o, v3.scale(d, t)), cut) > cut[3]) continue;
+          const q = j * 12, t = rayTri(ox, oy, oz, dx, dy, dz, T[q], T[q + 1], T[q + 2], T[q + 4], T[q + 5], T[q + 6], T[q + 8], T[q + 9], T[q + 10], eps);
+          if (!(t > tmin) || t >= best || (ok && !ok(j, t))) continue;
           best = t; hit = j;
           if (any) break;
         }
         if (any && hit >= 0) break;
       } else {
         const l = N[ni * 8 + 3], r = l + 1, tl = boxT(l, best), tr = boxT(r, best);
-        if (tl <= tr) { if (tr < Infinity) stack.push(r); if (tl < Infinity) stack.push(l); }
-        else { if (tl < Infinity) stack.push(l); if (tr < Infinity) stack.push(r); }
+        if (tl <= tr) { if (tr < Infinity) walkStack[sp++] = r; if (tl < Infinity) walkStack[sp++] = l; }
+        else { if (tl < Infinity) walkStack[sp++] = l; if (tr < Infinity) walkStack[sp++] = r; }
       }
     }
+    if (hit >= 0) walkT = best;
+    return hit;
+  }
+  // The same walk as the shader's trace(), on the CPU: { t, point, normal, node } or null.
+  function traceCPU(B, o, d, tmax = Infinity, any = false, cut = null) {
+    if (!B || !B.nTris) return null;
+    const T = B.tris;
+    const ok = cut ? (j, t) => !(T[j * 12 + 7] > 0.5 && (o[0] + d[0] * t) * cut[0] + (o[1] + d[1] * t) * cut[1] + (o[2] + d[2] * t) * cut[2] > cut[3]) : null;
+    const hit = bvhNearest(B.nodes, T, o, d, 1e-9, tmax, any, 1e-14, ok);
     if (hit < 0) return null;
-    const q = hit * 12;
+    const best = walkT, q = hit * 12;
     let n = v3.norm(v3.cross([T[q + 4], T[q + 5], T[q + 6]], [T[q + 8], T[q + 9], T[q + 10]]));
     if (v3.dot(n, d) > 0) n = v3.scale(n, -1);
     return { t: best, point: v3.add(o, v3.scale(d, best)), normal: n, node: B.list[B.triItem[hit]]?.node ?? null };
+  }
+
+  // Picking (view.pick, view.hidden: hover, labels a part hides) walks a BVH of each big mesh in
+  // its own space. A worker builds it once the mesh has held still for a moment, so the page never
+  // waits on a build; until then picks test every triangle, without allocating. Both give the
+  // same hit.
+  function meshTree(P, I, split) {
+    const nt = I.length / 3, lo = new Float32Array(nt * 3), hi = new Float32Array(nt * 3), cen = new Float32Array(nt * 3), tri = new Float32Array(nt * 9);
+    for (let t = 0; t < nt; t++) {
+      const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
+      for (let d = 0; d < 3; d++) {
+        const A = P[a + d], B = P[b + d], C = P[c + d];
+        tri[t * 9 + d] = A; tri[t * 9 + 3 + d] = B - A; tri[t * 9 + 6 + d] = C - A;
+        lo[t * 3 + d] = Math.min(A, B, C); hi[t * 3 + d] = Math.max(A, B, C); cen[t * 3 + d] = (A + B + C) / 3;
+      }
+    }
+    const { idx, nodes, count } = split(lo, hi, cen, nt), tris = new Float32Array(Math.max(1, nt) * 12);
+    for (let k = 0; k < nt; k++) { const j = idx[k] * 9, q = k * 12; for (let d = 0; d < 3; d++) { tris[q + d] = tri[j + d]; tris[q + 4 + d] = tri[j + 3 + d]; tris[q + 8 + d] = tri[j + 6 + d]; } }
+    return { nodes: nodes.slice(0, count * 8), tris, nTris: nt };
+  }
+  const pickTrees = new WeakMap(), treeJobs = new Map();
+  let treeWorker, treeSeq = 0;
+  function startTreeWorker() {
+    if (treeWorker !== undefined) return treeWorker;
+    treeWorker = null;
+    try {
+      const src = `const split = ${bvhSplit}; const tree = ${meshTree};
+onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: e.data.id, tree: t }, [t.nodes.buffer, t.tris.buffer]); };`;
+      const w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+      w.onmessage = e => { const done = treeJobs.get(e.data.id); treeJobs.delete(e.data.id); if (done) done(e.data.tree); };
+      w.onerror = () => { treeWorker = null; treeJobs.clear(); };
+      treeWorker = w;
+    } catch { treeWorker = null; }
+    return treeWorker;
+  }
+  function pickTree(mesh) {
+    const nt = mesh.indices.length / 3;
+    if (nt < 1024) return null;
+    const v = mesh.version ?? 0, now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    let e = pickTrees.get(mesh);
+    if (!e || e.version !== v) pickTrees.set(mesh, (e = { version: v, since: now, tree: null, asked: false }));
+    if (e.tree || e.asked) return e.tree;
+    const done = tree => { if (pickTrees.get(mesh) === e) e.tree = tree; };
+    if (typeof Worker === "undefined") { e.asked = true; done(meshTree(mesh.positions, mesh.indices, bvhSplit)); return e.tree; }
+    if (now - e.since < 250) return null;   // a mesh that changes every frame never gets one
+    e.asked = true;
+    const w = startTreeWorker();
+    if (w) { const id = ++treeSeq; treeJobs.set(id, done); w.postMessage({ id, P: Float32Array.from(mesh.positions), I: Uint32Array.from(mesh.indices) }); }
+    return null;
   }
   // The scene's BVH, rebuilt only when a traced part moves, changes, or comes and goes.
   function traceOf(scene, items, matOf) {
@@ -4245,20 +4290,25 @@ void main() {
 
   // ---------- WebGL renderer ----------
   let R = null;
+  // Both shaders compile and link before anything asks how it went, so the driver can work on
+  // them together instead of finishing each one while the page waits; the status (and the
+  // failing shader's log) is read only once, after the link.
   function compile(gl, vs, fs, varyings) {
     const make = (type, src) => {
       const s = gl.createShader(type);
       gl.shaderSource(s, src);
       gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader: ${gl.getShaderInfoLog(s)}`);
       return s;
     };
-    const p = gl.createProgram();
-    gl.attachShader(p, make(gl.VERTEX_SHADER, vs));
-    gl.attachShader(p, make(gl.FRAGMENT_SHADER, fs));
+    const p = gl.createProgram(), v = make(gl.VERTEX_SHADER, vs), f = make(gl.FRAGMENT_SHADER, fs);
+    gl.attachShader(p, v);
+    gl.attachShader(p, f);
     if (varyings) gl.transformFeedbackVaryings(p, varyings, gl.SEPARATE_ATTRIBS);
     gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`program: ${gl.getProgramInfoLog(p)}`);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      for (const s of [v, f]) if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader: ${gl.getShaderInfoLog(s)}`);
+      throw new Error(`program: ${gl.getProgramInfoLog(p)}`);
+    }
     const u = {};
     const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
     for (let i = 0; i < n; i++) {
@@ -4334,9 +4384,6 @@ void main() {
     R.sRaw = sampler(false, gl.NEAREST);
     R.dummyDepth = texture(1, 1, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST);
     R.dummyColor = texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
-    // A software GL (SwiftShader, llvmpipe) starts at the lightest still and moving quality.
-    const info = gl.getExtension("WEBGL_debug_renderer_info");
-    R.soft = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER)));
     // After a lost context (a GPU reset, or the browser reclaiming it) the next frame makes a new
     // one; every figure redraws then, since the frames they were showing may never have finished.
     if (canvas.addEventListener) canvas.addEventListener("webglcontextlost", e => {
@@ -5531,7 +5578,7 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     };
     const unbindSamplers = () => { for (const u of [5, 6, 7]) gl.bindSampler(u, null); };
 
-    const samples = (q.moving || q.lite) && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
+    const samples = q.moving && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
     // What this frame ran at, for the harness and for pages that report it.
     E3stats = { tier: q.name, moving: q.moving, ss, scale: q.scale, samples, size: [W, H], out: [Wo, Ho], triangles: items.reduce((n, it) => n + (it.node.mesh ? it.node.mesh.indices.length / 3 : 0), 0), particles: fxNodes.filter(f => f.node.isParticles).reduce((n, f) => n + (f.node._drawN || 0), 0), plumes: fxNodes.filter(f => f.node.isPlume).length };
     scene.stats = E3stats;
@@ -6055,7 +6102,7 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     const view = makeView(scene, items, C0, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.ch - Ho, sw: Wo, sh: Ho });
     view.quality = q.name;
     // A traced view refines over the next still frames; the runtime asks for them while this is true.
-    view.converging = stochastic && !q.moving && accN + 1 < Math.min(scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48), q.lite ? (lens ? q.lite.lensSamples : q.lite.samples) : Infinity);
+    view.converging = stochastic && !q.moving && accN + 1 < (scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48));
     view.frames = stochastic ? accN + 1 : 1;
     view.trace = (o, d, tmax) => (Tr ? traceCPU(Tr.bvh, o, v3.norm(d), tmax ?? Infinity, false, cut ? cutV : null) : null);
     return view;
@@ -6085,26 +6132,26 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
         if (bq * bq - cq < 0) continue;
         const inv = m4.invert(it.world);
         const o = m4.apply(inv, origin), d = m4.applyDir(inv, dir);
-        const P = node.mesh.positions, I = node.mesh.indices;
-        for (let t = 0; t < I.length; t += 3) {
-          const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
-          const e1 = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]];
-          const e2 = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
-          const pv = v3.cross(d, e2), det = v3.dot(e1, pv);
-          if (Math.abs(det) < 1e-12) continue;
-          const tv = [o[0] - P[a], o[1] - P[a + 1], o[2] - P[a + 2]];
-          const u = v3.dot(tv, pv) / det;
-          if (u < 0 || u > 1) continue;
-          const qv = v3.cross(tv, e1), v = v3.dot(d, qv) / det;
-          if (v < 0 || u + v > 1) continue;
-          const tt = v3.dot(e2, qv) / det;
-          if (tt <= 0) continue;
-          const local = v3.add(o, v3.scale(d, tt));
-          const world = m4.apply(it.world, local);
-          if (cut && node.cut && v3.dot(world, cut.slice(0, 3)) > cut[3]) continue;
-          const dist = v3.dist(world, origin);
-          if (!best || dist < best.distance) best = { node, point: world, distance: dist };
+        // The ray's parameter is the same in the mesh's space as in the world's (dir is a unit
+        // vector), so a hit beyond the best so far can be skipped; the world distance decides.
+        const tmax = best ? best.distance * (1 + 1e-6) + 1e-9 : Infinity;
+        const at = tt => m4.apply(it.world, [o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt]);
+        const cutAway = cut && node.cut ? tt => v3.dot(at(tt), cut.slice(0, 3)) > cut[3] : null;
+        const P = node.mesh.positions, I = node.mesh.indices, tree = pickTree(node.mesh);
+        let tt = Infinity;
+        if (tree) { if (bvhNearest(tree.nodes, tree.tris, o, d, 0, tmax, false, 1e-12, cutAway && ((j, t) => !cutAway(t))) >= 0) tt = walkT; }
+        else {
+          let lim = tmax;
+          for (let k = 0; k < I.length; k += 3) {
+            const a = I[k] * 3, b = I[k + 1] * 3, c = I[k + 2] * 3, ax = P[a], ay = P[a + 1], az = P[a + 2];
+            const t = rayTri(o[0], o[1], o[2], d[0], d[1], d[2], ax, ay, az, P[b] - ax, P[b + 1] - ay, P[b + 2] - az, P[c] - ax, P[c + 1] - ay, P[c + 2] - az, 1e-12);
+            if (!(t > 0) || t >= lim || (cutAway && cutAway(t))) continue;
+            lim = tt = t;
+          }
         }
+        if (tt === Infinity) continue;
+        const world = at(tt), dist = v3.dist(world, origin);
+        if (!best || dist < best.distance) best = { node, point: world, distance: dist };
       }
       return best;
     }
@@ -7473,9 +7520,6 @@ void main() {
       get tier() { return TIER_NAMES[Q.rank ?? startRank()]; },
       force(name) { Q.forced = TIERS[name] ? name : null; },
       tiers: TIERS,
-      // The runtime reports how long a still frame blocked the page (ms), to set the still level.
-      observe: observeStill,
-      get still() { return Q.still ?? startStill(); },
     },
     // True when the page is dark (from the palette's background): pick a look by it, in draw.
     get dark() { return pageDark(); },
@@ -7489,6 +7533,6 @@ void main() {
     // The WebGPU device ({ state, name, soft, error, errors, ready }) and sync(system): resolves once a system's copy back has landed.
     get webgpu() { return { state: GPUX.state, name: GPUX.name, soft: GPUX.soft, error: GPUX.error, errors: GPUX.errors, ready: GPUX.ready, sync: sys => (sys && sys._x ? sys._x.sync() : Promise.resolve()) }; },
     // For tests: the pure functions the shaders mirror.
-    _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS, buildBVH, traceCPU, lightRig, sunTransmittance, skyOf, waterOmega, waterIfft1, waterIfft2, waterPoolLine, oceanSetup, oceanHeightField, WATER_BODIES },
+    _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS, buildBVH, traceCPU, bvhSplit, meshTree, bvhNearest, rayTri, walkT: () => walkT, lightRig, sunTransmittance, skyOf, waterOmega, waterIfft1, waterIfft2, waterPoolLine, oceanSetup, oceanHeightField, WATER_BODIES },
   };
 })();

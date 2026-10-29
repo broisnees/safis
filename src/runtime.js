@@ -475,7 +475,6 @@
         if (bw * bh * (out * ss) ** 2 > budget) ss = 1;
         // The figure's `quality` ("low" | "medium" | "high") forces a tier; `still` tells the
         // engine this frame isn't part of a drag or animation, so it renders at full quality.
-        const t0 = performance.now();
         const view = E3.render(scene, { quality: g.quality, still: !g.interacting, ...cam }, bw, bh, out, ss);
         const s = view.source;
         ctx.save();
@@ -483,8 +482,6 @@
         ctx.drawImage(s.image, s.sx, s.sy, s.sw, s.sh, bx, by, bw, bh);
         ctx.restore();
         if (s.image.close) s.image.close();
-        // How long a still frame held the page tells the engine how much a still frame can afford.
-        if (!g.interacting) E3.quality.observe?.(performance.now() - t0);
         // Traced light refines over a few still frames; keep drawing until it settles.
         if (view.converging) g.wantsFrame = g.busy = true;
         return {
