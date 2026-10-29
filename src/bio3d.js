@@ -1691,10 +1691,134 @@
     return A;
   }
 
+  // ---------- brain ----------
+  // An adult brain in millimeters, 167 long, 140 wide, 93 tall above the brainstem: +z is the front
+  // (anterior), +y up, +x the patient's left. Two cerebral hemispheres (frontal, parietal,
+  // occipital, and temporal lobes, the longitudinal and lateral fissures, gyri and sulci), the
+  // cerebellum with its folia, the brainstem (midbrain, pons, medulla) into the spinal cord, the
+  // corpus callosum, and the deep structures at their real places: caudate nucleus (head, body,
+  // and tail curving into the temporal lobe), putamen, globus pallidus, nucleus accumbens,
+  // thalamus, amygdala, hippocampus, and in the midbrain the ventral tegmental area and
+  // substantia nigra. The prefrontal cortex is a separate patch of the frontal pole so it can be
+  // colored. The dopamine pathways (mesolimbic, mesocortical, nigrostriatal) run as tubes on the
+  // left side with pulses that travel along them: pose({ pulse, pathways }). The cortex is
+  // see-through by default (ghost(false) makes it solid); cutaway(true) is a midsagittal section
+  // showing the left hemisphere's medial face.
+  function brain(o = {}) {
+    const A = sectionable(P.assembly(o.name ?? "brain", o));
+    const M = (role, name, fb) => matFor(o, role, name, fb);
+    const h = o.h ?? 1.8;
+    const mirror = f => sd.field((x, y, z) => f.d(Math.abs(x), y, z), [-f.max[0], f.min[1], f.min[2]], [f.max[0], f.max[1], f.max[2]]);
+    const rotX = a => m4.rotationX(a);
+    // One hemisphere (x > 0), mirrored: lobes as blended ellipsoids, the medial face flat against
+    // the longitudinal fissure, the lateral fissure between the temporal and frontal lobes, and
+    // sulci as narrow grooves from warped noise.
+    const lobes = sd.smooth(13,
+      sd.ellipsoid([33, 20, -6], [33, 48, 74]),
+      sd.ellipsoid([30, 15, 42], [31, 41, 38]),
+      sd.ellipsoid([26, 13, -60], [27, 35, 25]),
+      sd.ellipsoid([45, -14, 8], [21, 20, 40], rotX(-0.18)));
+    const hemi = sd.field((x, y, z) => {
+      let d = lobes.d(x, y, z);
+      d = Math.max(d, 1.6 - x);                                     // the longitudinal fissure
+      if (x > 26 && z > -30 && z < 46) {                            // the lateral (Sylvian) fissure
+        const yf = -3 + 0.32 * z, w = 1.4 * sstep(-30, -10, z) * (1 - sstep(30, 46, z));
+        d = Math.max(d, w - Math.abs(y - yf) - Math.max(0, 30 - x) * 0.4);
+      }
+      if (d < 4) {                                                  // gyri and sulci
+        const wx = x * 0.055 + 0.6 * noise(y * 0.03, z * 0.03, x * 0.03, 5), wy = y * 0.055 + 0.6 * noise(z * 0.03, x * 0.03, y * 0.03, 6);
+        const n = noise(wx, wy, z * 0.055, 7);
+        d += 2.6 * (1 - sstep(0.0, 0.16, Math.abs(n)));
+      }
+      return d;
+    }, [0, -40, -88], [70, 70, 84]);
+    const cortex = mirror(hemi);
+    const keep = sd.plane([-1, 0, 0], 0), capL = [{ n: [-1, 0, 0], d: 0 }];
+    const layer = (name, f, mat, hh, extra) => sectioned(A, name, polygonize(f, { h: hh }), () => polygonize(sd.intersect(f, keep), { h: hh, caps: capL }), { material: mat, ...extra });
+    const gray = M("cortex", "cerebral cortex", tissue("tissue", { color: "#e2bdb2" }));
+    const cx = layer("cerebral cortex", cortex, gray, h, { label: { text: "cerebral cortex", at: [62, 40, -10] }, note: "the folded outer layer, 2 to 4 mm thick, where perception, planning, and language happen" });
+    const pfcF = sd.intersect(sd.shell(cortex, 2.4), sd.plane([0, 0, -1], -50));
+    const pfc = A.part("prefrontal cortex", polygonize(pfcF, { h }), { material: M("cortex", "prefrontal cortex", tissue("tissue", { color: "#9fb4e6" })), label: { text: "prefrontal cortex", at: [24, 30, 74] }, note: "the front of the frontal lobe: goals, plans, and holding back an impulse" });
+    // Cerebellum with its folia, under the occipital lobes.
+    const cbl = sd.field((x, y, z) => {
+      const d = smin(sd.ellipsoid([22, -30, -56], [28, 22, 28]).d(Math.abs(x), y, z), sd.ellipsoid([0, -28, -52], [14, 20, 26]).d(x, y, z), 8);
+      return d + 0.55 * Math.sin((y * 0.85 - z * 0.5) * 1.15) * sstep(-4, 0, -d);
+    }, [-52, -54, -86], [52, -6, -26]);
+    layer("cerebellum", cbl, M("cortex", "cerebellum", tissue("tissue", { color: "#d9b2a6" })), h, { label: { text: "cerebellum", at: [40, -38, -70] }, note: "coordinates movement and timing; its folia pack more neurons than the rest of the brain" });
+    const stem = sd.smooth(6, sd.tube([[0, -2, -8], [0, -14, -11], [0, -28, -14], [0, -44, -20], [0, -62, -25], [0, -82, -28]], [10, 11, 12, 9, 7.5, 6]), sd.ellipsoid([0, -28, -6], [14, 11, 11]));
+    layer("brainstem", stem, M("cortex", "brainstem", tissue("tissue", { color: "#e7cfc3" })), h * 0.8, { label: { text: "brainstem", at: [12, -60, -22] }, note: "midbrain, pons, and medulla: breathing, heart rate, sleep and waking" });
+    // Corpus callosum: an arch of white matter joining the hemispheres.
+    const arch = [[8, 33], [16, 33], [22, 22], [24, 2], [23, -18], [17, -33], [9, -35]];
+    const segD = (py, pz) => { let m = 1e9; for (let i = 1; i < arch.length; i++) { const [ay, az] = arch[i - 1], [by, bz] = arch[i], ey = by - ay, ez = bz - az, t = clamp(((py - ay) * ey + (pz - az) * ez) / (ey * ey + ez * ez), 0, 1); m = Math.min(m, Math.hypot(py - ay - ey * t, pz - az - ez * t)); } return m; };
+    const cc = sd.field((x, y, z) => Math.max(segD(y, z) - 4.2, Math.abs(x) - 17), [-18, 2, -42], [18, 30, 40]);
+    layer("corpus callosum", cc, M("white", "corpus callosum", tissue("membrane", { color: "#f3eee6" })), h * 0.7, { label: { text: "corpus callosum", at: [0, 30, 6], inside: true }, note: "200 million axons joining the two hemispheres" });
+    layer("thalamus", mirror(sd.ellipsoid([10, 2, -10], [9, 9, 16])), M("deep", "thalamus", tissue("tissue", { color: "#d8c5ad" })), h * 0.7, { label: { text: "thalamus", at: [10, 6, -10], inside: true }, note: "the relay that passes sensory signals up to the cortex" });
+    // Paired deep structures: built on both sides; the cut shows the left (+x) ones.
+    const right = [];
+    const pair = (name, f, mat, extra, hh = h * 0.6) => {
+      const L = A.part(name, polygonize(f, { h: hh }), { material: mat, ...extra });
+      const Rf = sd.field((x, y, z) => f.d(-x, y, z), [-f.max[0], f.min[1], f.min[2]], [-f.min[0], f.max[1], f.max[2]]);
+      right.push(A.part(name + " (right)", polygonize(Rf, { h: hh }), { material: mat }));
+      return L;
+    };
+    const purple = tissue("tissue", { color: "#b49ad8" });
+    pair("caudate nucleus", sd.tube([[14, 8, 25], [16, 16, 13], [17, 19, -3], [18, 17, -19], [22, 10, -31], [28, -2, -30], [32, -12, -16], [33, -16, -3]], [9, 7, 5, 4, 3, 2.5, 2, 1.5], 2), M("deep", "caudate nucleus", purple), { label: { text: "caudate nucleus", at: [16, 20, 10] }, note: "part of the dorsal striatum; with the putamen, learns action sequences and habits" });
+    pair("putamen", sd.ellipsoid([25, 2, 6], [7, 13, 22], rotX(0.15)), M("deep", "putamen", purple), { label: { text: "putamen", at: [31, 6, 4] }, note: "the outer part of the dorsal striatum, central to well-practiced, habitual actions" });
+    pair("globus pallidus", sd.ellipsoid([19, -1, 2], [4.5, 8, 12]), M("deep", "globus pallidus", tissue("tissue", { color: "#cfc0e6" })), { note: "the striatum's output station" });
+    pair("nucleus accumbens", sd.ellipsoid([9, -6, 22], [6, 5, 8]), M("deep", "nucleus accumbens", tissue("tissue", { color: "#9c80d2" })), { label: { text: "nucleus accumbens", at: [9, -9, 24] }, note: "the ventral striatum: where dopamine signals about reward arrive" });
+    pair("amygdala", sd.ellipsoid([23, -20, 8], [8, 7, 9]), M("deep", "amygdala", tissue("tissue", { color: "#e3958a" })), { label: { text: "amygdala", at: [25, -24, 10] }, note: "flags threats and emotionally important events" });
+    pair("hippocampus", sd.tube([[24, -21, -1], [27, -16, -14], [27, -10, -24], [22, 0, -32]], [5.5, 5, 4, 3], 2), M("deep", "hippocampus", tissue("tissue", { color: "#e8c89a" })), { label: { text: "hippocampus", at: [30, -14, -18] }, note: "forms new memories of events and places" });
+    const orange = tissue("tissue", { color: "#f0a050" });
+    pair("ventral tegmental area", sd.ellipsoid([3.5, -14, -10], [3, 2.6, 4]), M("dopamine", "ventral tegmental area", orange), { label: { text: "ventral tegmental area", at: [4, -17, -9] }, note: "dopamine neurons whose axons reach the nucleus accumbens and prefrontal cortex" }, h * 0.4);
+    pair("substantia nigra", sd.ellipsoid([9, -13, -12], [6, 2.4, 5], m4.rotationZ(0.35)), M("dopamine", "substantia nigra", tissue("tissue", { color: "#c9712f" })), { label: { text: "substantia nigra", at: [12, -16, -12] }, note: "dopamine neurons that project to the dorsal striatum; they die in Parkinson's disease" }, h * 0.4);
+    // Dopamine pathways (left side), with pulses traveling from the midbrain outward.
+    const PATHS = {
+      mesolimbic: [[[3.5, -14, -10], [5, -12, 0], [8, -8, 13], [9, -6, 21]], [[3.5, -14, -10], [12, -17, -3], [22, -20, 7]]],
+      mesocortical: [[[3.5, -14, -10], [5, -10, 2], [7, -3, 18], [9, 8, 36], [12, 20, 54], [16, 28, 66]]],
+      nigrostriatal: [[[9, -13, -12], [14, -6, -5], [20, 0, 2], [24, 2, 6]], [[9, -13, -12], [12, -2, 2], [14, 7, 14], [14, 9, 22]]],
+    };
+    const pathMat = M("dopamine", "dopamine pathway", { color: "#f08a24", metal: 0, roughness: 0.5, emissive: 0.35 });
+    const beadMesh = mesh.sphere(2.6, { segments: 12 }), beads = {}, routes = {};
+    for (const [key, list] of Object.entries(PATHS)) {
+      routes[key] = list.map(pts => smoothPath(pts, 40));
+      A.part(`${key} pathway`, merge(routes[key].map(r => tube(r, 1.4, { segments: 10 }))), { material: pathMat, label: { text: `${key} pathway`, at: routes[key][0][Math.floor(routes[key][0].length * 0.6)] }, note: { mesolimbic: "VTA to nucleus accumbens and amygdala: reward and motivation", mesocortical: "VTA to prefrontal cortex: attention, working memory, and control", nigrostriatal: "substantia nigra to the dorsal striatum: movement and habit" }[key] });
+      beads[key] = [];
+      for (const r of routes[key]) for (let k = 0; k < 3; k++) beads[key].push({ route: r, k, node: A.add(beadMesh, { name: `${key} pulse`, material: { color: "#ffb347", emissive: 1.6 }, castShadow: false, trace: false, pickable: false }) });
+    }
+    // Cortex see-through by default, so the deep structures show; solid when cut.
+    let ghostOn = o.ghost !== false;
+    // The prefrontal patch follows the cortex: a tinted ghost over the frontal pole, solid when the cortex is.
+    const setGhost = () => { const op = ghostOn && !A._cut ? (o.cortexOpacity ?? 0.2) : 1; cx.traverse(n => { n.opacity = op; }); pfc.traverse(n => { n.opacity = op < 1 ? Math.min(1, op * 1.8) : 1; }); };
+    A.ghost = (on = true) => { ghostOn = on; setGhost(); return A; };
+    const baseCut = A.cutaway;
+    A.cutaway = (on = true) => { A._cut = !!on; baseCut(on); for (const n of right) n.visible = !on; pfc.visible = !on; setGhost(); return A; };
+    setGhost();
+    A.section = [-1, 0, 0, 0];
+    A.ports = { vta: [3.5, -14, -10], nigra: [9, -13, -12], accumbens: [9, -6, 22], pfc: [16, 28, 66], amygdala: [23, -20, 8], striatum: [24, 2, 6] };
+    A.pathways = routes;
+    A.state = { pulse: 0, pathways: Object.keys(PATHS) };
+    A.onPose = st => {
+      const t = st.pulse ?? 0, on = st.pathways ?? Object.keys(PATHS);
+      for (const key of Object.keys(PATHS)) {
+        const show = on.includes(key);
+        A.parts[`${key} pathway`].visible = show;
+        for (const b of beads[key]) {
+          const u = (t + b.k / 3) % 1, r = b.route, f = u * (r.length - 1), i = Math.floor(f), w = f - i;
+          b.node.position = v3.lerp(r[i], r[Math.min(i + 1, r.length - 1)], w);
+          b.node.visible = show && (st.pulse != null);
+        }
+      }
+      A.state = { pulse: t, pathways: on };
+    };
+    A.pose({});
+    A.info = { units: "mm", length: 167, width: 140, height: 93, cortex: [2, 4], sources: ["Standring (ed.), Gray's Anatomy, 41st ed., 2016", "Kandel et al., Principles of Neural Science, 6th ed., 2021", "Haber and Knutson, The reward circuit, Neuropsychopharmacology 35 (2010) 4-26", "Mai, Majtanik and Paxinos, Atlas of the Human Brain, 4th ed., 2016"] };
+    return A;
+  }
+
   E3.bio = {
     // modeling helpers
     sd, polygonize, implicit, sheet, slab, muscle, vesselTree, longBone, leaflet, onSurface, clipPath, clippedTubes, noise, fbm, rng, tissue, TISSUE, triangles, smoothPath,
     // assemblies
-    heart: detailed(heart), eye: detailed(eye), knee: detailed(knee), neuron: detailed(neuron), cell: detailed(cell), tooth: detailed(tooth), skin: detailed(skin),
+    heart: detailed(heart), eye: detailed(eye), knee: detailed(knee), neuron: detailed(neuron), cell: detailed(cell), tooth: detailed(tooth), skin: detailed(skin), brain: detailed(brain),
   };
 })();

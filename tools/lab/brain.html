@@ -1,0 +1,24 @@
+<script>window.LAB = { scenes: {}, handles: {} };</script>
+<h1>Brain lab</h1>
+<p class="dek"><code>E3.bio.brain</code>: see-through cortex with the deep structures and the dopamine pathways, and the midsagittal section. Render with <code>node tools/check-3d.mjs --lab tools/lab/brain.html --gpu</code>.</p>
+<figure class="demo" id="brain" aria-label="A see-through brain with the striatum, amygdala, thalamus, and the dopamine pathways from the midbrain glowing as pulses travel along them."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "anatomy" });
+  const B = E3.bio.brain();
+  scene.add(B);
+  LAB.scenes.brain = scene;
+  LAB.handles.brain = demo("brain", {
+    aspect: 1.35, orbit: { yaw: -0.95, pitch: 0.28 },
+    state: () => ({ t: 0.4 }),
+    controls: [{ key: "path", label: "Pathway", type: "choice", options: [{ value: "all", label: "all" }, { value: "mesolimbic", label: "mesolimbic" }, { value: "mesocortical", label: "mesocortical" }, { value: "nigrostriatal", label: "nigrostriatal" }], value: "all" },
+               { key: "cut", label: "Cut along the midline", type: "toggle", value: false }],
+    step(dt, s) { s.t += dt * 0.6; },
+    draw(g, s, v) {
+      B.cutaway(v.cut).pose({ pulse: s.t % 1, pathways: v.path === "all" ? undefined : [v.path] });
+      const view = g.render3d(scene, { ...s.view, fov: 28 });
+      g.callouts(B.labels().filter(l => /accumbens|prefrontal|putamen|caudate|amygdala|tegmental|nigra|thalamus|corpus/.test(l.text)).map(l => ({ at: view.project(l.at), text: l.text })));
+    },
+  });
+}
+</script>

@@ -182,5 +182,13 @@ check("detail 0.5 has well under half the triangles of detail 1", visibleTris(lo
   check("the sweat gland's coil sits deep in the dermis, its duct reaching the surface", coil.min[1] < -1.6 && coil.max[1] > -0.05);
 }
 
+{
+  const B = window.E3.bio.brain({ detail: 0.5 });
+  check("brain: 25 parts with the reward circuit", ["nucleus accumbens", "ventral tegmental area", "prefrontal cortex", "caudate nucleus", "amygdala", "mesolimbic pathway"].every(n => B.parts[n]));
+  B.pose({ pulse: 0.5, pathways: ["mesocortical"] });
+  check("brain: pathways toggle", B.parts["mesocortical pathway"].visible && !B.parts["mesolimbic pathway"].visible);
+  const bb = B.parts["cerebral cortex"].children[0].mesh.bounds;
+  check("brain: about 167 mm front to back", Math.abs(bb.max[2] - bb.min[2] - 167) < 14, (bb.max[2] - bb.min[2]).toFixed(0));
+}
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
