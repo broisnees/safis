@@ -48,7 +48,8 @@ Pick these up later. The shared brief for page writers is `tools/explainer-brief
 - **Motion.** `g.ease`, animated `g.tokens`, ranked `g.bars`, `g.matrix`, `g.flow`, a text control; references/motion.md; figures.md forbids UI mock-ups and grids of outlined boxes.
 - **Brain.** `E3.bio.brain()` with the reward circuit and dopamine pathways; lab `tools/lab/brain.html`.
 - **Pages.** Doomscrolling, How a transformer works, Why water is so strange, How air works: all verify PASS at <=180 words per figure.
-- **Website.** Redesign (dark, borderless), pure-black first paint, kits deferred so text paints at once, the hero rocket with its throttle and cut-away back, bio3d pages load parts3d.
+- **Website.** Redesign (dark, borderless), pure-black first paint, kits deferred so text paints at once, the hero rocket with its throttle and cut-away back, bio3d pages load parts3d. Figures draw a screen ahead and far ones release their canvases (canvas memory after a long page: about 85 MB to under 10 MB).
+- **Deployed** to safis.fyi on 2026-10-29 (Cloudflare version db1d7e5e). The website check passed 33 of 34 pages; air timed out in software rendering only.
 
 ### Open from this pass
 
