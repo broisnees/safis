@@ -87,6 +87,16 @@
     return c.map(v => Math.round(clamp(encode(v), 0, 255)));
   }
   const wavelengthColor = (nm, o) => { const [r, g, b] = wavelengthRGB(nm, o); return `rgb(${r}, ${g}, ${b})`; };
+  // The color of a glowing body at T kelvin, normalized so the brightest channel is 255 (a fit to
+  // the Planck spectrum seen through sRGB, good from 1000 to 40000 K): 1900 a candle, 2700 a
+  // household bulb, 3200 a halogen lamp, 5800 sunlight, 6500 overcast daylight.
+  function blackbodyRGB(T) {
+    const t = clamp(T, 1000, 40000) / 100;
+    const r = t <= 66 ? 255 : 329.698727446 * (t - 60) ** -0.1332047592;
+    const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * (t - 60) ** -0.0755148492;
+    const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+    return [r, g, b].map(v => Math.round(clamp(v, 0, 255)));
+  }
   // White light as seven lines, red to violet; Optics.spectrum(n) gives finer ones.
   const WHITE = [650, 605, 578, 540, 500, 465, 415];
   const spectrum = (n = 7, lo = 415, hi = 650) => Array.from({ length: n }, (_, i) => +(n === 1 ? (lo + hi) / 2 : hi - ((hi - lo) * i) / (n - 1)).toFixed(1));
@@ -314,10 +324,11 @@
   const sensor = (a, b, o) => absorber("sensor", a, b, o);
 
   // ---------- Sources ----------
-  // A source is plain data: { type: "source", rays: [[x, y, dx, dy], ...], wl, I, color }.
+  // A source is plain data: { type: "source", rays: [[x, y, dx, dy], ...], wl, I, color, temperature }.
   // wl: undefined (one color, index at the d line), a wavelength in nm, a list, or "white".
+  // temperature: the color of a hot source in kelvin (a lamp, a candle, the Sun) when there's no wl or color.
   const wlOf = w => (w == null ? null : w === "white" ? WHITE.slice() : Array.isArray(w) ? w.slice() : +w);
-  const source = (kind, rays, o, at) => ({ type: "source", kind, at: at ? pt(at) : null, rays, wl: wlOf(o.wl), I: o.I ?? 1, color: o.color ?? null, name: o.name ?? null, marker: o.marker ?? kind !== "beam" });
+  const source = (kind, rays, o, at) => ({ type: "source", kind, at: at ? pt(at) : null, rays, wl: wlOf(o.wl), I: o.I ?? 1, color: o.color ?? null, temperature: o.temperature ?? null, name: o.name ?? null, marker: o.marker ?? kind !== "beam" });
   const ray = (p, dir, o = {}) => { const d = dirOf(dir); return source("ray", [[p[0], p[1], d[0], d[1]]], o, p); };
   function beam(p, dir, width, o = {}) {
     const d = dirOf(dir), v = [-d[1], d[0]], n = Math.max(1, o.n ?? 9), rays = [];
@@ -604,7 +615,7 @@
     const cache = new Map();
     const spectral = (nm, dk) => { const k = `${nm}|${dk}`; let c = cache.get(k); if (!c) { c = wavelengthColor(nm, { on: dk ? "dark" : "light" }); cache.set(k, c); } return c; };
     g.wavelengthColor = nm => spectral(nm, dark());
-    const ident = q => q;
+    const ident = q => q, ORIGIN = [0, 0], ONE = [1, 1];
     const scaleOf = P => P.sx ?? (dist(P([1, 0]), P([0, 0])) || 1);
     const dirPx = (P, p, d) => unit(sub(P(add(p, d)), P(p)));
     function piecePx(pc, P, sc) {
@@ -649,6 +660,73 @@
     };
     const fillAlpha = (el, dk) => clamp(0.05 + 0.12 * (index(el.n) - 1), 0.07, 0.22) * (dk ? 1.5 : 1);
 
+    // ---------- Light ----------
+    // Rays draw as light. On dark pages each one is added to what's under it as a wide faint
+    // bloom, a glow, and a thin core whitened from its color, so rays that cross brighten and a
+    // focus or a caustic burns white. On light pages the glow deepens the paper (multiply) under
+    // a saturated core. Photons ride the traced paths, slowing to c/n in glass.
+    const reduced = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+    const checkingNow = () => typeof document !== "undefined" && document.documentElement.classList.contains("safis-checking");
+    const css = c => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+    const lights = new Map();
+    // A light's colors: glow, core, and a sprite for photons and sources, made once per color and page tone.
+    function lightOf(c, dk) {
+      const key = `${c[0]},${c[1]},${c[2]}|${dk ? 1 : 0}`;
+      let L = lights.get(key);
+      if (L) return L;
+      let glow, core;
+      if (dk) { glow = c; core = c.map(v => Math.round(v + (255 - v) * 0.6)); }
+      else {
+        // White light can't show on white paper: it draws as a warm neutral instead. Pale colors
+        // deepen so they read on paper; the palette's own colors are already made for it.
+        const base = Math.min(c[0], c[1], c[2]) > 190 ? [190, 148, 56] : c;
+        const lum = 0.2126 * base[0] + 0.7152 * base[1] + 0.0722 * base[2], k = 1 + 0.45 * clamp((lum - 110) / 110, 0, 1);
+        glow = base.map(v => Math.round(clamp(255 - (255 - v) * Math.max(1, k * 0.85), 0, 255)));
+        core = base.map(v => Math.round(clamp(255 - (255 - v) * k, 0, 255)));
+      }
+      L = { glow: css(glow), core: css(core), g3: glow, c3: core, dk, sprite: null, tr: [], hd: [] };
+      lights.set(key, L);
+      return L;
+    }
+    function spriteOf(L) {
+      if (L.sprite !== null) return L.sprite;
+      const S = 48, cv = typeof document !== "undefined" ? document.createElement("canvas") : null;
+      if (!cv) return (L.sprite = false);
+      cv.width = cv.height = S;
+      const c = cv.getContext("2d"), gr = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      const [r, gg, b] = L.g3, [cr, cg, cb] = L.c3;
+      if (L.dk) {
+        gr.addColorStop(0, "rgba(255, 255, 255, 1)"); gr.addColorStop(0.1, `rgba(${cr}, ${cg}, ${cb}, 0.95)`);
+        gr.addColorStop(0.3, `rgba(${r}, ${gg}, ${b}, 0.4)`); gr.addColorStop(0.6, `rgba(${r}, ${gg}, ${b}, 0.1)`); gr.addColorStop(1, `rgba(${r}, ${gg}, ${b}, 0)`);
+      } else {
+        gr.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, 1)`); gr.addColorStop(0.18, `rgba(${cr}, ${cg}, ${cb}, 0.85)`);
+        gr.addColorStop(0.45, `rgba(${r}, ${gg}, ${b}, 0.22)`); gr.addColorStop(1, `rgba(${r}, ${gg}, ${b}, 0)`);
+      }
+      c.fillStyle = gr; c.fillRect(0, 0, S, S);
+      return (L.sprite = cv);
+    }
+    // A fixed pseudo-random number in [0, 1) for three integers: which photons a ray carries,
+    // where along it they sit, and which way each one goes at a split.
+    const hash = (a, b, c) => {
+      let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b + 0x632be5ab, 0xc2b2ae35) ^ Math.imul(c + 0x27d4eb2f, 0x165667b1);
+      h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; h = Math.imul(h, 0x297a2d39); h ^= h >>> 15;
+      return (h >>> 0) / 4294967296;
+    };
+    // A few recent traces by scene, so a figure redrawn every frame for its photons doesn't
+    // retrace a scene that hasn't changed.
+    const traces = [];
+    const layers = [];
+    let frameAt = -1, calls = 0, idleTimer = 0, traceIds = 0;
+    function traceOf(scene, o) {
+      let key;
+      try { key = JSON.stringify([scene, o.depth, o.minI, o.fresnel, o.n0, o.far, o.maxSegments]); } catch { return trace(scene, o); }
+      for (const c of traces) if (c.key === key) return c.T;
+      const T = trace(scene, o);
+      traces.unshift({ key, T });
+      if (traces.length > 4) traces.pop();
+      return T;
+    }
+
     // Glass: a tint that deepens toward the bottom (the thickness light crosses), edges that
     // brighten (Fresnel reflection grows at grazing angles), and a highlight inset along the
     // edges that face the light (upper left).
@@ -671,14 +749,22 @@
       for (let i = 0; i < pts.length; i++) { const p0 = pts[i], p1 = pts[(i + 1) % pts.length]; area += p0[0] * p1[1] - p1[0] * p0[1]; }
       const sgn = area > 0 ? 1 : -1, L = [-0.6, -0.8];
       ctx.lineCap = "round";
-      for (let i = 0; i < pts.length; i++) {
-        const p0 = pts[i], p1 = pts[(i + 1) % pts.length], d = sub(p1, p0), len = hypot(d[0], d[1]);
-        if (len < 0.5) continue;
-        const nrm = [(sgn * d[1]) / len, (-sgn * d[0]) / len], f = nrm[0] * L[0] + nrm[1] * L[1];
-        if (f < 0.35) continue;
-        const inset = mul(nrm, -4);
-        ctx.strokeStyle = `rgba(255, 255, 255, ${((dk ? 0.28 : 0.7) * (f - 0.35)) / 0.65})`; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(p0[0] + inset[0], p0[1] + inset[1]); ctx.lineTo(p1[0] + inset[0], p1[1] + inset[1]); ctx.stroke();
+      ctx.lineWidth = 2;
+      // Four brightness steps, one path each, so a round drop is four strokes, not a hundred.
+      for (let q = 1; q <= 4; q++) {
+        ctx.beginPath();
+        let any = false;
+        for (let i = 0; i < pts.length; i++) {
+          const p0 = pts[i], p1 = pts[(i + 1) % pts.length], dx = p1[0] - p0[0], dy = p1[1] - p0[1], len = hypot(dx, dy);
+          if (len < 0.5) continue;
+          const nx = (sgn * dy) / len, ny = (-sgn * dx) / len, f = nx * L[0] + ny * L[1];
+          if (f < 0.35 || Math.min(4, 1 + Math.floor(((f - 0.35) / 0.65) * 4)) !== q) continue;
+          ctx.moveTo(p0[0] - nx * 4, p0[1] - ny * 4); ctx.lineTo(p1[0] - nx * 4, p1[1] - ny * 4);
+          any = true;
+        }
+        if (!any) continue;
+        ctx.strokeStyle = `rgba(255, 255, 255, ${((dk ? 0.34 : 0.7) * (q - 0.5)) / 4})`;
+        ctx.stroke();
       }
       ctx.restore();
     }
@@ -756,9 +842,25 @@
       const P = o.P ?? ident, sc = scaleOf(P), dk = dark();
       lastP = P;
       const { els, srcs } = split(scene);
-      const T = o.trace ?? trace(scene, o);
+      const T = o.trace ?? traceOf(scene, o);
       const show = o.elements !== false;
       const lit = el => !!el.name && g.lit(el.name);
+      const additive = o.blend === "add" || (o.blend !== "normal" && dk);
+      // The color of a ray, hit, or record: its wavelength's; white light; its source's color or
+      // temperature; o.color; o.temperature; else a 3000 K lamp.
+      const colorMemo = new Map();
+      const lightFor = s => {
+        const k = s.wl != null ? s.wl : s.band ? -1 : -2 - (s.src ?? 0);
+        let L = colorMemo.get(k);
+        if (L) return L;
+        const src = srcs[s.src] ?? {};
+        const c = s.wl != null ? wavelengthRGB(s.wl, { on: dk ? "dark" : "light" })
+          : s.band ? (o.white ? util.rgb(o.white) : blackbodyRGB(6000))
+          : src.color ? util.rgb(src.color) : src.temperature ? blackbodyRGB(src.temperature)
+          : o.color ? util.rgb(o.color) : blackbodyRGB(o.temperature ?? 3000);
+        colorMemo.set(k, (L = lightOf(c, dk)));
+        return L;
+      };
       // Optical axes, then glass fills, so rays draw over them.
       if (o.axis) {
         const far = (4 * Math.max(g.w, g.h)) / sc;
@@ -773,103 +875,279 @@
         if (o.glass === "flat") g.path(outline(el, P, sc), { fill: el.tint ?? "blue", alpha: fillAlpha(el, dk) * (lit(el) ? 1.7 : 1), close: true });
         else drawGlass(el, P, sc, dk, lit(el), 1);
       }
-      // Rays: alpha by intensity, color by wavelength; added together on dark pages.
+      // Rays, drawn as light (see "Light" above). Each ray's segments are batched by brightness,
+      // so a fan is a few dozen strokes and separate rays still add up where they cross.
       if (o.rays !== false) {
         const ctx = g.ctx, w = o.width ?? 1.75, base = o.alpha ?? 1, minA = o.minAlpha ?? 0.12, gain = o.gain ?? 1;
-        const segs = o.filter ? T.segments.filter(o.filter) : T.segments, alphaOf = s => clamp(Math.sqrt(s.I * gain), minA, 1) * base;
-        const additive = o.blend === "add" || (o.blend !== "normal" && dk);
-        const colorOf = s => (s.wl != null ? spectral(s.wl, dk) : util.color(s.band ? o.white ?? "ink" : s.color ?? o.color ?? "orange"));
-        ctx.save();
-        ctx.lineCap = "butt";
-        ctx.lineJoin = "round";
-        if (additive) ctx.globalCompositeOperation = "lighter";
-        // Dispersed light as a continuous fan: between neighboring wavelengths of one ray on the
-        // same path, a band shaded from one color to the next, so the spectrum is smooth.
-        if (o.spectrum !== "lines") {
-          const fans = new Map();
-          for (const s of segs) if (s.wl != null && s.band == null) { const k = `${s.src}|${s.ray}|${s.via}|${s.depth}`; (fans.get(k) ?? fans.set(k, []).get(k)).push(s); }
-          for (const list of fans.values()) {
-            if (list.length < 2) continue;
-            list.sort((p, q) => p.wl - q.wl);
-            for (let i = 1; i < list.length; i++) {
-              const s1 = list[i - 1], s2 = list[i];
-              if (s1.end !== s2.end) continue;
-              const a1 = P(s1.a), b1 = P(s1.b), a2 = P(s2.a), b2 = P(s2.b), L1 = dist(a1, b1);
-              if (dist(a1, a2) > 0.25 * L1 + 6 || dist(b1, b2) > 0.6 * L1 + 40) continue;
-              const m1 = mul(add(a1, b1), 0.5), m2 = mul(add(a2, b2), 0.5), gr = ctx.createLinearGradient(m1[0], m1[1], m2[0], m2[1]);
-              gr.addColorStop(0, spectral(s1.wl, dk)); gr.addColorStop(1, spectral(s2.wl, dk));
-              ctx.fillStyle = gr;
-              ctx.globalAlpha = Math.min(alphaOf(s1), alphaOf(s2)) * (dk ? 0.55 : 0.4);
-              ctx.beginPath(); ctx.moveTo(a1[0], a1[1]); ctx.lineTo(b1[0], b1[1]); ctx.lineTo(b2[0], b2[1]); ctx.lineTo(a2[0], a2[1]); ctx.closePath(); ctx.fill();
+        const segs = o.filter ? T.segments.filter(o.filter) : T.segments;
+        const level = s => clamp(Math.sqrt(s.I * gain), minA, 1), alphaOf = s => level(s) * base;
+        // On light pages everything paints normally (overlapping glows still deepen), which also
+        // lets the still layers be cached exactly, as normal painting composites in any grouping.
+        const comp = additive ? "lighter" : "source-over", soft = comp;
+        // A source's light is shared among its rays, so the soft layers of a fan of 21 rays are
+        // fainter than a lone ray's and the fan doesn't burn white; with wavefronts the rays step
+        // back and the crests lead.
+        const dens = si => clamp(Math.sqrt(5 / Math.max(1, srcs[si]?.rays.length ?? 1)), 0.3, 1), back = o.wavefronts ? 0.4 : 1;
+        // Canvas positions, the part inside the canvas (as fractions c0 to c1 along the segment), and
+        // which way a photon chooses at each split; kept on the segment while the mapping holds.
+        const sig = `${g.w}|${g.h}|${P(ORIGIN)}|${P(ONE)}`, box = [-40, -40, g.w + 80, g.h + 80];
+        for (const s of segs) {
+          if (s.pxSig === sig) continue;
+          s.pxSig = sig; s.pa = P(s.a); s.pb = P(s.b);
+          const v = clipSeg(s.pa, s.pb, box), len = dist(s.pa, s.pb) || 1;
+          s.qa = v ? v[0] : null; s.qb = v ? v[1] : null;
+          s.c0 = v ? dist(s.pa, v[0]) / len : 0; s.c1 = v ? dist(s.pa, v[1]) / len : 0;
+          let flips = 0;
+          for (const ch of s.via) if (ch === "R" || ch === "P") flips++;
+          s.flip = flips & 1;
+        }
+        const groups = new Map();
+        for (const s of segs) {
+          const a = alphaOf(s);
+          if (!s.qa || a < 0.004) continue;
+          const sl = srcs[s.src]?.name && g.lit(srcs[s.src].name) ? 1 : 0, qa = Math.max(1, Math.round(a * 24));
+          const k = `${s.src}|${s.ray}|${s.wl ?? (s.band ? "w" : "")}|${qa}|${sl}`;
+          let G = groups.get(k);
+          if (!G) groups.set(k, (G = { L: lightFor(s), a: qa / 24, d: dens(s.src), lit: sl, segs: [] }));
+          G.segs.push(s);
+        }
+        const list = [...groups.values()];
+        // The still part of the light: beam, glow inside glass, spectrum, the rays, source glows.
+        const paint = ctx => {
+          const stroke = (width, k, key) => {
+            for (const G of list) {
+              ctx.strokeStyle = G.L[key]; ctx.globalAlpha = Math.min(1, G.a * k * back * (key === "core" ? (o.wavefronts ? 0.6 : 0.35 + 0.65 * G.d) : G.d)); ctx.lineWidth = G.lit ? width * 1.6 : width;
+              ctx.beginPath();
+              for (const s of G.segs) { ctx.moveTo(s.qa[0], s.qa[1]); ctx.lineTo(s.qb[0], s.qb[1]); }
+              ctx.stroke();
+            }
+          };
+          ctx.save();
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          // The beam: the light between neighboring rays of one source on the same path, brighter
+          // where they crowd together, so a fan reads as a cone of light and a focus as a pinch of it.
+          if (o.fill !== false) {
+            const at = new Map(), fills = new Map();
+            for (const s of segs) if (s.qa && (srcs[s.src]?.rays.length ?? 0) >= 5) at.set(`${s.src}|${s.ray}|${s.via}|${s.wl}`, s);
+            for (const s of at.values()) {
+              const n = at.get(`${s.src}|${s.ray + 1}|${s.via}|${s.wl}`);
+              if (!n || n.end !== s.end) continue;
+              const len = dist(s.pa, s.pb), wa = dist(s.pa, n.pa);
+              if (wa > 0.25 * len + 10 || dist(s.pb, n.pb) > 0.6 * len + 40) continue;
+              const f = s.c1, wb = hypot(s.pa[0] + (s.pb[0] - s.pa[0]) * f - n.pa[0] - (n.pb[0] - n.pa[0]) * f, s.pa[1] + (s.pb[1] - s.pa[1]) * f - n.pa[1] - (n.pb[1] - n.pa[1]) * f);
+              const a = (dk ? 0.075 : 0.06) * dens(s.src) * Math.min(level(s), level(n)) * clamp(16 / Math.max(3, (wa + wb) / 2), 0.3, 1.5), qa = Math.max(1, Math.round(a * 200));
+              const L = lightFor(s), k = `${L.glow}|${qa}`;
+              let F = fills.get(k);
+              if (!F) fills.set(k, (F = { L, a: qa / 200, quads: [] }));
+              F.quads.push(s, n);
+            }
+            ctx.globalCompositeOperation = soft;
+            for (const F of fills.values()) {
+              ctx.fillStyle = F.L.glow; ctx.globalAlpha = F.a;
+              ctx.beginPath();
+              for (let i = 0; i < F.quads.length; i += 2) {
+                const s = F.quads[i], n = F.quads[i + 1];
+                ctx.moveTo(s.pa[0], s.pa[1]); ctx.lineTo(s.pb[0], s.pb[1]); ctx.lineTo(n.pb[0], n.pb[1]); ctx.lineTo(n.pa[0], n.pa[1]); ctx.closePath();
+              }
+              ctx.fill();
             }
           }
-        }
-        // A soft glow under each ray; where rays converge the glows add up, so a focus or a
-        // caustic shows as a bright spot.
-        if (o.glow !== false) {
-          ctx.lineCap = "round";
-          for (const s of segs) {
-            ctx.strokeStyle = colorOf(s);
-            ctx.globalAlpha = alphaOf(s) * (dk ? 0.13 : 0.06);
-            ctx.lineWidth = w * 5;
-            const a = P(s.a), b = P(s.b);
-            ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+          // Light scattered inside the glass along each path, so a lit rod or block glows from within.
+          if (o.scatter !== false && dk && show) {
+            const inside = new Map();
+            for (const G of list) for (const s of G.segs) if (s.med >= 0 && els[s.med] && !els[s.med].hidden) (inside.get(s.med) ?? inside.set(s.med, []).get(s.med)).push(s, G);
+            ctx.globalCompositeOperation = comp;
+            for (const [mi, items] of inside) {
+              const pts = outline(els[mi], P, sc);
+              if (pts.length < 3) continue;
+              ctx.save();
+              ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath(); ctx.clip();
+              ctx.lineWidth = w * 13;
+              for (let i = 0; i < items.length; i += 2) {
+                const s = items[i], G = items[i + 1];
+                ctx.strokeStyle = G.L.glow; ctx.globalAlpha = G.a * G.d * 0.06;
+                ctx.beginPath(); ctx.moveTo(s.qa[0], s.qa[1]); ctx.lineTo(s.qb[0], s.qb[1]); ctx.stroke();
+              }
+              ctx.restore();
+            }
           }
-          ctx.lineCap = "butt";
-        }
-        for (const s of segs) {
-          const sl = srcs[s.src]?.name && g.lit(srcs[s.src].name);
-          ctx.strokeStyle = colorOf(s);
-          ctx.globalAlpha = alphaOf(s);
-          ctx.lineWidth = sl ? w + 1.25 : w;
-          const a = P(s.a), b = P(s.b);
-          ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-        }
+          // Dispersed light as a continuous fan: between neighboring wavelengths of one ray on the
+          // same path, a band shaded from one color to the next, so the spectrum is smooth.
+          ctx.globalCompositeOperation = comp;
+          if (o.spectrum !== "lines") {
+            const fans = new Map();
+            for (const s of segs) if (s.wl != null && s.band == null) { const k = `${s.src}|${s.ray}|${s.via}|${s.depth}`; (fans.get(k) ?? fans.set(k, []).get(k)).push(s); }
+            for (const list of fans.values()) {
+              if (list.length < 2) continue;
+              list.sort((p, q) => p.wl - q.wl);
+              for (let i = 1; i < list.length; i++) {
+                const s1 = list[i - 1], s2 = list[i];
+                if (s1.end !== s2.end) continue;
+                const a1 = s1.pa, b1 = s1.pb, a2 = s2.pa, b2 = s2.pb, L1 = dist(a1, b1);
+                if (dist(a1, a2) > 0.25 * L1 + 6 || dist(b1, b2) > 0.6 * L1 + 40) continue;
+                const m1 = mul(add(a1, b1), 0.5), m2 = mul(add(a2, b2), 0.5), gr = ctx.createLinearGradient(m1[0], m1[1], m2[0], m2[1]);
+                gr.addColorStop(0, spectral(s1.wl, dk)); gr.addColorStop(1, spectral(s2.wl, dk));
+                ctx.fillStyle = gr;
+                ctx.globalAlpha = Math.min(alphaOf(s1), alphaOf(s2)) * (dk ? 0.55 : 0.4);
+                ctx.beginPath(); ctx.moveTo(a1[0], a1[1]); ctx.lineTo(b1[0], b1[1]); ctx.lineTo(b2[0], b2[1]); ctx.lineTo(a2[0], a2[1]); ctx.closePath(); ctx.fill();
+              }
+            }
+          }
+          // Each ray: a wide faint bloom and a glow in its color, then a thin core whitened toward it.
+          ctx.globalCompositeOperation = soft;
+          if (o.glow !== false) { if (dk) { stroke(w * 7, 0.05, "glow"); stroke(w * 2.8, 0.2, "glow"); } else stroke(w * 3.6, 0.3, "glow"); }
+          ctx.globalCompositeOperation = comp;
+          stroke(dk ? w * 0.85 : w, 1, "core");
+          // A source glows where its light starts.
+          if (dk && o.sources !== false) {
+            ctx.globalCompositeOperation = comp;
+            srcs.forEach((s, si) => {
+              if (!s.at || s.kind === "beam") return;
+              const q = P(s.at), L = lightFor({ wl: Array.isArray(s.wl) ? null : s.wl, band: Array.isArray(s.wl) ? s.wl : null, src: si }), R = 15;
+              ctx.globalAlpha = 0.9 * Math.min(1, Math.sqrt(s.I));
+              const spr = spriteOf(L);
+              if (spr) ctx.drawImage(spr, q[0] - R, q[1] - R, 2 * R, 2 * R);
+            });
+          }
+          ctx.restore();
+        };
+        // The still layers are drawn once into a layer the size of the canvas and laid on each
+        // frame, so a figure whose photons move every frame repaints only them. The layer goes
+        // when the figure has been idle for 3 s, so only figures on screen hold one.
+        if (typeof document !== "undefined") {
+          if (g.time !== frameAt) { frameAt = g.time; calls = 0; }
+          const slot = layers[calls] ?? (layers[calls] = { cv: document.createElement("canvas"), key: "" });
+          calls++;
+          const tf = ctx.getTransform(), cv = ctx.canvas;
+          if (T._id == null) { T._id = ++traceIds; T.segments.forEach((s, i) => (s._i = i)); }
+          // A filter is a new function each frame; what it kept is the same segments.
+          const kept = o.filter ? segs.map(s => s._i).join(",") : "";
+          const key = [T._id, kept, sig, tf.a, tf.b, tf.c, tf.d, tf.e, tf.f, cv.width, cv.height, w, base, minA, gain, o.fill, o.glow, o.scatter, o.spectrum, o.color, o.temperature, o.white, o.blend, !!o.wavefronts, show, o.sources,
+            srcs.map(q => (q.name && g.lit(q.name) ? 1 : 0)).join(""), util.color("panel")].join("|");
+          if (slot.cv.width !== cv.width || slot.cv.height !== cv.height) { slot.cv.width = cv.width; slot.cv.height = cv.height; slot.key = ""; }
+          if (slot.key !== key) {
+            const lc = slot.cv.getContext("2d");
+            lc.setTransform(1, 0, 0, 1, 0, 0); lc.clearRect(0, 0, slot.cv.width, slot.cv.height); lc.setTransform(tf);
+            paint(lc);
+            slot.key = key;
+          }
+          ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = comp;
+          ctx.drawImage(slot.cv, 0, 0);
+          ctx.restore();
+          clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => { for (const l of layers) { l.cv.width = l.cv.height = 0; l.key = ""; } }, 3000);
+        } else paint(ctx);
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
         // Wavefronts: points of equal optical path length on each ray, joined across neighboring
-        // rays of the same source and path. o.wavefronts is the spacing in world units, or
-        // { spacing, phase, alpha }; advancing phase makes them travel.
+        // rays of the same source and path, drawn as glowing crests. o.wavefronts is the spacing in
+        // world units, or { spacing, phase, alpha, width }; advancing phase makes them travel.
         if (o.wavefronts) {
           const wf = typeof o.wavefronts === "number" ? { spacing: o.wavefronts } : o.wavefronts, sp = Math.max(1e-6, wf.spacing ?? 1), ph = wf.phase ?? 0;
           const buckets = new Map();
           for (const s of segs) {
-            if (!s.opl || s.end === "escape" && s.opl[1] - s.opl[0] > 1e5) { if (!s.opl) continue; }
+            if (!s.opl) continue;
             const [L0, L1] = s.opl, span = L1 - L0;
             if (span <= 0) continue;
             const m0 = Math.ceil((L0 - ph) / sp), m1 = Math.floor((Math.min(L1, L0 + 200 * sp) - ph) / sp);
             for (let m = m0; m <= m1; m++) {
-              const f = (m * sp + ph - L0) / span, q = [s.a[0] + (s.b[0] - s.a[0]) * f, s.a[1] + (s.b[1] - s.a[1]) * f];
+              const f = (m * sp + ph - L0) / span;
               const k = `${s.src}|${s.via}|${s.wl}|${m}`;
-              (buckets.get(k) ?? buckets.set(k, []).get(k)).push({ ray: s.ray, p: P(q), s });
+              (buckets.get(k) ?? buckets.set(k, []).get(k)).push({ ray: s.ray, p: [s.pa[0] + (s.pb[0] - s.pa[0]) * f, s.pa[1] + (s.pb[1] - s.pa[1]) * f], s });
             }
           }
-          ctx.globalCompositeOperation = "source-over";
-          ctx.lineCap = "round"; ctx.lineJoin = "round";
-          ctx.lineWidth = wf.width ?? 1.6;
-          const maxGap = 0.18 * Math.max(g.w, g.h);
-          for (const pts of buckets.values()) {
-            if (pts.length < 2) continue;
-            pts.sort((p, q) => p.ray - q.ray);
-            ctx.strokeStyle = colorOf(pts[0].s);
-            ctx.globalAlpha = (wf.alpha ?? 0.75) * alphaOf(pts[0].s);
+          const lines = [], maxGap = 0.18 * Math.max(g.w, g.h), A = wf.alpha ?? 0.85, ww = wf.width ?? 1.6;
+          for (const pts of buckets.values()) if (pts.length >= 2) { pts.sort((p, q) => p.ray - q.ray); lines.push(pts); }
+          const crests = (key, width, k) => {
+            ctx.lineWidth = width;
+            for (const pts of lines) {
+              ctx.strokeStyle = lightFor(pts[0].s)[key];
+              ctx.globalAlpha = Math.min(1, A * level(pts[0].s) * k);
+              ctx.beginPath();
+              for (let i = 0; i < pts.length; i++) {
+                const jump = i === 0 || pts[i].ray !== pts[i - 1].ray + 1 || dist(pts[i].p, pts[i - 1].p) > maxGap;
+                if (jump) ctx.moveTo(pts[i].p[0], pts[i].p[1]); else ctx.lineTo(pts[i].p[0], pts[i].p[1]);
+              }
+              ctx.stroke();
+            }
+          };
+          ctx.globalCompositeOperation = soft;
+          crests("glow", ww * 4.5, dk ? 0.22 : 0.3);
+          ctx.globalCompositeOperation = comp;
+          crests("core", ww, 1);
+        }
+        // Photons: small bright packets that ride every traced path at a steady speed, slowing to
+        // c/n in glass (their place is set by optical path length, like the wavefronts). Where a
+        // ray splits, each photon goes one way, as often as the intensities say; white light that
+        // splits into colors sends each photon down one color. On by default without wavefronts.
+        const ph = o.photons === false || (o.photons == null && o.wavefronts) ? null
+          : { speed: 140, spacing: 64, count: 260, size: 1, trail: 30, ...(typeof o.photons === "object" ? o.photons : {}) };
+        if (ph) {
+          const still = checkingNow() || reduced.matches;
+          const t = o.time ?? (still ? 0 : g.time);
+          if (o.time == null && !still) g.wantsFrame = true;
+          const v = ph.speed / sc, trail = ph.trail / sc;
+          // Many-ray sources carry fewer photons per ray, so a dense fan isn't a swarm.
+          const gapOf = si => (ph.spacing / sc) * Math.max(1, Math.sqrt((srcs[si]?.rays.length ?? 1) / 5));
+          let spread = 1, est = 0;
+          for (const s of segs) {
+            const span = s.opl ? s.opl[1] - s.opl[0] : 0;
+            if (s.qa && span > 0) est += (span * (s.c1 - s.c0) * Math.min(1, s.I / (srcs[s.src]?.I || 1))) / gapOf(s.src);
+          }
+          // Spread them out when the paths are long, so a busy figure stays cheap.
+          if (est > ph.count) spread = est / ph.count;
+          const used = [];
+          for (const s of segs) {
+            if (!s.qa || !s.opl) continue;
+            const src = srcs[s.src], rel = s.I / (src?.I || 1), L0 = s.opl[0], span = s.opl[1] - L0;
+            if (rel < 0.02 || !(span > 0)) continue;
+            const sp = gapOf(s.src) * spread;
+            const v0 = L0 + span * s.c0, v1 = L0 + span * s.c1, head = v * t - hash(s.src, s.ray, 1) * sp;
+            const bands = Array.isArray(src?.wl) && s.wl != null ? src.wl : null, bi = bands ? bands.indexOf(s.wl) : -1;
+            const L = lightFor(s);
+            for (let m = Math.ceil((head - v1) / sp) - 1, m1 = Math.floor((head - v0) / sp) + 1; m <= m1; m++) {
+              const id = (m & 0xffffff) * 4;
+              const lam = head - m * sp + (hash(s.src, s.ray, id + 2) - 0.5) * 0.6 * sp;
+              if (lam < v0 || lam > v1) continue;
+              const u = hash(s.src, s.ray, id + 3);
+              if ((s.flip ? 1 - u : u) >= rel) continue;
+              if (bi >= 0 && Math.floor(hash(s.src, s.ray, id + 4) * bands.length) !== bi) continue;
+              const f = (lam - L0) / span, f0 = Math.max(0, (lam - trail - L0) / span), fm = (f + f0) / 2;
+              if (!L.hd.length) used.push(L);
+              L.hd.push(s.pa[0] + (s.pb[0] - s.pa[0]) * f, s.pa[1] + (s.pb[1] - s.pa[1]) * f);
+              L.tr.push(s.pa[0] + (s.pb[0] - s.pa[0]) * f0, s.pa[1] + (s.pb[1] - s.pa[1]) * f0, s.pa[0] + (s.pb[0] - s.pa[0]) * fm, s.pa[1] + (s.pb[1] - s.pa[1]) * fm);
+            }
+          }
+          ctx.globalCompositeOperation = comp;
+          const r = (dk ? 9 : 6.5) * ph.size;
+          for (const L of used) {
+            // A tail fading toward the back: a faint wide stroke over the whole trail, a brighter one over its front half.
+            ctx.strokeStyle = L.glow; ctx.lineWidth = 3 * ph.size; ctx.globalAlpha = dk ? 0.3 : 0.35;
             ctx.beginPath();
-            for (let i = 0; i < pts.length; i++) {
-              const jump = i === 0 || pts[i].ray !== pts[i - 1].ray + 1 || dist(pts[i].p, pts[i - 1].p) > maxGap;
-              if (jump) ctx.moveTo(pts[i].p[0], pts[i].p[1]); else ctx.lineTo(pts[i].p[0], pts[i].p[1]);
-            }
+            for (let i = 0, j = 0; j < L.hd.length; i += 4, j += 2) { ctx.moveTo(L.tr[i], L.tr[i + 1]); ctx.lineTo(L.hd[j], L.hd[j + 1]); }
             ctx.stroke();
+            ctx.strokeStyle = L.core; ctx.lineWidth = 1.4 * ph.size; ctx.globalAlpha = dk ? 0.6 : 0.75;
+            ctx.beginPath();
+            for (let i = 0, j = 0; j < L.hd.length; i += 4, j += 2) { ctx.moveTo(L.tr[i + 2], L.tr[i + 3]); ctx.lineTo(L.hd[j], L.hd[j + 1]); }
+            ctx.stroke();
+            const spr = spriteOf(L);
+            ctx.globalAlpha = 1;
+            if (spr) for (let j = 0; j < L.hd.length; j += 2) ctx.drawImage(spr, L.hd[j] - r, L.hd[j + 1] - r, 2 * r, 2 * r);
+            L.hd.length = 0; L.tr.length = 0;
           }
-          if (additive) ctx.globalCompositeOperation = "lighter";
         }
         if (o.arrows) {
+          ctx.globalCompositeOperation = "source-over";
           const size = o.arrowSize ?? 8;
           for (const s of segs) {
             if (o.arrows === "first" && s.depth > 0) continue;
-            const v = clipSeg(P(s.a), P(s.b), [0, 0, g.w, g.h]);
-            if (!v || dist(v[0], v[1]) < size * 5) continue;
-            ctx.fillStyle = colorOf(s);
+            if (!s.qa || dist(s.qa, s.qb) < size * 5) continue;
+            ctx.fillStyle = lightFor(s).core;
             ctx.globalAlpha = alphaOf(s);
-            const u = unit(sub(v[1], v[0]));
-            tri(add(mul(add(v[0], v[1]), 0.5), mul(u, size / 2)), u, size);
+            const u = unit(sub(s.qb, s.qa));
+            tri(add(mul(add(s.qa, s.qb), 0.5), mul(u, size / 2)), u, size);
           }
         }
         ctx.restore();
@@ -877,13 +1155,12 @@
       // Total internal reflection: a small ring at each point it happens, in the ray's color.
       if (o.tir !== false && o.rays !== false) for (const h of T.hits) {
         if (h.kind !== "tir" || h.I < (o.minI ?? 0.01) * 3) continue;
-        const q = P(h.p), c = h.wl != null ? spectral(h.wl, dk) : util.color(h.band ? o.white ?? "ink" : srcs[h.src]?.color ?? o.color ?? "orange");
-        g.circle(q, 4.5, { stroke: c, width: 1.75, alpha: clamp(Math.sqrt(h.I), 0.35, 1) });
+        g.circle(P(h.p), 4.5, { stroke: lightFor(h).glow, width: 1.75, alpha: clamp(Math.sqrt(h.I), 0.35, 1) });
       }
       if (show) {
         for (const el of els) {
           if (el.hidden) continue;
-          if (el.type === "body") g.path(outline(el, P, sc), { stroke: "ink", width: lit(el) ? 2.5 : 1.25, close: true });
+          if (el.type === "body") g.path(outline(el, P, sc), { stroke: "ink", width: lit(el) ? 2.5 : 1.25, alpha: lit(el) ? 1 : 0.6, close: true });
           else if (el.type === "mirror") drawMirror(el, P, sc, lit(el));
           else if (el.type === "lens") drawThinLens(el, P, dk, lit(el));
           else if (el.type === "absorber") drawAbsorber(el, P, sc, lit(el));
@@ -891,15 +1168,14 @@
         els.forEach((el, ei) => {
           if (!el.record || el.hidden || o.marks === false) return;
           for (const r of T.sensors[keyOf(el, ei)] ?? []) {
-            const c = r.wl != null ? spectral(r.wl, dk) : r.band ? o.white ?? "ink" : r.color ?? srcs[r.src]?.color ?? o.color ?? "orange";
-            g.circle(P(r.p), 2.4, { fill: c, alpha: clamp(Math.sqrt(r.I), 0.25, 1) });
+            g.circle(P(r.p), 2.4, { fill: lightFor(r).glow, alpha: clamp(Math.sqrt(r.I), 0.25, 1) });
           }
         });
-        for (const s of srcs) {
-          if (!s.marker || !s.at || o.sources === false) continue;
-          const c = Array.isArray(s.wl) ? "ink" : s.wl != null ? spectral(s.wl, dk) : s.color ?? o.color ?? "orange";
-          g.circle(P(s.at), 4.5, { fill: c, stroke: "panel", width: 1.5 });
-        }
+        srcs.forEach((s, si) => {
+          if (!s.marker || !s.at || o.sources === false) return;
+          const L = lightFor({ wl: Array.isArray(s.wl) ? null : s.wl, band: Array.isArray(s.wl) ? s.wl : null, src: si });
+          g.circle(P(s.at), 4.5, { fill: dk ? L.core : L.glow, stroke: "panel", width: 1.5 });
+        });
         if (o.focal) for (const el of els) if (!el.hidden) marks(el, P, dk);
         if (o.labels !== false) for (const el of els) {
           if (!el.label || el.hidden) continue;
@@ -996,7 +1272,7 @@
 
   window.Optics = {
     // materials and light
-    materials: MATERIALS, index, abbe, dispersive, WHITE, spectrum, wavelengthRGB, wavelengthColor,
+    materials: MATERIALS, index, abbe, dispersive, WHITE, spectrum, wavelengthRGB, wavelengthColor, blackbodyRGB,
     // physics
     snell, critical, brewster, fresnel, image, lensmaker, thick, rainbow,
     // geometry and elements

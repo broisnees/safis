@@ -11,7 +11,7 @@ Conventions:
 - World coordinates have y up, in any unit you pick (cm for an optical bench, mm for the eye). Map them to the canvas with `P` from `g.fit` or `g.graph`.
 - Angles in the API are degrees. Directions are measured counterclockwise from +x. Hits report angles from the surface normal.
 - Elements and sources are plain data. Rebuild the scene in `draw()` from `v` and `s` every frame; it costs well under a millisecond.
-- Colors are palette names, except rays with a wavelength, which take their physical color.
+- Light draws as light. Rays with a wavelength take their physical color, a source with a `temperature` the color of a body that hot, and the rest a 3000 K lamp unless I give a palette `color`. Every ray glows, and photons ride the traced paths (see `g.optics` below).
 
 ## When to use what
 
@@ -61,7 +61,7 @@ A body inside another body (listed after it) sits in that medium, which is how t
 | `Optics.fan(p, dir, spread, o)` | A point source: rays over `spread` degrees around `dir`, or all around for 360. `n` [9]. |
 | `Optics.fanTo(p, a, b, o)` | Rays from p through `n` [9] evenly spaced points from a to b: a point source filling an aperture, the right source for an object in front of a lens. |
 
-Every source takes `wl`: leave it out for one color traced at the index for 587.6 nm, give a wavelength in nm, a list of them, or `"white"` for seven lines from red (650) to violet (415). White light stays one ray until it meets a material whose index depends on wavelength, then splits. Also `I` [1] (intensity), `color` ["orange"] for rays without a wavelength, `name`, and `marker` (a dot at the source; on by default except for beams).
+Every source takes `wl`: leave it out for one color traced at the index for 587.6 nm, give a wavelength in nm, a list of them, or `"white"` for seven lines from red (650) to violet (415). White light stays one ray until it meets a material whose index depends on wavelength, then splits. Also `I` [1] (intensity), `color` (a palette name for rays without a wavelength), `temperature` (kelvin, for a hot source without a wavelength or color: 1900 a candle, 2700 a household bulb, 3200 a halogen lamp, 5800 the Sun), `name`, and `marker` (a dot at the source; on by default except for beams). `Optics.blackbodyRGB(T)` gives the color of a body at T kelvin as `[r, g, b]`.
 
 ## Materials and color
 
@@ -130,7 +130,15 @@ It returns `T = { segments, hits, sensors, energy, truncated, ms }`.
 
 ## g.optics(scene, o)
 
-Traces and draws: glass as a tinted fill with an ink outline, mirrors with a hatched back, thin lenses as a slim biconvex or biconcave outline, walls hatched, screens pale, sensors in their color, then the rays with alpha by intensity and color by wavelength. Returns `T` with `px` on every hit and sensor record.
+Traces and draws: glass as a tinted fill with a soft outline, mirrors with a hatched back, thin lenses as a slim biconvex or biconcave outline, walls hatched, screens pale, sensors in their color, then the light. Returns `T` with `px` on every hit and sensor record.
+
+The light looks like light, not like wires:
+
+- **Rays glow.** On dark pages each ray adds to what is under it: a wide faint bloom, a glow in its color, and a thin core whitened toward it. Where rays cross they brighten, so a focus or a caustic burns white. A source's light is shared among its rays, so a fan of 21 doesn't blow out. On light pages the glow and a saturated core paint normally, and white light shows as a warm neutral, since nothing is brighter than paper.
+- **Beams have a body.** Between neighboring rays of one source on the same path the light fills in, brighter where they crowd together: a fan reads as a cone, a focus as a pinch.
+- **Glass glows inside** along the paths through it, the light it scatters.
+- **Photons travel.** Small bright packets with short tails ride every traced path and slow to c/n in glass (their place is the optical path length, the same quantity the wavefronts mark). At a partial reflection each photon goes one way, as often as the Fresnel split says; white light that splits sends each photon down one color. The figure redraws every frame while it's on screen. They hold still under reduced motion and while the checker runs, at `time` (0 by default), so the still frame is always the same.
+- **It stays cheap.** The still part of the light is drawn once into a cached layer and laid on each frame, so a frame repaints only the photons and wavefronts; the trace is cached while the scene is unchanged.
 
 | option | default | |
 |---|---|---|
@@ -138,9 +146,10 @@ Traces and draws: glass as a tinted fill with an ink outline, mirrors with a hat
 | `depth`, `minI`, `fresnel`, `n0`, `far`, `maxSegments` | | Passed to `Optics.trace`. |
 | `width` | 1.75 | Ray width in px. |
 | `alpha`, `minAlpha`, `gain` | 1, 0.12, 1 | Ray alpha is √(I × gain), at least `minAlpha`, times `alpha`. Raise `gain` to show weak paths such as the rainbow's. |
-| `blend` | `"auto"` | `"auto"` adds colors together on dark pages (overlapping colors make white) and paints normally on light ones; `"add"`, `"normal"`. |
-| `color` | `"orange"` | Rays without a wavelength (a source's own `color` wins). |
-| `white` | `"ink"` | Unsplit white light: dark on light pages, white on dark ones. |
+| `blend` | `"auto"` | `"auto"` adds light together on dark pages (overlapping colors make white) and paints normally on light ones; `"add"`, `"normal"`. |
+| `color` | | A palette color for rays without a wavelength (a source's own `color` or `temperature` wins). |
+| `temperature` | 3000 | Kelvin, the color of rays with no wavelength, color, or source temperature: a warm lamp. |
+| `white` | | A palette color for unsplit white light, instead of white light itself. |
 | `arrows` | false | `true` puts an arrowhead mid-way along every visible segment, `"first"` only on the rays leaving the sources. |
 | `focal` | false | Marks F and F′ of lenses (thin and thick) and F and C of curved mirrors. |
 | `axis` | false | A dashed line along each lens's and curved mirror's axis. |
@@ -149,9 +158,13 @@ Traces and draws: glass as a tinted fill with an ink outline, mirrors with a hat
 | `rays`, `elements` | true | `false` skips that layer. |
 | `glass` | `"lit"` | Glass bodies shade by thickness (deeper toward the bottom), brighten at their edges (Fresnel reflection grows at grazing angles), and catch a highlight along the edges that face the light. `"flat"` is a plain tint. |
 | `spectrum` | `"smooth"` | Dispersed light draws as a continuous fan: between neighboring wavelengths of one ray, a band shaded from one color to the next. `"lines"` draws only the separate rays. |
-| `glow` | true | A soft halo under each ray. Where rays converge the halos add up, so a focus or a caustic shows as a bright spot. |
+| `glow` | true | The bloom and glow under each ray. Where rays converge they add up, so a focus or a caustic shows as a bright spot. |
+| `fill` | true | The body of a beam: light between neighboring rays of a source with 5 or more rays, brighter where they crowd. |
+| `scatter` | true | On dark pages, a glow inside glass along the paths through it. |
+| `photons` | on without `wavefronts` | `false`, or `{ speed, spacing, count, size, trail }`: speed [140] and spacing [64] in px per second and px, at most `count` [260] on screen (spaced out further when the paths are long), head `size` [1] as a multiple, tail [30] px. Many-ray sources carry fewer per ray. |
+| `time` | | Seconds, to drive the photons from the figure's own clock (`s.t`) instead of the page's. Pass it when the figure plays and pauses, so the photons stop with it. |
 | `tir` | true | A small ring in the ray's color at each total internal reflection. |
-| `wavefronts` | | Spacing in world units, or `{ spacing, phase, alpha, width }`: draws curves of equal optical path across neighboring rays of each source and path. Advance `phase` with time (`(s.t * speed) % spacing`) and they travel. Use a `fan` or `fanTo` with 15 to 25 rays so the curves are smooth. |
+| `wavefronts` | | Spacing in world units, or `{ spacing, phase, alpha, width }`: draws glowing crests along curves of equal optical path across neighboring rays of each source and path, with the rays stepped back so the crests lead. Advance `phase` with time (`(s.t * speed) % spacing`) and they travel. Use a `fan` or `fanTo` with 15 to 25 rays so the curves are smooth. |
 
 ## g.rayAngles(hit, o)
 
@@ -303,7 +316,8 @@ The verdict in the status line comes from `Optics.eyeFocus`; the picture comes f
 ## Recipes
 
 - **A smooth spectrum.** A white `Optics.ray` into a flint prism and a screen far enough away that every color lands on it; the fan fills between the colors. Colors that end on different things (one on the screen, one past it) aren't joined, so size the screen to catch them all.
-- **Wavefronts through a lens.** `Optics.fanTo(object, [0, -h], [0, h], { n: 21 })`, a lens, and `wavefronts: { spacing: 0.9, phase: (s.t * 1.2) % 0.9 }`, with `alpha: 0.5` on the rays so the fronts lead. Circles from the object flatten in the glass and curl round to the image.
+- **Wavefronts through a lens.** `Optics.fanTo(object, [0, -h], [0, h], { n: 21 })`, a lens, and `wavefronts: { spacing: 0.9, phase: (s.t * 1.2) % 0.9 }`. Circles from the object flatten in the glass and curl round to the image, inside a cone of light.
+- **Light from a real source.** Give the source its temperature (`temperature: 1900` for a candle, `5800` for sunlight) or its wavelength (`wl: 532` for a green laser) and leave `color` out, so the light is the color it really is.
 - **Total internal reflection.** A bent `Optics.body` of acrylic and a `fan` into its end: each bounce gets a ring; tighten the bend and rays leak out where they meet the wall below the critical angle.
 - **A caustic.** A beam through a real `Optics.lens` (spherical aberration) on a dark page: the glows pile up along the caustic curve and at the focus.
 
@@ -315,7 +329,9 @@ The verdict in the status line comes from `Optics.eyeFocus`; the picture comes f
 - **Don't let bodies partly overlap.** Nest one fully inside another, or keep them apart. A ray inside overlapping glass doesn't know which index it's in.
 - **Fast glass lenses can't exist.** A BK7 lens with f near its aperture needs radii smaller than its half-height; `Optics.lens` trims the aperture to fit, and the result looks like a ball. Keep the aperture under about 1.3 f, or use `Optics.thinLens`.
 - **The eye's verdict is paraxial; its rays are real.** With spherical surfaces and a 3 mm pupil the traced rays cross about 0.2 mm in front of the retina even when `eyeFocus` says sharp. Report `eyeFocus`, draw the rays.
-- **Keep traces out of state.** Rebuild the scene and call `g.optics` in `draw()`. A trace is plain data but large; store only the numbers the reader controls.
+- **Keep traces out of state.** Rebuild the scene and call `g.optics` in `draw()`. A trace is plain data but large; store only the numbers the reader controls. `g.optics` caches the trace and the drawn light while the scene stays the same, so redrawing every frame for the photons is cheap.
+- **Don't paint light orange by hand.** Lines drawn with `g.line` next to traced rays look like wires beside light. Trace them, or pass `photons: false, glow: false` on a figure that must stay a plain diagram.
+- **Photons need the figure on screen.** They ask for a frame only while the figure is visible, and pause under reduced motion. A figure with play and pause should pass `time: s.t`.
 - **Escaping rays run far past the canvas.** That's fine when the figure is one picture. In a split figure, wrap the optics in `g.clip(box, ...)` so rays stay in their panel.
 - **Build arcs with `Optics.arc`.** It stores the end vectors the tracer uses.
 - **Watch `T.truncated`.** Hundreds of rays bouncing many times inside glass can hit `maxSegments`; raise it only for tracing in `status()` or a precomputed graph, not for drawing.
