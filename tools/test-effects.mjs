@@ -202,6 +202,105 @@ check("hash is deterministic and spreads", Fx.hash(1, 2, 3) === Fx.hash(1, 2, 3)
   check("water in section: the surface moves about its level", Math.abs(lv(100) - 120) < 40 && lv(100) !== lv(300));
 }
 
+// ---------- simulations on the CPU: fluid, waves, particles ----------
+{
+  const maxAbs = a => a.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  // Projection: the 5-point Laplacian is exactly div grad on the staggered grid, so a converged
+  // solve leaves no divergence, and the default iterations leave a tiny residual each step.
+  const sim = Fx.fluid({ domain: [1.2, 0.6], cpuCells: 24, speed: 0.5, re: 100, iterations: 600, obstacles: [{ shape: "circle", at: [0.4, 0.3], r: 0.06 }] });
+  const C = sim._cpu();
+  for (let k = 0; k < C.u.length; k++) { C.u[k] += 15 * Math.sin(k * 0.37); C.v[k] += 15 * Math.cos(k * 0.91); }
+  const before = sim.project(), after = sim.divergence();
+  check("fluid: projection removes the divergence (to float precision)", after < 1e-3 * before, `max |div| ${before.toFixed(2)} -> ${after.toExponential(2)} per s`);
+  sim.set({ iterations: 32 }); sim.reset(); sim.advance(3);
+  check("fluid: each step leaves under 0.1% of the divergence it made", sim.divergence() < 1e-3 * sim.lastDiv, `${sim.lastDiv.toFixed(2)} -> ${sim.divergence().toExponential(2)}`);
+  const still = Fx.fluid({ domain: [1, 0.5], cpuCells: 20, speed: 0, re: 50, length: 0.1, kick: false, obstacles: [{ shape: "rect", at: [0.5, 0.25], size: [0.1, 0.1] }] });
+  still.advance(3);
+  check("fluid: still air round a body stays still", maxAbs(still._cpu().u) < 1e-9 && maxAbs(still._cpu().v) < 1e-9);
+  const free = Fx.fluid({ domain: [1, 0.5], cpuCells: 20, speed: 0.4, re: 50, length: 0.1 });
+  free.advance(2);
+  const uc = 0.4 / free.h;
+  check("fluid: an empty channel keeps a uniform stream", free._cpu().u.every((v, k) => k % (free.grid[0] + 1) === 0 || Math.abs(v - uc) < 1e-3 * uc || k >= (free.grid[0] + 1) * free.grid[1]));
+  // Wakes at the right Reynolds numbers: attached at Re 2, a recirculation bubble at Re 30.
+  const wake = re => { const s = Fx.fluid({ domain: [1.6, 0.8], cpuCells: 40, speed: 0.5, re, kick: false, obstacles: [{ shape: "circle", at: [0.45, 0.4], r: 0.08 }] }); s.advance(6); return s.sample([0.45 + 0.08 * 1.6, 0.4]).u; };
+  const u2 = wake(2), u30 = wake(30);
+  check("fluid: at Re 2 the flow closes behind a cylinder (no bubble)", u2 > 0, `u ${u2.toFixed(3)} m/s, 0.8 D behind`);
+  check("fluid: at Re 30 a recirculation bubble sits behind it", u30 < 0, `u ${u30.toFixed(3)} m/s, 0.8 D behind`);
+  // Shedding: a cylinder at Re 120 sheds at a Strouhal number near 0.17 (0.15 to 0.21 here).
+  const st = Fx.fluid({ domain: [2, 0.8], cpuCells: 40, speed: 0.5, re: 120, track: true, obstacles: [{ shape: "circle", at: [0.42, 0.4], r: 0.05 }] });
+  st.advance(14);
+  const sh = st.shedding();
+  check("fluid: a cylinder at Re 120 sheds at St 0.15 to 0.21", sh.strouhal > 0.15 && sh.strouhal < 0.21, `St ${sh.strouhal.toFixed(3)}, ${sh.frequency.toFixed(2)} Hz`);
+  // Determinism: the same settings give the same field, and going back in time replays it.
+  const run = () => { const s = Fx.fluid({ domain: [1, 0.5], cpuCells: 16, speed: 0.5, re: 150, obstacles: [{ shape: "circle", at: [0.3, 0.25], r: 0.04 }] }); s.stir([0.6, 0.2], [0.65, 0.22]); s.advance(1.5); return s; };
+  const r1 = run(), r2 = run();
+  check("fluid: deterministic", same(Array.from(r1._cpu().u), Array.from(r2._cpu().u)) && same(Array.from(r1._cpu().d[0]), Array.from(r2._cpu().d[0])));
+  r1.warm(1); r1.advance(2); const fwd = Array.from(r1._cpu().v); r1.advance(1.2); r1.advance(2);
+  check("fluid: going back in time and forward again gives the same frame", same(fwd, Array.from(r1._cpu().v)));
+  // Waves: a ring spreads at c, and shallow water gives c = sqrt(g h).
+  const front = W => { const prof = t => { W.advance(t); return Array.from({ length: 260 }, (_, i) => W.height([0.6 + i * 0.002, 0.6])); }, at = t => { const p = prof(t), m = maxAbs(p); let i = p.length - 1; while (i > 0 && Math.abs(p[i]) < 0.2 * m) i--; return i * 0.002; }; const a = at(0.4), b = at(0.9); return (b - a) / 0.5; };
+  const W1 = Fx.waves({ domain: [1.2, 1.2], cpuCells: 120, speed: 0.3, damping: 0 });
+  W1.drop([0.6, 0.6], { amp: 0.002, r: 0.04 });
+  const c1 = front(W1);
+  check("waves: a pebble's ring spreads at c (within 5%)", Math.abs(c1 / 0.3 - 1) < 0.05, `${c1.toFixed(3)} vs 0.300 m/s`);
+  const W2 = Fx.waves({ domain: [1.2, 1.2], cpuCells: 120, depth: 0.004, damping: 0 }), c2 = Math.sqrt(9.81 * 0.004);
+  W2.drop([0.6, 0.6], { amp: 0.001, r: 0.04 });
+  const m2 = front(W2);
+  check("waves: shallow water runs at sqrt(g h) (within 5%)", Math.abs(W2.speed - c2) < 1e-12 && Math.abs(m2 / c2 - 1) < 0.05, `${m2.toFixed(3)} vs ${c2.toFixed(3)} m/s`);
+  const W3 = Fx.waves({ domain: [1.6, 1.6], cpuCells: 120, speed: 0.3, damping: 0, sources: [{ at: [0.8, 0.8], freq: 2, amp: 0.001 }] });
+  W3.advance(2.5);
+  let a1 = 0;
+  for (let k = 0; k < 64; k++) for (let d = -0.04; d <= 0.04; d += 0.005) a1 = Math.max(a1, Math.abs(W3.height([0.8 + (0.15 + d) * Math.cos(k / 10), 0.8 + (0.15 + d) * Math.sin(k / 10)])));
+  check("waves: a source's waves are amp high one wavelength out (within 15%)", Math.abs(a1 / 0.001 - 1) < 0.15, `${(a1 * 1000).toFixed(2)} mm`);
+  const wv = () => { const s = Fx.waves({ domain: [0.5, 0.5], cpuCells: 40, speed: 0.3, walls: Fx.waves.slits([0.25, 0], [0.25, 0.5], [[0.25, 0.05]]), sources: [{ at: [0.1, 0.25], freq: 3 }] }); s.drop([0.4, 0.1]); s.advance(1); return Array.from(s.heights()); };
+  check("waves: deterministic", same(wv(), wv()));
+  const walls = Fx.waves.slits([0, 0], [0, 1], [[0.4, 0.1], [0.6, 0.1]]);
+  check("waves: slits cut a barrier into pieces with gaps", walls.length === 3 && Math.abs(walls[0].to[1] - 0.35) < 1e-12 && Math.abs(walls[1].from[1] - 0.45) < 1e-12);
+  // Particles: terminal speeds from the presets, still things stay still, determinism.
+  for (const [m, vt] of [["dust", 0.3], ["sand", 2.5], ["water", 5.5], ["rain", 8.5], ["snow", 1], ["spark", 7], ["bubble", -0.25], ["pollen", 0.03]]) {
+    const P = Fx.particles({ matter: m, domain: [4, 400], count: 1, emitter: { at: [2, 200] }, forces: { turbulence: { strength: 0 } }, life: [30, 30], prewarm: false });
+    P.advance(8);
+    const v = P.alive()[0]?.v[1] ?? NaN;
+    check(`particles: ${m} falls at its terminal speed (within 5%)`, Math.abs(v / vt - 1) < 0.05, `${v.toFixed(3)} vs ${vt} m/s`);
+  }
+  const still2 = Fx.particles({ matter: "air", domain: [1, 1], count: 1, emitter: { at: [0.5, 0.5] }, forces: { turbulence: { strength: 0 } }, life: [20, 20], prewarm: false });
+  still2.advance(5);
+  check("particles: a tracer in still air stays where it is", same(still2.alive()[0]?.p, [0.5, 0.5]));
+  const settle = Fx.particles({ matter: "dust", domain: [1, 1], count: 40, ground: 0.9, pile: false, emitter: { shape: "line", from: [0.2, 0.5], to: [0.8, 0.5] }, life: [20, 20], prewarm: false });
+  settle.advance(6);
+  const down = settle.alive().filter(q => q.landed);
+  settle.advance(9);
+  const later = new Map(settle.alive().map(q => [q.i, q]));
+  check("particles: dust that has landed stays where it landed", down.length > 2 && down.every(q => Math.abs(q.p[1] - 0.9) < 1e-9 && same(later.get(q.i)?.p, q.p)), `${down.length} landed`);
+  const heap = Fx.particles({ matter: "sand", domain: [1, 1], count: 600, ground: 0.95, heap: 4, emitter: { at: [0.5, 0.2] }, life: [2, 2.5] });
+  heap.advance(6);
+  const pile = heap.pile(), top = Math.min(...pile.map(q => q[1])), slope = Math.max(...pile.slice(1).map((q, i) => Math.abs(q[1] - pile[i][1]) / (q[0] - pile[i][0])));
+  check("particles: sand builds a heap no steeper than its angle of repose", top < 0.95 - 0.01 && slope <= Math.tan(34 * Math.PI / 180) * 1.001, `height ${(0.95 - top).toFixed(3)} m, steepest ${(Math.atan(slope) * 180 / Math.PI).toFixed(1)}°`);
+  const smoke = o => Fx.particles({ matter: "smoke", domain: [10, 10], count: 300, emitter: { at: [5, 9], speed: 1, dir: -Math.PI / 2 }, ...o });
+  const sa = smoke(), sb = smoke();
+  sa.advance(4); sb.advance(4);
+  check("particles: deterministic", same(sa.alive(), sb.alive()) && !same(sa.alive(), (() => { const s = smoke({ seed: 2 }); s.advance(4); return s.alive(); })()));
+  check("particles: hot smoke rises", sa.alive().reduce((s, q) => s + q.p[1], 0) / sa.alive().length < 9 - 1);
+  const rain = Fx.particles({ matter: "rain", domain: [2, 2], count: 200, ground: 1.9, emitter: { shape: "line", from: [0.2, 0], to: [1.8, 0] } });
+  rain.advance(3);
+  check("particles: rain splashes on the ground", rain.droplets().length > 0 && rain.alive().every(q => q.p[1] <= 1.9 + 1e-9));
+  const sim2 = Fx.fluid({ domain: [2, 0.8], cpuCells: 24, speed: 1, re: 100, obstacles: [{ shape: "circle", at: [0.6, 0.4], r: 0.12 }] });
+  const tr = Fx.particles({ matter: "air", fluid: sim2, count: 300, emitter: { shape: "line", from: [0.05, 0.1], to: [0.05, 0.7] } });
+  tr.advance(2.5);
+  check("particles: tracers in a fluid go round the body, never into it", tr.alive().length > 50 && tr.alive().every(q => Math.hypot(q.p[0] - 0.6, q.p[1] - 0.4) >= 0.12 - 1e-6) && Math.abs(sim2.time - 2.5) < 1e-6);
+  // Defining matter and colormaps from a page.
+  Fx.matter.define("ash", { base: "dust", vt: 0.5, color: "#777777", style: "smoke" });
+  const ash = Fx.particles({ matter: "ash", domain: [4, 400], count: 1, emitter: { at: [2, 200] }, forces: { turbulence: { strength: 0 } }, life: [30, 30], prewarm: false });
+  ash.advance(8);
+  check("matter.define: a new matter falls at its own terminal speed", Math.abs(ash.alive()[0].v[1] / 0.5 - 1) < 0.01 && Fx.matter.names.includes("ash") && Fx.matter("ash").style === "puff");
+  const err = f => { try { f(); return ""; } catch (e) { return e.message; } };
+  check("matter.define: bad numbers are explained", /vt is -1; it should be terminal speed/.test(err(() => Fx.matter.define("x", { vt: -1 }))) && /unknown key "speed"/.test(err(() => Fx.matter.define("x", { speed: 1 }))) && /say how it moves/.test(err(() => Fx.matter.define("x", { style: "dot" }))));
+  Fx.colormap.define("ice", ["#000", [0.5, 0.7, 1], "#ffffff"]);
+  check("colormap.define: a new map interpolates its stops", same(Fx.colormap("ice", 0).map(v => +v.toFixed(3)), [0, 0, 0]) && Math.abs(Fx.colormap("ice", 0.5)[2] - 1) < 0.05 && same(Fx.colormap("ice", 1), [1, 1, 1]));
+  check("colormap.define: bad stops are explained", /stop 1 is "red"/.test(err(() => Fx.colormap.define("x", ["#000", "red"]))) && /rise from 0 to 1/.test(err(() => Fx.colormap.define("x", [[0, "#000"], [0.8, "#fff"]]))));
+  check("the built-in colormaps: magma dark to light, coolwarm blue to red", Fx.colormap("magma", 0)[0] < 0.01 && Fx.colormap("magma", 1)[0] > 0.95 && Fx.colormap("coolwarm", 0)[2] > Fx.colormap("coolwarm", 0)[0] && Fx.colormap("coolwarm", 1)[0] > Fx.colormap("coolwarm", 1)[2]);
+}
+
 // ---------- in a browser: shaders, determinism, fallback, smooth envelopes ----------
 if (!findChrome() || typeof WebSocket === "undefined") console.log("skip browser checks (no Chrome or Node < 22)");
 else {
@@ -222,6 +321,7 @@ ${fig("glow", "(g, t, x) => g.fx.glow(null, { path: [[60, g.h / 2], [g.w - 60, g
 ${fig("water", "(g, t, x) => (g.fx.caustics(null, { t, depth: 60 + 120 * x }), g.fx.ripples([0, 0, g.w / 2, g.h], { t, sources: [[80, 80]] }))")}
 ${fig("misc", "(g, t, x) => (g.fx.smoke(null, { t, density: x }), g.fx.sparks(null, { t, rate: 20 + 60 * x }), g.fx.arc(null, { t, intensity: x + 0.3 }), g.fx.shimmer(null, { t, strength: 3 * x }))")}
 ${fig("fresh", "(g, t, x) => { const h = g.h / 2, w = g.w / 2; g.fx.dust([0, 0, w, h], { t: t + 0.5, sources: [{ at: [w / 2, h * 0.9], start: 0 }], density: x + 0.3 }); g.fx.water([w, 0, w, h], { t, depth: 40 + 100 * x }); g.fx.water([0, h, w, h], { view: 'side', t, amp: x + 0.2 }); g.fx.wind([w, h, w, h], { t: t + 2, bodies: [{ at: [w * 1.3, h * 1.5], r: 14 }] }); return g.fx.fire([0, 0, g.w, g.h], { t, power: x, embers: 1, smoke: 0.6 }); }")}
+${fig("sims", "(g, t, x) => { const F = window.SF ??= Fx.fluid({ gpu: true, domain: [1.2, 0.4], cells: 32, speed: 0.4, re: 60, obstacles: [{ shape: 'circle', at: [0.3, 0.2], r: 0.04 }], streaks: 0.04 }); const W = window.SW ??= Fx.waves({ gpu: true, domain: [1, 0.5], cells: 48, speed: 0.3, walls: Fx.waves.slits([0.5, 0], [0.5, 0.5], [[0.25, 0.06]]), sources: [{ at: [0.2, 0.25], freq: 3, amp: 0.002 }] }); const P = window.SP ??= Fx.particles({ matter: 'air', fluid: F, count: 150, emitter: { shape: 'line', from: [0.02, 0.05], to: [0.02, 0.35] } }); P.advance(t + 1); W.advance(t + 1); const h = g.h / 2, r = g.fx.fluid([0, 0, g.w, h], { sim: F, arrows: true, show: x > 0.5 ? 'vorticity' : 'speed' }); g.fx.particles([0, 0, g.w, h], { sys: P }); const w = g.fx.waves([0, h, g.w, h], { sim: W, look: x > 0.5 ? 'height' : 'pool' }); return { gpu: r.gpu && w.gpu && F.gpu && W.gpu }; }")}
 </main>`;
   const dir = await mkdtemp(path.join(os.tmpdir(), "fx-test-")), file = path.join(dir, "index.html");
   await writeFile(file, html);
@@ -240,10 +340,26 @@ ${fig("fresh", "(g, t, x) => { const h = g.h / 2, w = g.w / 2; g.fx.dust([0, 0, 
         for (let i = 0; i < d.length; i += 4) { if ((i >> 2) % 3 === 0) { s += Math.abs(L(d[i], d[i + 1], d[i + 2]) - L0) / 255; n++; } h = Math.imul(h ^ d[i] ^ (d[i + 1] << 8) ^ (d[i + 2] << 16), 16777619); }
         return { ink: s / n, hash: h >>> 0 };
       };`);
-    const ids = ["plume", "flow", "fire", "glow", "water", "misc", "fresh"];
+    const ids = ["plume", "flow", "fire", "glow", "water", "misc", "fresh", "sims"];
     check("the shaders compile (SwiftShader WebGL2)", (await ev("Fx.gpu")) && (await ev("Fx.errors.length")) === 0, await ev("Fx.errors.join('; ')"));
     for (const id of ids) await ev(`drive("${id}", { steps: 1 })`);
     check("shader effects report gpu: true", await ev(`["plume", "fire", "glow", "water"].every(id => out[id].gpu)`));
+    check("simulations run in float textures when asked (gpu: true), with no shader errors", (await ev("out.sims.gpu")) && (await ev("Fx.errors.length")) === 0, await ev("Fx.errors.join('; ')"));
+    // The GPU and CPU solvers take the same steps: a steady wake and a wave field agree.
+    const agree = await ev(`(() => {
+      const o = { domain: [1.2, 0.4], speed: 0.4, re: 20, kick: false, obstacles: [{ shape: "circle", at: [0.3, 0.2], r: 0.05 }] };
+      const a = Fx.fluid({ ...o, gpu: true, cells: 32 }), b = Fx.fluid({ ...o, gpu: false, cpuCells: 32 });
+      a.advance(3); b.advance(3);
+      let fl = 0;
+      for (let x = 0.05; x < 1.2; x += 0.05) for (let y = 0.03; y < 0.4; y += 0.04) { const p = a.velocity([x, y]), q = b.velocity([x, y]); fl = Math.max(fl, Math.hypot(p[0] - q[0], p[1] - q[1]) / 0.4); }
+      const w = { domain: [1, 0.5], speed: 0.3, damping: 0.1, sources: [{ at: [0.3, 0.25], freq: 3, amp: 0.002 }] }, c = Fx.waves({ ...w, gpu: true, cells: 40 }), d = Fx.waves({ ...w, gpu: false, cpuCells: 40 });
+      c.drop([0.7, 0.2]); d.drop([0.7, 0.2]); c.advance(1.5); d.advance(1.5);
+      const H = c.heights(), K = d.heights(), m = Math.max(...K.map(Math.abs));
+      let wv = 0; H.forEach((v, i) => { wv = Math.max(wv, Math.abs(v - K[i]) / m); });
+      return { fl, wv, gpu: a.gpu && c.gpu && !b.gpu && !d.gpu };
+    })()`);
+    check("GPU and CPU fluid solvers agree (within 1% of the stream)", agree.gpu && agree.fl < 0.01, `${(agree.fl * 100).toFixed(3)}%`);
+    check("GPU and CPU wave solvers agree (within 0.1%)", agree.gpu && agree.wv < 1e-3, `${(agree.wv * 100).toFixed(4)}%`);
     // Determinism: the same state renders the same pixels.
     let stable = true;
     for (const id of ids) { const a = await ev(`(drive("${id}", {}), ink("${id}").hash)`), c = await ev(`(drive("${id}", {}), ink("${id}").hash)`); stable &&= a === c; }

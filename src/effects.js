@@ -77,6 +77,83 @@
   const hue = c => { const m = max(...c, 1); return c.map(v => v / m); };
   const W1 = [1, 1, 1], mixc = (a, b, t) => a.map((v, i) => lerp(v, b[i], clamp(t, 0, 1)));
 
+  // ---------- colormaps for fields: 16 even stops, read by the shaders and the 2D versions ----------
+  const hexc = s => { s = String(s).trim(); if (/^#[0-9a-f]{3}$/i.test(s)) s = "#" + [...s.slice(1)].map(c => c + c).join(""); return /^#[0-9a-f]{6}$/i.test(s) ? [1, 3, 5].map(i => parseInt(s.slice(i, i + 2), 16) / 255) : null; };
+  const CMAPS = {};
+  function defineColormap(name, stops) {
+    const where = `Fx.colormap.define(${JSON.stringify(name)}, stops)`;
+    if (typeof name !== "string" || !/^[a-z][\w-]*$/i.test(name)) throw new Error(`${where}: name it with a word, such as "ocean"`);
+    if (!Array.isArray(stops) || stops.length < 2 || stops.length > 64) throw new Error(`${where}: give 2 to 64 stops, low to high`);
+    const placed = stops.every(s => Array.isArray(s) && s.length === 2 && typeof s[0] === "number"), list = placed ? stops.map(s => s[1]) : stops;
+    const big = list.some(c => Array.isArray(c) && c.some(v => v > 1));
+    const cols = list.map((c, i) => {
+      const v = typeof c === "string" ? hexc(c) : Array.isArray(c) && c.length === 3 && c.every(x => typeof x === "number" && x >= 0 && x <= 255) ? c.map(x => (big ? x / 255 : x)) : null;
+      if (!v) throw new Error(`${where}: stop ${i} is ${JSON.stringify(c)}; use "#rrggbb" or [r, g, b] (all 0-1 or all 0-255)`);
+      return v;
+    });
+    const ts = placed ? stops.map(s => s[0]) : cols.map((_, i) => i / (cols.length - 1));
+    if (placed && (ts[0] !== 0 || ts[ts.length - 1] !== 1 || ts.some((t, i) => i && t <= ts[i - 1]))) throw new Error(`${where}: [position, color] stops must rise from 0 to 1`);
+    CMAPS[name] = Array.from({ length: 16 }, (_, k) => { const t = k / 15; let i = 0; while (i < ts.length - 2 && t > ts[i + 1]) i++; return mixc(cols[i], cols[i + 1], (t - ts[i]) / (ts[i + 1] - ts[i])); });
+    return name;
+  }
+  defineColormap("magma", ["#000004", "#1c1044", "#4f127b", "#812581", "#b5367a", "#e55064", "#fb8761", "#fec287", "#fcfdbf"]);
+  defineColormap("viridis", ["#440154", "#472d7b", "#3b528b", "#2c728e", "#21918c", "#28ae80", "#5ec962", "#addc30", "#fde725"]);
+  defineColormap("coolwarm", [[59, 76, 192], [98, 130, 234], [141, 176, 254], [184, 208, 249], [221, 221, 221], [245, 196, 173], [244, 154, 123], [222, 96, 77], [180, 4, 38]]);
+  const cmapStops = name => CMAPS[name] ?? CMAPS.magma;
+  const cmap = (name, t) => { const s = cmapStops(name); t = clamp(num(t, 0), 0, 1) * 15; const i = min(floor(t), 14); return mixc(s[i], s[i + 1], t - i); };
+
+  // ---------- what particles are made of (the same SI numbers as E3.particles) ----------
+  // vt: terminal speed falling in still air (m/s); rise: bubbles; drag (1/s) for gases, which get
+  // lift g (T - Ta) / T at their birth temperature; eddy: [speed m/s, size m, change rate] of the
+  // air's swirl; size [start, end] m; pile: settles and stays, building a heap at its angle of
+  // repose (degrees); splash: drops that break into droplets when they hit.
+  const MATTER = {
+    smoke: { gas: true, style: "puff", temperature: [600, 300], drag: 1.6, eddy: [0.9, 0.8, 0.35], life: [5, 9], size: [0.3, 2.4], opacity: 0.3, bounce: 0, friction: 0.05 },
+    exhaust: { gas: true, style: "puff", temperature: [1100, 320], drag: 0.9, eddy: [2.2, 3, 0.25], life: [6, 12], size: [1, 8], opacity: 0.26, bounce: 0, friction: 0.05 },
+    steam: { gas: true, style: "puff", temperature: [373, 295], drag: 2.5, eddy: [0.4, 0.3, 0.5], life: [1.5, 3.5], size: [0.04, 0.5], opacity: 0.35, color: "#f3f5f7", fade: [0.12, 0.65], bounce: 0, friction: 0.05 },
+    fire: { gas: true, style: "glow", temperature: [1300, 700], drag: 3.5, eddy: [1, 0.15, 1.4], life: [0.4, 0.9], size: [0.08, 0.3], opacity: 0.55, bounce: 0, friction: 0.05 },
+    dust: { vt: 0.3, style: "mote", eddy: [0.6, 0.6, 0.3], life: [3, 7], size: [0.004, 0.004], opacity: 0.85, color: "#a8916f", bounce: 0, friction: 1, pile: 40 },
+    mist: { vt: 0.25, style: "puff", eddy: [0.4, 0.5, 0.4], life: [1.5, 3], size: [0.05, 0.4], opacity: 0.18, color: "#eef4f8", fade: [0.1, 0.6], bounce: 0, friction: 1 },
+    sand: { vt: 2.5, style: "dot", eddy: [0.2, 0.3, 0.3], life: [1.2, 2.5], size: [0.006, 0.006], opacity: 1, color: "#c4a26a", bounce: 0.15, friction: 0.85, pile: 34 },
+    water: { vt: 5.5, style: "streak", eddy: [0.05, 0.3, 0.3], life: [0.8, 2], size: [0.012, 0.012], opacity: 0.9, color: "#d4e9f7", bounce: 0.1, friction: 0.6, splash: true },
+    rain: { vt: 8.5, style: "streak", life: [1.5, 3], size: [0.006, 0.006], opacity: 0.8, color: "#bcd3e6", bounce: 0.02, friction: 0.95, splash: true },
+    snow: { vt: 1, style: "dot", eddy: [0.8, 0.6, 0.5], life: [4, 8], size: [0.012, 0.012], opacity: 1, color: "#ffffff", bounce: 0, friction: 1 },
+    spark: { vt: 7, style: "spark", temperature: [2100, 900], life: [0.5, 1.4], size: [0.01, 0.006], opacity: 1, bounce: 0.35, friction: 0.25 },
+    ember: { vt: 1.5, lift: 1.8, style: "spark", temperature: [1250, 750], eddy: [0.5, 0.3, 0.6], life: [1.5, 3.5], size: [0.012, 0.008], opacity: 1, bounce: 0.2, friction: 0.6 },
+    bubble: { rise: 0.25, style: "bubble", eddy: [0.06, 0.02, 1], life: [2, 5], size: [0.004, 0.005], opacity: 0.9, color: "#dff1fb", bounce: 0, friction: 0 },
+    air: { drag: 20, style: "streak", eddy: [0.3, 1, 0.3], life: [1, 2], size: [0.004, 0.004], opacity: 0.8, color: "#9fc3dd", bounce: 0.5, friction: 0 },
+    pollen: { vt: 0.03, style: "mote", eddy: [0.3, 0.5, 0.3], life: [6, 12], size: [0.003, 0.003], opacity: 0.9, color: "#e2bd3c", bounce: 0, friction: 1 },
+    "grass-seed": { vt: 1.2, style: "dot", eddy: [0.4, 0.5, 0.4], life: [3, 6], size: [0.01, 0.01], opacity: 1, color: "#b39a5c", bounce: 0.1, friction: 0.9 },
+    leaf: { vt: 1, style: "leaf", flutter: [1.4, 0.5], eddy: [0.6, 1, 0.3], life: [6, 10], size: [0.05, 0.05], opacity: 1, color: "#8f9b3a", bounce: 0, friction: 1 },
+  };
+  const STYLES = ["puff", "glow", "mote", "dot", "streak", "spark", "bubble", "leaf"], SALIAS = { smoke: "puff", fire: "glow", sphere: "bubble" };
+  const pair = (v, ok) => Array.isArray(v) && v.length === 2 && v.every(x => typeof x === "number" && Number.isFinite(x)) && ok(v);
+  const MCHECK = {
+    base: [v => !!MATTER[v], "the name of a matter to start from"], like: [v => !!MATTER[v], "the name of a matter to start from"], vt: [v => v > 0, "terminal speed in still air, m/s, above 0"], rise: [v => v > 0, "rise speed, m/s, above 0"],
+    drag: [v => v >= 0, "drag rate, 1/s, 0 or more"], gas: [v => typeof v === "boolean", "true or false"], lift: [v => typeof v === "number", "a lift, m/s² over g"],
+    temperature: [v => pair(v, ([a, b]) => a > 0 && b > 0), "[at birth, at death] in kelvin"], eddy: [v => Array.isArray(v) && v.length === 3 && v.every(x => x >= 0), "[speed m/s, size m, change rate 1/s]"],
+    life: [v => pair(v, ([a, b]) => a > 0 && b >= a), "[shortest, longest] in seconds"], size: [v => pair(v, ([a, b]) => a >= 0 && b >= 0), "[at birth, at death] in m"],
+    opacity: [v => v >= 0 && v <= 1, "0 to 1"], bounce: [v => v >= 0 && v <= 1, "0 to 1"], friction: [v => v >= 0 && v <= 1, "0 to 1"], fade: [v => pair(v, ([a, b]) => a >= 0 && b <= 1), "[fade in, fade out] as shares of life"],
+    color: [v => typeof v === "string", "a CSS color or a palette name"], style: [v => STYLES.includes(v) || !!SALIAS[v], STYLES.join(", ")], pile: [v => v > 0 && v < 90, "the angle of repose in degrees"],
+    splash: [v => typeof v === "boolean", "true or false"], flutter: [v => pair(v, ([a, b]) => a >= 0 && b >= 0), "[sway Hz, sway m/s]"],
+  };
+  function defineMatter(name, o) {
+    const where = `Fx.matter.define(${JSON.stringify(name)}, …)`;
+    if (typeof name !== "string" || !/^[a-z][\w-]*$/i.test(name)) throw new Error(`${where}: name it with a word, such as "ash"`);
+    if (!o || typeof o !== "object") throw new Error(`${where}: give the numbers as an object, such as { vt: 0.5, style: "dot" }`);
+    for (const [k, v] of Object.entries(o)) {
+      if (!MCHECK[k]) throw new Error(`${where}: unknown key "${k}"; use ${Object.keys(MCHECK).join(", ")}`);
+      if (!MCHECK[k][0](v)) throw new Error(`${where}: ${k} is ${JSON.stringify(v)}; it should be ${MCHECK[k][1]}`);
+    }
+    const from = o.base ?? o.like, m = { ...(from ? MATTER[from] : { style: "dot", life: [2, 4], size: [0.01, 0.01], opacity: 1, bounce: 0.2, friction: 0.5 }), ...o };
+    delete m.like; delete m.base;
+    if (SALIAS[m.style]) m.style = SALIAS[m.style];
+    if (o.vt != null || o.rise != null || o.drag != null) for (const k of ["vt", "rise", "drag"]) if (o[k] == null) delete m[k];
+    if (m.vt == null && m.rise == null && m.drag == null) throw new Error(`${where}: say how it moves: vt (m/s, things that fall), rise (m/s, bubbles), or drag (1/s, gases and tracers)`);
+    MATTER[name] = m;
+    return name;
+  }
+
   // ---------- parameters: options resolved against the box ----------
   const common = o => ({ t: num(o.t, 0), seed: num(o.seed, 1) | 0 }), bp = (b, x, y) => [b[0] + b[2] * x, b[1] + b[3] * y];
   // A source oscillates from its start time on; with dur it rings for about dur seconds and dies
@@ -896,6 +973,875 @@ void main() {
     return { img: R.off ? R.canvas.transferToImageBitmap() : R.canvas, sy: R.h - Hh, W, H: Hh };
   }
 
+  // ---------- simulations: fluid, waves, particles ----------
+  // Each is made once per figure, stepped in fixed steps up to the figure's time (advance(t)),
+  // and drawn by g.fx. Going back in time reloads the checkpoint warm(t) saved, or starts over,
+  // so the same time shows the same picture. On the GPU the state lives in float textures on the
+  // shared context; without float render targets the same steps run on the CPU on a coarser grid.
+  const padTo = (a, n) => a.concat(Array(max(0, n - a.length)).fill(0)).slice(0, n);
+  // A software WebGL (SwiftShader, llvmpipe) is slower at this than the CPU solver, so it counts as none.
+  function floatGL(force) {
+    if (Fx.force2d || !context()) return null;
+    const gl = R.gl;
+    if (R.float === undefined) {
+      R.float = !!gl.getExtension("EXT_color_buffer_float");
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      R.soft = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)));
+    }
+    return R.float && (force || !R.soft) ? R : null;
+  }
+  const upload = (T, data) => { const gl = R.gl; gl.bindTexture(gl.TEXTURE_2D, T.tex); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, T.w, T.h, gl.RGBA, gl.FLOAT, data); };
+  function pass(name, T, u) {
+    const gl = R.gl, P = program(name);
+    if (!P) throw new Error(`${name}: shader failed`);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.fb); gl.viewport(0, 0, T.w, T.h); gl.useProgram(P.p);
+    uniforms(P, u); gl.bindVertexArray(R.vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  function copyTex(A, B) {
+    const gl = R.gl;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, A.fb); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, B.fb);
+    gl.blitFramebuffer(0, 0, A.w, A.h, 0, 0, B.w, B.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+  }
+  // A sim's clock: fixed steps of S.dt, a checkpoint from warm(t), and going back in time.
+  function clock(S, stepOnce, save, load, init) {
+    const restart = () => { init(); S.time = 0; };
+    Object.assign(S, {
+      time: 0, chk: null,
+      reset() { restart(); S.chk = null; return S; },
+      advance(t) {
+        t = num(t, 0);
+        if (t < S.time - 1e-9) { if (S.chk && t >= S.chk.time - 1e-9) { load(S.chk); S.time = S.chk.time; } else restart(); }
+        for (let n = 0; S.time + S.dt <= t + 1e-9 && n < 1e5; n++) { stepOnce(S.dt); S.time += S.dt; }
+        return S;
+      },
+      warm(t) {
+        t = num(t, 0);
+        if (S.chk?.at === t) { load(S.chk); S.time = S.chk.time; return S; }
+        if (t < S.time - 1e-9 || S.chk) restart();
+        S.advance(t);
+        S.chk = { ...save(), time: S.time, at: t };
+        return S;
+      },
+    });
+    restart();
+  }
+  const toWorld = (S, p) => { const b = S.view ?? [0, 0, S.domain[0], S.domain[1]]; return [(p[0] - b[0]) / b[2] * S.domain[0], (p[1] - b[1]) / b[3] * S.domain[1]]; };
+  const toScreen = (S, q) => { const b = S.view ?? [0, 0, S.domain[0], S.domain[1]]; return [b[0] + q[0] / S.domain[0] * b[2], b[1] + q[1] / S.domain[1] * b[3]]; };
+
+  // Solid bodies in m (y down): circle { at, r }, rect { at, size, angle }, polygon { points, at? },
+  // airfoil { at (mid-chord), chord, thickness, camber, alpha (nose up) }: a NACA 4-digit section.
+  function naca(c, t, m, n = 36) {
+    const P = 0.4, up = [], lo = [];
+    for (let k = 0; k <= n; k++) {
+      const x = (1 - cos(PI * k / n)) / 2, yt = 5 * t * (0.2969 * sqrt(x) - 0.126 * x - 0.3516 * x * x + 0.2843 * x ** 3 - 0.1036 * x ** 4);
+      const yc = x < P ? m / P / P * (2 * P * x - x * x) : m / (1 - P) ** 2 * (1 - 2 * P + 2 * P * x - x * x), th = Math.atan(x < P ? 2 * m / P / P * (P - x) : 2 * m / (1 - P) ** 2 * (P - x));
+      up.push([(x - yt * sin(th)) * c, -(yc + yt * cos(th)) * c]); lo.push([(x + yt * sin(th)) * c, -(yc - yt * cos(th)) * c]);
+    }
+    return up.concat(lo.reverse().slice(1, -1));
+  }
+  function solidOf(q) {
+    const at = q.at ?? [0, 0], a = num(q.alpha ?? q.angle, 0), ca = cos(a), sa = sin(a), rot = p => [at[0] + p[0] * ca - p[1] * sa, at[1] + p[0] * sa + p[1] * ca];
+    const shape = q.shape ?? (q.r != null ? "circle" : q.points ? "polygon" : q.chord != null ? "airfoil" : "rect");
+    if (shape === "circle") { const r = max(1e-9, num(q.r, 0.05)); return { kind: 0, c: at, r, box: [at[0] - r, at[1] - r, at[0] + r, at[1] + r], D: 2 * r }; }
+    let pts;
+    if (shape === "rect") { const s = q.size ?? [0.1, 0.1], w = s[0] / 2, h = s[1] / 2; pts = [[-w, -h], [w, -h], [w, h], [-w, h]].map(rot); }
+    else if (shape === "airfoil") { const c = max(1e-6, num(q.chord, 0.3)); pts = naca(c, cn(q.thickness, 0.12, 0.01, 0.4), cn(q.camber, 0, -0.1, 0.1)).map(p => rot([p[0] - c / 2, p[1]])); }
+    else if (shape === "polygon" && q.points?.length > 2) pts = q.points.map(p => (q.at ? rot(p) : [p[0], p[1]]));
+    else throw new Error(`Fx.fluid: obstacle shape ${JSON.stringify(shape)} isn't one of "circle", "rect", "polygon", "airfoil" (a polygon needs 3 or more points)`);
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), box = [min(...xs), min(...ys), max(...xs), max(...ys)];
+    return { kind: 1, pts, box, D: shape === "airfoil" ? num(q.chord, 0.3) : box[3] - box[1] };
+  }
+  const inPoly = (pts, x, y) => { let k = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const a = pts[i], b = pts[j]; if ((a[1] > y) !== (b[1] > y) && x < ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]) + a[0]) k = !k; } return k; };
+  const inSolid = (s, x, y) => (s.kind ? x >= s.box[0] && x <= s.box[2] && y >= s.box[1] && y <= s.box[3] && inPoly(s.pts, x, y) : (x - s.c[0]) ** 2 + (y - s.c[1]) ** 2 < s.r * s.r);
+  // Signed distance from a body's surface and the outward normal there: [d, nx, ny].
+  function surfaceOf(s, x, y) {
+    if (!s.kind) { const dx = x - s.c[0], dy = y - s.c[1], d = hypot(dx, dy) || 1e-9; return [d - s.r, dx / d, dy / d]; }
+    let best = 1e18, nx = 0, ny = -1;
+    for (let i = 0, j = s.pts.length - 1; i < s.pts.length; j = i++) {
+      const a = s.pts[j], b = s.pts[i], ex = b[0] - a[0], ey = b[1] - a[1], t = clamp(((x - a[0]) * ex + (y - a[1]) * ey) / (ex * ex + ey * ey || 1e-18), 0, 1);
+      const qx = x - a[0] - ex * t, qy = y - a[1] - ey * t, d = hypot(qx, qy);
+      if (d < best) { best = d; nx = d > 1e-12 ? qx / d : ey; ny = d > 1e-12 ? qy / d : -ex; }
+    }
+    return inPoly(s.pts, x, y) ? [-best, -nx, -ny] : [best, nx, ny];
+  }
+  const bodyPath = s => (s.kind ? s.pts : Array.from({ length: 48 }, (_, i) => [s.c[0] + s.r * cos(i / 48 * TAU), s.c[1] + s.r * sin(i / 48 * TAU)]));
+
+  // ---------- fluid: incompressible Navier-Stokes on a staggered (MAC) grid ----------
+  // Texel (i, j) holds u on cell (i, j)'s left face and v on its top face, so velocity is an
+  // (nx + 1) x (ny + 1) grid; pressure and dye sit at cell centers. A step: MacCormack advection
+  // (forward, back, half the round-trip error put back, clamped to the cell it came from), forces,
+  // viscosity (explicit when mild, implicit Jacobi when viscous), then projection: red-black SOR on
+  // the 5-point Laplacian, which on this grid is exactly div grad, so the divergence left is the
+  // solver's residual. Solids are cells; faces into a solid carry its velocity, faces inside it
+  // hold ghosts that mirror the flow (no-slip) or copy it (free-slip). Inflow at the left edge,
+  // p = 0 outflow at the right, walls (or open air) at the top and bottom.
+  const FLU = `
+uniform sampler2D uV, uS; uniform ivec2 uN; uniform float uWs, uDt; uniform int uOpen;
+float fu(sampler2D t, ivec2 c) { c.x = clamp(c.x, 0, uN.x); float s = 1.0; if (c.y < 0 || c.y >= uN.y) { s = uWs; c.y = clamp(c.y, 0, uN.y - 1); } return s * texelFetch(t, c, 0).x; }
+float fv(sampler2D t, ivec2 c) { c.y = clamp(c.y, 0, uN.y); float s = 1.0; if (c.x < 0) { s = -1.0; c.x = 0; } c.x = min(c.x, uN.x - 1); return s * texelFetch(t, c, 0).y; }
+vec4 fd(sampler2D t, ivec2 c) { return texelFetch(t, clamp(c, ivec2(0), uN - 1), 0); }
+float bu(sampler2D t, vec2 p, out vec2 m) { p.y -= 0.5; ivec2 i = ivec2(floor(p)); vec2 f = p - vec2(i); float a = fu(t, i), b = fu(t, i + ivec2(1, 0)), c = fu(t, i + ivec2(0, 1)), d = fu(t, i + 1); m = vec2(min(min(a, b), min(c, d)), max(max(a, b), max(c, d))); return mix(mix(a, b, f.x), mix(c, d, f.x), f.y); }
+float bv(sampler2D t, vec2 p, out vec2 m) { p.x -= 0.5; ivec2 i = ivec2(floor(p)); vec2 f = p - vec2(i); float a = fv(t, i), b = fv(t, i + ivec2(1, 0)), c = fv(t, i + ivec2(0, 1)), d = fv(t, i + 1); m = vec2(min(min(a, b), min(c, d)), max(max(a, b), max(c, d))); return mix(mix(a, b, f.x), mix(c, d, f.x), f.y); }
+vec4 bd(sampler2D t, vec2 p, out vec4 lo, out vec4 hi) { p -= 0.5; ivec2 i = ivec2(floor(p)); vec2 f = p - vec2(i); vec4 a = fd(t, i), b = fd(t, i + ivec2(1, 0)), c = fd(t, i + ivec2(0, 1)), d = fd(t, i + 1); lo = min(min(a, b), min(c, d)); hi = max(max(a, b), max(c, d)); return mix(mix(a, b, f.x), mix(c, d, f.x), f.y); }
+vec2 vel(vec2 p) { vec2 m; return vec2(bu(uV, p, m), bv(uV, p, m)); }
+vec2 trace(vec2 p, float s) { return p - s * vel(p - 0.5 * s * vel(p)); }
+bool sol(ivec2 c) { return c.x >= 0 && c.y >= 0 && c.x < uN.x && c.y < uN.y && texelFetch(uS, c, 0).x > 0.5; }
+`;
+  const SPLAT = `uniform vec4 uSp[8], uSv[8]; uniform int uNs;
+float stir(vec2 x, float w, int k0) { for (int k = 0; k < 8; k++) { if (k >= uNs) break; vec2 d = x - uSp[k].xy; float q = exp(-dot(d, d) / (uSp[k].z * uSp[k].z)) * uSp[k].w, t = k0 == 0 ? uSv[k].x : uSv[k].y; w = uSv[k].w > 0.5 ? w + q * t : mix(w, t, q); } return w; }
+`;
+  Object.assign(FS, {
+    flDye1: FLU + `uniform sampler2D uD;
+void main() { vec4 lo, hi; o = bd(uD, trace(vec2(ivec2(gl_FragCoord.xy)) + 0.5, uDt), lo, hi); }`,
+    flDye2: FLU + SPLAT + `uniform sampler2D uD, uH; uniform float uStk, uFade;
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy); vec2 x = vec2(c) + 0.5; vec4 lo, hi, l2, h2;
+  vec4 b = bd(uH, trace(x, -uDt), l2, h2); bd(uD, trace(x, uDt), lo, hi);
+  o = clamp(texelFetch(uH, c, 0) + 0.5 * (texelFetch(uD, c, 0) - b), lo, hi) * uFade;
+  for (int k = 0; k < 8; k++) { if (k >= uNs) break; vec2 d = x - uSp[k].xy; o.x += uSv[k].z * exp(-dot(d, d) / (uSp[k].z * uSp[k].z)); }
+  if (uStk > 0.0 && c.x < 2) o.y = 1.0 - smoothstep(0.35, 1.1, abs(fract(x.y / uStk) - 0.5) * uStk);
+  if (sol(c)) o = vec4(0.0);
+}`,
+    flAdv1: FLU + `void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy); vec2 m; o = texelFetch(uV, c, 0);
+  if (c.y < uN.y) o.x = bu(uV, trace(vec2(c) + vec2(0.0, 0.5), uDt), m);
+  if (c.x < uN.x) o.y = bv(uV, trace(vec2(c) + vec2(0.5, 0.0), uDt), m);
+}`,
+    // The correction, the reader's stirring, and (if asked) vorticity confinement.
+    flAdv2: FLU + SPLAT + `uniform sampler2D uH, uW; uniform float uEps, uUc;
+float wa(ivec2 c) { return texelFetch(uW, clamp(c, ivec2(0), uN), 0).x; }
+float conf(ivec2 c, int k) {
+  ivec2 e = ivec2(1, 0), f = ivec2(0, 1); float w, gx, gy;
+  if (k == 0) { w = 0.5 * (wa(c) + wa(c + f)); gx = 0.25 * (abs(wa(c + e)) + abs(wa(c + e + f)) - abs(wa(c - e)) - abs(wa(c - e + f))); gy = abs(wa(c + f)) - abs(wa(c)); }
+  else { w = 0.5 * (wa(c) + wa(c + e)); gx = abs(wa(c + e)) - abs(wa(c)); gy = 0.25 * (abs(wa(c + f)) + abs(wa(c + e + f)) - abs(wa(c - f)) - abs(wa(c + e - f))); }
+  return uEps * uUc * w * (k == 0 ? gy : -gx) / (length(vec2(gx, gy)) + 1e-5);
+}
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy); vec2 m, m2; vec4 w = texelFetch(uV, c, 0), h = texelFetch(uH, c, 0); o = w;
+  if (c.y < uN.y) { vec2 x = vec2(c) + vec2(0.0, 0.5); float b = bu(uH, trace(x, -uDt), m2); bu(uV, trace(x, uDt), m); o.x = stir(x, clamp(h.x + 0.5 * (w.x - b), m.x, m.y), 0); if (uEps > 0.0) o.x += uDt * conf(c, 0); }
+  if (c.x < uN.x) { vec2 x = vec2(c) + vec2(0.5, 0.0); float b = bv(uH, trace(x, -uDt), m2); bv(uV, trace(x, uDt), m); o.y = stir(x, clamp(h.y + 0.5 * (w.y - b), m.x, m.y), 1); if (uEps > 0.0) o.y += uDt * conf(c, 1); }
+}`,
+    flCurl: FLU + `void main() { ivec2 c = ivec2(gl_FragCoord.xy); o = vec4(fv(uV, c) - fv(uV, c - ivec2(1, 0)) - fu(uV, c) + fu(uV, c - ivec2(0, 1)), 0.0, 0.0, 0.0); }`,
+    // Boundary faces, ghosts, and viscosity (uMode 0: boundaries only, 1: explicit, 2: one Jacobi sweep of the implicit step).
+    flBnd: FLU + `uniform sampler2D uA; uniform float uAl, uIn; uniform int uMode;
+bool fluU(ivec2 c) { return c.y >= 0 && c.y < uN.y && c.x > 0 && c.x <= uN.x && !sol(c - ivec2(1, 0)) && (c.x == uN.x || !sol(c)); }
+bool fluV(ivec2 c) { return c.x >= 0 && c.x < uN.x && c.y > 0 && c.y < uN.y && !sol(c - ivec2(0, 1)) && !sol(c); }
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy), e = ivec2(1, 0), f = ivec2(0, 1); vec4 w = texelFetch(uV, c, 0); o = w;
+  if (c.y < uN.y) {
+    bool l = c.x > 0 && sol(c - e), r = c.x < uN.x && sol(c);
+    if (c.x == 0) o.x = r ? 0.0 : uIn;
+    else if (l && r) {
+      vec4 A = texelFetch(uS, c - e, 0), B = texelFetch(uS, c, 0); float vo = 0.5 * (A.y + B.y), sg = A.w > 0.5 ? 1.0 : -1.0, s = 0.0, n = 0.0;
+      if (fluU(c - f)) { s += texelFetch(uV, c - f, 0).x; n++; }
+      if (fluU(c + f)) { s += texelFetch(uV, c + f, 0).x; n++; }
+      o.x = n > 0.0 ? vo + sg * (s / n - vo) : vo;
+    } else if (l || r) o.x = texelFetch(uS, l ? c - e : c, 0).y;
+    else if (uMode > 0) { float s = fu(uV, c - e) + fu(uV, c + e) + fu(uV, c - f) + fu(uV, c + f); o.x = uMode == 1 ? w.x + uAl * (s - 4.0 * w.x) : (texelFetch(uA, c, 0).x + uAl * s) / (1.0 + 4.0 * uAl); }
+  }
+  if (c.x < uN.x) {
+    bool t = c.y > 0 && sol(c - f), b = c.y < uN.y && sol(c);
+    if ((c.y == 0 || c.y == uN.y) && uOpen == 0) o.y = 0.0;
+    else if (t && b) {
+      vec4 A = texelFetch(uS, c - f, 0), B = texelFetch(uS, c, 0); float vo = 0.5 * (A.z + B.z), sg = A.w > 0.5 ? 1.0 : -1.0, s = 0.0, n = 0.0;
+      if (fluV(c - e)) { s += texelFetch(uV, c - e, 0).y; n++; }
+      if (fluV(c + e)) { s += texelFetch(uV, c + e, 0).y; n++; }
+      o.y = n > 0.0 ? vo + sg * (s / n - vo) : vo;
+    } else if (t || b) o.y = texelFetch(uS, t ? c - f : c, 0).z;
+    else if (uMode > 0) { float s = fv(uV, c - e) + fv(uV, c + e) + fv(uV, c - f) + fv(uV, c + f); o.y = uMode == 1 ? w.y + uAl * (s - 4.0 * w.y) : (texelFetch(uA, c, 0).y + uAl * s) / (1.0 + 4.0 * uAl); }
+  }
+}`,
+    flDiv: FLU + `void main() { ivec2 c = ivec2(gl_FragCoord.xy); vec4 w = texelFetch(uV, c, 0); o = vec4(0.0); if (!sol(c)) o.x = texelFetch(uV, c + ivec2(1, 0), 0).x - w.x + texelFetch(uV, c + ivec2(0, 1), 0).y - w.y; }`,
+    // One color of red-black SOR. A solid cell takes the mean of its fluid neighbours (for drawing only).
+    flSor: FLU + `uniform sampler2D uP, uDv; uniform int uColor; uniform float uOm;
+float P(ivec2 c) { return texelFetch(uP, c, 0).x; }
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy), e = ivec2(1, 0), f = ivec2(0, 1); float p = P(c), s = 0.0, n = 0.0; o = vec4(p, 0.0, 0.0, 1.0);
+  if (((c.x + c.y) & 1) != uColor) return;
+  if (sol(c)) {
+    if (c.x > 0 && !sol(c - e)) { s += P(c - e); n++; } if (c.x < uN.x - 1 && !sol(c + e)) { s += P(c + e); n++; }
+    if (c.y > 0 && !sol(c - f)) { s += P(c - f); n++; } if (c.y < uN.y - 1 && !sol(c + f)) { s += P(c + f); n++; }
+    o.x = n > 0.0 ? s / n : 0.0; return;
+  }
+  if (c.x > 0 && !sol(c - e)) { s += P(c - e); n++; }
+  if (c.x < uN.x - 1) { if (!sol(c + e)) { s += P(c + e); n++; } } else n++;
+  if (c.y > 0) { if (!sol(c - f)) { s += P(c - f); n++; } } else if (uOpen == 1) n++;
+  if (c.y < uN.y - 1) { if (!sol(c + f)) { s += P(c + f); n++; } } else if (uOpen == 1) n++;
+  if (n > 0.0) o.x = p + uOm * ((s - texelFetch(uDv, c, 0).x) / n - p);
+}`,
+    flProj: FLU + `uniform sampler2D uP;
+float P(ivec2 c) { return texelFetch(uP, c, 0).x; }
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy), e = ivec2(1, 0), f = ivec2(0, 1); o = texelFetch(uV, c, 0);
+  if (c.y < uN.y && c.x > 0 && !sol(c - e)) { if (c.x == uN.x) o.x += P(c - e); else if (!sol(c)) o.x -= P(c) - P(c - e); }
+  if (c.x < uN.x) {
+    if (c.y > 0 && c.y < uN.y) { if (!sol(c - f) && !sol(c)) o.y -= P(c) - P(c - f); }
+    else if (uOpen == 1) { if (c.y == 0 && !sol(c)) o.y -= P(c); else if (c.y == uN.y && !sol(c - f)) o.y += P(c - f); }
+  }
+}`,
+    // A small grid for the CPU: velocity (m/s) at block centers, solid, pressure.
+    flRead: FLU + `uniform sampler2D uP; uniform float uF, uHm;
+void main() { vec2 x = (floor(gl_FragCoord.xy) + 0.5) * uF; ivec2 c = clamp(ivec2(x), ivec2(0), uN - 1); o = vec4(vel(x) * uHm, sol(c) ? 1.0 : 0.0, texelFetch(uP, c, 0).x); }`,
+    // The picture: speed, pressure coefficient, or vorticity through a colormap, with dye on top.
+    flShow: FLU + `uniform sampler2D uP, uD; uniform vec2 uBox; uniform int uMode; uniform float uLo, uHi, uHm, uCpK, uWk, uDyeK, uStkK; uniform vec3 uCm[16], uDye, uStkC, uBody, uPaper;
+vec3 cmap(float t) { t = clamp(t, 0.0, 1.0) * 15.0; int i = min(int(t), 14); return mix(uCm[i], uCm[i + 1], t - float(i)); }
+float sc(sampler2D t, vec2 p, int k) { p -= 0.5; ivec2 i = ivec2(floor(p)); vec2 f = p - vec2(i); ivec2 m = uN - 1;
+  float a = texelFetch(t, clamp(i, ivec2(0), m), 0)[k], b = texelFetch(t, clamp(i + ivec2(1, 0), ivec2(0), m), 0)[k], c = texelFetch(t, clamp(i + ivec2(0, 1), ivec2(0), m), 0)[k], d = texelFetch(t, clamp(i + 1, ivec2(0), m), 0)[k];
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y); }
+void main() {
+  vec2 x = px() / uBox * vec2(uN), m; float val = 0.0;
+  if (uMode == 0) val = length(vel(x)) * uHm;
+  else if (uMode == 1) { float ref = (sc(uP, vec2(1.5, 0.25 * float(uN.y)), 0) + sc(uP, vec2(1.5, 0.5 * float(uN.y)), 0) + sc(uP, vec2(1.5, 0.75 * float(uN.y)), 0)) / 3.0; val = (sc(uP, x, 0) - ref) * uCpK; }
+  else if (uMode == 2) val = ((bv(uV, x + vec2(0.5, 0.0), m) - bv(uV, x - vec2(0.5, 0.0), m)) - (bu(uV, x + vec2(0.0, 0.5), m) - bu(uV, x - vec2(0.0, 0.5), m))) * uWk;
+  vec3 col = uMode == 3 ? uPaper : cmap((val - uLo) / (uHi - uLo));
+  vec4 lo, hi, d = bd(uD, x, lo, hi);
+  col = mix(col, uDye, (1.0 - exp(-max(d.x, 0.0) * uDyeK)) * 0.92);
+  col = mix(col, uStkC, clamp(d.y, 0.0, 1.0) * uStkK);
+  col = mix(col, uBody, smoothstep(0.3, 0.7, sc(uS, x, 0)));
+  o = vec4(col, 1.0);
+}`,
+  });
+
+  function fluid(o = {}) {
+    const dom = o.domain ?? [2.4, 0.9];
+    if (!(dom[0] > 0 && dom[1] > 0)) throw new Error("Fx.fluid: domain should be [width, height] in m, such as [2.4, 0.9]");
+    let G = null, X = null;
+    const want = pick(o) !== "cpu" && !!floatGL(gpuForced(o));
+    const ny = max(8, Math.round(num(want ? o.cells : o.cpuCells, want ? 96 : 40))), h = dom[1] / ny, nx = max(8, Math.round(dom[0] / h)), W = nx + 1, NF = W * (ny + 1), NC = nx * ny;
+    const S = { isFluid: true, domain: dom, grid: [nx, ny], h, view: null, walls: ["slip", "no-slip", "open"].includes(o.walls) ? o.walls : "slip", obstacles: (o.obstacles ?? []).map(q => ({ ...q })) };
+    const solid = new Uint8Array(NC), sv = new Float32Array(NC * 4), paint = new Uint8Array(NC);
+    let bodies = [], U = 0.5, nu = 1e-3, re = null, L = 1, eps = 0, iters = 24, omega = 1.85, vsp = [], dsp = [], sources = [], streaks = 0, fade = 0, maskDirty = true, serial = 0, kicked = false, probe = null, hist = [];
+    const rasterize = () => {
+      bodies = S.obstacles.map(solidOf);
+      solid.set(paint); sv.fill(0);
+      for (let k = 0; k < NC; k++) sv[k * 4] = paint[k];
+      bodies.forEach((b, bi) => {
+        const q = S.obstacles[bi], v = q._v ?? [0, 0], slip = q.slip === "free" ? 1 : 0;
+        const i0 = max(0, floor(b.box[0] / h - 1)), i1 = min(nx - 1, Math.ceil(b.box[2] / h)), j0 = max(0, floor(b.box[1] / h - 1)), j1 = min(ny - 1, Math.ceil(b.box[3] / h));
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (inSolid(b, (i + 0.5) * h, (j + 0.5) * h)) { const k = i + j * nx; solid[k] = 1; sv[k * 4] = 1; sv[k * 4 + 1] = v[0] / h; sv[k * 4 + 2] = v[1] / h; sv[k * 4 + 3] = slip; }
+      });
+      maskDirty = false;
+      if (G) upload(G.S, sv);
+      if (X) { X.Q.flush(); X.d.queue.writeBuffer(X.S, 0, sv); }
+    };
+    rasterize();
+    L = max(1e-6, num(o.length, bodies[0]?.D ?? dom[1] / 8));
+    S.set = (p = {}) => {
+      if (p.speed != null) U = max(0, num(p.speed, U));
+      if (p.length != null) L = max(1e-6, num(p.length, L));
+      if (p.nu != null) { nu = max(0, num(p.nu, nu)); re = null; }
+      if (p.re != null) re = max(1e-3, num(p.re, 100));
+      if (re != null) nu = U * L / re;
+      if (p.vorticity != null) eps = cn(p.vorticity, 0, 0, 2);
+      if (p.iterations != null) iters = cn(p.iterations, 24, 1, 400) | 0;
+      if (p.dye) sources = p.dye.map(d => ({ x: d.at[0] / h, y: d.at[1] / h, r: max(0.7, num(d.r, 2 * h) / h), rate: num(d.rate, 4) }));
+      if (p.streaks != null) streaks = p.streaks ? max(4, num(p.streaks, 0.05) / h) : 0;
+      if (p.fade != null) fade = max(0, num(p.fade, 0));
+      // Fixed sub-steps: the fastest air (about 2.2 U) moves at most 1.3 cells a step.
+      S.dt = 1 / (60 * clamp(Math.ceil((2.2 * U / h) / 60 / 1.3), 1, 16));
+      Object.assign(S, { speed: U, nu, length: L, re: U * L / max(nu, 1e-12), vorticity: eps, iterations: iters });
+      return S;
+    };
+    S.set({ speed: num(o.speed, 0.5), re: o.nu == null ? num(o.re, 100) : null, nu: o.nu, vorticity: o.vorticity, iterations: o.iterations, dye: o.dye ?? [], streaks: o.streaks ?? 0, fade: o.fade });
+
+    // ----- the CPU solver (and the readback grid it shares with the GPU) -----
+    const ws = () => (S.walls === "no-slip" ? -1 : 1), open = () => S.walls === "open";
+    const A = n => new Float32Array(n);
+    let C = null, lo = 0, hi = 0, tx = 0, ty = 0, WS = 1;
+    const fu = (a, i, j) => { i = i < 0 ? 0 : i > nx ? nx : i; return j < 0 ? WS * a[i] : j >= ny ? WS * a[i + (ny - 1) * W] : a[i + j * W]; };
+    const fv = (a, i, j) => { j = j < 0 ? 0 : j > ny ? ny : j; return i < 0 ? -a[j * W] : a[(i >= nx ? nx - 1 : i) + j * W]; };
+    const fd = (a, i, j) => a[(i < 0 ? 0 : i >= nx ? nx - 1 : i) + (j < 0 ? 0 : j >= ny ? ny - 1 : j) * nx];
+    const bil = (f, a, x, y) => { const i = floor(x), j = floor(y), fx = x - i, fy = y - j, a0 = f(a, i, j), a1 = f(a, i + 1, j), a2 = f(a, i, j + 1), a3 = f(a, i + 1, j + 1); lo = min(a0, a1, a2, a3); hi = max(a0, a1, a2, a3); return (a0 + (a1 - a0) * fx) * (1 - fy) + (a2 + (a3 - a2) * fx) * fy; };
+    const su = (a, x, y) => bil(fu, a, x, y - 0.5), svv = (a, x, y) => bil(fv, a, x - 0.5, y), sd = (a, x, y) => bil(fd, a, x - 0.5, y - 0.5);
+    const trace = (x, y, s) => { const mx = x - 0.5 * s * su(C.u, x, y), my = y - 0.5 * s * svv(C.v, x, y); tx = x - s * su(C.u, mx, my); ty = y - s * svv(C.v, mx, my); };
+    const sol = (i, j) => i >= 0 && j >= 0 && i < nx && j < ny && solid[i + j * nx] === 1;
+    const fluU = (i, j) => j >= 0 && j < ny && i > 0 && i <= nx && !sol(i - 1, j) && (i === nx || !sol(i, j));
+    const fluV = (i, j) => i >= 0 && i < nx && j > 0 && j < ny && !sol(i, j - 1) && !sol(i, j);
+    const stir = (w, x, y, k) => { for (const s of vsp) { const q = exp(-((x - s[0]) ** 2 + (y - s[1]) ** 2) / (s[2] * s[2])) * s[3], t = k ? s[5] : s[4]; w = s[7] ? w + q * t : w + (t - w) * q; } return w; };
+    // Boundary faces, ghosts, and viscosity, the same as the flBnd shader.
+    function fix(iu, iv, ou, ov, mode, al = 0, au = iu, av = iv) {
+      const Uc = U / h, op = open();
+      for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
+        const k = i + j * W;
+        if (j < ny) {
+          const l = i > 0 && sol(i - 1, j), r = i < nx && sol(i, j);
+          let w = iu[k];
+          if (i === 0) w = r ? 0 : Uc;
+          else if (l && r) { const a = (i - 1 + j * nx) * 4, vo = 0.5 * (sv[a + 1] + sv[a + 5]), sg = sv[a + 3] > 0.5 ? 1 : -1; let s = 0, n = 0; if (fluU(i, j - 1)) { s += iu[k - W]; n++; } if (fluU(i, j + 1)) { s += iu[k + W]; n++; } w = n ? vo + sg * (s / n - vo) : vo; }
+          else if (l || r) w = sv[((l ? i - 1 : i) + j * nx) * 4 + 1];
+          else if (mode) { const s = fu(iu, i - 1, j) + fu(iu, i + 1, j) + fu(iu, i, j - 1) + fu(iu, i, j + 1); w = mode === 1 ? w + al * (s - 4 * w) : (au[k] + al * s) / (1 + 4 * al); }
+          ou[k] = w;
+        }
+        if (i < nx) {
+          const t = j > 0 && sol(i, j - 1), b = j < ny && sol(i, j);
+          let w = iv[k];
+          if ((j === 0 || j === ny) && !op) w = 0;
+          else if (t && b) { const a = (i + (j - 1) * nx) * 4, c2 = (i + j * nx) * 4, vo = 0.5 * (sv[a + 2] + sv[c2 + 2]), sg = sv[a + 3] > 0.5 ? 1 : -1; let s = 0, n = 0; if (fluV(i - 1, j)) { s += iv[k - 1]; n++; } if (fluV(i + 1, j)) { s += iv[k + 1]; n++; } w = n ? vo + sg * (s / n - vo) : vo; }
+          else if (t || b) w = sv[(i + (t ? j - 1 : j) * nx) * 4 + 2];
+          else if (mode) { const s = fv(iv, i - 1, j) + fv(iv, i + 1, j) + fv(iv, i, j - 1) + fv(iv, i, j + 1); w = mode === 1 ? w + al * (s - 4 * w) : (av[k] + al * s) / (1 + 4 * al); }
+          ov[k] = w;
+        }
+      }
+    }
+    const swapV = () => { [C.u, C.un] = [C.un, C.u]; [C.v, C.vn] = [C.vn, C.v]; };
+    // Projection on the CPU: divergence, red-black SOR, subtract the gradient. Returns max |div| before.
+    function project() {
+      const p = C.p, op = open();
+      let worst = 0;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const k = i + j * nx, q = i + j * W; C.dv[k] = solid[k] ? 0 : C.u[q + 1] - C.u[q] + C.v[q + W] - C.v[q]; worst = max(worst, abs(C.dv[k])); }
+      for (let it = 0; it < 2 * iters; it++) for (let j = 0; j < ny; j++) for (let i = (j + it) & 1; i < nx; i += 2) {
+        const k = i + j * nx;
+        let s = 0, n = 0;
+        if (solid[k]) {
+          if (i > 0 && !solid[k - 1]) { s += p[k - 1]; n++; } if (i < nx - 1 && !solid[k + 1]) { s += p[k + 1]; n++; }
+          if (j > 0 && !solid[k - nx]) { s += p[k - nx]; n++; } if (j < ny - 1 && !solid[k + nx]) { s += p[k + nx]; n++; }
+          p[k] = n ? s / n : 0; continue;
+        }
+        if (i > 0 && !solid[k - 1]) { s += p[k - 1]; n++; }
+        if (i < nx - 1) { if (!solid[k + 1]) { s += p[k + 1]; n++; } } else n++;
+        if (j > 0) { if (!solid[k - nx]) { s += p[k - nx]; n++; } } else if (op) n++;
+        if (j < ny - 1) { if (!solid[k + nx]) { s += p[k + nx]; n++; } } else if (op) n++;
+        if (n) p[k] += omega * ((s - C.dv[k]) / n - p[k]);
+      }
+      for (let j = 0; j < ny; j++) for (let i = 1; i <= nx; i++) { if (sol(i - 1, j)) continue; const k = i + j * W; if (i === nx) C.u[k] += p[nx - 1 + j * nx]; else if (!sol(i, j)) C.u[k] -= p[i + j * nx] - p[i - 1 + j * nx]; }
+      for (let j = 0; j <= ny; j++) for (let i = 0; i < nx; i++) {
+        const k = i + j * W;
+        if (j > 0 && j < ny) { if (!sol(i, j - 1) && !sol(i, j)) C.v[k] -= p[i + j * nx] - p[i + (j - 1) * nx]; }
+        else if (op) { if (j === 0 && !sol(i, 0)) C.v[k] -= p[i]; else if (j === ny && !sol(i, ny - 1)) C.v[k] += p[i + (ny - 1) * nx]; }
+      }
+      fix(C.u, C.v, C.un, C.vn, 0); swapV();
+      return worst;
+    }
+    const divergence = () => { let m = 0; for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const q = i + j * W; if (!solid[i + j * nx]) m = max(m, abs(C.u[q + 1] - C.u[q] + C.v[q + W] - C.v[q])); } return m; };
+    function cpuStep(dt) {
+      WS = ws();
+      const Uc = U / h;
+      // Dye, carried by the old velocity.
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const k = i + j * nx; trace(i + 0.5, j + 0.5, dt); for (let ch = 0; ch < 2; ch++) { C.dh[ch][k] = sd(C.d[ch], tx, ty); C.dl[ch][k] = lo; C.dH[ch][k] = hi; } }
+      const fk = exp(-fade * dt);
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const k = i + j * nx, x = i + 0.5, y = j + 0.5;
+        if (solid[k]) { C.dn[0][k] = C.dn[1][k] = 0; continue; }
+        trace(x, y, -dt);
+        for (let ch = 0; ch < 2; ch++) C.dn[ch][k] = clamp(C.dh[ch][k] + 0.5 * (C.d[ch][k] - sd(C.dh[ch], tx, ty)), C.dl[ch][k], C.dH[ch][k]) * fk;
+        for (const s of dsp) C.dn[0][k] += s[3] * exp(-((x - s[0]) ** 2 + (y - s[1]) ** 2) / (s[2] * s[2]));
+        if (streaks && i < 2) C.dn[1][k] = 1 - smooth(0.35, 1.1, abs(((y / streaks) % 1) - 0.5) * streaks);
+      }
+      for (let ch = 0; ch < 2; ch++) [C.d[ch], C.dn[ch]] = [C.dn[ch], C.d[ch]];
+      // Velocity: forward, then the corrected and clamped value, stirring, confinement.
+      let wa = null;
+      if (eps) { wa = A(NF); for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) wa[i + j * W] = fv(C.v, i, j) - fv(C.v, i - 1, j) - fu(C.u, i, j) + fu(C.u, i, j - 1); }
+      const wn = (i, j) => wa[clamp(i, 0, nx) + clamp(j, 0, ny) * W];
+      const conf = (i, j, k) => {
+        let w, gx, gy;
+        if (!k) { w = 0.5 * (wn(i, j) + wn(i, j + 1)); gx = 0.25 * (abs(wn(i + 1, j)) + abs(wn(i + 1, j + 1)) - abs(wn(i - 1, j)) - abs(wn(i - 1, j + 1))); gy = abs(wn(i, j + 1)) - abs(wn(i, j)); }
+        else { w = 0.5 * (wn(i, j) + wn(i + 1, j)); gx = abs(wn(i + 1, j)) - abs(wn(i, j)); gy = 0.25 * (abs(wn(i, j + 1)) + abs(wn(i + 1, j + 1)) - abs(wn(i, j - 1)) - abs(wn(i + 1, j - 1))); }
+        return eps * Uc * w * (k ? -gx : gy) / (hypot(gx, gy) + 1e-5);
+      };
+      for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) { const k = i + j * W; if (j < ny) { trace(i, j + 0.5, dt); C.uh[k] = su(C.u, tx, ty); C.ul[k] = lo; C.uH[k] = hi; } if (i < nx) { trace(i + 0.5, j, dt); C.vh[k] = svv(C.v, tx, ty); C.vl[k] = lo; C.vH[k] = hi; } }
+      for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
+        const k = i + j * W;
+        if (j < ny) { const x = i, y = j + 0.5; trace(x, y, -dt); C.un[k] = stir(clamp(C.uh[k] + 0.5 * (C.u[k] - su(C.uh, tx, ty)), C.ul[k], C.uH[k]), x, y, 0) + (eps ? dt * conf(i, j, 0) : 0); }
+        if (i < nx) { const x = i + 0.5, y = j; trace(x, y, -dt); C.vn[k] = stir(clamp(C.vh[k] + 0.5 * (C.v[k] - svv(C.vh, tx, ty)), C.vl[k], C.vH[k]), x, y, 1) + (eps ? dt * conf(i, j, 1) : 0); }
+      }
+      swapV();
+      const al = nu / (h * h) * dt;
+      if (al <= 0.2) { fix(C.u, C.v, C.un, C.vn, al > 0 ? 1 : 0, al); swapV(); }
+      else {
+        const n = clamp(Math.ceil(6 + 10 * sqrt(al)), 6, 40), su0 = C.u, sv0 = C.v;
+        let cu = C.u, cv = C.v;
+        const tu = [C.un, C.uh], tv = [C.vn, C.vh];
+        for (let k = 0; k < n; k++) { fix(cu, cv, tu[k & 1], tv[k & 1], 2, al, su0, sv0); cu = tu[k & 1]; cv = tv[k & 1]; }
+        const ru = [su0, C.un, C.uh].filter(a => a !== cu), rv = [sv0, C.vn, C.vh].filter(a => a !== cv);
+        C.u = cu; C.v = cv; [C.un, C.uh] = ru; [C.vn, C.vh] = rv;
+      }
+      S.lastDiv = project();
+    }
+
+    // ----- the GPU solver -----
+    const RF = 2, rx = Math.ceil(nx / RF), ry = Math.ceil(ny / RF), rb = new Float32Array(rx * ry * 4);
+    let rbAt = -1;
+    function gpuInit() {
+      const T = (w, hh) => ftex(w, hh);
+      G = { V: T(W, ny + 1), V1: T(W, ny + 1), V2: T(W, ny + 1), Wn: T(W, ny + 1), P: T(nx, ny), P1: T(nx, ny), Dv: T(nx, ny), D: T(nx, ny), D1: T(nx, ny), D2: T(nx, ny), S: T(nx, ny), RB: T(rx, ry), gl: R.gl };
+      for (const n of ["flDye1", "flDye2", "flAdv1", "flAdv2", "flBnd", "flDiv", "flSor", "flProj", "flRead", "flShow"]) if (!program(n)) throw new Error(`${n} shader failed`);
+      upload(G.S, sv);
+    }
+    const packSplats = list => ({ uSp: padTo(list.flatMap(s => [s[0], s[1], s[2], s[3]]), 32), uSv: padTo(list.flatMap(s => [s[4], s[5], s[6], s[7]]), 32), uNs: min(8, list.length) });
+    function gpuStep(dt) {
+      const base = { uS: G.S, uN: [nx, ny], uWs: ws(), uDt: dt, uOpen: open() ? 1 : 0 };
+      if (eps) pass("flCurl", G.Wn, { ...base, uV: G.V });
+      pass("flDye1", G.D2, { ...base, uV: G.V, uD: G.D });
+      pass("flDye2", G.D1, { ...base, uV: G.V, uD: G.D, uH: G.D2, ...packSplats(dsp.map(s => [s[0], s[1], s[2], 0, 0, 0, s[3], 0])), uStk: streaks, uFade: exp(-fade * dt) });
+      [G.D, G.D1] = [G.D1, G.D];
+      pass("flAdv1", G.V2, { ...base, uV: G.V });
+      pass("flAdv2", G.V1, { ...base, uV: G.V, uH: G.V2, uW: G.Wn, uEps: eps, uUc: U / h, ...packSplats(vsp) });
+      [G.V, G.V1] = [G.V1, G.V];
+      const al = nu / (h * h) * dt, bu = { ...base, uIn: U / h, uAl: al };
+      if (al <= 0.2) { pass("flBnd", G.V1, { ...bu, uV: G.V, uA: G.V, uMode: al > 0 ? 1 : 0 }); [G.V, G.V1] = [G.V1, G.V]; }
+      else {
+        const n = clamp(Math.ceil(6 + 10 * sqrt(al)), 6, 40), star = G.V, tg = [G.V1, G.V2];
+        let cur = G.V;
+        for (let k = 0; k < n; k++) { pass("flBnd", tg[k & 1], { ...bu, uV: cur, uA: star, uMode: 2 }); cur = tg[k & 1]; }
+        [G.V1, G.V2] = [star, G.V1, G.V2].filter(T => T !== cur); G.V = cur;
+      }
+      pass("flDiv", G.Dv, { ...base, uV: G.V });
+      for (let k = 0; k < 2 * iters; k++) { pass("flSor", G.P1, { ...base, uP: G.P, uDv: G.Dv, uColor: k & 1, uOm: omega }); [G.P, G.P1] = [G.P1, G.P]; }
+      pass("flProj", G.V1, { ...base, uV: G.V, uP: G.P }); [G.V, G.V1] = [G.V1, G.V];
+      pass("flBnd", G.V1, { ...bu, uV: G.V, uA: G.V, uMode: 0 }); [G.V, G.V1] = [G.V1, G.V];
+    }
+    // The velocity grid the CPU reads (arrows, particles, probes): GPU readback or the CPU arrays.
+    function field() {
+      if (rbAt === serial) return rb;
+      if (G) { pass("flRead", G.RB, { uS: G.S, uN: [nx, ny], uWs: ws(), uV: G.V, uP: G.P, uF: RF, uHm: h }); readTex(G.RB, rb); }
+      else { WS = ws(); for (let J = 0; J < ry; J++) for (let I = 0; I < rx; I++) { const x = (I + 0.5) * RF, y = (J + 0.5) * RF, k = (I + J * rx) * 4, c = min(nx - 1, floor(x)) + min(ny - 1, floor(y)) * nx; rb[k] = su(C.u, x, y) * h; rb[k + 1] = svv(C.v, x, y) * h; rb[k + 2] = solid[c]; rb[k + 3] = C.p[c]; } }
+      rbAt = serial;
+      return rb;
+    }
+    const sample = (x, y) => {
+      const f = field(), X = clamp(x / (h * RF) - 0.5, 0, rx - 1), Y = clamp(y / (h * RF) - 0.5, 0, ry - 1), i = min(floor(X), rx - 2), j = min(floor(Y), ry - 2), fx = X - i, fy = Y - j, out = [0, 0, 0, 0];
+      for (let c = 0; c < 4; c++) { const a = f[(i + j * rx) * 4 + c], b = f[(i + 1 + j * rx) * 4 + c], d = f[(i + (j + 1) * rx) * 4 + c], e = f[(i + 1 + (j + 1) * rx) * 4 + c]; out[c] = (a + (b - a) * fx) * (1 - fy) + (d + (e - d) * fx) * fy; }
+      return out;
+    };
+
+    function init() {
+      if (maskDirty) rasterize();
+      const u0 = A(NF), v0 = A(NF), Uc = U / h;
+      for (let j = 0; j < ny; j++) for (let i = 0; i <= nx; i++) u0[i + j * W] = Uc;
+      WS = ws();
+      if (G) {
+        const d = A(NF * 4);
+        C = { u: u0, v: v0, un: A(NF), vn: A(NF) };
+        fix(u0, v0, C.un, C.vn, 0);
+        for (let k = 0; k < NF; k++) { d[k * 4] = C.un[k]; d[k * 4 + 1] = C.vn[k]; }
+        upload(G.V, d);
+        for (const T of [G.P, G.D]) upload(T, A(NC * 4));
+        if (X) { X.Q.flush(); X.d.queue.writeBuffer(X.V, 0, d); X.d.queue.writeBuffer(X.P, 0, A(NC * 4)); X.d.queue.writeBuffer(X.D, 0, A(NC * 4)); X.at = 0; }
+        C = null;
+      } else {
+        C = { u: u0, v: v0, uh: A(NF), vh: A(NF), un: A(NF), vn: A(NF), ul: A(NF), uH: A(NF), vl: A(NF), vH: A(NF), p: A(NC), dv: A(NC), d: [A(NC), A(NC)], dh: [A(NC), A(NC)], dn: [A(NC), A(NC)], dl: [A(NC), A(NC)], dH: [A(NC), A(NC)] };
+        fix(C.u, C.v, C.un, C.vn, 0); swapV();
+      }
+      kicked = false; hist = []; serial++;
+    }
+    function stepOnce(dt) {
+      if (G && G.gl !== context()?.gl) { gpuInit(); init(); }   // the context was lost and came back: start again from rest
+      for (const q of S.obstacles) if (q._v && S.time - q._mt > 0.06) { q._v = null; maskDirty = true; }
+      if (maskDirty) rasterize();
+      // A nudge across the wake early on, so a symmetric body sheds as a real one does (from noise).
+      if (!kicked && S.time >= 0.3 && bodies[0] && o.kick !== false) {
+        kicked = true; const b = bodies[0].box, D = (b[3] - b[1]) / h;
+        vsp.push([b[2] / h + 0.6 * D, (b[1] + b[3]) / 2 / h, 0.5 * D, 1, 0, 0.35 * U / h, 0, 1]);
+      }
+      dsp = sources.map(s => [s.x, s.y, s.r, s.rate * dt]).concat(dsp.filter(s => s[4]).map(s => [s[0], s[1], s[2], s[3]]));
+      if (X) xStep(dt); else if (G) gpuStep(dt); else cpuStep(dt);
+      vsp = []; dsp = []; serial++;
+      if (probe && (hist.length === 0 || S.time + dt - hist[hist.length - 1][0] > 1 / 61)) { hist.push([S.time + dt, sample(probe[0], probe[1])[1]]); if (hist.length > 900) hist.shift(); }
+    }
+    // ----- what figures call -----
+    S.velocity = q => { const s = sample(q[0], q[1]); return [s[0], s[1]]; };
+    S.sample = q => { const s = sample(q[0], q[1]); return { u: s[0], v: s[1], speed: hypot(s[0], s[1]), solid: s[2] > 0.5, p: s[3] }; };
+    S.solidAt = q => { const i = floor(q[0] / h), j = floor(q[1] / h); return i >= 0 && j >= 0 && i < nx && j < ny && solid[i + j * nx] === 1; };
+    S.bodies = () => { if (maskDirty) rasterize(); return bodies; };
+    S.update = () => { maskDirty = true; return S; };
+    S.move = (i, at) => {
+      const q = S.obstacles[i];
+      if (!q) return S;
+      const t = S.time;
+      if (q._mt != null && t > q._mt + 1e-9) q._v = [(at[0] - q.at[0]) / (t - q._mt), (at[1] - q.at[1]) / (t - q._mt)].map(v => clamp(v, -4 * U - 1, 4 * U + 1));
+      q.at = [at[0], at[1]]; q._mt = t; maskDirty = true;
+      return S;
+    };
+    // Stir along a stroke from a to b (m): the air there takes the stroke's speed and gets dye.
+    S.stir = (a, b, k = {}) => {
+      const dx = b[0] - a[0], dy = b[1] - a[1], r = num(k.radius, max(3 * h, 0.04 * dom[1])) / h, n = clamp(Math.ceil(hypot(dx, dy) / h / max(r, 1)), 1, 4), sp = num(k.speed, 60);
+      const vx = clamp(dx * sp, -6 * U - 1, 6 * U + 1) / h, vy = clamp(dy * sp, -6 * U - 1, 6 * U + 1) / h;
+      for (let i = 1; i <= n && vsp.length < 8; i++) { const x = (a[0] + dx * i / n) / h, y = (a[1] + dy * i / n) / h; vsp.push([x, y, r, cn(k.strength, 0.8, 0, 1), vx, vy, 0, 0]); if (k.dye !== false) dsp.push([x, y, r * 0.8, num(k.dye, 1.5) / n, 1]); }
+      return S;
+    };
+    S.inject = (at, k = {}) => { dsp.push([at[0] / h, at[1] / h, num(k.radius, 2 * h) / h, num(k.amount, 1.5), 1]); return S; };
+    S.paint = (at, r, on = true) => {
+      const R0 = r / h, ci = at[0] / h, cj = at[1] / h;
+      for (let j = max(0, floor(cj - R0)); j <= min(ny - 1, Math.ceil(cj + R0)); j++) for (let i = max(0, floor(ci - R0)); i <= min(nx - 1, Math.ceil(ci + R0)); i++) if ((i + 0.5 - ci) ** 2 + (j + 0.5 - cj) ** 2 <= R0 * R0) paint[i + j * nx] = on ? 1 : 0;
+      maskDirty = true;
+      return S;
+    };
+    S.clearPaint = () => { paint.fill(0); maskDirty = true; return S; };
+    S.toWorld = p => toWorld(S, p);
+    S.toScreen = q => toScreen(S, q);
+    S.hit = (p, pad0 = 8) => { const q = toWorld(S, p), m = S.view ? pad0 / S.view[2] * dom[0] : 0; return S.bodies().findIndex((b, i) => S.obstacles[i].fixed !== true && surfaceOf(b, q[0], q[1])[0] < m); };
+    // A drag spec for demo(): drag a body to move it, or anywhere else to stir.
+    let grab = -1, last = null, off = [0, 0];
+    S.interact = {
+      live: true,
+      start(p) { grab = S.hit(p); const q = toWorld(S, p); last = q; if (grab >= 0) { const at = S.obstacles[grab].at ?? [0, 0]; off = [at[0] - q[0], at[1] - q[1]]; } },
+      move(p) { const q = toWorld(S, p); if (grab >= 0) S.move(grab, [clamp(q[0] + off[0], 0, dom[0]), clamp(q[1] + off[1], 0, dom[1])]); else if (last) S.stir(last, q); last = q; },
+      end() { grab = -1; last = null; },
+    };
+    S.track = (at) => {
+      const b = bodies[0]?.box;
+      probe = at ?? (b ? [min(dom[0] - h, b[2] + (b[3] - b[1])), (b[1] + b[3]) / 2] : [dom[0] * 0.6, dom[1] / 2]);
+      return S;
+    };
+    // Shedding: the frequency of the cross-stream velocity behind the body (rising zero crossings).
+    S.shedding = () => {
+      if (!probe) S.track();
+      const H = hist.filter(q => q[0] > S.time - 12);
+      if (H.length < 30) return { frequency: 0, strouhal: 0, samples: H.length };
+      const mean = H.reduce((s, q) => s + q[1], 0) / H.length, amp = max(...H.map(q => abs(q[1] - mean))), ups = [];
+      for (let i = 1; i < H.length; i++) if (H[i - 1][1] - mean < 0 && H[i][1] - mean >= 0) { const a = H[i - 1], b = H[i], f = (mean - a[1]) / (b[1] - a[1]); ups.push(a[0] + f * (b[0] - a[0])); }
+      const f = ups.length > 2 && amp > 0.02 * U ? (ups.length - 1) / (ups[ups.length - 1] - ups[0]) : 0;
+      return { frequency: f, strouhal: f * L / max(U, 1e-9), amplitude: amp, samples: H.length };
+    };
+    S.divergence = () => (C ? divergence() : null);
+    S.project = () => { if (!C) return null; WS = ws(); fix(C.u, C.v, C.un, C.vn, 0); swapV(); return project(); };
+    if (o.track) S.track();
+    S._cpu = () => C;
+    S.showUniforms = (box, k) => ({ uV: G.V, uS: G.S, uP: G.P, uD: G.D, uN: [nx, ny], uWs: ws(), uOpen: open() ? 1 : 0, uBox: [box[2], box[3]], uHm: h, uCpK: 2 / (S.dt * (U / h) ** 2 || 1), uWk: L / max(U, 1e-9), ...k });
+    // Without a GPU: the same picture from the CPU arrays, on a grid twice as fine.
+    S.paintCPU = (c, box, k) => {
+      if (G) field();
+      const cw = nx * 2, ch = ny * 2, img = new ImageData(cw, ch), Uc = U / h, cpK = 2 / (S.dt * Uc * Uc || 1), stops = k.map ? cmapStops(k.map) : null;
+      WS = ws();
+      let pref = 0;
+      if (C) { for (let j = 0; j < ny; j++) pref += C.p[1 + j * nx]; pref /= ny; }
+      for (let b = 0; b < ch; b++) for (let a = 0; a < cw; a++) {
+        const x = (a + 0.5) / 2, y = (b + 0.5) / 2, ci = min(nx - 1, floor(x)) + min(ny - 1, floor(y)) * nx;
+        let val = 0, col;
+        if (C) {
+          if (k.mode === 0) val = hypot(su(C.u, x, y), svv(C.v, x, y)) * h;
+          else if (k.mode === 1) val = (sd(C.p, x, y) - pref) * cpK;
+          else if (k.mode === 2) val = (svv(C.v, x + 0.5, y) - svv(C.v, x - 0.5, y) - su(C.u, x, y + 0.5) + su(C.u, x, y - 0.5)) * k.wk;
+        } else { const s = sample(x * h, y * h); val = k.mode === 0 ? hypot(s[0], s[1]) : k.mode === 1 ? (s[3] - field()[3]) * cpK : 0; }
+        if (k.mode === 3 || !stops) col = k.paper; else { const t = clamp((val - k.lo) / (k.hi - k.lo), 0, 1) * 15, i = min(floor(t), 14); col = mixc(stops[i], stops[i + 1], t - i); }
+        if (C) { col = mixc(col, k.dye, (1 - exp(-max(sd(C.d[0], x, y), 0) * k.dyeK)) * 0.92); col = mixc(col, k.stk, clamp(sd(C.d[1], x, y), 0, 1) * k.stkK); }
+        if (solid[ci]) col = k.body;
+        img.data.set([col[0] * 255, col[1] * 255, col[2] * 255, 255], (a + b * cw) * 4);
+      }
+      gridCanvas ??= document.createElement("canvas");
+      gridCanvas.width = cw; gridCanvas.height = ch;
+      gridCanvas.getContext("2d").putImageData(img, 0, 0);
+      c.imageSmoothingEnabled = true;
+      c.drawImage(gridCanvas, box[0], box[1], box[2], box[3]);
+    };
+    return S;
+  }
+
+  // ---------- waves: the surface of water, simulated ----------
+  // Height h and its rate v on a grid, stepped symplectically: v += dt (c² ∇²h - s ∇⁴h - γ v + forcing),
+  // h += dt v. c is the wave speed (sqrt(g depth) for shallow water); s = (σ/ρ) depth adds the
+  // capillary term, so short ripples outrun long ones and a pebble's packet spreads into a train
+  // of rings. Walls are cells with no flux through them (they reflect); a sponge layer along the
+  // edges soaks up what reaches it. Heights are kept in cells.
+  const WAV = `
+uniform sampler2D uHt, uM; uniform ivec2 uN;
+float hn(ivec2 c, float h0, int k) { if (c.x < 0 || c.y < 0 || c.x >= uN.x || c.y >= uN.y || texelFetch(uM, c, 0).x > 0.5) return h0; return texelFetch(uHt, c, 0)[k]; }
+float lap(ivec2 c, int k) { float h0 = texelFetch(uHt, c, 0)[k]; return hn(c + ivec2(1, 0), h0, k) + hn(c - ivec2(1, 0), h0, k) + hn(c + ivec2(0, 1), h0, k) + hn(c - ivec2(0, 1), h0, k) - 4.0 * h0; }
+vec4 bl(sampler2D t, vec2 p) { p -= 0.5; ivec2 i = ivec2(floor(p)); vec2 f = p - vec2(i); ivec2 m = uN - 1;
+  return mix(mix(texelFetch(t, clamp(i, ivec2(0), m), 0), texelFetch(t, clamp(i + ivec2(1, 0), ivec2(0), m), 0), f.x), mix(texelFetch(t, clamp(i + ivec2(0, 1), ivec2(0), m), 0), texelFetch(t, clamp(i + 1, ivec2(0), m), 0), f.x), f.y); }
+`;
+  // The water surface for the pool and caustics shaders, from the simulated heights.
+  const WSURF = WAV + `uniform sampler2D uG1, uG2; uniform float uPx, uAmp;
+void surf(vec2 p, out vec3 a, out vec3 b) { vec2 q = p / uPx; vec4 g = bl(uG1, q), k = bl(uG2, q); a = vec3(g.x * uPx, g.y, g.z); b = k.xyz / uPx; }
+vec2 sp() { return px(); }
+`;
+  Object.assign(FS, {
+    waLap: WAV + `void main() { ivec2 c = ivec2(gl_FragCoord.xy); vec4 w = texelFetch(uHt, c, 0); o = vec4(w.xy, lap(c, 0), 0.0); }`,
+    waStep: WAV + `uniform float uDt, uC2, uS4, uT0; uniform vec4 uSa[8], uSb[8], uSc[8], uDr[4]; uniform int uNsrc, uNd;
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy); vec4 w = texelFetch(uHt, c, 0), m = texelFetch(uM, c, 0); vec2 x = vec2(c) + 0.5;
+  if (m.x > 0.5) { o = vec4(0.0); return; }
+  float a = uC2 * lap(c, 0);
+  if (uS4 > 0.0) a -= uS4 * lap(c, 2);
+  for (int k = 0; k < 8; k++) {
+    if (k >= uNsrc) break;
+    vec2 A = uSa[k].xy, B = uSa[k].zw, d = x - A, e = B - A; float t = clamp(dot(d, e) / max(dot(e, e), 1e-6), 0.0, 1.0), r2 = dot(d - e * t, d - e * t), age = uT0 - uSc[k].x;
+    if (age > 0.0) a += uSb[k].x * exp(-r2 / (uSb[k].w * uSb[k].w)) * sin(uSb[k].y * uT0 + uSb[k].z) * smoothstep(0.0, uSc[k].z, age) * exp(-age / uSc[k].y);
+  }
+  float v = (w.y + uDt * a) * exp(-m.y * uDt), h = (w.x + uDt * v) * exp(-m.z * uDt);
+  for (int k = 0; k < 4; k++) { if (k >= uNd) break; vec2 d = x - uDr[k].xy; h -= uDr[k].w * exp(-dot(d, d) / (uDr[k].z * uDr[k].z)); }
+  o = vec4(h, v, w.z, 0.0);
+}`,
+    waG1: WAV + `void main() { ivec2 c = ivec2(gl_FragCoord.xy); float h = texelFetch(uHt, c, 0).x; o = vec4(h, 0.5 * (hn(c + ivec2(1, 0), h, 0) - hn(c - ivec2(1, 0), h, 0)), 0.5 * (hn(c + ivec2(0, 1), h, 0) - hn(c - ivec2(0, 1), h, 0)), 0.0); }`,
+    waG2: WAV + `void main() { ivec2 c = ivec2(gl_FragCoord.xy), e = ivec2(1, 0), f = ivec2(0, 1); float h = texelFetch(uHt, c, 0).x;
+  o = vec4(hn(c + e, h, 0) + hn(c - e, h, 0) - 2.0 * h, 0.25 * (hn(c + e + f, h, 0) - hn(c + e - f, h, 0) - hn(c - e + f, h, 0) + hn(c - e - f, h, 0)), hn(c + f, h, 0) + hn(c - f, h, 0) - 2.0 * h, 0.0); }`,
+    // Height through a diverging map (paper at rest), walls in ink.
+    waHeight: WAV + `uniform vec2 uBox; uniform float uRange; uniform vec3 uLo, uMid, uHi, uWall; uniform vec3 uCm[16]; uniform int uUseCm;
+void main() {
+  vec2 x = px() / uBox * vec2(uN); vec4 g = bl(uHt, x); float t = clamp(g.x / uRange, -1.0, 1.0);
+  vec3 col;
+  if (uUseCm == 1) { float s = (t * 0.5 + 0.5) * 15.0; int i = min(int(s), 14); col = mix(uCm[i], uCm[i + 1], s - float(i)); }
+  else col = mix(uMid, t > 0.0 ? uHi : uLo, pow(abs(t), 0.8) * 0.9);
+  o = vec4(mix(col, uWall, smoothstep(0.3, 0.7, bl(uM, x).x)), 1.0);
+}`,
+  });
+  // The pool and its floor light reuse the water and caustics shaders over the simulated surface.
+  FS.wavePool = WSURF + FS.water.slice(SURF.length);
+  FS.waveFloor = WSURF + FS.caustics.slice(SURF.length);
+
+  function waves(o = {}) {
+    const dom = o.domain ?? [1.6, 1];
+    if (!(dom[0] > 0 && dom[1] > 0)) throw new Error("Fx.waves: domain should be [width, height] in m, such as [1.6, 1]");
+    const want = pick(o) !== "cpu" && !!floatGL(gpuForced(o));
+    const ny = max(8, Math.round(num(want ? o.cells : o.cpuCells, want ? 160 : 72))), h = dom[1] / ny, nx = max(8, Math.round(dom[0] / h)), NC = nx * ny;
+    const S = { isWaves: true, domain: dom, grid: [nx, ny], h, view: null, walls: [], sources: [] };
+    const wall = new Uint8Array(NC), M = new Float32Array(NC * 4);
+    let G = null, X = null, c = 0.3, s4 = 0, damp = 0.15, edges = "absorb", sponge = 0, drops = [], pre = [], serial = 0, dirty = true, depth = null;
+    let tension = 0;
+    S.set = (p = {}) => {
+      const g = num(o.gravity, 9.81);
+      if (p.tension != null) tension = max(0, num(p.tension, 0));
+      if (p.speed != null) { c = max(1e-4, num(p.speed, 0.3)); depth = null; }
+      else if (p.depth != null) { depth = max(1e-5, num(p.depth, 0.01)); c = sqrt(g * depth); }
+      s4 = tension * (depth ?? c * c / g);
+      if (p.damping != null) { damp = max(0, num(p.damping, 0.15)); dirty = true; }
+      if (p.edges != null) { edges = p.edges === "reflect" ? "reflect" : "absorb"; dirty = true; }
+      if (p.sponge != null) { sponge = max(0, num(p.sponge, 0)); dirty = true; }
+      if (p.walls) { S.walls = p.walls; dirty = true; }
+      if (p.sources) S.sources = p.sources;
+      // Stable for ω_max dt < 2 (symplectic Euler); ω_max² = 8 c²/h² + 64 s/h⁴.
+      const cc = c / h, sc = s4 / h ** 4, wm = sqrt(8 * cc * cc + 64 * sc);
+      S.dt = 1 / (60 * clamp(Math.ceil(wm / 1.6 / 60), 1, 64));
+      Object.assign(S, { speed: c, depth, tension, damping: damp, edges });
+      return S;
+    };
+    S.set({ speed: o.speed, depth: o.speed == null ? num(o.depth, 0.01) : null, tension: num(o.tension, 0), damping: o.damping ?? 0.15, edges: o.edges ?? "absorb", sponge: o.sponge ?? 0.1 * min(dom[0], dom[1]), walls: o.walls ?? [], sources: o.sources ?? [] });
+    // Walls: segments { from, to, width }, polylines { points, width }, or solid { polygon }.
+    function rasterize() {
+      wall.fill(0);
+      const segs = [], polys = [];
+      for (const q of S.walls) {
+        if (q.polygon) polys.push(q.polygon);
+        else { const pts = q.points ?? [q.from, q.to], w = max(num(q.width, 0), 1.2 * h) / 2; for (let i = 1; i < pts.length; i++) segs.push([pts[i - 1], pts[i], w]); if (q.close && pts.length > 2) segs.push([pts[pts.length - 1], pts[0], w]); }
+      }
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const x = (i + 0.5) * h, y = (j + 0.5) * h;
+        let on = polys.some(p => inPoly(p, x, y));
+        for (const [a, b, w] of segs) { if (on) break; const ex = b[0] - a[0], ey = b[1] - a[1], t = clamp(((x - a[0]) * ex + (y - a[1]) * ey) / (ex * ex + ey * ey || 1e-18), 0, 1); on = hypot(x - a[0] - ex * t, y - a[1] - ey * t) <= w; }
+        wall[i + j * nx] = on ? 1 : 0;
+      }
+      // The sponge: damping rising as the square of depth into the edge band, strong enough to
+      // soak up a wave crossing it once.
+      const Wd = max(2, sponge / h), gmax = edges === "absorb" ? 3.2 * (c / h) / Wd : 0;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const k = i + j * nx, d = min(i, j, nx - 1 - i, ny - 1 - j), s = d < Wd ? gmax * ((Wd - d) / Wd) ** 2 : 0;
+        M[k * 4] = wall[k]; M[k * 4 + 1] = damp + s; M[k * 4 + 2] = s * 0.5; M[k * 4 + 3] = 0;
+      }
+      dirty = false;
+      if (G) upload(G.M, M);
+      if (X) { X.Q.flush(); X.d.queue.writeBuffer(X.M, 0, M); }
+    }
+    // A source's strength so its waves are `amp` high one wavelength out (2D Green's function), or
+    // `amp` high everywhere for a line source (1D).
+    const srcU = t => {
+      const list = S.sources.slice(0, 8).map(q => {
+        const f = max(0.01, num(q.freq, 4)), w = TAU * f, k = w / c * h, r = max(0.8, num(q.r, 1.5 * h) / h), a = num(q.amp, 0.002) / h, cc = (c / h) ** 2;
+        const A0 = q.at, B0 = q.to ?? q.at, len = hypot(B0[0] - A0[0], B0[1] - A0[1]) / h, g = exp(min(k * k * r * r / 4, 8));
+        const F = len > 2 * PI / k ? 2 * k * a * cc / (r * sqrt(PI)) * g : 4 * a * cc / (r * r) * g;
+        return [[A0[0] / h, A0[1] / h, B0[0] / h, B0[1] / h], [F, w, num(q.phase, PI / 2), r], [num(q.start, 0), max(1e-3, num(q.dur, 1e9)), 1 / f, 0]];
+      });
+      return { uSa: padTo(list.flatMap(q => q[0]), 32), uSb: padTo(list.flatMap(q => q[1]), 32), uSc: padTo(list.flatMap(q => q[2]), 32), uNsrc: list.length, uT0: t };
+    };
+    let C = null;
+    function cpuStep(dt) {
+      const { uSa, uSb, uSc, uNsrc } = srcU(S.time + dt), cc = (c / h) ** 2, sc = s4 / h ** 4, hh = C.h, v = C.v, Lh = C.L;
+      const nb = (a, i, j, a0) => (i < 0 || j < 0 || i >= nx || j >= ny || wall[i + j * nx] ? a0 : a[i + j * nx]);
+      const lap = (a, i, j) => { const a0 = a[i + j * nx]; return nb(a, i + 1, j, a0) + nb(a, i - 1, j, a0) + nb(a, i, j + 1, a0) + nb(a, i, j - 1, a0) - 4 * a0; };
+      if (sc) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) Lh[i + j * nx] = lap(hh, i, j);
+      const T0 = S.time + dt;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const k = i + j * nx;
+        if (wall[k]) { C.hn[k] = C.vn[k] = 0; continue; }
+        let a = cc * lap(hh, i, j) - (sc ? sc * lap(Lh, i, j) : 0);
+        const x = i + 0.5, y = j + 0.5;
+        for (let q = 0; q < uNsrc; q++) {
+          const ax = uSa[q * 4], ay = uSa[q * 4 + 1], ex = uSa[q * 4 + 2] - ax, ey = uSa[q * 4 + 3] - ay, t = clamp(((x - ax) * ex + (y - ay) * ey) / max(ex * ex + ey * ey, 1e-6), 0, 1), r2 = (x - ax - ex * t) ** 2 + (y - ay - ey * t) ** 2, age = T0 - uSc[q * 4];
+          if (age > 0) a += uSb[q * 4] * exp(-r2 / uSb[q * 4 + 3] ** 2) * sin(uSb[q * 4 + 1] * T0 + uSb[q * 4 + 2]) * smooth(0, uSc[q * 4 + 2], age) * exp(-age / uSc[q * 4 + 1]);
+        }
+        const vv = (v[k] + dt * a) * exp(-M[k * 4 + 1] * dt);
+        let hv = (hh[k] + dt * vv) * exp(-M[k * 4 + 2] * dt);
+        for (const d of drops) hv -= d[3] * exp(-((x - d[0]) ** 2 + (y - d[1]) ** 2) / (d[2] * d[2]));
+        C.vn[k] = vv; C.hn[k] = hv;
+      }
+      [C.h, C.hn] = [C.hn, C.h]; [C.v, C.vn] = [C.vn, C.v];
+    }
+    function gpuInit() {
+      G = { H: ftex(nx, ny), H1: ftex(nx, ny), M: ftex(nx, ny), G1: ftex(nx, ny), G2: ftex(nx, ny), gl: R.gl, row: null };
+      for (const n of ["waLap", "waStep", "waG1", "waG2", "waHeight", "wavePool", "waveFloor"]) if (!program(n)) throw new Error(`${n} shader failed`);
+    }
+    function gpuStep(dt) {
+      const base = { uM: G.M, uN: [nx, ny] };
+      if (s4) { pass("waLap", G.H1, { ...base, uHt: G.H }); [G.H, G.H1] = [G.H1, G.H]; }
+      pass("waStep", G.H1, { ...base, uHt: G.H, uDt: dt, uC2: (c / h) ** 2, uS4: s4 / h ** 4, ...srcU(S.time + dt), uDr: padTo(drops.flat(), 16), uNd: min(4, drops.length) });
+      [G.H, G.H1] = [G.H1, G.H];
+    }
+    function init() {
+      if (dirty) rasterize();
+      if (G) { upload(G.H, new Float32Array(NC * 4)); C = null; }
+      else C = { h: new Float32Array(NC), v: new Float32Array(NC), L: new Float32Array(NC), hn: new Float32Array(NC), vn: new Float32Array(NC) };
+      if (X) { X.Q.flush(); X.d.queue.writeBuffer(X.H, 0, new Float32Array(NC * 4)); X.at = 0; }
+      // Pebbles dropped at time 0 (before warm-up) belong to the start, so every restart drops them again.
+      drops = pre.slice(); serial++;
+    }
+    function stepOnce(dt) {
+      if (G && G.gl !== context()?.gl) { gpuInit(); dirty = true; init(); }
+      if (dirty) rasterize();
+      if (X) xStep(dt); else if (G) gpuStep(dt); else cpuStep(dt);
+      drops = []; serial++;
+    }
+  // ---------- particles: things moving by the physics of what they are ----------
+  // Slot i is reborn every life[1] seconds at a fixed phase (golden-ratio spacing); where and how
+  // fast comes from a hash of (seed, slot, generation). Forces from the matter: gravity and the
+  // drag that gives the terminal speed (solved exactly over a step, so stiff drag stays stable),
+  // hot gas's lift g (T - Ta) / T fading as it mixes, curl-noise eddies, wind or a simulated
+  // fluid's velocity. Colliders: the ground, segments, circles, polygons, and a fluid's bodies.
+  const UNITS = { m: 1, cm: 100, mm: 1000 };
+  function particles(o = {}) {
+    const name = o.matter ?? "dust", Mt = MATTER[name];
+    if (!Mt) throw new Error(`Fx.particles: unknown matter ${JSON.stringify(name)}; use one of ${Object.keys(MATTER).join(", ")}, or Fx.matter.define a new one`);
+    const F = o.fluid?.isFluid ? o.fluid : null, u = F ? 1 : typeof o.units === "number" ? o.units : UNITS[o.units ?? "m"] ?? 1, g0 = 9.81 * u;
+    const dom = F ? F.domain : o.domain ?? [4 * u, 2.25 * u];
+    const P = { ...Mt, ...Object.fromEntries(["style", "life", "opacity", "color", "temperature", "fade", "flutter"].filter(k => o[k] != null).map(k => [k, o[k]])) };
+    const lifeR = Array.isArray(P.life) ? P.life : [P.life, P.life], size = (o.size ?? P.size).map(s => s * u), Tr = P.temperature ? (Array.isArray(P.temperature) ? P.temperature : [P.temperature, P.temperature]) : null;
+    const fo = o.forces ?? {};
+    let gy = 0, k0 = 0, lift = 0;
+    if (P.vt != null) { gy = g0; k0 = 9.81 / P.vt; } else if (P.rise != null) { gy = -g0; k0 = 9.81 / P.rise; } else k0 = P.drag ?? 0;
+    if (P.gas && Tr) lift = g0 * max(0, (Tr[0] - num(o.ambient, 293)) / Tr[0]);
+    if (P.lift) lift = g0 * P.lift;
+    if (fo.gravity != null) gy = num(fo.gravity, 9.81) * u;
+    if (fo.drag != null) k0 = max(0, num(fo.drag, k0));
+    if (fo.buoyancy != null) lift = num(fo.buoyancy, 0) * u;
+    // Coupled to a fluid, a gas parcel is the air itself: it can't lag the flow by more than a moment.
+    const kk = F && P.gas ? max(k0, 8) : k0;
+    const ed = fo.turbulence ?? (P.eddy ? { strength: P.eddy[0], scale: P.eddy[1], speed: P.eddy[2] } : null);
+    const turb = ed ? [num(ed.strength, 0.5) * u * max(1, kk) * (F ? 0.5 : 1), 1 / (max(1e-6, num(ed.scale, 0.5)) * u), num(ed.speed, 0.3)] : null;
+    const colliders = () => {
+      const list = [];
+      for (const c of o.colliders ?? []) {
+        const e = num(c.bounce, bounce), fr = num(c.friction, friction);
+        if (c.segment || c.from) { const [a, b] = c.segment ?? [c.from, c.to]; list.push({ seg: [a, b], e, fr }); }
+        else if (c.circle || c.r != null) { const q = c.circle ?? [c.at[0], c.at[1], c.r]; list.push({ body: { kind: 0, c: [q[0], q[1]], r: q[2] }, e, fr }); }
+        else if (c.points || c.polygon) { const pts = c.points ?? c.polygon, xs = pts.map(p => p[0]), ys = pts.map(p => p[1]); list.push({ body: { kind: 1, pts, box: [min(...xs), min(...ys), max(...xs), max(...ys)] }, e, fr }); }
+      }
+      if (F) for (const b of F.bodies()) list.push({ body: b, e: bounce, fr: friction });
+      return list;
+    };
+    // Piles: heights on bins along the ground, slumping to the angle of repose.
+    const NB = 240, bw = dom[0] / NB, pileOn = (o.pile ?? !!P.pile) && o.ground != null, repose = Math.tan(num(P.pile, 35) * PI / 180), heap = num(o.heap, 1);
+    let pile = new Float32Array(NB);
+    const pileAt = x => { const X = clamp(x / bw - 0.5, 0, NB - 1.001), i = floor(X), f = X - i; return pile[i] * (1 - f) + pile[i + 1] * f; };
+    // A grain that lands rolls down the face of the heap until it rests where neither side is
+    // steeper than the angle of repose (deposited in small parts, so the heap stays smooth).
+    const deposit = (x, a) => {
+      const lim = repose * bw, n = Math.ceil(a / (0.5 * lim)), d = a / n;
+      for (let c = 0; c < n; c++) {
+        let b = clamp(floor(x / bw), 0, NB - 1);
+        for (let s = 0; s < NB && b >= 0; s++) {
+          const top = pile[b] + d, l = b > 0 ? top - pile[b - 1] : Infinity, r = b < NB - 1 ? top - pile[b + 1] : Infinity;
+          if (l <= lim && r <= lim) break;
+          b = l > r ? b - 1 : b + 1;
+          if (b >= NB) b = -1;
+        }
+        if (b >= 0) pile[b] += d;
+      }
+    };
+    // State: x, y, vx, vy, generation, flag (0 flying, 1 landed, 2 gone), spin phase, spare.
+    let st = new Float64Array(N * 8);
+    const SPN = max(16, N >> 2), sp = new Float64Array(SPN * 6);
+    let spi = 0;
+    const slot = (i, t) => { const ph = ((i * 0.6180339887) % 1) * period, k = floor((t - ph) / period); return [k, t - ph - k * period]; };
+    const rr = (i, k, c) => rnd(seed, i * 7919 + k * 104729, c);
+    const lifeOf = (i, k) => lifeR[0] + (lifeR[1] - lifeR[0]) * rr(i, k, 1);
+    function emit(i, k) {
+      const r = c => rr(i, k, c), at = E.at;
+      let x = at[0], y = at[1];
+      if (E.shape === "disk") { const a = TAU * r(10), q = E.radius * sqrt(r(11)); x += q * cos(a); y += q * sin(a); }
+      else if (E.shape === "line") { const a = E.from ?? at, b = E.to ?? at, t = r(10); x = lerp(a[0], b[0], t); y = lerp(a[1], b[1], t); }
+      else if (E.shape === "box") { const s = E.size ?? [dom[0], dom[1]], c0 = E.at ?? [dom[0] / 2, dom[1] / 2]; x = c0[0] + (r(10) - 0.5) * s[0]; y = c0[1] + (r(11) - 0.5) * s[1]; }
+      const a = (Array.isArray(E.dir) ? Math.atan2(E.dir[1], E.dir[0]) : num(E.dir, 0)) + (r(13) * 2 - 1) * num(E.spread, 0);
+      const s0 = Array.isArray(E.speed) ? lerp(E.speed[0], E.speed[1], r(15)) : num(E.speed, 0);
+      return [x, y, cos(a) * s0 * u, sin(a) * s0 * u];
+    }
+    // 2D curl noise: the curl of a sum of drifting plane waves, so the eddies have no sources or sinks.
+    const modes = Array.from({ length: 4 }, (_, j) => { const a = TAU * rnd(seed, 501, j), m = 0.7 + 0.7 * rnd(seed, 502, j); return [cos(a) * m, sin(a) * m, TAU * rnd(seed, 503, j), (0.6 + 0.8 * rnd(seed, 504, j)) * (j & 1 ? 1 : -1), 1 / m]; });
+    const curl = (x, y, t) => { let cx = 0, cy = 0; for (const [kx, ky, ph, w, s] of modes) { const c2 = cos(kx * x + ky * y + ph + w * t * TAU) * s; cx += c2 * ky; cy -= c2 * kx; } return [cx * 0.7, cy * 0.7]; };
+    function hitSeg(x0, y0, x1, y1, a, b) {
+      const ex = b[0] - a[0], ey = b[1] - a[1], s0 = (x0 - a[0]) * ey - (y0 - a[1]) * ex, s1 = (x1 - a[0]) * ey - (y1 - a[1]) * ex;
+      if ((s0 > 0) === (s1 > 0) || s0 === s1) return null;
+      const t = s0 / (s0 - s1), qx = x0 + (x1 - x0) * t, qy = y0 + (y1 - y0) * t, along = ((qx - a[0]) * ex + (qy - a[1]) * ey) / (ex * ex + ey * ey || 1e-18);
+      if (along < 0 || along > 1) return null;
+      const L = hypot(ex, ey) || 1, sg = s0 > 0 ? 1 : -1;
+      return [qx, qy, sg * ey / L, -sg * ex / L];
+    }
+    const splash = (x, y, v) => {
+      const n = 2 + (hash(seed, floor(x * 977), floor(y * 613)) % 3);
+      for (let j = 0; j < n; j++) { const r = c => rnd(seed + 77, spi * 31 + j, c), a = -PI / 2 + (r(0) - 0.5) * 2.2, s = v * (0.18 + 0.22 * r(1)), q = (spi % SPN) * 6; sp.set([x, y - 0.002 * u, cos(a) * s, sin(a) * s, S.time, 1], q); spi++; }
+    };
+    let cols = [];
+    function stepOnce(hh) {
+      const t1 = S.time + hh, cl = cols = colliders(), ground = o.ground;
+      for (let i = 0; i < NCPU; i++) {
+        const q = i * 8, [k, age] = slot(i, t1), life = lifeOf(i, k);
+        let dtl = hh;
+        if (st[q + 4] !== k) {
+          if (age > hh + 1e-9) { st[q + 4] = k; st[q + 5] = 2; continue; }
+          st[q + 4] = k;
+          if (!S.emitting || rr(i, k, 2) >= S.density) { st[q + 5] = 2; continue; }
+          const e = emit(i, k);
+          st[q] = e[0]; st[q + 1] = e[1]; st[q + 2] = e[2]; st[q + 3] = e[3]; st[q + 5] = 0; st[q + 6] = TAU * rr(i, k, 5);
+          dtl = clamp(age, 0, hh);
+        }
+        if (st[q + 5] !== 0 || age > life) continue;
+        let x = st[q], y = st[q + 1], vx = st[q + 2], vy = st[q + 3];
+        const x0 = x, y0 = y;
+        let ax = 0, ay = gy - lift * max(0, 1 - age / life);
+        if (turb) { const c2 = curl(x * turb[1], y * turb[1], t1 * turb[2]); ax += c2[0] * turb[0]; ay += c2[1] * turb[0]; }
+        if (P.flutter) ax += kk * P.flutter[1] * u * sin(TAU * P.flutter[0] * t1 + st[q + 6]);
+        let wx = wind[0], wy = wind[1];
+        if (F) { const w = F.velocity([x / u, y / u]); wx = w[0] * u; wy = w[1] * u; }
+        if (kk > 0) {
+          const e = exp(-kk * dtl), f = (1 - e) / kk, Tx = wx + ax / kk, Ty = wy + ay / kk;
+          x += Tx * dtl + (vx - Tx) * f; y += Ty * dtl + (vy - Ty) * f; vx = Tx + (vx - Tx) * e; vy = Ty + (vy - Ty) * e;
+        } else { vx += ax * dtl; vy += ay * dtl; x += vx * dtl; y += vy * dtl; }
+        // Colliders: reflect the normal velocity by the bounce, take friction off the tangential.
+        const meet = (nx, ny, e, fr, onGround) => {
+          const vn = vx * nx + vy * ny;
+          if (vn >= 0) return;
+          if (P.splash && -vn > 1.5 * u) { splash(x, y, -vn); st[q + 5] = 2; return; }
+          vx -= (1 + e) * vn * nx; vy -= (1 + e) * vn * ny;
+          const vt = vx * -ny + vy * nx; vx -= vt * fr * -ny; vy -= vt * fr * nx;
+          // Grains that come to rest on the ground join the heap; things that stick stay where they land.
+          if (onGround && pileOn && hypot(vx, vy) < 0.4 * u) { deposit(x, heap * size[0] * size[0] * 0.9 / bw); st[q + 5] = 2; vx = vy = 0; }
+          else if (fr >= 0.99 && e <= 0.01) { st[q + 5] = 1; vx = vy = 0; }
+        };
+        for (const c of cl) {
+          if (c.seg) { const H = hitSeg(x0, y0, x, y, c.seg[0], c.seg[1]); if (H) { x = H[0] + H[2] * 1e-4 * u; y = H[1] + H[3] * 1e-4 * u; meet(H[2], H[3], c.e, c.fr, false); } }
+          else { const s = surfaceOf(c.body, x, y); if (s[0] < 0) { x -= s[1] * (s[0] - 1e-4 * u); y -= s[2] * (s[0] - 1e-4 * u); meet(s[1], s[2], c.e, c.fr, false); } }
+          if (st[q + 5]) break;
+        }
+        if (ground != null && st[q + 5] === 0) { const gl = ground - (pileOn ? pileAt(x) : 0); if (y > gl) { y = gl; meet(0, -1, bounce, friction, true); } }
+        if (x < -0.05 * dom[0] || x > 1.05 * dom[0] || y < -0.5 * dom[1] || y > 1.05 * dom[1]) st[q + 5] = 2;
+        st[q] = x; st[q + 1] = y; st[q + 2] = vx; st[q + 3] = vy;
+      }
+      // Splash droplets: short ballistic flights.
+      for (let j = 0; j < SPN; j++) {
+        const q = j * 6;
+        if (!sp[q + 5]) continue;
+        sp[q + 3] += g0 * hh; sp[q] += sp[q + 2] * hh; sp[q + 1] += sp[q + 3] * hh;
+        if (t1 - sp[q + 4] > 0.6 || (ground != null && sp[q + 1] > ground - (pileOn ? pileAt(sp[q]) : 0) && sp[q + 3] > 0)) sp[q + 5] = 0;
+      }
+    }
+    // Prewarm a full life so the system starts full, unless it's driven by a fluid (which starts from rest).
+    function prewarm() {
+      pre0 = false;
+      const pre = o.prewarm ?? !F;
+      if (pre && period > 0) { const n = Math.ceil(period / S.dt), t0 = S.time; for (let i = 0; i < n; i++) { S.time = (i - n) * S.dt; if (X) X.pend.push(S.time + S.dt); else stepOnce(S.dt); } S.time = t0; }
+    }
+    const save = () => (X && X.save(), { st: st.slice(), sp: sp.slice(), spi, pile: pile.slice() });
+    const load = k => { st.set(k.st); sp.set(k.sp); spi = k.spi; pile.set(k.pile); if (X) X.load(); };
+    const step = dt => { if (F) F.advance(S.time + dt); if (X) X.pend.push(S.time + dt); else stepOnce(dt); };
+    function xCheck() { xMove(); if (pre0) { if (X) X.reset(); prewarm(); } }
   // ---------- 2D versions (no WebGL2, or gpu: false) ----------
   const trace = (c, pts) => { c.beginPath(); pts.forEach((q, i) => (i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]))); };
   const stroke = (c, pts, close) => { trace(c, pts); if (close) c.closePath(); c.stroke(); };
@@ -1164,6 +2110,260 @@ void main() {
       });
       return { gpu: false, count: trails.length, frame: p.F };
     });
+
+    // ---------- simulations ----------
+    const colorOf = c => (Array.isArray(c) ? c : hexc(c) ?? pal(c));
+    // Light paint vanishes on a light page: pale colors are deepened there.
+    const onPage = (col, dk) => (!dk && 0.2126 * col[0] + 0.7152 * col[1] + 0.0722 * col[2] > 0.7 ? mixc(col, [0.36, 0.43, 0.52], 0.55) : col);
+    const fmt = v => { const a = abs(v); return a === 0 ? "0" : a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1).replace(/\.0$/, "") : a >= 1 ? v.toFixed(2).replace(/0$/, "").replace(/\.0$/, "") : v.toFixed(2); };
+    const LEG = { speed: "speed (m/s)", pressure: "pressure coefficient Cp", vorticity: "vorticity ωD/U", dye: "", none: "" };
+    const arrow = (c, a, b, head) => { const d = hypot(b[0] - a[0], b[1] - a[1]) || 1, ux = (b[0] - a[0]) / d, uy = (b[1] - a[1]) / d; c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.moveTo(b[0] - ux * head - uy * head * 0.55, b[1] - uy * head + ux * head * 0.55); c.lineTo(b[0], b[1]); c.lineTo(b[0] - ux * head + uy * head * 0.55, b[1] - uy * head - ux * head * 0.55); };
+
+    fx.fluid = (b, o = {}) => {
+      const box = boxOf(b), S = o.sim;
+      if (!S?.isFluid) throw new Error("g.fx.fluid: pass { sim }, a simulation made once with Fx.fluid({ ... })");
+      S.view = box;
+      const dk = isDark(), show = ["speed", "pressure", "vorticity", "dye", "none"].includes(o.show) ? o.show : "speed", mode = { speed: 0, pressure: 1, vorticity: 2, dye: 3, none: 3 }[show];
+      const map = mode === 3 ? null : CMAPS[o.map] ? o.map : mode === 0 ? "magma" : "coolwarm";
+      const range = o.range ?? (mode === 0 ? [0, 1.6 * S.speed] : mode === 1 ? [-1, 1] : [-6, 6]);
+      const paper = pal("panel"), ink = pal("ink"), dye = o.dyeColor ? colorOf(o.dyeColor) : mode === 3 ? pal(dk ? "orange" : "red") : [0.97, 0.97, 0.95];
+      const stk = mode === 3 ? mixc(paper, ink, 0.75) : [1, 1, 1], body = o.bodyColor ? colorOf(o.bodyColor) : mixc(paper, ink, 0.1);
+      const k = { mode, map, lo: range[0], hi: range[1], paper, dye, stk, body, dyeK: num(o.dyeDensity, 1.2), stkK: 0.85 * cn(o.streakAlpha, 1, 0, 1), wk: S.length / max(S.speed, 1e-9) };
+      const u = S.gpu ? S.showUniforms(box, { uMode: mode, uLo: range[0], uHi: range[1], uCm: cmapStops(map ?? "magma").flat(), uDye: dye, uStkC: stk, uBody: body, uPaper: paper, uDyeK: k.dyeK, uStkK: k.stkK }) : null;
+      const gpu = draw(box, { res: 1, ...o }, { t: 0, seed: 1 }, false, "flShow", u, c => S.paintCPU(c, box, k));
+      const P = q => S.toScreen(q), white = mode === 3 ? ink : [1, 1, 1];
+      draw(box, o, { t: 0 }, false, "", null, c => {
+        c.lineCap = c.lineJoin = "round";
+        // Streamlines: the instantaneous field followed from the inflow edge (RK2 in arc length).
+        const nS = o.streamlines | 0;
+        if (nS > 0) {
+          const ds = S.h * 0.7, steps = Math.ceil(2.5 * (S.grid[0] + S.grid[1]) / 0.7);
+          c.strokeStyle = css(white, mode === 3 ? 0.55 : 0.5); c.lineWidth = 1;
+          for (let s = 0; s < nS; s++) {
+            let q = [S.h * 0.5, S.domain[1] * (s + 0.5) / nS];
+            c.beginPath(); c.moveTo(...P(q));
+            for (let i = 0; i < steps; i++) {
+              const v1 = S.velocity(q), l1 = hypot(...v1); if (l1 < 1e-6) break;
+              const m = [q[0] + v1[0] / l1 * ds / 2, q[1] + v1[1] / l1 * ds / 2], v2 = S.velocity(m), l2 = hypot(...v2) || 1;
+              q = [q[0] + v2[0] / l2 * ds, q[1] + v2[1] / l2 * ds];
+              if (q[0] < 0 || q[0] > S.domain[0] || q[1] < 0 || q[1] > S.domain[1] || S.solidAt(q)) break;
+              c.lineTo(...P(q));
+            }
+            c.stroke();
+          }
+        }
+        if (o.bodies !== false) for (const s of S.bodies()) { trace(c, bodyPath(s).map(P)); c.closePath(); c.fillStyle = css(body); c.fill(); c.strokeStyle = css(ink, 0.85); c.lineWidth = 1.3; c.stroke(); }
+        // Arrows on a grid, length by speed (clamped), from the small readback grid.
+        if (o.arrows) {
+          const A = o.arrows === true ? {} : o.arrows, sp = max(8, num(A.spacing, 26)), ref = num(A.scale, 1.5 * S.speed) || 1;
+          const nx = max(1, floor(box[2] / sp)), ny = max(1, floor(box[3] / sp)), ox = box[0] + (box[2] - (nx - 1) * sp) / 2, oy = box[1] + (box[3] - (ny - 1) * sp) / 2, list = [];
+          for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+            const p = [ox + i * sp, oy + j * sp], q = S.toWorld(p);
+            if (S.solidAt(q) || S.bodies().some(s => surfaceOf(s, q[0], q[1])[0] < S.h)) continue;
+            const v = S.velocity(q), L = min(1, hypot(...v) / ref) * sp * 0.82;
+            if (L < 3) continue;
+            const d = hypot(...v), e = [v[0] / d * L / 2, v[1] / d * L / 2];
+            list.push([[p[0] - e[0], p[1] - e[1]], [p[0] + e[0], p[1] + e[1]], min(5, 1.5 + 0.28 * L)]);
+          }
+          const col = A.color ? colorOf(A.color) : white, w = num(A.width, 1.3);
+          if (mode !== 3) { c.beginPath(); for (const a of list) arrow(c, ...a); c.strokeStyle = "rgba(0, 0, 0, 0.35)"; c.lineWidth = w + 1.6; c.stroke(); }
+          c.beginPath(); for (const a of list) arrow(c, ...a); c.strokeStyle = css(col, 0.92); c.lineWidth = w; c.stroke();
+        }
+      });
+      return { gpu, legend: map ? { map, range, label: o.label ?? LEG[show] } : null, toWorld: S.toWorld, toScreen: S.toScreen };
+    };
+
+    // A horizontal bar for a colormap, with end and middle values.
+    fx.colorbar = (b, o = {}) => {
+      const box = boxOf(b), map = o.map ?? "magma", [lo, hi] = o.range ?? [0, 1], st = cmapStops(map), c = g.ctx, gr = c.createLinearGradient(box[0], 0, box[0] + box[2], 0);
+      st.forEach((s, i) => gr.addColorStop(i / 15, css(s)));
+      c.save(); c.fillStyle = gr; c.fillRect(...box); c.restore();
+      g.rect(...box, { stroke: "faint", width: 1 });
+      const n = max(2, num(o.ticks, 3) | 0), ty = box[1] + box[3] + 10;
+      for (let i = 0; i < n; i++) { const t = i / (n - 1), x = box[0] + t * box[2]; g.text(o.format ? o.format(lerp(lo, hi, t)) : fmt(lerp(lo, hi, t)), [x, ty], { size: 11, color: "muted", align: i === 0 ? "left" : i === n - 1 ? "right" : "center" }); }
+      if (o.label) g.text(o.label, [box[0], box[1] - 9], { size: 12, weight: 500, color: "muted", align: "left" });
+      return { box };
+    };
+
+    fx.waves = (b, o = {}) => {
+      const box = boxOf(b), S = o.sim;
+      if (!S?.isWaves) throw new Error("g.fx.waves: pass { sim }, a simulation made once with Fx.waves({ ... })");
+      S.view = box;
+      const dk = isDark(), look = ["pool", "height", "caustics", "section"].includes(o.look) ? o.look : "pool", k = box[2] / S.domain[0], h = S.h;
+      const [nx, ny] = S.grid, ink = pal("ink"), paper = pal("panel"), tint = pal(o.color ?? "blue");
+      let gpu = false;
+      if (look === "section") {
+        // Water in section along the row at y = at: the surface, exaggerated to be seen.
+        const H = S.heights(), j = clamp(floor(num(o.at, S.domain[1] / 2) / h), 0, ny - 1), lvl = box[1] + box[3] * 0.35, ex = num(o.exaggerate, box[3] * 0.12 / S.range()) ;
+        const pts = Array.from({ length: nx }, (_, i) => [box[0] + (i + 0.5) / nx * box[2], lvl - H[i + j * nx] * ex]);
+        draw(box, o, { t: 0 }, false, "", null, c => {
+          const top = mixc(tint, [0.3, 0.8, 0.82], 0.55).map(v => v * (dk ? 0.6 : 0.98)), deep = mixc(tint, [0.05, 0.55, 0.6], 0.5).map(v => v * (dk ? 0.3 : 0.7)), gr = c.createLinearGradient(0, lvl, 0, box[1] + box[3]);
+          gr.addColorStop(0, css(top)); gr.addColorStop(1, css(deep));
+          trace(c, [[box[0], pts[0][1]], ...pts, [box[0] + box[2], pts[nx - 1][1]], [box[0] + box[2], box[1] + box[3]], [box[0], box[1] + box[3]]]); c.fillStyle = gr; c.fill();
+          c.strokeStyle = css(dk ? mixc(top, W1, 0.5) : mixc(tint, [0.05, 0.15, 0.25], 0.4)); c.lineWidth = 1.5; stroke(c, pts);
+        });
+        return { gpu: false, level: x => lvl - S.height([(x - box[0]) / k, num(o.at, S.domain[1] / 2)]) * ex };
+      }
+      const range = num(o.range, S.range());
+      if (look === "height") {
+        const lo = pal(o.low ?? "blue"), hi = pal(o.high ?? "red"), c3 = [mixc(paper, lo, 0.9), paper, mixc(paper, hi, 0.9)], useCm = !!(o.map && CMAPS[o.map]);
+        const u = S.gpu ? { ...S.surfaceUniforms(), uBox: [box[2], box[3]], uRange: range / h, uLo: c3[0], uMid: c3[1], uHi: c3[2], uWall: ink, uCm: cmapStops(o.map ?? "coolwarm").flat(), uUseCm: useCm ? 1 : 0 } : null;
+        gpu = draw(box, o, { t: 0 }, false, "waHeight", u, c => paintWaves(c, box, S, (H, i, j, x, y) => {
+          if (S._wall[i + j * nx]) return ink;
+          const t = clamp(H(x, y) / range, -1, 1);
+          return useCm ? cmap(o.map, t * 0.5 + 0.5) : mixc(c3[1], t > 0 ? c3[2] : c3[0], abs(t) ** 0.8 * 0.9);
+        }));
+      } else {
+        // The pool from above (or just its floor light): the water shaders over the simulated surface.
+        const depth = num(o.depth, max(S.depth ?? 0, 0.3)), n = cn(o.n, 1.333, 1, 2.5), D = depth * (1 - 1 / n) * k, clar = num(o.clarity, 3 * depth) * k, tile = num(o.tile, 0.06) * k;
+        const deep = mixc(tint, [0.05, 0.55, 0.6], 0.5).map(v => v * (dk ? 0.34 : 0.72)), floorK = { tiles: 0, sand: 1, plain: 2 }[o.floor ?? "tiles"] ?? 0;
+        const fA = floorK === 1 ? (dk ? [0.48, 0.44, 0.36] : [0.9, 0.84, 0.68]) : dk ? [0.58, 0.64, 0.68] : [0.95, 0.97, 0.97], fB = floorK === 1 ? (dk ? [0.36, 0.33, 0.27] : [0.78, 0.7, 0.54]) : dk ? [0.3, 0.36, 0.42] : [0.62, 0.7, 0.75];
+        const sky = dk ? [0.16, 0.2, 0.3] : [0.82, 0.9, 1], skyH = dk ? [0.42, 0.48, 0.58] : [1, 1, 1], sun = [0.35, -0.55, 0.76].map(v => v / hypot(0.35, 0.55, 0.76));
+        const fl = mixc(paper, tint, dk ? 0.34 : 0.3), sh = mixc(paper, tint, dk ? 0.16 : 0.5), lt = dk ? mixc(tint, W1, 0.7) : W1;
+        const name = look === "pool" ? "wavePool" : "waveFloor";
+        const u = S.gpu ? { ...S.surfaceUniforms(), uPx: box[2] / nx, uAmp: range / h * box[2] / nx, uD: D, uDepth: depth * k, uClar: clar, uTile: tile, uTilt: cn(o.tilt, 0.35, 0, 1.3), uFoam: 0, uFloorK: floorK, uIor: n,
+          uWater: deep, uFlA: fA, uFlB: fB, uSky: sky, uSkyH: skyH, uSunD: sun, uFloor: fl, uShadow: sh, uLight: lt } : null;
+        gpu = draw(box, o, { t: 0 }, false, name, u, c => paintWaves(c, box, S, (H, i, j, x, y) => {
+          // Without a GPU: floor light from the curvature, refraction of the tiles, depth tint.
+          const e = 1, hx = (H(x + e, y) - H(x - e, y)) / (2 * e), hy = (H(x, y + e) - H(x, y - e)) / (2 * e), Dc = D / (box[2] / nx);
+          const fx2 = x - Dc * hx, fy2 = y - Dc * hy, hxx = H(fx2 + e, fy2) + H(fx2 - e, fy2) - 2 * H(fx2, fy2), hyy = H(fx2, fy2 + e) + H(fx2, fy2 - e) - 2 * H(fx2, fy2);
+          const hxy = (H(fx2 + e, fy2 + e) - H(fx2 + e, fy2 - e) - H(fx2 - e, fy2 + e) + H(fx2 - e, fy2 - e)) / 4, I = 1 / max(abs((1 + Dc * hxx) * (1 + Dc * hyy) - Dc * Dc * hxy * hxy), 0.12);
+          if (S._wall[i + j * nx]) return ink;
+          if (look === "caustics") return fl.map((v, q) => min(1, lerp(sh[q], v, min(I, 1)) + lt[q] * max(I - 1.2, 0) * 0.22));
+          const tc = tile / (box[2] / nx), gx = ((fx2 / tc) % 1 + 1) % 1, gy = ((fy2 / tc) % 1 + 1) % 1, grout = 1 - smooth(0.15, 0.55, min(gx, 1 - gx, gy, 1 - gy) * tc * (box[2] / nx)), base = floorK === 0 ? mixc(fA, fB, grout) : fA;
+          const Tr = [1.7, 0.55, 0.38].map(a => exp(-a * 2 * depth * k / clar));
+          return base.map((v, q) => v * (0.5 + 0.55 * min(I, 2.6)) * Tr[q] + deep[q] * (1 - Tr[q]));
+        }));
+      }
+      if (o.walls !== false) draw(box, o, { t: 0 }, false, "", null, c => {
+        c.lineCap = "butt"; c.strokeStyle = c.fillStyle = css(ink, 0.9);
+        for (const q of S.walls) {
+          if (q.polygon) { trace(c, q.polygon.map(S.toScreen)); c.closePath(); c.fill(); continue; }
+          const pts = (q.points ?? [q.from, q.to]).map(S.toScreen);
+          c.lineWidth = max(2, num(q.width, 0) * k, 1.2 * h * k); stroke(c, q.close ? [...pts, pts[0]] : pts);
+        }
+      });
+      return { gpu, range, height: p => S.height(S.toWorld(p)), toWorld: S.toWorld, toScreen: S.toScreen };
+    };
+    // Waves without a GPU: a color per cell from the heights (in cells), smoothed up to the box.
+    // Painted at twice the grid, from bilinear heights, so tiles and light lines stay smooth.
+    function paintWaves(c, box, S, fn) {
+      const [nx, ny] = S.grid, Hm = S.heights(), h = S.h, cw = nx * 2, ch = ny * 2, img = new ImageData(cw, ch);
+      const H = (x, y) => { const X = clamp(x - 0.5, 0, nx - 1.001), Y = clamp(y - 0.5, 0, ny - 1.001), i = floor(X), j = floor(Y), fx = X - i, fy = Y - j, k = i + j * nx; return ((Hm[k] * (1 - fx) + Hm[k + 1] * fx) * (1 - fy) + (Hm[k + nx] * (1 - fx) + Hm[k + nx + 1] * fx) * fy) / h; };
+      for (let b = 0; b < ch; b++) for (let a = 0; a < cw; a++) { const col = fn(H, a >> 1, b >> 1, (a + 0.5) / 2, (b + 0.5) / 2); img.data.set([col[0] * 255, col[1] * 255, col[2] * 255, 255], (a + b * cw) * 4); }
+      gridCanvas ??= document.createElement("canvas");
+      gridCanvas.width = cw; gridCanvas.height = ch;
+      gridCanvas.getContext("2d").putImageData(img, 0, 0);
+      c.imageSmoothingEnabled = true;
+      c.drawImage(gridCanvas, box[0], box[1], box[2], box[3]);
+    }
+
+    // Soft round sprites, one per color, for puffs and glows.
+    const sprites = new Map();
+    const sprite = (col, soft) => {
+      const key = col.map(v => Math.round(v * 40)).join() + soft;
+      let s = sprites.get(key);
+      if (!s) {
+        s = document.createElement("canvas"); s.width = s.height = 64;
+        const c = s.getContext("2d"), gr = c.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gr.addColorStop(0, css(col, 1)); gr.addColorStop(soft ? 0.35 : 0.55, css(col, soft ? 0.55 : 0.8)); gr.addColorStop(1, css(col, 0));
+        c.fillStyle = gr; c.fillRect(0, 0, 64, 64);
+        if (sprites.size > 400) sprites.clear();
+        sprites.set(key, s);
+      }
+      return s;
+    };
+    fx.particles = (b, o = {}) => {
+      const box = boxOf(b), S = o.sys ?? o.sim;
+      if (!S?.isParticles) throw new Error("g.fx.particles: pass { sys }, a system made once with Fx.particles({ ... })");
+      S.view = box;
+      const dk = isDark(), M = MATTER[S.matter], style = STYLES.includes(o.style) ? o.style : S.style, sx = box[2] / S.domain[0], sy = box[3] / S.domain[1], u = S.units;
+      const P = q => [box[0] + q[0] * sx, box[1] + q[1] * sy], list = S.alive(), [fi, fo] = M.fade ?? [0.08, 0.3], op = num(o.opacity, M.opacity ?? 1);
+      const fade = q => op * smooth(0, max(1e-3, fi), q.k) * (1 - smooth(1 - fo, 1, q.k));
+      const size = q => lerp(S.params.size[0], S.params.size[1], q.k) * u * sx;
+      const base = o.color ? colorOf(o.color) : style === "puff" && !M.color ? (dk ? [0.66, 0.65, 0.64] : [0.42, 0.41, 0.4]) : M.color ? onPage(hexc(M.color) ?? pal(M.color), dk) : pal("ink");
+      // A beam of light (a sunbeam through a window): particles in it scatter it toward the eye.
+      const Lt = o.light !== undefined ? o.light : S.light;
+      let beam = null;
+      if (Lt) {
+        const a = P(Lt.from), d0 = Array.isArray(Lt.dir) ? Lt.dir : [cos(num(Lt.dir, 1)), sin(num(Lt.dir, 1))], dl = hypot(...d0) || 1, d = [d0[0] / dl, d0[1] / dl], w = num(Lt.width, 0.3 * u) * sx / 2;
+        beam = { a, d, w, n: [-d[1], d[0]] };
+        const far = hypot(box[2], box[3]) * 1.5, e = [a[0] + d[0] * far, a[1] + d[1] * far], warm = dk ? [1, 0.93, 0.76] : [1, 0.86, 0.5];
+        layer(box, o, dk, c => {
+          const gr = c.createLinearGradient(a[0], a[1], e[0], e[1]); gr.addColorStop(0, css(warm, dk ? 0.13 : 0.22)); gr.addColorStop(0.5, css(warm, dk ? 0.06 : 0.12)); gr.addColorStop(1, css(warm, 0));
+          trace(c, [[a[0] + beam.n[0] * w, a[1] + beam.n[1] * w], [e[0] + beam.n[0] * w * 1.2, e[1] + beam.n[1] * w * 1.2], [e[0] - beam.n[0] * w * 1.2, e[1] - beam.n[1] * w * 1.2], [a[0] - beam.n[0] * w, a[1] - beam.n[1] * w]]); c.closePath();
+          if (!dk) c.globalCompositeOperation = "multiply";
+          c.fillStyle = gr; c.fill();
+        });
+      }
+      const inBeam = p => { if (!beam) return 0; const rx = p[0] - beam.a[0], ry = p[1] - beam.a[1], s = rx * beam.d[0] + ry * beam.d[1], dn = abs(rx * beam.n[0] + ry * beam.n[1]); return s > 0 ? 1 - smooth(beam.w * 0.7, beam.w * 1.05, dn) : 0; };
+      const pile = S.pile();
+      if (pile && pile.some(q => q[1] < S.ground - 1e-9)) draw(box, o, { t: 0 }, false, "", null, c => {
+        const pts = pile.map((q, i) => P([q[0], (pile[max(0, i - 1)][1] + 2 * q[1] + pile[min(pile.length - 1, i + 1)][1]) / 4])), gnd = box[1] + S.ground * sy;
+        trace(c, [[pts[0][0], gnd], ...pts, [pts[pts.length - 1][0], gnd]]); c.closePath();
+        c.fillStyle = css(mixc(base, [0.1, 0.08, 0.05], dk ? 0.25 : 0.35), 0.95); c.fill();
+      });
+      const light = style === "glow" || style === "spark";
+      draw(box, o, { t: 0 }, light, "", null, c => {
+        c.lineCap = "round";
+        if (style === "puff") {
+          // Lit puffs that shade themselves: the density between each puff and the light dims it.
+          const la = num(o.lightAngle, -2.16), ld = [cos(la), sin(la)], gw = 40, gh = max(4, Math.round(gw * box[3] / box[2])), cw = box[2] / gw, grid = new Float32Array(gw * gh);
+          const at = (x, y) => { const i = floor((x - box[0]) / cw), j = floor((y - box[1]) / cw); return i >= 0 && j >= 0 && i < gw && j < gh ? grid[i + j * gw] : 0; };
+          for (const q of list) { const p = P(q.p), i = floor((p[0] - box[0]) / cw), j = floor((p[1] - box[1]) / cw); if (i >= 0 && j >= 0 && i < gw && j < gh) grid[i + j * gw] += fade(q) * min(4, (size(q) / cw) ** 2) * 0.6; }
+          const lit = mixc(base, W1, dk ? 0.25 : 0.32), shade = mixc(base, [0.06, 0.06, 0.07], dk ? 0.6 : 0.5), sh = num(o.shadow, 1);
+          for (const q of list) {
+            const p = P(q.p), r = max(1.5, size(q) / 2), a = fade(q);
+            let tau = 0;
+            for (let s = 1; s <= 4; s++) tau += at(p[0] + ld[0] * cw * s * 1.2, p[1] + ld[1] * cw * s * 1.2);
+            const L = exp(-tau * 0.5 * sh), col = mixc(shade, lit, L);
+            c.globalAlpha = clamp(a, 0, 1); c.drawImage(sprite(col, true), p[0] - r, p[1] - r, 2 * r, 2 * r);
+          }
+          c.globalAlpha = 1;
+        } else if (style === "glow") {
+          const T = M.temperature ?? [1300, 700];
+          for (const q of list) {
+            const Tk = lerp(T[0], T[1], q.k), col = hue(blackbody(Tk)).map(v => (dk ? v : v ** 1.6)), p = P(q.p), r = max(2, size(q) / 2);
+            c.globalAlpha = clamp(fade(q) * (0.4 + 0.6 * glowLevel(Tk)), 0, 1); c.drawImage(sprite(col, false), p[0] - r, p[1] - r, 2 * r, 2 * r);
+          }
+          c.globalAlpha = 1;
+        } else if (style === "spark") {
+          const T = M.temperature ?? [2000, 900], tr = num(o.trail, 1 / 30);
+          flecks(c, list.map(q => { const Tk = lerp(T[0], T[1], q.k), p = P(q.p); return { p, tail: [p[0] - q.v[0] * sx * tr, p[1] - q.v[1] * sy * tr], T: Tk, level: glowLevel(Tk) * fade(q) }; }), num(o.width, 1.4), dk);
+        } else if (style === "streak") {
+          const tr = num(o.trail, S.matter === "air" ? 0.08 : 1 / 30), w = num(o.width, max(1, S.params.size[0] * u * sx));
+          c.strokeStyle = css(base); c.lineWidth = w;
+          for (const q of list) { const p = P(q.p); c.globalAlpha = clamp(fade(q), 0, 1); c.beginPath(); c.moveTo(p[0] - q.v[0] * sx * tr, p[1] - q.v[1] * sy * tr); c.lineTo(p[0], p[1]); c.stroke(); }
+          c.globalAlpha = 1;
+        } else if (style === "mote") {
+          // Dust in a beam: each mote scatters the light toward the eye and glints as it tumbles.
+          const glint = dk ? [1, 0.95, 0.8] : mixc(base, [0.35, 0.2, 0.04], 0.55), t = S.time;
+          for (const q of list) {
+            const p = P(q.p), L = inBeam(p), r = max(0.8, size(q) / 2) * (1 + (dk ? 0.6 : 0.9) * L), tw = 0.55 + 0.45 * sin(q.spin * 7 + t * (2 + (q.spin % 1) * 5)) ** 2;
+            const a = fade(q) * (beam ? 0.18 + 0.82 * L * tw : 0.8);
+            if (a < 0.02) continue;
+            c.fillStyle = css(L > 0.05 ? mixc(base, glint, L) : base, a);
+            c.beginPath(); c.arc(p[0], p[1], r, 0, TAU); c.fill();
+            if (L > 0.3 && dk) { c.fillStyle = css(glint, a * 0.18); c.beginPath(); c.arc(p[0], p[1], r * 3, 0, TAU); c.fill(); }
+          }
+        } else if (style === "bubble") {
+          c.lineWidth = 1;
+          for (const q of list) { const p = P(q.p), r = max(1.5, size(q) / 2), a = fade(q); c.strokeStyle = css(base, a); c.fillStyle = css(base, a * 0.15); c.beginPath(); c.arc(p[0], p[1], r, 0, TAU); c.fill(); c.stroke(); c.fillStyle = css(W1, a * 0.8); c.beginPath(); c.arc(p[0] - r * 0.35, p[1] - r * 0.35, r * 0.25, 0, TAU); c.fill(); }
+        } else if (style === "leaf") {
+          for (const q of list) { const p = P(q.p), r = max(2, size(q) / 2), a = q.spin + q.age * 2.2; c.fillStyle = css(base, fade(q)); c.beginPath(); c.ellipse(p[0], p[1], r, r * 0.45 * (0.35 + 0.65 * abs(cos(a))), a * 0.6, 0, TAU); c.fill(); }
+        } else {
+          for (const q of list) { const p = P(q.p), r = max(0.9, size(q) / 2); c.fillStyle = css(base, fade(q)); c.beginPath(); c.arc(p[0], p[1], r, 0, TAU); c.fill(); }
+        }
+        const drops = S.droplets();
+        if (drops.length) { c.fillStyle = css(base, 0.85); for (const q of drops) { const p = P(q.p); c.beginPath(); c.arc(p[0], p[1], max(0.8, S.params.size[0] * u * sx * 0.35), 0, TAU); c.fill(); } }
+      });
+      return { gpu: false, count: list.length, toWorld: S.toWorld, toScreen: S.toScreen };
+    };
+    // The water effects take a simulated surface too.
+    for (const [name, look] of [["water", null], ["ripples", "height"], ["caustics", "caustics"]]) {
+      const own = fx[name];
+      fx[name] = (b, o = {}) => (o.sim?.isWaves ? fx.waves(b, { ...o, look: look ?? (o.view === "side" ? "section" : "pool") }) : own(b, o));
+    }
     g.fx = fx;
   });
 
@@ -1176,6 +2376,9 @@ void main() {
     embers: model("fire", embers), grains: model("dust", grains), wind: model("wind", wind),
     windVelocity: (box, o, q) => { const p = params("wind", box, o); return windField(p)(q[0], q[1], p.t / WH); },
     waterLevel: (box, o, x) => { const p = params("water", box, { ...o, view: "side" }); return p.level - surf1(x - box[0], p, p.t)[0]; },
+    fluid, waves, particles,
+    matter: Object.defineProperties(name => (MATTER[name] ? JSON.parse(JSON.stringify(MATTER[name])) : null), { define: { value: defineMatter }, names: { get: () => Object.keys(MATTER) } }),
+    colormap: Object.defineProperties((name, t) => cmap(name, t), { define: { value: defineColormap }, names: { get: () => Object.keys(CMAPS) }, stops: { value: name => cmapStops(name).map(c => c.slice()) } }),
     force2d: false,
     get gpu() { return !this.force2d && !!context(); },
     get still() { return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches; },

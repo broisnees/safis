@@ -184,6 +184,124 @@ LAB.handles.duct = demo("duct", {
 });
 </script>
 
+<h2>Simulations</h2>
+<p>Air in a channel past a square, solved (incompressible Navier-Stokes). Speed in magma, arrows sampled from the velocity. At a low Reynolds number the flow stays attached and steady; raise it and a recirculation bubble grows behind the square, then sheds. Drag the square, or drag in the air to stir:</p>
+<figure class="demo" id="channel" aria-label="A square in a channel of air. The speed of the air is colored from black (still) through purple and orange to pale yellow (fast), with white arrows on a grid showing the flow, which speeds up round the square and leaves a slow wake behind it."></figure>
+<script>
+{
+  const sim = Fx.fluid({ domain: [2.4, 0.9], speed: 0.5, re: 60, obstacles: [{ shape: "rect", at: [0.6, 0.45], size: [0.16, 0.16] }] });
+  LAB.handles.channel = demo("channel", {
+    aspect: w => w / (w * 0.9 / 2.4 + 50),
+    reset: true,
+    state: () => (sim.warm(5), { t: 5 }),
+    controls: [
+      { key: "speed", label: "Inflow speed", min: 0.1, max: 1, step: 0.01, value: 0.5, unit: " m/s", color: "orange" },
+      { key: "re", label: "Reynolds number", min: 5, max: 250, step: 1, value: 60, color: "blue" },
+    ],
+    drag: sim.interact,
+    step(dt, s, v) { sim.set({ speed: v.speed, re: v.re }); s.t += dt; sim.advance(s.t); },
+    status: () => `Re = ${Math.round(sim.re)}`,
+    draw(g, s, v) {
+      const H = g.w * 0.9 / 2.4, r = g.fx.fluid([0, 0, g.w, H], { sim, arrows: true, range: [0, 0.9] });
+      g.fx.colorbar([g.w - 190, H + 26, 170, 8], r.legend);
+    },
+  });
+}
+</script>
+
+<p>A cylinder at Re 150 sheds a von Kármán street. Vorticity in a diverging map (blue one way, red the other), dye released in lanes at the inflow; the status line measures the shedding frequency behind the cylinder:</p>
+<figure class="demo" id="street" aria-label="A cylinder in a stream of air, with alternating blue and red vortices shed behind it in two staggered rows, and white dye lanes swept into the wake."></figure>
+<script>
+{
+  const sim = Fx.fluid({ domain: [2.4, 0.8], speed: 0.4, re: 150, obstacles: [{ shape: "circle", at: [0.42, 0.4], r: 0.05 }], streaks: 0.05, track: true });
+  LAB.handles.street = demo("street", {
+    aspect: w => w / (w / 3 + 50),
+    reset: true,
+    state: () => (sim.warm(10), { t: 10 }),
+    controls: [
+      { key: "re", label: "Reynolds number", min: 20, max: 250, step: 1, value: 150, color: "blue" },
+      { key: "show", label: "Show", type: "choice", options: ["vorticity", "speed", "pressure", "dye"], value: "vorticity" },
+    ],
+    drag: sim.interact,
+    step(dt, s, v) { sim.set({ re: v.re }); s.t += dt; sim.advance(s.t); },
+    status: () => { const q = sim.shedding(); return q.frequency ? `sheds at ${q.frequency.toFixed(2)} Hz: St = fD/U = ${q.strouhal.toFixed(3)}` : "steady wake, no shedding"; },
+    draw(g, s, v) {
+      const H = g.w / 3, r = g.fx.fluid([0, 0, g.w, H], { sim, show: v.show });
+      if (r.legend) g.fx.colorbar([g.w - 190, H + 26, 170, 8], r.legend);
+    },
+  });
+}
+</script>
+
+<p>A ripple tank, simulated: plane waves from a paddle on the left pass two slits and spread into an interference pattern; the floor light is focused by the simulated surface. Click to drop a pebble:</p>
+<figure class="demo" id="tank" aria-label="A shallow tank of water seen from above over a tiled floor. Straight waves from the left pass through two slits in a barrier and spread out as two sets of rings that cross, making bright and dark fringes of light on the floor."></figure>
+<script>
+{
+  const sim = Fx.waves({ domain: [1.6, 1], depth: 0.01, damping: 0.05,
+    walls: Fx.waves.slits([0.62, 0], [0.62, 1], [[0.42, 0.06], [0.58, 0.06]], 0.02),
+    sources: [{ at: [0.14, 0.12], to: [0.14, 0.88], freq: 5, amp: 0.0008 }] });
+  LAB.handles.tank = demo("tank", {
+    aspect: 1.6,
+    reset: true,
+    state: () => (sim.warm(4), { t: 4 }),
+    controls: [
+      { key: "look", label: "Look", type: "choice", options: ["pool", "height", "caustics"], value: "pool" },
+      { type: "button", label: "Drop a pebble", action: (s) => { sim.drop([1.15, 0.3], { amp: 0.003, r: 0.015 }); } },
+    ],
+    drag: sim.interact,
+    step(dt, s) { s.t += dt; sim.advance(s.t); },
+    status: () => `c = ${sim.speed.toFixed(2)} m/s, wavelength ${(sim.speed / 5 * 100).toFixed(1)} cm`,
+    draw(g, s, v) { g.fx.waves(null, { sim, look: v.look, depth: 0.25, tile: 0.1 }); },
+  });
+}
+</script>
+
+<p>Dust settling in a sunbeam: each mote falls at its terminal speed through gently stirring air and glints where the beam lights it (the Tyndall effect); what lands builds up on the floor:</p>
+<figure class="demo" id="sunbeam" aria-label="A dim room with a slanting beam of sunlight from the upper left. Dust motes drift slowly down; the ones inside the beam glint brightly, the rest are faint. A thin layer of dust collects on the floor."></figure>
+<script>
+{
+  const sys = Fx.particles({ matter: "dust", domain: [4, 2.5], count: 1400, seed: 3, ground: 2.42, heap: 6,
+    emitter: { shape: "box", at: [2, 1.1], size: [4, 2], speed: [0, 0.05], spread: 3.14 },
+    forces: { turbulence: { strength: 0.06, scale: 0.5, speed: 0.08 } },
+    light: { from: [0.5, 0], dir: [0.62, 0.78], width: 0.75 } });
+  LAB.handles.sunbeam = demo("sunbeam", {
+    aspect: 1.6,
+    reset: true,
+    state: () => (sys.warm(6), { t: 6 }),
+    controls: [{ key: "beam", label: "Beam", type: "toggle", value: true }],
+    step(dt, s) { s.t += dt; sys.advance(s.t); },
+    draw(g, s, v) {
+      g.rect(0, 0, g.w, g.h, { fill: g.mix("panel", "ink", 0.06) });
+      g.fx.particles(null, { sys, light: v.beam ? undefined : null });
+      g.rect(0, g.h * 2.42 / 2.5, g.w, g.h, { fill: "panel" });
+      g.line([0, g.h * 2.42 / 2.5], [g.w, g.h * 2.42 / 2.5], { stroke: "ink", width: 1.5 });
+    },
+  });
+}
+</script>
+
+<p>Smoke from a chimney, carried by a simulated wind round a building: the particles ride the fluid's velocity, so the plume dips into the wake and is rolled up by the eddies the building sheds:</p>
+<figure class="demo" id="chimney" aria-label="Wind blowing left to right over a low building with a chimney. Faint streamlines bend over the roof; grey smoke from the chimney is pulled down behind the building and rolled into eddies in its wake."></figure>
+<script>
+{
+  const sim = Fx.fluid({ domain: [30, 10], cells: 72, cpuCells: 36, speed: 4, re: 300, obstacles: [{ shape: "rect", at: [9, 8.25], size: [6, 3.5], fixed: true }, { shape: "rect", at: [11.2, 6.0], size: [0.8, 1.0], fixed: true }] });
+  const smoke = Fx.particles({ matter: "smoke", fluid: sim, count: 1500, seed: 2, size: [0.3, 2.6], temperature: [360, 300], opacity: 0.4,
+    emitter: { at: [11.2, 5.35], shape: "disk", radius: 0.25, speed: [0.6, 1.2], dir: -Math.PI / 2, spread: 0.3 } });
+  LAB.handles.chimney = demo("chimney", {
+    aspect: 3,
+    reset: true,
+    state: () => (smoke.warm(9), { t: 9 }),
+    controls: [{ key: "wind", label: "Wind", min: 1, max: 8, step: 0.1, value: 4, unit: " m/s", color: "blue" }],
+    step(dt, s, v) { sim.set({ speed: v.wind }); s.t += dt; smoke.advance(s.t); },
+    draw(g, s, v) {
+      g.fx.fluid(null, { sim, show: "none", streamlines: 14, bodies: true });
+      g.fx.particles(null, { sys: smoke });
+      g.line([0, g.h - 1], [g.w, g.h - 1], { stroke: "ink", width: 1.5 });
+    },
+  });
+}
+</script>
+
 <h2>Light</h2>
 <p>A rocket plume, a glowing filament, sparks, and an arc:</p>
 <figure class="demo" id="glow" aria-label="A rocket plume, a glowing coil, a spray of sparks, and an electric arc."></figure>

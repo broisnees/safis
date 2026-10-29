@@ -1495,7 +1495,7 @@
         if (Math.abs(next - d.zoomTo) < d.zoomTo * 2e-3) { d.s.view.zoom = d.zoomTo; d.zoomEase = false; } else d.s.view.zoom = next;
         d.dirty = true;
       }
-      if (d.spec.step && d.playing && d.visible && !d.dragging && !d.broken) {
+      if (d.spec.step && d.playing && d.visible && (!d.dragging || d.spec.drag?.live) && !d.broken) {
         if (guard(d, "step", () => d.spec.step(dt * d.speed, d.s, d.v, d.handle))) d.dirty = true;
       }
       if (d.pulse && d.visible) d.dirty = true;
