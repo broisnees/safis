@@ -1661,12 +1661,11 @@
     syncThemeButton(b);
     document.body.append(b);
   }
-  // The site index in the sidebar: a button hides it on wide screens (remembered, and
-  // applied before the page paints) and opens it as a drawer on narrow ones.
-  const TOC_KEY = "safis-toc";
-  try { if (!window.__safisHost && localStorage.getItem(TOC_KEY) === "hidden") root.classList.add("safis-toc-hidden"); } catch {}
-  // A page may carry its own index button (a site header does); otherwise one floats in the
-  // corner. Ctrl+B (Cmd+B on a Mac) toggles it too, the way an editor's sidebar does.
+  // The site index: a panel over the page's left edge (styles in src/theme.css), hidden on every
+  // page until the reader asks for it. Resting the pointer at the window's left edge peeks it open
+  // and moving away closes it; the index button or Ctrl+B (Cmd+B on a Mac) opens it until the
+  // button, Escape, or a click outside closes it. A page may carry its own button (a site header
+  // does); otherwise one floats in the corner.
   function addIndexToggle() {
     if (window.__safisHost || !document.querySelector(".page.has-toc .toc")) return;
     let b = document.querySelector(".toc-toggle");
@@ -1681,43 +1680,70 @@
     const toc = document.querySelector(".page.has-toc .toc");
     if (!toc.id) toc.id = "safis-index";
     b.setAttribute("aria-controls", toc.id);
-    const wide = matchMedia("(min-width: 1240px)");
     const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
     const keys = mac ? "⌘B" : "Ctrl+B";
-    const open = () => (wide.matches ? !root.classList.contains("safis-toc-hidden") : root.classList.contains("safis-toc-open"));
+    // How it is open: "" (closed), "peek" (from the window's edge), or "pinned" (button or keys).
+    let mode = "", timer = 0;
+    const later = (fn, ms) => { clearTimeout(timer); timer = setTimeout(fn, ms); };
     const sync = () => {
-      const label = open() ? "Hide the index" : "Show the index";
+      const label = mode ? "Hide the index" : "Show the index";
       b.title = `${label} (${keys})`;
       b.setAttribute("aria-label", label);
       b.setAttribute("aria-keyshortcuts", mac ? "Meta+B" : "Control+B");
-      b.setAttribute("aria-expanded", String(open()));
+      b.setAttribute("aria-expanded", String(!!mode));
     };
-    const close = () => { root.classList.remove("safis-toc-open"); sync(); };
-    const toggle = () => {
-      if (wide.matches) {
-        const hidden = root.classList.toggle("safis-toc-hidden");
-        try { if (hidden) localStorage.setItem(TOC_KEY, "hidden"); else localStorage.removeItem(TOC_KEY); } catch {}
-      } else {
-        root.classList.toggle("safis-toc-open");
-        if (open()) toc.querySelector('[aria-current="page"], a')?.focus({ preventScroll: true });
-      }
+    // The list's ends fade where there is more to scroll to.
+    const ends = () => {
+      toc.classList.toggle("more-above", toc.scrollTop > 2);
+      toc.classList.toggle("more-below", toc.scrollTop + toc.clientHeight < toc.scrollHeight - 2);
+    };
+    toc.addEventListener("scroll", ends, { passive: true });
+    // The current page's link is in view whenever the index opens.
+    const reveal = () => {
+      const cur = toc.querySelector('[aria-current="page"]');
+      if (!cur) return;
+      const top = cur.offsetTop, h = toc.clientHeight;
+      if (top < toc.scrollTop + 48 || top + cur.offsetHeight > toc.scrollTop + h - 48) toc.scrollTop = top - h * 0.35;
+    };
+    const set = (next, { instant = false, focus = false } = {}) => {
+      clearTimeout(timer);
+      if (next === mode) return;
+      const was = mode;
+      mode = next;
+      // A keyboard toggle shows its result at once: no motion for something done this often.
+      if (instant) { toc.classList.add("instant"); requestAnimationFrame(() => requestAnimationFrame(() => toc.classList.remove("instant"))); }
+      if (mode && !was) { reveal(); ends(); }
+      root.classList.toggle("safis-toc-open", !!mode);
+      if (mode && focus) (toc.querySelector('[aria-current="page"]') ?? toc.querySelector("a"))?.focus({ preventScroll: true });
+      if (!mode && toc.contains(document.activeElement)) b.focus({ preventScroll: true });
       sync();
     };
-    b.addEventListener("click", toggle);
-    document.addEventListener("click", e => { if (root.classList.contains("safis-toc-open") && !e.target.closest(".toc, .toc-toggle")) close(); });
+    b.addEventListener("click", () => set(mode ? "" : "pinned", { focus: b.matches(":focus-visible") }));
+    document.addEventListener("click", e => { if (mode && !e.target.closest(".toc, .toc-toggle, .toc-edge")) set(""); });
     document.addEventListener("keydown", e => {
-      if (e.key === "Escape" && root.classList.contains("safis-toc-open")) { close(); b.focus(); return; }
+      if (e.key === "Escape" && mode) { set("", { instant: true }); return; }
       if ((e.key === "b" || e.key === "B") && (mac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey) {
         const t = e.target;
         if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
         e.preventDefault();
-        toggle();
+        set(mode ? "" : "pinned", { instant: true, focus: true });
       }
     });
-    wide.addEventListener("change", close);
-    // The current page's link scrolls into view inside the index.
-    const cur = toc.querySelector('[aria-current="page"]');
-    if (cur && cur.offsetTop > toc.clientHeight * 0.6) toc.scrollTop = cur.offsetTop - toc.clientHeight * 0.35;
+    // Peeking: the pointer has to rest at the edge a moment (passing by on the way to another
+    // window doesn't open it), and leaving the panel closes it after a short grace.
+    const fine = matchMedia("(hover: hover) and (pointer: fine)");
+    const edge = node("div", "toc-edge");
+    edge.setAttribute("aria-hidden", "true");
+    document.body.append(edge);
+    edge.addEventListener("pointerenter", () => { if (fine.matches && !mode) later(() => set("peek"), 160); });
+    const away = e => { if (mode === "peek" && !e.relatedTarget?.closest?.(".toc")) later(() => { if (mode === "peek") set(""); }, 300); };
+    edge.addEventListener("pointerleave", e => { if (!mode) clearTimeout(timer); else away(e); });
+    document.documentElement.addEventListener("pointerleave", away);
+    toc.addEventListener("pointerenter", () => { if (mode === "peek") clearTimeout(timer); });
+    toc.addEventListener("pointerleave", e => {
+      if (mode !== "peek" || e.relatedTarget?.closest?.(".toc-edge, .toc-toggle")) return;
+      later(() => { if (mode === "peek") set(""); }, 300);
+    });
     sync();
   }
   // ---------- Article furniture (styles in src/article.css, reference in references/article.md) ----------

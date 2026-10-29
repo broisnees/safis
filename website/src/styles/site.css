@@ -378,12 +378,8 @@ main.site .search kbd { border: 0; font: 500 12px/1 var(--font-text); color: var
 .sbar ~ .page .toc .site { font: 500 13px/1.2 var(--font-text); color: var(--muted); margin-bottom: 6px; text-decoration: none; }
 .sbar ~ .page .toc .site:hover { color: var(--ink); }
 .sbar ~ .page .toc h2:first-of-type { margin-top: 14px; }
-@media (min-width: 1240px) { .sbar ~ .page.has-toc .toc { padding-top: 40px; } }
-/* On narrow screens the index opens as a drawer just below the bar, whose button closes it. */
-@media (max-width: 1239.98px) {
-  .safis-toc-open .sbar ~ .page.has-toc .toc { top: var(--bar-h); padding-top: 20px; box-shadow: 1px 0 0 var(--rule), 24px 0 60px -24px rgb(0 0 0 / 0.45); }
-  .safis-toc-open .sbar ~ .page.has-toc::after { top: var(--bar-h); }
-}
+/* The index opens below the bar (--safis-bar), whose button opens and closes it. */
+.sbar ~ .page.has-toc .toc { --toc-pad: 22px; }
 /* The footer under an article starts closer: the article already ends with room. */
 .page ~ footer.sfoot { margin-top: 0; }
 

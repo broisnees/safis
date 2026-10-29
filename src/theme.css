@@ -29,6 +29,7 @@
   --chip-hover: color-mix(in srgb, var(--ink) 10%, transparent);
   --chip-line: color-mix(in srgb, var(--ink) 9%, transparent);
   --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --font-serif: "Safis Serif", "Iowan Old Style", Charter, "Palatino Linotype", Georgia, serif;
   --font-display: "Safis Display", "Safis Serif", "Iowan Old Style", Georgia, serif;
   --font-text: "Safis Sans", "Source Sans 3", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -94,62 +95,68 @@ body {
 }
 ::selection { background: color-mix(in srgb, var(--ink) 18%, transparent); }
 
-/* Layout: optional site index on the left, article in the middle. A site that puts a bar
-   above the page sets --safis-bar to its height, and the index sits below it. */
+/* Layout: the article in the middle. A site that puts a bar above the page sets --safis-bar to
+   its height, and the index opens below it. */
 .page { position: relative; padding: 0 20px; }
 main { max-width: var(--measure); margin: 0 auto; padding: 88px 0 128px; }
-.toc { display: none; }
-@media (min-width: 1240px) {
-  .page.has-toc { display: grid; grid-template-columns: 264px 1fr; }
-  .page.has-toc main { margin: 0 auto; transform: translateX(-70px); }
-  .toc {
-    display: block;
-    position: sticky; top: var(--safis-bar, 0px); align-self: start;
-    max-height: calc(100vh - var(--safis-bar, 0px)); overflow-y: auto;
-    padding: 56px 16px 48px 4px;
-    font: 14.5px/1.4 var(--font-text);
-  }
+/* The site index is a panel over the page's left edge, hidden until the reader asks for it:
+   resting the pointer at the window's left edge peeks it open (it closes again when the pointer
+   leaves), and the index button or Ctrl+B / Cmd+B opens it until the button, Escape, or a click
+   outside closes it. Only transform and opacity move, so opening it never lays out the article;
+   it comes in quickly and leaves a little quicker. */
+.page.has-toc .toc {
+  position: fixed; z-index: 30; inset-block: var(--safis-bar, 0px) 0; inset-inline-start: 0;
+  width: min(300px, 86vw); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+  /* Room above the list for the corner button; a site bar that carries the button sets less. */
+  --toc-pad: 64px;
+  padding: var(--toc-pad) 14px 40px; font: 14.5px/1.4 var(--font-text);
+  background: var(--bg); box-shadow: 1px 0 0 var(--rule), 18px 0 48px -22px rgb(0 0 0 / 0.45);
+  transform: translateX(calc(-100% - 24px)); opacity: 0; visibility: hidden;
+  transition: transform 180ms var(--ease-drawer), opacity 140ms ease, visibility 0s linear 180ms;
 }
-/* The index scrolls on its own with a slim bar that shows while the pointer is over it. */
-.toc { scrollbar-width: thin; scrollbar-color: transparent transparent; scrollbar-gutter: stable; overscroll-behavior: contain; }
-.toc:hover, .toc:focus-within { scrollbar-color: var(--faint) transparent; }
-/* A button in the top-left corner hides the index on wide screens and opens it as a drawer on
-   narrow ones; Ctrl+B / Cmd+B does the same. A site header can carry the button instead. */
+.page.has-toc .toc::-webkit-scrollbar { display: none; }
+.safis-toc-open .page.has-toc .toc { transform: none; opacity: 1; visibility: visible; transition: transform 240ms var(--ease-drawer), opacity 160ms ease, visibility 0s; }
+/* Opened or closed from the keyboard: no motion. */
+.page.has-toc .toc.instant { transition: none; }
+/* The list scrolls without a bar; its ends fade into the panel where there is more to see. */
+.page.has-toc .toc::before, .page.has-toc .toc::after {
+  content: ""; position: sticky; z-index: 1; display: block; height: 28px; pointer-events: none;
+  opacity: 0; transition: opacity 150ms ease;
+}
+.page.has-toc .toc::before { top: calc(-1 * var(--toc-pad)); margin: calc(-1 * var(--toc-pad)) -14px calc(var(--toc-pad) - 28px); background: linear-gradient(var(--bg), transparent); }
+.page.has-toc .toc::after { bottom: -40px; margin: -28px -14px 0; background: linear-gradient(transparent, var(--bg)); }
+.page.has-toc .toc.more-above::before, .page.has-toc .toc.more-below::after { opacity: 1; }
+/* The strip along the window's left edge that peeks the index open; a short handle shows where
+   it is while the pointer rests there. Pointers that can't hover use the button. */
+.toc-edge { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .toc-edge { display: block; position: fixed; z-index: 29; inset-block: var(--safis-bar, 0px) 0; inset-inline-start: 0; width: 12px; }
+  .toc-edge::after { content: ""; position: absolute; top: 50%; inset-inline-start: 3px; width: 3px; height: 44px; margin-top: -22px; border-radius: 3px; background: var(--faint); opacity: 0; transition: opacity 150ms ease; }
+  .toc-edge:hover::after { opacity: 1; }
+}
+/* On narrow screens the open index dims the page behind it. */
+@media (max-width: 1239.98px) {
+  .page.has-toc::after { content: ""; position: fixed; inset: var(--safis-bar, 0px) 0 0; z-index: 29; background: rgb(0 0 0 / 0.32); opacity: 0; pointer-events: none; transition: opacity 180ms ease; }
+  .safis-toc-open .page.has-toc::after { opacity: 1; pointer-events: auto; }
+}
+/* The index button: in the top-left corner, or in a site header that carries it. */
 .toc-toggle {
-  position: fixed; top: 14px; inset-inline-start: 14px; z-index: 16;
+  position: fixed; top: 14px; inset-inline-start: 14px; z-index: 31;
   width: 36px; height: 36px; display: grid; place-items: center; padding: 0;
   border: 1px solid var(--rule); border-radius: 50%; background: color-mix(in srgb, var(--panel) 92%, transparent);
   color: var(--muted); cursor: pointer; box-shadow: var(--shadow);
-  transition: scale 0.15s, color 0.15s, background-color 0.15s;
+  transition: transform 150ms var(--ease-out), color 150ms ease, background-color 150ms ease;
 }
 .toc-toggle svg { width: 16px; height: 16px; }
-.toc-toggle:active { scale: 0.96; }
+.toc-toggle:active { transform: scale(0.96); }
 .toc-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: hover) { .toc-toggle:hover { color: var(--ink); } }
-@media (min-width: 1240px) {
-  .page.has-toc { transition: grid-template-columns 0.4s var(--ease-out); }
-  .page.has-toc main { transition: transform 0.4s var(--ease-out); }
-  .page.has-toc .toc { transition: opacity 0.22s var(--ease-out), translate 0.4s var(--ease-out), visibility 0.4s; }
-  .safis-toc-hidden .page.has-toc { grid-template-columns: 0 1fr; }
-  .safis-toc-hidden .page.has-toc main { transform: none; }
-  .safis-toc-hidden .page.has-toc .toc { opacity: 0; visibility: hidden; translate: -28px 0; overflow: hidden; }
-}
-@media (max-width: 1239.98px) {
-  .safis-toc-open .page.has-toc .toc {
-    display: block; position: fixed; inset: 0 auto 0 0; z-index: 30; width: min(320px, 86vw); overflow-y: auto;
-    padding: 64px 16px 40px 18px; font: 15px/1.45 var(--font-text);
-    background: var(--bg); box-shadow: 0 0 0 1px var(--rule), 0 24px 60px -12px rgb(0 0 0 / 0.45);
-    animation: toc-in 0.32s var(--ease-out);
-  }
-  .safis-toc-open .page.has-toc::after { content: ""; position: fixed; inset: 0; z-index: 29; background: rgb(0 0 0 / 0.32); backdrop-filter: blur(2px); animation: toc-fade 0.3s ease; }
-}
-@keyframes toc-in { from { translate: -100% 0; } }
-@keyframes toc-fade { from { opacity: 0; } }
+.toc-toggle[aria-expanded="true"] { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
-  .safis-toc-open .page.has-toc .toc, .safis-toc-open .page.has-toc::after { animation: none; }
-  .page.has-toc, .page.has-toc main, .page.has-toc .toc { transition: none !important; }
+  .page.has-toc .toc { transform: none; transition: opacity 120ms ease, visibility 0s linear 120ms; }
+  .safis-toc-open .page.has-toc .toc { transition: opacity 120ms ease, visibility 0s; }
 }
-@media print { .toc-toggle { display: none !important; } }
+@media print { .toc-toggle, .toc-edge, .page.has-toc .toc { display: none !important; } }
 .toc a { display: block; padding: 5px 10px; margin: 1px 0; border-radius: 7px; color: var(--muted); text-decoration: none; text-wrap: pretty; transition: background-color 0.15s, color 0.15s; }
 .toc a:hover { color: var(--ink); background: var(--chip); }
 .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -161,7 +168,6 @@ main { max-width: var(--measure); margin: 0 auto; padding: 88px 0 128px; }
 .toc ul { list-style: none; margin: 0; padding: 0; }
 .backlink { display: inline-block; margin-bottom: 36px; font: 15px/1.4 var(--font-serif); font-style: italic; color: var(--muted); text-decoration: none; }
 .backlink:hover { color: var(--ink); }
-@media (min-width: 1240px) { .has-toc .backlink { display: none; } }
 
 .skip { position: absolute; inset-inline-start: 16px; top: -48px; z-index: 20; padding: 8px 14px; border-radius: 6px; background: var(--ink); color: var(--bg); font: 500 15px/1.2 var(--font-text); text-decoration: none; }
 .skip:focus { top: 12px; }
