@@ -303,7 +303,7 @@ figure.demo.wide { width: min(calc(100vw - 40px), var(--wide)); margin-left: 50%
 /* Loading. Until its kit loads, a figure holds its place with a spinner; once live, its stage
    shows one until the first frame is drawn, and a quiet chip while a 3D view is still refining
    or a simulation is catching up (shown only if that lasts, so quick devices never see it). */
-@keyframes safis-spin { to { rotate: 1turn; } }
+@keyframes safis-spin { to { transform: rotate(1turn); } }
 figure.demo:not(.is-live) { position: relative; }
 figure.demo:not(.is-live)::before { content: ""; display: block; aspect-ratio: 1.6; border-radius: 4px; background: color-mix(in srgb, var(--panel) 70%, transparent); }
 figure.demo:not(.is-live)::after, .stage.loading::after, .stage.busy::after {

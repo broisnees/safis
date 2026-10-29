@@ -925,15 +925,18 @@ void main() {
     const gl = R.gl;
     let P = null;
     try {
-      const p = gl.createProgram();
+      // Compile both and link before asking how it went, so the driver needn't finish each in turn.
+      const p = gl.createProgram(), shaders = [];
       for (const [type, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, HEAD + FS[name]]]) {
         const s = gl.createShader(type);
         gl.shaderSource(s, src); gl.compileShader(s);
-        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
-        gl.attachShader(p, s);
+        gl.attachShader(p, s); shaders.push(s);
       }
       gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+        for (const s of shaders) if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+        throw new Error(gl.getProgramInfoLog(p));
+      }
       P = { p, u: {} };
       for (let i = 0; i < gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i++) {
         const a = gl.getActiveUniform(p, i);
@@ -1464,11 +1467,12 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
     gl.blitFramebuffer(0, 0, A.w, A.h, 0, 0, B.w, B.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
   }
-  // Inside a figure's frame (the runtime sets __safisFrame), stepping shares a budget of about 10 ms
-  // a frame across every sim on the page, so warming one up to t = 9 s, or catching up after the
-  // tab was hidden, runs over several frames instead of freezing the page; the sim reports
-  // `behind` until it gets there. Called from anywhere else, or while the page checker runs,
-  // advance(t) gets all the way to t at once.
+  // Inside a figure's frame (the runtime sets __safisFrame), a big jump (a warm-up to t = 9 s, or
+  // catching up after the tab was hidden) shares a budget of about 10 ms a frame across every sim
+  // on the page, so it runs over several frames instead of freezing the page; the sim reports
+  // `behind` until it gets there. A frame's ordinary steps (under 0.1 s of sim time) always run in
+  // full, so a playing sim never drifts. Called from anywhere else, or while the page checker
+  // runs, advance(t) gets all the way to t at once.
   const STEP_BUDGET = 10;
   let budgetFrom = -1e9;
   const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -1489,7 +1493,7 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
       advance(t) {
         t = num(t, 0);
         if (t < S.time - 1e-9) { if (S.chk && t >= S.chk.time - 1e-9) { load(S.chk); S.time = S.chk.time; } else restart(); }
-        const end = stepDeadline();
+        const end = t - S.time > 0.1 ? stepDeadline() : Infinity;
         S.target = t;
         for (let n = 0; S.time + S.dt <= t + 1e-9 && n < 1e5; n++) {
           mark();
@@ -1878,8 +1882,9 @@ void main() {
     }
     // The velocity grid the CPU reads (arrows, particles, probes): GPU readback or the CPU arrays.
     // Without WebGPU the readback goes through a pixel buffer and a fence, so the CPU picks it up
-    // when the GPU is done instead of waiting on every queued step; the field is then at most two
-    // steps old. It stays exact while the page checker runs and when particles ride the fluid.
+    // when the GPU is done instead of waiting on every queued step; the field is then about a
+    // frame old, which arrows, probes and the picture don't show. It stays exact while the page
+    // checker runs and when particles ride the fluid.
     let rbq = null;
     function readAsync() {
       const gl = R.gl;
@@ -1900,7 +1905,7 @@ void main() {
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         rbq.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); rbq.at = serial; gl.flush();
       }
-      return rbAt >= 0 && serial - rbAt <= 2;
+      return rbAt >= 0;
     }
     function field() {
       if (rbAt === serial) return rb;
