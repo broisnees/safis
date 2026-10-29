@@ -1,33 +1,20 @@
 ---
 import Mark from "./Mark.astro";
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+const COLS: [string, [string, string][]][] = [
+  ["Site", [[`${base}what-it-makes/`, "What it makes"], [`${base}how-it-works/`, "How it works"], [`${base}usage/`, "Usage"], [`${base}examples/`, "Examples"]]],
+  ["Project", [["https://github.com/broisnees/safis", "GitHub"], ["https://github.com/broisnees/safis/tree/main/skills/safis/references", "References"], ["https://github.com/broisnees/safis/blob/main/CONTRIBUTING.md", "Contributing"], ["https://github.com/broisnees/safis/blob/main/LICENSE", "MIT license"]]],
+  ["Packages", [["https://www.npmjs.com/package/@safis/core", "@safis/core"], ["https://www.npmjs.com/package/@safis/react", "@safis/react"], ["https://www.npmjs.com/package/@safis/vue", "@safis/vue"], ["https://www.npmjs.com/package/@safis/svelte", "@safis/svelte"], ["https://www.npmjs.com/package/@safis/astro", "@safis/astro"]]],
+];
 ---
 <footer class="sfoot">
   <div class="wrap">
     <div class="grid">
       <div class="about">
-        <a class="brand" href={base}><Mark id="mk-foot" />Safis</a>
+        <a class="brand" href={base} aria-label="Safis home"><Mark id="mk-foot" />Safis</a>
         <p>An agent skill that writes long-form interactive explainers: prose that builds an idea step by step, with figures the reader moves.</p>
       </div>
-      <div><h4>Site</h4><ul>
-        <li><a href={`${base}what-it-makes/`}>What it makes</a></li>
-        <li><a href={`${base}how-it-works/`}>How it works</a></li>
-        <li><a href={`${base}usage/`}>Usage</a></li>
-        <li><a href={`${base}examples/`}>Examples</a></li>
-      </ul></div>
-      <div><h4>Project</h4><ul>
-        <li><a href="https://github.com/broisnees/safis">GitHub</a></li>
-        <li><a href="https://github.com/broisnees/safis/tree/main/skills/safis/references">References</a></li>
-        <li><a href="https://github.com/broisnees/safis/blob/main/CONTRIBUTING.md">Contributing</a></li>
-        <li><a href="https://github.com/broisnees/safis/blob/main/LICENSE">MIT license</a></li>
-      </ul></div>
-      <div><h4>Packages</h4><ul>
-        <li><a href="https://www.npmjs.com/package/@safis/core">@safis/core</a></li>
-        <li><a href="https://www.npmjs.com/package/@safis/react">@safis/react</a></li>
-        <li><a href="https://www.npmjs.com/package/@safis/vue">@safis/vue</a></li>
-        <li><a href="https://www.npmjs.com/package/@safis/svelte">@safis/svelte</a></li>
-        <li><a href="https://www.npmjs.com/package/@safis/astro">@safis/astro</a></li>
-      </ul></div>
+      {COLS.map(([h, links]) => <nav aria-label={h}><h2>{h}</h2><ul>{links.map(([href, label]) => <li><a href={href}>{label}</a></li>)}</ul></nav>)}
     </div>
     <div class="fine"><span>Every page on this site was written by the skill and checked in a headless browser.</span><span>Follows the <a href="https://agentskills.io">Agent Skills</a> format.</span></div>
   </div>

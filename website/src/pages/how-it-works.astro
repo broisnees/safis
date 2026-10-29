@@ -3,16 +3,19 @@ import Site from "../layouts/Site.astro";
 import CodeBlock from "../components/CodeBlock.astro";
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 const spec = `demo("swing", {
-  controls: [{ key: "L", label: "Length", min: 0.2, max: 2, value: 1, unit: "m" }],
+  controls: [
+    { key: "L", label: "Length", min: 0.2, max: 2, value: 1, unit: "m" },
+  ],
   state: () => ({ th: 0.5, w: 0 }),
   step(dt, s, v) {
     s.w -= (9.81 / v.L) * Math.sin(s.th) * dt;
     s.th += s.w * dt;
   },
   draw(g, s, v) {
-    const P = [g.w / 2 + 160 * v.L * Math.sin(s.th), 30 + 160 * v.L * Math.cos(s.th)];
-    g.line([g.w / 2, 30], P, { stroke: "muted" });
-    g.circle(P, 14, { fill: "blue" });
+    const x = g.w / 2 + 160 * v.L * Math.sin(s.th);
+    const y = 30 + 160 * v.L * Math.cos(s.th);
+    g.line([g.w / 2, 30], [x, y], { stroke: "muted" });
+    g.circle([x, y], 14, { fill: "blue" });
   },
 });`;
 const plan = `Question: What happens in the jaw joint when it locks?
@@ -67,123 +70,109 @@ const KITS = [
 <Site title="How it works · Safis" description="How the Safis skill plans, builds, and checks an interactive explainer: the pipeline, the figure spec, what the self-check and explorer catch, and how faults get fixed." current="how-it-works">
   <header class="phead">
     <div class="wrap">
-      <p class="eyebrow">How it works</p>
-      <h1>Planned like an article, <em>checked</em> like software.</h1>
+      <h1>Planned like an article, checked like software</h1>
       <p class="lede-x">The skill gives your agent a page runtime, a guide to writing and to figures, and scripts that drive a real browser. No figure ships until it has been played with.</p>
-      <div class="abstract-x">
-        <b>In brief</b>
-        <p>A page answers one question. Every figure draws from one shared model, so a side view and a 3D view always agree. The agent writes the page a few sections at a time, then two scripts load it in headless Chrome: one runs the page's own self-check at desktop and phone widths, the other moves every control and turns every view into contact sheets the agent reads. What looks wrong is traced to its layer and fixed at the cause.</p>
-      </div>
+      <nav class="toc-x" aria-label="On this page"><a href="#ideas">Ideas</a><a href="#pipeline">Pipeline</a><a href="#spec">The spec</a><a href="#checks">Checks</a><a href="#fix">Fixing</a><a href="#runtime">Runtime</a></nav>
+      <p class="brief-x">A page answers one question. Every figure draws from one shared model, so a side view and a 3D view always agree. The agent writes the page a few sections at a time, then two scripts load it in headless Chrome: one runs the page's own self-check at desktop and phone widths, the other moves every control and turns every view into contact sheets the agent reads. What looks wrong is traced to its layer and fixed at the cause.</p>
     </div>
   </header>
 
-  <section class="sec">
-    <div class="wrap"><div class="sec-grid">
-      <div class="sec-num"><b>1</b>Ideas</div>
-      <div>
-        <h2>What makes a good interactive article.</h2>
-        <p class="sub">Four rules the skill holds every page to, borrowed from the best long-form explorable explanations.</p>
-        <div class="principles">
-          <div><h3>One idea per figure</h3><p>Each figure teaches one thing, discovered by moving something. About one figure for every 130 to 180 words of text.</p></div>
-          <div><h3>Prose and figures take turns</h3><p>A sentence says what to try and ends with a colon. The figure lets the reader try it. The next paragraph names what they saw.</p></div>
-          <div><h3>Neutral objects, colored subjects</h3><p>Everything is drawn in a calm neutral. Only the parts under discussion get color, and the same color names them in the text.</p></div>
-          <div><h3>Real models</h3><p>Mechanisms are modeled and actually move, cut open, explode, and turn. Physics and geometry are computed from real numbers, not faked.</p></div>
-        </div>
+  <section class="sec" id="ideas" style="padding-top: var(--sp-8)">
+    <div class="wrap stack">
+      <h2>What makes a good interactive article</h2>
+      <p class="sub">Four rules the skill holds every page to, borrowed from the best long-form explorable explanations.</p>
+      <div class="tiles-x">
+        <div><h3>One idea per figure</h3><p>Each figure teaches one thing, discovered by moving something. About one figure for every 130 to 180 words of text.</p></div>
+        <div><h3>Prose and figures take turns</h3><p>A sentence says what to try and ends with a colon. The figure lets the reader try it. The next paragraph names what they saw.</p></div>
+        <div><h3>Neutral objects, colored subjects</h3><p>Everything is drawn in a calm neutral. Only the parts under discussion get color, and the same color names them in the text.</p></div>
+        <div><h3>Real models</h3><p>Mechanisms are modeled and actually move, cut open, explode, and turn. Physics and geometry are computed from real numbers, not faked.</p></div>
       </div>
-    </div></div>
+    </div>
   </section>
 
-  <section class="sec" id="pipeline">
-    <div class="wrap"><div class="sec-grid">
-      <div class="sec-num"><b>2</b>Pipeline</div>
-      <div>
-        <h2>From a question to a checked page.</h2>
-        <p class="sub">Eight steps, in order. The long ones repeat: a page is built in passes and checked after each.</p>
-        <ol class="pipeline">
-          {STEPS.map(([t, d, how]) => <li><div><h3>{t}</h3><p>{d}</p></div><div class="how"><code>{how}</code></div></li>)}
-        </ol>
-        <div class="split" style="margin-top: 40px">
-          <div class="body-text"><h3>The plan comes first</h3><p>Before any figure is drawn, the agent writes the plan in the conversation: the question, the shared model, and one line per figure. A plan that lands far below the target figure count usually has paragraphs doing a figure's job.</p></div>
-          <CodeBlock code={plan} lang="text" title="plan" />
-        </div>
+  <section class="zone" id="pipeline">
+    <div class="wrap stack">
+      <h2>From a question to a checked page</h2>
+      <p class="sub">Eight steps, in order. The long ones repeat: a page is built in passes and checked after each.</p>
+      <ol class="steps-x">
+        {STEPS.map(([t, d, how]) => <li><div><h3>{t}</h3><p>{d}</p><p class="how"><code>{how}</code></p></div></li>)}
+      </ol>
+      <div class="split" style="margin-top: var(--sp-9)">
+        <div class="body-text"><h3>The plan comes first</h3><p>Before any figure is drawn, the agent writes the plan in the conversation: the question, the shared model, and one line per figure. A plan that lands far below the target figure count usually has paragraphs doing a figure's job.</p></div>
+        <CodeBlock code={plan} lang="text" title="plan" />
       </div>
-    </div></div>
+    </div>
   </section>
 
   <section class="sec" id="spec">
-    <div class="wrap"><div class="sec-grid">
-      <div class="sec-num"><b>3</b>Spec</div>
-      <div class="split">
-        <div class="body-text">
-          <h2>A figure is a small spec.</h2>
-          <p>Controls, state, a step function for anything that moves, and a draw function. Colors are asked for by name, so a figure follows light and dark mode and matches the words in the text.</p>
-          <ul class="checks">
-            <li><b>Controls</b> that fit the quantity: sliders with marks, knobs, steppers, XY pads, switches, presets</li>
-            <li><b>Dragging</b> with grab handles, hover readouts, and keyboard control</li>
-            <li><b>Prose that drives figures</b>: numbers the reader drags, “try this” links, colored terms that light their part</li>
-            <li><b>3D views</b> that turn, zoom, cut open, and explode</li>
-            <li><b>A self-check</b> built in, which the scripts run</li>
-          </ul>
-        </div>
-        <CodeBlock code={spec} title="pendulum.js" />
+    <div class="wrap split">
+      <CodeBlock code={spec} title="pendulum.js" />
+      <div class="body-text">
+        <h2>A figure is a small spec</h2>
+        <p>Controls, state, a step function for anything that moves, and a draw function. Colors are asked for by name, so a figure follows light and dark mode and matches the words in the text.</p>
+        <ul class="checks sm">
+          <li><b>Controls</b> that fit the quantity: sliders with marks, knobs, steppers, XY pads, switches, presets</li>
+          <li><b>Dragging</b> with grab handles, hover readouts, and keyboard control</li>
+          <li><b>Prose that drives figures</b>: numbers the reader drags, “try this” links, colored terms that light their part</li>
+          <li><b>3D views</b> that turn, zoom, cut open, and explode</li>
+          <li><b>A self-check</b> built in, which the scripts run</li>
+        </ul>
       </div>
-    </div></div>
+    </div>
   </section>
 
   <section class="sec" id="checks">
-    <div class="wrap"><div class="sec-grid">
-      <div class="sec-num"><b>4</b>Checks</div>
-      <div>
-        <h2>What gets checked, every time.</h2>
-        <p class="sub">Both scripts need only Node 22 and Chrome, Chromium, or Edge. Without them, add <span class="chip-code">?check</span> to a page's address for the same self-check in a panel.</p>
-        <div class="cols-2">
-          <div>
-            <h3><code>verify.mjs</code>: the page's own self-check</h3>
-            <ul class="checks">{VERIFY.map(([b, t]) => <li><b>{b}</b>{/^[:,]/.test(t) ? t : ` ${t}`}</li>)}</ul>
-            <p class="body-text" style="margin-top: 16px; font-size: 15px; color: var(--muted)">It also saves screenshots of every figure in light, dark, and on a phone, for a visual pass.</p>
-          </div>
-          <div>
-            <h3><code>explore.mjs</code>: plays with every figure</h3>
-            <ul class="checks">
-              <li><b>Sweeps</b> each slider across its range</li>
-              <li><b>Flips</b> every toggle and presses every button and preset</li>
-              <li><b>Turns</b> each 3D view to four sides</li>
-              <li><b>Steps</b> animations forward in time</li>
-              <li><b>One contact sheet</b> per figure, which the agent reads against the sentence before it</li>
-            </ul>
-            <p class="body-text" style="margin-top: 16px; font-size: 15px; color: var(--muted)">The question for each sheet: would a reader doing what the sentence says see what the next paragraph claims, at the values it claims?</p>
-          </div>
+    <div class="wrap stack">
+      <h2>What gets checked, every time</h2>
+      <p class="sub">Both scripts need only Node 22 and Chrome, Chromium, or Edge. Without them, add <code>?check</code> to a page's address for the same self-check in a panel.</p>
+      <div class="cols-2">
+        <div>
+          <h3><code>verify.mjs</code>: the page's own self-check</h3>
+          <ul class="checks sm">{VERIFY.map(([b, t]) => <li><b>{b}</b>{/^[:,]/.test(t) ? t : ` ${t}`}</li>)}</ul>
+          <p class="aside-x">It also saves screenshots of every figure in light, dark, and on a phone, for a visual pass.</p>
+        </div>
+        <div>
+          <h3><code>explore.mjs</code>: plays with every figure</h3>
+          <ul class="checks sm">
+            <li><b>Sweeps</b> each slider across its range</li>
+            <li><b>Flips</b> every toggle and presses every button and preset</li>
+            <li><b>Turns</b> each 3D view to four sides</li>
+            <li><b>Steps</b> animations forward in time</li>
+            <li><b>One contact sheet</b> per figure, which the agent reads against the sentence before it</li>
+          </ul>
+          <p class="aside-x">The question for each sheet: would a reader doing what the sentence says see what the next paragraph claims, at the values it claims?</p>
         </div>
       </div>
-    </div></div>
+    </div>
   </section>
 
   <section class="sec" id="fix">
-    <div class="wrap"><div class="sec-grid">
-      <div class="sec-num"><b>5</b>Fixing</div>
-      <div>
-        <h2>Fix the cause, not the symptom.</h2>
-        <p class="sub">Every fault is reproduced, traced to one of four layers, fixed there, and checked again.</p>
-        <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>Layer</th><th>What goes wrong</th><th>The fix</th></tr></thead>
-          <tbody>{LAYERS.map(([a, b, c]) => <tr><td>{a}</td><td>{b}</td><td>{c}</td></tr>)}</tbody>
-        </table></div>
-      </div>
-    </div></div>
+    <div class="wrap stack">
+      <h2>Fix the cause, not the symptom</h2>
+      <p class="sub">Every fault is reproduced, traced to one of four layers, fixed there, and checked again.</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Layer</th><th>What goes wrong</th><th>The fix</th></tr></thead>
+        <tbody>{LAYERS.map(([a, b, c]) => <tr><td>{a}</td><td>{b}</td><td>{c}</td></tr>)}</tbody>
+      </table></div>
+    </div>
   </section>
 
   <section class="sec" id="runtime">
-    <div class="wrap"><div class="sec-grid">
-      <div class="sec-num"><b>6</b>Runtime</div>
-      <div>
-        <h2>What a page is made of.</h2>
-        <p class="sub">A page is one HTML file with its fonts and runtime inside, and it opens from disk. On this site the runtime is split into kits, and a page downloads only the kits its figures use, so a math page never loads the 3D engine.</p>
-        <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>Kit</th><th>What it does</th><th>Loaded for</th></tr></thead>
-          <tbody>{KITS.map(([a, b, c]) => <tr><td><code>{a}</code></td><td>{b}</td><td>{c}</td></tr>)}</tbody>
-        </table></div>
-        <div class="ctas"><a class="btn solid" href={`${base}usage/`}>Use it <span class="arr">→</span></a><a class="btn" href={`${base}what-it-makes/`}>See what it makes</a></div>
-      </div>
-    </div></div>
+    <div class="wrap stack">
+      <h2>What a page is made of</h2>
+      <p class="sub">A page is one HTML file with its fonts and runtime inside, and it opens from disk. On this site the runtime is split into kits, and a page downloads only the kits its figures use, so a math page never loads the 3D engine.</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Kit</th><th>What it does</th><th>Loaded for</th></tr></thead>
+        <tbody>{KITS.map(([a, b, c]) => <tr><td><code>{a}</code></td><td>{b}</td><td>{c}</td></tr>)}</tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap cta-x">
+      <h2>Try it on a question of yours</h2>
+      <p>One command installs it in any agent that reads skills.</p>
+      <div class="ctas"><a class="btn solid" href={`${base}usage/`}>Use it</a><a class="btn" href={`${base}what-it-makes/`}>See what it makes</a></div>
+    </div>
   </section>
 </Site>

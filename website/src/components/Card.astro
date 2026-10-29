@@ -7,12 +7,10 @@ const loading = eager ? "eager" : "lazy";
 ---
 <a class="ecard" href={`${base}${p.slug}/`} data-cat={p.category} data-text={`${p.title} ${p.dek} ${p.category}`.toLowerCase()}>
   <span class="shot">
-    {p.thumb ? <img class="thumb-light" src={`${base}${p.slug}/thumb.webp`} alt="" width="640" height="400" loading={loading} decoding="async" /> : <span class="noimg"></span>}
+    {p.thumb ? <img class="thumb-light" src={`${base}${p.slug}/thumb.webp`} alt="" width="640" height="400" loading={loading} decoding="async" /> : <span class="noimg"><span>{p.category}</span></span>}
     {p.thumbDark && <img class="thumb-dark" src={`${base}${p.slug}/thumb-dark.webp`} alt="" width="640" height="400" loading={loading} decoding="async" />}
-    {isNew && <b class="badge-new">New</b>}
   </span>
-  <span class="cat-x">{p.category}</span>
   <span class="t">{p.title}</span>
   <span class="d">{p.dek}</span>
-  <span class="m">{p.figures} figures · {p.minutes} min read</span>
+  <span class="m">{isNew && <Fragment><span class="new">New</span> · </Fragment>}{p.category} · {p.figures} figures · {p.minutes} min</span>
 </a>

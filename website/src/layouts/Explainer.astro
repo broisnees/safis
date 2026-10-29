@@ -1,15 +1,15 @@
 ---
 // One explainer: the site bar (with the index button, also Ctrl+B / Cmd+B), then the same
-// layout as a standalone page: the sidebar index, the header, and the article.
+// layout as a standalone page (the sidebar index, the header, and the article), then the footer.
 import Base from "./Base.astro";
 import SiteHeader from "../components/SiteHeader.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import { fieldsOf } from "../lib/categories";
 import pages from "../generated/pages.json";
 interface Props { page: (typeof pages)[number]; article: string }
 const { page, article } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
-const ORDER = ["Body", "Biology", "Chemistry", "Physics", "Machines", "Engineering", "Earth & Space", "Computing", "AI", "Math"];
-const rank = (c: string) => (ORDER.indexOf(c) + 1 || 99);
-const cats = [...new Set(pages.map(p => p.category))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+const cats = fieldsOf(pages);
 const inCat = (c: string) => pages.filter(p => p.category === c).sort((a, b) => a.title.localeCompare(b.title));
 ---
 <Base title={`${page.title} · Safis`} description={page.dek} slug={page.slug} kits={page.kits} figures ogImage={page.thumb ? `${base}${page.slug}/thumb.webp` : undefined}>
@@ -26,4 +26,5 @@ const inCat = (c: string) => pages.filter(p => p.category === c).sort((a, b) => 
 <article set:html={article}></article>
 </main>
 </div>
+<SiteFooter />
 </Base>

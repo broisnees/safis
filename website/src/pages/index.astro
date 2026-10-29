@@ -1,119 +1,57 @@
 ---
-// The landing page: the pitch, a live figure, the four doors into the site, the newest
+// The landing page: one line, two actions, and a live figure; then the numbers, the newest
 // explainers, and the install command.
 import Site from "../layouts/Site.astro";
 import Card from "../components/Card.astro";
 import Cmd from "../components/Cmd.astro";
-import CodeBlock from "../components/CodeBlock.astro";
 import pages from "../generated/pages.json";
 import hero from "../figures/hero.html?raw";
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
-const newest = [...pages].sort((a, b) => b.added - a.added).slice(0, 6);
-const newCut = newest[2]?.added ?? 0;
+const newest = [...pages].sort((a, b) => b.added - a.added).slice(0, 3);
 const figures = pages.reduce((n, p) => n + p.figures, 0);
 const cats = new Set(pages.map(p => p.category)).size;
 const install = "npx skills add broisnees/safis -g";
-const spec = `demo("swing", {
-  controls: [{ key: "L", label: "Length", min: 0.2, max: 2, value: 1, unit: "m" }],
-  state: () => ({ th: 0.5, w: 0 }),
-  step(dt, s, v) {
-    s.w -= (9.81 / v.L) * Math.sin(s.th) * dt;
-    s.th += s.w * dt;
-  },
-  draw(g, s, v) {
-    const P = [g.w / 2 + 160 * v.L * Math.sin(s.th), 30 + 160 * v.L * Math.cos(s.th)];
-    g.line([g.w / 2, 30], P, { stroke: "muted" });
-    g.circle(P, 14, { fill: "blue" });
-  },
-});`;
-const TILES = [
-  ["what-it-makes", "01", "What it makes", "2D and 3D figures, machines from real parts, smoke and flame, maps, optics, sound, and math."],
-  ["how-it-works", "02", "How it works", "Planned like an article, then checked like software: every figure is played with in a real browser."],
-  ["usage", "03", "Usage", "One command to install, then ask. How to word a prompt, and what each kind of request gets you."],
-  ["examples", "04", "Examples", `${pages.length} explainers in ${cats} fields, every one written by the skill from a single prompt.`],
-] as const;
 ---
 <Site figures title="Safis · Interactive explainers your agent writes" description="An agent skill that writes long-form interactive explainers: prose that builds the idea step by step, with live 2D, 3D, map, optics, and sound figures. One HTML file that opens from disk." kits={["engine3d", "parts3d"]} slug="home" ogImage={`${base}rocket-engine/thumb.webp`}>
-  <section class="hero">
-    <div class="wrap">
-      <p class="eyebrow">An agent skill for interactive explainers</p>
-      <h1>Explain how anything works, with figures people can <em>touch</em>.</h1>
-      <p class="lede-x">Ask your agent how a jaw joint locks, why there are two tides, or how a rocket engine makes thrust. Safis writes a long-form page that builds the idea step by step, with live figures the reader drags, turns, cuts open, and hears.</p>
-      <Cmd cmd={install} />
+  <section class="hero-x">
+    <div class="wrap hero-copy">
+      <p class="label-x"><span>Agent skill</span> Interactive explainers</p>
+      <h1>Explain how anything works</h1>
+      <p class="lede-x">Your agent writes the page. Your reader moves the figures.</p>
       <div class="ctas">
-        <a class="btn solid" href={`${base}examples/`}>Read the explainers <span class="arr">→</span></a>
-        <a class="btn" href={`${base}usage/`}>How to use it</a>
-      </div>
-      <p class="agents">Works in <b>Claude Code</b>, <b>Codex</b>, <b>OpenCode</b>, <b>Cursor</b>, and any agent that reads Agent Skills.</p>
-      <div class="stage-x">
-        <Fragment set:html={hero} />
-      </div>
-    </div>
-  </section>
-
-  <div class="wrap">
-    <div class="stats-x rise">
-      <div><b>{pages.length}</b><span>example explainers</span></div>
-      <div><b>{figures}</b><span>live figures</span></div>
-      <div><b>1</b><span>HTML file per page</span></div>
-      <div><b>0</b><span>dependencies</span></div>
-    </div>
-  </div>
-
-  <section class="sec">
-    <div class="wrap">
-      <div class="tiles rise">
-        {TILES.map(([slug, n, title, line]) => (
-          <a class="tile" href={`${base}${slug}/`}>
-            <span class="n">{n}</span>
-            <h3>{title}</h3>
-            <p>{line}</p>
-            <span class="go">Open <span>→</span></span>
-          </a>
-        ))}
+        <a class="btn solid" href={`${base}examples/`}>Read the explainers</a>
+        <a class="btn" href={`${base}usage/`}>Install</a>
       </div>
     </div>
   </section>
 
   <section class="sec">
     <div class="wrap">
-      <div class="sec-grid">
-        <div class="sec-num"><b>New</b>explainers</div>
-        <div>
-          <h2>Pages the skill wrote.</h2>
-          <p class="sub">Each one came from a single prompt and went through the same checks. Open one and play with the figures.</p>
-        </div>
-      </div>
-      <div class="cards-x">{newest.map(p => <Card page={p} isNew={p.added >= newCut} />)}</div>
-      <div class="ctas"><a class="btn" href={`${base}examples/`}>All {pages.length} explainers <span class="arr">→</span></a></div>
+      <dl class="stats-x">
+        <div><dt>{pages.length}</dt><dd>explainers</dd></div>
+        <div><dt>{figures}</dt><dd>live figures</dd></div>
+        <div><dt>{cats}</dt><dd>fields</dd></div>
+        <div><dt>0</dt><dd>dependencies</dd></div>
+      </dl>
     </div>
   </section>
 
   <section class="sec">
     <div class="wrap">
-      <div class="sec-grid">
-        <div class="sec-num"><b>Spec</b>a figure</div>
-        <div class="split">
-          <div class="body-text">
-            <h2>A figure is a small spec.</h2>
-            <p>Controls, state, and a draw function. The runtime does the rest: the canvas, sliders and knobs, dragging, keyboard, light and dark, the self-check, and the scripts that play with every figure before a page ships.</p>
-            <p>The same specs run in React, Vue, Svelte, and Astro through the <a href={`${base}usage/#in-your-app`}>npm packages</a>.</p>
-            <div class="ctas"><a class="btn" href={`${base}how-it-works/`}>How it works <span class="arr">→</span></a></div>
-          </div>
-          <CodeBlock code={spec} title="pendulum.js" />
-        </div>
+      <div class="sec-head">
+        <h2>New explainers</h2>
+        <a class="more" href={`${base}examples/`}>View all <span>→</span></a>
       </div>
+      <div class="cards-x">{newest.slice(0, 3).map(p => <Card page={p} />)}</div>
     </div>
   </section>
 
-  <div class="wrap">
-    <div class="band rise">
-      <div>
-        <h2>Teach something today.</h2>
-        <p>Install it, then ask your agent how something works.</p>
-      </div>
+  <section class="sec">
+    <div class="wrap cta-x">
+      <h2>One command. Any agent.</h2>
+      <p>Works in Claude Code, Codex, OpenCode, Cursor, and any agent that reads Agent Skills.</p>
       <Cmd cmd={install} />
     </div>
-  </div>
+  </section>
 </Site>

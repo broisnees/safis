@@ -1,8 +1,9 @@
 // Site behavior that doesn't need the figure runtime: the theme button in the bar, copy
-// buttons, the mobile menu, tabs, sections settling in, and the examples filter.
+// buttons, the mobile menu, tabs, and the examples filter.
 const root = document.documentElement;
 const KEY = "safis-theme";
-const saved = () => { try { return localStorage.getItem(KEY) || "auto"; } catch { return "auto"; } };
+// Dark unless the reader chose otherwise; "auto" (follow the system) is stored like the others.
+const saved = () => { try { const t = localStorage.getItem(KEY); return t === "light" || t === "auto" ? t : "dark"; } catch { return "dark"; } };
 // The button carries all three icons; CSS shows the one for html[data-theme-mode] (set before
 // the first paint), so nothing in the bar changes as the page loads.
 const syncTheme = () => {
@@ -26,7 +27,7 @@ function setTheme(mode) {
 }
 for (const b of document.querySelectorAll(".sbar .theme-toggle")) {
   b.addEventListener("click", () => {
-    const order = ["auto", "light", "dark"];
+    const order = ["dark", "light", "auto"];
     setTheme(order[(order.indexOf(saved()) + 1) % order.length]);
   });
 }
@@ -59,10 +60,6 @@ for (const t of document.querySelectorAll("[data-tabs]")) {
   if (buttons[0]) pick(buttons[0].dataset.tab);
 }
 
-// Sections settle in as they scroll into view.
-const rise = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { e.target.classList.add("in"); rise.unobserve(e.target); } }, { threshold: 0.08 });
-for (const el of document.querySelectorAll(".rise")) rise.observe(el);
-
 // The examples page: a search box and category chips.
 const grid = document.querySelector("[data-filter-grid]");
 if (grid) {
@@ -72,6 +69,8 @@ if (grid) {
   const empty = document.querySelector("[data-filter-empty]");
   const count = document.querySelector("[data-filter-count]");
   let cat = new URLSearchParams(location.search).get("category") || "all";
+  // A link to a field with no pages (yet) shows them all rather than an empty page.
+  if (!chips.some(b => b.dataset.filterCat === cat)) cat = "all";
   const apply = () => {
     const q = (input?.value || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
     let shown = 0;
@@ -92,8 +91,29 @@ if (grid) {
     apply();
   });
   input?.addEventListener("input", apply);
+  document.querySelector("[data-filter-reset]")?.addEventListener("click", () => {
+    cat = "all";
+    if (input) input.value = "";
+    history.replaceState(null, "", location.pathname);
+    apply();
+    input?.focus();
+  });
   addEventListener("keydown", e => {
+    if (e.key === "Escape" && document.activeElement === input && input.value) { input.value = ""; apply(); return; }
     if (e.key === "/" && document.activeElement !== input && !/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || "")) { e.preventDefault(); input?.focus(); }
   });
   apply();
+}
+
+// What it makes: the contents column marks the kind being read.
+const kindsNav = document.querySelector(".kinds-nav");
+if (kindsNav) {
+  const links = new Map([...kindsNav.querySelectorAll("a[data-kind]")].map(a => [a.dataset.kind, a]));
+  const seen = new Set();
+  const mark = () => {
+    const first = [...links.keys()].find(id => seen.has(id));
+    for (const [id, a] of links) if (id === first) a.setAttribute("aria-current", "true"); else a.removeAttribute("aria-current");
+  };
+  const io = new IntersectionObserver(es => { for (const e of es) e.isIntersecting ? seen.add(e.target.id) : seen.delete(e.target.id); mark(); }, { rootMargin: "-30% 0px -60% 0px" });
+  for (const id of links.keys()) { const el = document.getElementById(id); if (el) io.observe(el); }
 }

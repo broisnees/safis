@@ -34,15 +34,17 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 <link rel="preload" href={fonts["serif-text.woff2"]} as="font" type="font/woff2" crossorigin>
 <link rel="preload" href={fonts["sans.woff2"]} as="font" type="font/woff2" crossorigin>
 <script is:inline>
-  // Before the first paint: the reader's theme (and which icon the theme button shows) and the index choice.
+  // Before the first paint: the reader's theme (and which icon the theme button shows) and the
+  // index choice. The site is dark until the reader picks light, or "auto" to follow the system.
   (() => {
     const r = document.documentElement;
-    let mode = "auto";
+    let mode = "dark";
     try {
       const t = localStorage.getItem("safis-theme");
-      if (t === "light" || t === "dark") { r.setAttribute("data-theme", t); mode = t; }
+      if (t === "light" || t === "auto") mode = t;
       if (localStorage.getItem("safis-toc") === "hidden") r.classList.add("safis-toc-hidden");
     } catch {}
+    if (mode !== "auto") r.setAttribute("data-theme", mode);
     r.dataset.themeMode = mode;
   })();
 </script>

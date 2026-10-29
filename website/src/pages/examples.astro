@@ -2,9 +2,9 @@
 import Site from "../layouts/Site.astro";
 import Card from "../components/Card.astro";
 import pages from "../generated/pages.json";
-const ORDER = ["Body", "Biology", "Chemistry", "Physics", "Machines", "Engineering", "Earth & Space", "Computing", "AI", "Math"];
-const rank = (c: string) => (ORDER.indexOf(c) + 1 || 99);
-const cats = [...new Set(pages.map(p => p.category))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+import { fieldsOf, rank } from "../lib/categories";
+// Only fields with pages get a chip, so a field in the order list with no pages yet stays hidden.
+const cats = fieldsOf(pages);
 const list = [...pages].sort((a, b) => rank(a.category) - rank(b.category) || a.title.localeCompare(b.title));
 const newest = new Set([...pages].sort((a, b) => b.added - a.added).slice(0, 3).map(p => p.slug));
 const figures = pages.reduce((n, p) => n + p.figures, 0);
@@ -12,23 +12,24 @@ const figures = pages.reduce((n, p) => n + p.figures, 0);
 <Site title="Examples · Safis" description={`All ${pages.length} explainers the Safis skill wrote, with ${figures} live figures, from the jaw joint to attention in language models.`} current="examples">
   <header class="phead">
     <div class="wrap">
-      <p class="eyebrow">Examples</p>
-      <h1>Pages the skill <em>wrote</em>.</h1>
-      <p class="lede-x">Every page here came from a single prompt and went through the same checks. {pages.length} explainers and {figures} live figures across {cats.length} fields. Open one and play.</p>
+      <h1>Examples</h1>
+      <p class="lede-x">Every page here came from a single prompt and went through the same checks: {pages.length} explainers and {figures} live figures across {cats.length} fields.</p>
     </div>
   </header>
   <div class="wrap">
     <div class="filter" role="search">
-      <label class="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="visually-hidden">Search the explainers</span><input type="search" placeholder="Search, or press /" data-filter-search autocomplete="off" /></label>
-      <div class="cats" aria-label="Filter by field">
+      <div class="filter-row">
+        <label class="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m10.6 10.6 3.4 3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span class="visually-hidden">Search the explainers</span><input type="search" placeholder="Search explainers" data-filter-search autocomplete="off" /><kbd aria-hidden="true">/</kbd></label>
+        <span class="count" aria-live="polite"><span data-filter-count>{pages.length}</span> of {pages.length}</span>
+      </div>
+      <div class="cats" role="group" aria-label="Filter by field">
         <button type="button" data-filter-cat="all" aria-pressed="true">All<span>{pages.length}</span></button>
         {cats.map(c => <button type="button" data-filter-cat={c} aria-pressed="false">{c}<span>{pages.filter(p => p.category === c).length}</span></button>)}
       </div>
-      <span class="sans" style="margin-inline-start: auto; font-size: 13.5px; color: var(--muted)" aria-live="polite"><span data-filter-count>{pages.length}</span> shown</span>
     </div>
     <div class="cards-x" data-filter-grid>
       {list.map((p, i) => <Card page={p} isNew={newest.has(p.slug)} eager={i < 3} />)}
     </div>
-    <p class="empty-x" data-filter-empty hidden>No explainer matches that. Try another word, or <a href="#" onclick="document.querySelector('[data-filter-cat=all]').click(); const i = document.querySelector('[data-filter-search]'); i.value = ''; i.dispatchEvent(new Event('input')); return false">show them all</a>.</p>
+    <p class="empty-x" data-filter-empty hidden>No explainer matches that. <button type="button" data-filter-reset>Show all of them</button></p>
   </div>
 </Site>
