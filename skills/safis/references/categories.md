@@ -2,7 +2,7 @@
 
 Each category has its own kind of figure that works, its own accuracy traps, and its own colors. Read the section for the page's category before planning.
 
-Contents: [Body](#body), [Biology](#biology), [Chemistry](#chemistry), [Physics](#physics), [Machines](#machines), [Engineering](#engineering), [Earth & Space](#earth--space), [Computing](#computing), [AI](#ai), [Math](#math).
+Contents: [Body](#body), [Biology](#biology), [Chemistry](#chemistry), [Physics](#physics), [Machines](#machines), [Engineering](#engineering), [Earth & Space](#earth--space), [Computing](#computing), [AI](#ai), [Math](#math), [History](#history), [Philosophy](#philosophy), [Language](#language), [Economics & Society](#economics--society), [Art & Music](#art--music).
 
 ## Body
 
@@ -94,3 +94,43 @@ Geometry, calculus, linear algebra, probability.
 - **Build:** `g.graph` ([plots.md](plots.md)) for function plots with π ticks, areas, tangents, vector fields and contours; `g.fit` with `uniform: true` for geometry so angles look right; `E3.mesh.custom` or `sweep` for surfaces; `g.gizmo` to show axes in 3D; equations with `.tex` and colored symbols ([math.md](math.md)).
 - **Accuracy:** derive everything from the draggable inputs, so no configuration can show a false picture.
 - **Example topics:** what a derivative is; how a matrix transforms space; why the normal distribution shows up everywhere.
+
+## History
+
+Events, eras, inventions, empires, how something came to be.
+
+- **Figures that work:** a timeline the reader scrubs (`g.timeline` with `now` on a slider: events after it fade); a map that changes with the year (`Geo`: borders, routes, the spread of a technology or a disease, one frame per decade); the thing itself rebuilt at each stage (the printing press, the steam engine, a city's walls) in 3D or `Iso`; a family tree or a line of succession (`g.tree`); a counter of people, ships, or money against time with the event that moved it marked.
+- **Accuracy:** date everything and say how sure we are ("about 1450", "by 1500"); name the sources, primary where possible; show competing accounts side by side instead of picking one silently; never invent quotes. Watch for anachronism in drawings (tools, clothes, maps).
+- **Example topics:** how the printing press changed Europe; the Silk Road; how the longitude problem was solved.
+
+## Philosophy
+
+Arguments, thought experiments, logic, ethics, mind.
+
+- **Figures that work:** an argument map (`g.tree` with `style: "cards"`: the claim, reasons in green, objections in red, replies under them) where the reader toggles a premise and watches what falls; a thought experiment as a live scene (the trolley switch, the ship of Theseus losing planks one by one, Mary's room in grays then color); truth tables and Venn diagrams that update from a formula; payoff matrices and simulated games (the prisoner's dilemma played out by a population, `Sim`); a spectrum of positions on a slider.
+- **Accuracy:** state each view in the form its best defenders would accept; separate what an argument shows from what it assumes; attribute positions to the people who held them, with sources; no verdict dressed up as fact.
+- **Example topics:** the Ship of Theseus and identity; why the prisoner's dilemma matters; what makes an argument valid.
+
+## Language
+
+How languages work and change: sounds, writing, grammar, meaning.
+
+- **Figures that work:** the vocal tract in section (2D or `E3.bio`-style smooth shapes) with the tongue moving for each vowel, beside a formant plot and the sound itself (`Sound`); a family tree of languages (`g.tree`, `orient: "right"`, branch lengths in centuries); sound changes stepping through a word's history; parse trees of a sentence the reader edits; scripts evolving letter by letter on a timeline.
+- **Accuracy:** use IPA for sounds and say which accent; dates of splits are estimates with ranges; avoid "primitive" and "correct" for languages and dialects.
+- **Example topics:** how vowels are made; how Latin became French; why English spelling is strange.
+
+## Economics & Society
+
+Markets, money, voting, cities, networks of people.
+
+- **Figures that work:** supply and demand curves the reader drags with the market price settling (`g.graph`); agent simulations (`Sim`) where a rule for individuals makes a pattern for everyone (segregation, traffic jams, bank runs, epidemics); voting systems counted live on a ballot set the reader edits; flows of money or goods as Sankey-like bands; maps of data (`Geo`).
+- **Accuracy:** cite the data and its year; say what a model leaves out; distinguish what is measured from what is modeled; show uncertainty bands.
+- **Example topics:** how compound interest works; why ranked-choice voting changes outcomes; how a traffic jam starts from nothing.
+
+## Art & Music
+
+Perspective, color, composition, harmony, rhythm, instruments.
+
+- **Figures that work:** perspective drawn from a camera (`E3` with `fov`, the picture plane and sight lines shown); color mixing with real light (E3 physical lights) next to paint mixing; a string or air column vibrating with its harmonics and the sound itself (`Sound`); intervals on a keyboard, a circle of fifths, and the waveform of a chord; rhythm on a looping timeline.
+- **Accuracy:** tuning systems and frequencies are exact numbers; credit artworks and composers; describe styles without ranking them.
+- **Example topics:** how perspective drawing works; why a fifth sounds consonant; how a violin makes its sound.

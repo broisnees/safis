@@ -18,7 +18,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a.startsWith("--")) opt[a.slice(2)] = argv[++i];
 }
 if (!opt.title || !opt.out) {
-  console.error('usage: node new-page.mjs --title "..." --category <Body|Biology|Chemistry|Physics|Machines|Engineering|Earth & Space|Computing|AI|Math> --dek "..." --out <dir/index.html> [--force]');
+  console.error('usage: node new-page.mjs --title "..." --category <Body|Biology|Chemistry|Physics|Machines|Engineering|Earth & Space|Computing|AI|Math|History|Philosophy|Language|Economics & Society|Art & Music> --dek "..." --out <dir/index.html> [--force]');
   process.exit(2);
 }
 const out = path.resolve(opt.out);

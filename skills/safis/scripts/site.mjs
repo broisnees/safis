@@ -24,7 +24,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const ORDER = ["Body", "Biology", "Chemistry", "Physics", "Machines", "Engineering", "Earth & Space", "Computing", "AI", "Math"];
+const ORDER = ["Body", "Biology", "Chemistry", "Physics", "Machines", "Engineering", "Earth & Space", "Computing", "AI", "Math", "History", "Philosophy", "Language", "Economics & Society", "Art & Music"];
 
 const argv = process.argv.slice(2);
 const opt = { root: null, title: null, intro: null, thumbs: false, shared: null, home: null };
