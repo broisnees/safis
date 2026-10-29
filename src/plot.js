@@ -435,6 +435,149 @@
       g.path([tip, [b[0] - uy * w, b[1] + ux * w], [b[0] + uy * w, b[1] - ux * w]], { fill: color, close: true });
     };
 
+    // ----- g.tree -----
+    // A tree laid out tidily: a phylogeny, a family tree, a decision tree, an argument map, a parse
+    // tree, an org chart. root = { label, children: [...], color, length, note }. Leaves sit one slot
+    // apart, each parent centered over its children. o: box, orient "down" | "right" | "radial",
+    // edges "elbow" (default down/right) | "curve" | "straight", lengths: true (depth by each
+    // node's `length`, a phylogram), highlight (a label or a function: that node and its path to the
+    // root are drawn in color, the rest faint), r (node radius), font size, collapsed (labels whose
+    // children are hidden). Returns { nodes: [{ node, p, depth, parent }], at(label), hit(p) }.
+    g.tree = (root, o = {}) => {
+      const box = o.box ?? [12, 12, g.w - 24, g.h - 24], orient = o.orient ?? "down";
+      const collapsed = new Set(o.collapsed ?? []);
+      const kids = n => (collapsed.has(n.label) ? [] : n.children ?? []);
+      const list = [];
+      let leaf = 0, maxD = 0;
+      const walk = (n, depth, dist, parent) => {
+        const e = { node: n, depth, dist, parent, kids: [] };
+        list.push(e);
+        maxD = Math.max(maxD, o.lengths ? dist : depth);
+        const ch = kids(n);
+        if (!ch.length) e.slot = leaf++;
+        else { e.kids = ch.map(c => walk(c, depth + 1, dist + (c.length ?? 1), e)); e.slot = (e.kids[0].slot + e.kids[e.kids.length - 1].slot) / 2; }
+        return e;
+      };
+      walk(root, 0, 0, null);
+      const nLeaf = Math.max(1, leaf - 1), D = Math.max(maxD, 1e-9);
+      const [bx, by, bw, bh] = box, size = o.size ?? 12.5;
+      for (const e of list) {
+        const u = leaf > 1 ? e.slot / nLeaf : 0.5, v = (o.lengths ? e.dist : e.depth) / D;
+        if (orient === "radial") {
+          const a = u * Math.PI * 2 * (leaf / (leaf + 1)) - Math.PI / 2, R = v * Math.min(bw, bh) * 0.42;
+          e.p = [bx + bw / 2 + Math.cos(a) * R, by + bh / 2 + Math.sin(a) * R];
+        } else if (orient === "right") e.p = [bx + 8 + v * (bw - (o.labelRoom ?? 110)), by + size + u * (bh - 2 * size)];
+        else e.p = [bx + size * 3 + u * (bw - size * 6), by + size + v * (bh - size * 3)];
+      }
+      const hl = o.highlight == null ? null : typeof o.highlight === "function" ? o.highlight : n => n.label === o.highlight;
+      const on = new Set();
+      if (hl) for (const e of list) if (hl(e.node)) for (let q = e; q; q = q.parent) on.add(q);
+      const colorOf = e => e.node.color ?? o.color ?? "ink";
+      const edgeStyle = o.edges ?? (orient === "radial" ? "straight" : "elbow");
+      for (const e of list) for (const c of e.kids) {
+        const faint = hl && !on.has(c), st = { stroke: on.has(c) ? colorOf(c) : faint ? "faint" : "muted", width: on.has(c) ? 2.2 : 1.4 };
+        const a = e.p, b = c.p;
+        if (edgeStyle === "straight") g.line(a, b, st);
+        else if (edgeStyle === "curve") g.path(Array.from({ length: 17 }, (_, i) => { const t = i / 16, k = t * t * (3 - 2 * t); return orient === "right" ? [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * k] : [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * t]; }), st);
+        else g.path(orient === "right" ? [a, [a[0], b[1]], b] : [a, [a[0], (a[1] + b[1]) / 2], [b[0], (a[1] + b[1]) / 2], b], st);
+      }
+      const r = o.r ?? 4.5;
+      // Long labels wrap to the room a node has (its slot), and stay inside the box.
+      const slotW = orient === "down" ? Math.max(70, (bw - size * 6) / Math.max(1, nLeaf) * 0.94) : o.labelRoom ?? 160;
+      const wrap = (str, max, wo) => {
+        const words = String(str).split(/\s+/), lines = [];
+        let cur = "";
+        for (const w of words) { const t = cur ? cur + " " + w : w; if (cur && g.measure(t, wo) > max) { lines.push(cur); cur = w; } else cur = t; }
+        if (cur) lines.push(cur);
+        return lines;
+      };
+      if (o.style === "cards") {
+        // Each node a card: wrapped text in a rounded box with a colored edge (argument maps,
+        // decision trees, org charts). Edges were drawn center to center underneath.
+        for (const e of list) {
+          const faint = hl && !on.has(e), c = faint ? "faint" : colorOf(e), wo = { size, weight: 600 };
+          const lines = wrap(e.node.label ?? "", Math.min(slotW, o.cardWidth ?? 200) - 16, wo).concat(e.node.note ? wrap(e.node.note, Math.min(slotW, o.cardWidth ?? 200) - 16, { size: size - 2 }).map(l => "\u0000" + l) : []);
+          const w = Math.min(Math.max(...lines.map(l => g.measure(l.replace("\u0000", ""), wo))) + 16, Math.min(slotW, o.cardWidth ?? 200)), lh = size * 1.25, h = lines.length * lh + 10;
+          const x0 = Math.min(Math.max(e.p[0] - w / 2, bx), bx + bw - w), y0 = Math.min(Math.max(e.p[1] - h / 2, by), by + bh - h);
+          g.rect(x0, y0, w, h, { fill: "panel", stroke: c, width: on.has(e) ? 2.2 : 1.4, r: 6 });
+          lines.forEach((l, i) => { const note = l.startsWith("\u0000"); g.text(note ? l.slice(1) : l, [x0 + w / 2, y0 + 5 + lh * (i + 0.5)], { size: note ? size - 2 : size, weight: note ? 500 : 600, color: faint ? "muted" : note ? "muted" : "ink", italic: note }); });
+        }
+        return { nodes: list.map(e => ({ node: e.node, p: e.p, depth: e.depth, parent: e.parent && e.parent.node })), at: label => list.find(e => e.node.label === label)?.p ?? null, hit: (p, rad = 30) => { let best = null, bd = rad; for (const e of list) { const d = Math.hypot(p[0] - e.p[0], p[1] - e.p[1]); if (d < bd) { bd = d; best = e.node; } } return best; } };
+      }
+      for (const e of list) {
+        const faint = hl && !on.has(e), c = faint ? "faint" : colorOf(e), isLeaf = !e.kids.length;
+        g.circle(e.p, isLeaf ? r : r * 0.8, collapsed.has(e.node.label) ? { fill: "panel", stroke: c, width: 2 } : { fill: c });
+        if (e.node.label == null || o.labels === false) continue;
+        const center = !(orient === "right" || orient === "radial" || !isLeaf);
+        const wo = { size, weight: on.has(e) ? 650 : 500 };
+        const lines = wrap(e.node.label, center ? slotW : Math.max(60, bx + bw - e.p[0] - r - 8), wo);
+        const lw = Math.max(...lines.map(l => g.measure(l, wo)));
+        let lp = orient === "right" || (orient === "radial" && isLeaf) ? [e.p[0] + r + 5, e.p[1] - ((lines.length - 1) * size * 0.6)] : isLeaf ? [e.p[0], e.p[1] + r + size * 0.9] : [e.p[0] + r + 4, e.p[1] - size * 0.6 - (lines.length - 1) * size * 1.15];
+        if (center) lp = [Math.min(Math.max(lp[0], bx + lw / 2 + 2), bx + bw - lw / 2 - 2), lp[1]];
+        else lp = [Math.min(lp[0], bx + bw - lw - 2), lp[1]];
+        lines.forEach((l, i) => g.text(l, [lp[0], lp[1] + i * size * 1.15], { ...wo, color: faint ? "muted" : "ink", align: center ? "center" : "left", halo: true, italic: !!e.node.italic }));
+        if (e.node.note && !faint) {
+          const nl = wrap(e.node.note, center ? slotW : 180, { size: size - 2 }), nw = Math.max(...nl.map(l => g.measure(l, { size: size - 2 })));
+          const nx = center ? Math.min(Math.max(lp[0], bx + nw / 2 + 2), bx + bw - nw / 2 - 2) : lp[0];
+          nl.forEach((l, i) => g.text(l, [nx, lp[1] + (lines.length + i) * size * 1.12], { size: size - 2, color: "muted", align: center ? "center" : "left", halo: true }));
+        }
+      }
+      return {
+        nodes: list.map(e => ({ node: e.node, p: e.p, depth: e.depth, parent: e.parent && e.parent.node })),
+        at: label => list.find(e => e.node.label === label)?.p ?? null,
+        hit: (p, rad = 14) => { let best = null, bd = rad; for (const e of list) { const d = Math.hypot(p[0] - e.p[0], p[1] - e.p[1]); if (d < bd) { bd = d; best = e.node; } } return best; },
+      };
+    };
+
+    // ----- g.timeline -----
+    // A time axis for history, geology, evolution, a life: events as dots with labels stacked in
+    // lanes so they never overlap, spans as bars, eras as tinted bands, and a "now" marker the
+    // reader can drag. Years before 0 read "500 BCE" (format: "year" | "ago" for "65 Ma" style | a
+    // function). events: [{ t, end, label, color }]; o: box, range [t0, t1], eras [{ from, to,
+    // label, color }], now, log (for deep time: spacing by log of time before `ref`). Returns
+    // { x(t), t(x), hit(p) }.
+    g.timeline = (events, o = {}) => {
+      const box = o.box ?? [16, 10, g.w - 32, g.h - 20], [bx, by, bw, bh] = box;
+      const ts = events.flatMap(e => [e.t, e.end ?? e.t]);
+      const [t0, t1] = o.range ?? [Math.min(...ts), Math.max(...ts)];
+      const ref = o.ref ?? t1;
+      const f = o.log ? t => -Math.log10(Math.max(ref - t, 1e-9) + 1) : t => t;
+      const x = t => bx + ((f(t) - f(t0)) / (f(t1) - f(t0) || 1)) * bw;
+      const tOf = px => { let a = t0, b = t1; for (let i = 0; i < 50; i++) { const m = (a + b) / 2; if (x(m) < px) a = m; else b = m; } return (a + b) / 2; };
+      const fmt = typeof o.format === "function" ? o.format : o.format === "ago" ? t => { const a = ref - t; return a >= 1e9 ? `${+(a / 1e9).toFixed(2)} Ga` : a >= 1e6 ? `${+(a / 1e6).toFixed(1)} Ma` : a >= 1e3 ? `${+(a / 1e3).toFixed(1)} ka` : `${Math.round(a)} years ago`; } : t => (t < 0 ? `${Math.round(-t).toLocaleString("en-US")} BCE` : t < 1000 ? `${Math.round(t)} CE` : String(Math.round(t)));
+      const axisY = by + bh - 22;
+      for (const er of o.eras ?? []) {
+        const a = x(er.from), b = x(er.to);
+        g.rect(a, by, b - a, axisY - by, { fill: er.color ?? "faint", alpha: 0.13 });
+        g.text(er.label, [(a + b) / 2, axisY + 15], { size: 11, weight: 600, color: er.color ?? "muted", caps: true, tracking: 0.6 });
+      }
+      g.line([bx, axisY], [bx + bw, axisY], { stroke: "muted", width: 1.2 });
+      const nTicks = Math.max(2, Math.min(9, Math.floor(bw / 90)));
+      for (let i = 0; i <= nTicks; i++) { const t = o.log ? tOf(bx + (bw * i) / nTicks) : t0 + ((t1 - t0) * i) / nTicks, px = x(t); g.line([px, axisY], [px, axisY + 4], { stroke: "muted", width: 1 }); if (!(o.eras ?? []).length) g.text(fmt(t), [px, axisY + 14], { size: 10.5, color: "muted" }); }
+      // Lanes: each label goes in the lowest lane where it doesn't overlap the previous one.
+      const lanes = [], laneH = 20, size = o.size ?? 12;
+      const placed = [...events].sort((a, b) => a.t - b.t).map(e => {
+        const w = g.measure(e.label ?? "", { size, weight: 600 }) + 14, a = x(e.t), flip = a + w > bx + bw, lx = flip ? a - w + 8 : a - 6;
+        let lane = 0;
+        while (lanes[lane] != null && lanes[lane] > lx) lane++;
+        lanes[lane] = lx + w;
+        return { e, a, b: e.end != null ? x(e.end) : null, lane, flip };
+      });
+      for (const p of placed) {
+        const y = axisY - 14 - p.lane * laneH, c = p.e.color ?? o.color ?? "ink", dim = o.now != null && p.e.t > o.now;
+        g.line([p.a, axisY], [p.a, y + 6], { stroke: c, width: 1, alpha: dim ? 0.25 : 0.55 });
+        if (p.b != null) g.rect(p.a, axisY - 5, Math.max(2, p.b - p.a), 5, { fill: c, alpha: dim ? 0.2 : 0.7 });
+        g.circle([p.a, axisY], 3.5, { fill: c, alpha: dim ? 0.3 : 1 });
+        g.text(p.e.label, [p.flip ? p.a + 2 : p.a - 2, y], { size, weight: 600, color: dim ? "muted" : c, align: p.flip ? "right" : "left", halo: true });
+      }
+      if (o.now != null) {
+        const px = x(o.now);
+        g.line([px, by], [px, axisY + 4], { stroke: o.nowColor ?? "orange", width: 2 });
+        g.chip(fmt(o.now), [px, by + 10], { color: o.nowColor ?? "orange" });
+      }
+      return { x, t: tOf, hit: (p, rad = 10) => placed.find(q => Math.abs(p[0] - q.a) < rad && Math.abs(p[1] - axisY) < rad + 20)?.e ?? null, axisY };
+    };
+
     // ----- g.graph -----
     g.graph = (o = {}) => {
       const box = o.box ?? [0, 0, g.w, g.h];
