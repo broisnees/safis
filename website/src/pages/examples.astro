@@ -3,13 +3,17 @@ import Site from "../layouts/Site.astro";
 import Card from "../components/Card.astro";
 import pages from "../generated/pages.json";
 import { fieldsOf, rank } from "../lib/categories";
+import { collection, breadcrumbs } from "../lib/seo";
 // Only fields with pages get a chip, so a field in the order list with no pages yet stays hidden.
 const cats = fieldsOf(pages);
 const list = [...pages].sort((a, b) => rank(a.category) - rank(b.category) || a.title.localeCompare(b.title));
 const newest = new Set([...pages].sort((a, b) => b.added - a.added).slice(0, 3).map(p => p.slug));
 const figures = pages.reduce((n, p) => n + p.figures, 0);
+const origin = new URL(import.meta.env.BASE_URL, Astro.site).href, url = new URL(Astro.url.pathname, Astro.site).href;
+const description = `All ${pages.length} explainers the Safis skill wrote, with ${figures} live figures, from the jaw joint to attention in language models.`;
+const jsonld = [collection(origin, url, "How things work: interactive explainers", description, list), breadcrumbs([{ name: "Safis", url: origin }, { name: "Examples", url }])];
 ---
-<Site title="Examples · Safis" description={`All ${pages.length} explainers the Safis skill wrote, with ${figures} live figures, from the jaw joint to attention in language models.`} current="examples">
+<Site title="How Things Work: Interactive Explainers · Safis" description={description} current="examples" jsonld={jsonld}>
   <header class="phead">
     <div class="wrap">
       <h1>Examples</h1>

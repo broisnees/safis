@@ -66,8 +66,12 @@ const KITS = [
   ["effects", "fire, smoke, airflow, ripples, glow", "effects"],
   ["iso", "isometric technical illustration, SVG export", "drawings"],
 ];
+import { guide, breadcrumbs } from "../lib/seo";
+const description = 'How the Safis skill plans, builds, and checks an interactive explainer: the pipeline, the figure spec, what the self-check and explorer catch, and how faults get fixed.';
+const origin = new URL(import.meta.env.BASE_URL, Astro.site).href, pageUrl = new URL(Astro.url.pathname, Astro.site).href;
+const jsonld = [guide(origin, pageUrl, 'How the Safis Skill Works', description), breadcrumbs([{ name: "Safis", url: origin }, { name: 'How it works', url: pageUrl }])];
 ---
-<Site title="How it works · Safis" description="How the Safis skill plans, builds, and checks an interactive explainer: the pipeline, the figure spec, what the self-check and explorer catch, and how faults get fixed." current="how-it-works">
+<Site title="How the Safis Skill Works · Safis" description={description} jsonld={jsonld} current="how-it-works">
   <header class="phead">
     <div class="wrap">
       <h1>Planned like an article, checked like software</h1>

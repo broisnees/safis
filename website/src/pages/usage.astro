@@ -102,8 +102,12 @@ export default () => ({
   step(dt, s, v) { s.v -= v.k * s.x * dt; s.x += s.v * dt; },
   draw(g, s) { g.circle([g.w / 2 + 120 * s.x, g.h / 2], 16, { fill: "blue" }); },
 });`;
+import { guide, breadcrumbs } from "../lib/seo";
+const description = 'Install the Safis skill in any agent, ask for a page with /safis, write prompts that get the page you want, build a site of explainers, check pages, and use the figures in React, Vue, Svelte, or Astro.';
+const origin = new URL(import.meta.env.BASE_URL, Astro.site).href, pageUrl = new URL(Astro.url.pathname, Astro.site).href;
+const jsonld = [guide(origin, pageUrl, 'How to Use the Safis Skill', description), breadcrumbs([{ name: "Safis", url: origin }, { name: 'Usage', url: pageUrl }])];
 ---
-<Site title="Usage · Safis" description="Install the Safis skill in any agent, ask for a page with /safis, write prompts that get the page you want, build a site of explainers, check pages, and use the figures in React, Vue, Svelte, or Astro." current="usage">
+<Site title="How to Use the Safis Skill · Safis" description={description} jsonld={jsonld} current="usage">
   <header class="phead">
     <div class="wrap">
       <h1>Install it once, then ask</h1>

@@ -3,8 +3,17 @@ import "../generated/safis.css";
 import "../styles/site.css";
 import fonts from "../generated/fonts.json";
 import kitfiles from "../generated/kitfiles.json";
-interface Props { title: string; description: string; slug?: string; kits?: string[]; figures?: boolean; ogImage?: string; type?: string }
-const { title, description, slug, kits = [], figures = kits.length > 0, ogImage, type = "article" } = Astro.props;
+import { metaDescription } from "../lib/seo";
+interface Props {
+  title: string; description: string; slug?: string; kits?: string[]; figures?: boolean; ogImage?: string; ogImageAlt?: string; type?: string;
+  // Search: structured data, an article's dates and section, and pages kept out of the index.
+  jsonld?: object[]; published?: number; modified?: number; section?: string; noindex?: boolean;
+}
+const { title, slug, kits = [], figures = kits.length > 0, type = "article", jsonld = [], published, modified, section, noindex = false } = Astro.props;
+const description = metaDescription(Astro.props.description);
+// Every page shares; one without its own picture uses the site's card.
+const ogImage = Astro.props.ogImage ?? `${import.meta.env.BASE_URL.replace(/\/?$/, "/")}og.jpg`;
+const ogImageAlt = Astro.props.ogImageAlt ?? (Astro.props.ogImage ? title : "Safis: interactive explainers of how things work");
 // A page with figures loads its kits as ordinary scripts in the head, in the template's order, so
 // each figure is built where it stands while the page parses: nothing below it moves later. The
 // kits are minified, fingerprinted, and cached for a year; a page without figures loads none.
@@ -25,8 +34,19 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 <meta property="og:url" content={canonical}>
 <meta property="og:type" content={type}>
 <meta property="og:site_name" content="Safis">
-{ogImage && <meta property="og:image" content={new URL(ogImage, Astro.site)}>}
-<meta name="twitter:card" content={ogImage ? "summary_large_image" : "summary"}>
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content={new URL(ogImage, Astro.site)}>
+<meta property="og:image:alt" content={ogImageAlt}>
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content={title}>
+<meta name="twitter:description" content={description}>
+<meta name="twitter:image" content={new URL(ogImage, Astro.site)}>
+{published && <meta property="article:published_time" content={new Date(published).toISOString()}>}
+{modified && <meta property="article:modified_time" content={new Date(modified).toISOString()}>}
+{section && <meta property="article:section" content={section}>}
+<meta name="robots" content={noindex ? "noindex, follow" : "index, follow, max-image-preview:large, max-snippet:-1"}>
+<link rel="alternate" type="application/rss+xml" title="Safis explainers" href={`${base}rss.xml`}>
+{jsonld.map(j => <script type="application/ld+json" set:html={JSON.stringify(j).replace(/</g, "\\u003c")}></script>)}
 <meta name="theme-color" content="#000000">
 <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml">
 <link rel="sitemap" href={`${base}sitemap-index.xml`}>

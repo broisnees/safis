@@ -70,7 +70,10 @@ if (grid) {
   const chips = [...document.querySelectorAll("[data-filter-cat]")];
   const empty = document.querySelector("[data-filter-empty]");
   const count = document.querySelector("[data-filter-count]");
-  let cat = new URLSearchParams(location.search).get("category") || "all";
+  const params = new URLSearchParams(location.search);
+  let cat = params.get("category") || "all";
+  // ?q= fills the search (the site search that search engines link to).
+  if (input && params.get("q")) input.value = params.get("q");
   // A link to a field with no pages (yet) shows them all rather than an empty page.
   if (!chips.some(b => b.dataset.filterCat === cat)) cat = "all";
   const apply = () => {

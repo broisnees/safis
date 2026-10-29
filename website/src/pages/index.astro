@@ -15,8 +15,12 @@ const newest = [...pages].sort((a, b) => b.added - a.added).slice(0, 3);
 const figures = pages.reduce((n, p) => n + p.figures, 0);
 const cats = new Set(pages.map(p => p.category)).size;
 const install = "npx skills add broisnees/safis -g";
+import { website, software } from "../lib/seo";
+const description = 'An agent skill that writes long-form interactive explainers: prose that builds the idea step by step, with live 2D, 3D, map, optics, and sound figures. One HTML file that opens from disk.';
+const origin = new URL(import.meta.env.BASE_URL, Astro.site).href;
+const jsonld = [website(origin), software(origin, description)];
 ---
-<Site figures title="Safis · Interactive explainers your agent writes" description="An agent skill that writes long-form interactive explainers: prose that builds the idea step by step, with live 2D, 3D, map, optics, and sound figures. One HTML file that opens from disk." kits={["engine3d", "parts3d"]} slug="home" ogImage={`${base}rocket-engine/thumb.webp`}>
+<Site figures title="Safis skill: interactive explainers of how things work" description={description} jsonld={jsonld} kits={["engine3d", "parts3d"]} slug="home" ogImage={`${base}rocket-engine/thumb.webp`}>
   <section class="hero-x">
     <div class="wrap hero-copy">
       <p class="label-x"><span>Agent skill</span> Interactive explainers</p>

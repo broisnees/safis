@@ -4,26 +4,46 @@
 import Base from "./Base.astro";
 import SiteHeader from "../components/SiteHeader.astro";
 import SiteFooter from "../components/SiteFooter.astro";
+import Card from "../components/Card.astro";
 import { fieldsOf } from "../lib/categories";
+import { article as articleLd, breadcrumbs } from "../lib/seo";
 import pages from "../generated/pages.json";
 interface Props { page: (typeof pages)[number]; article: string }
 const { page, article } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 const cats = fieldsOf(pages);
 const inCat = (c: string) => pages.filter(p => p.category === c).sort((a, b) => a.title.localeCompare(b.title));
+// Search: the page as a blog post of the site, with its place in the site's trail.
+const origin = new URL(base, Astro.site).href, url = new URL(Astro.url.pathname, Astro.site).href;
+const images = [page.thumb && `${origin}${page.slug}/thumb.webp`, page.thumbDark && `${origin}${page.slug}/thumb-dark.webp`].filter(Boolean) as string[];
+const modified = page.modified ?? page.added;
+const jsonld = [
+  articleLd(origin, page, url, images),
+  breadcrumbs([{ name: "Safis", url: origin }, { name: "Examples", url: `${origin}examples/` }, { name: page.category, url: `${origin}examples/?category=${encodeURIComponent(page.category)}` }, { name: page.title, url }]),
+];
+const date = (ms: number) => new Date(ms).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+// More to read: the rest of the field first, then the newest from elsewhere, four in all.
+const related = [
+  ...pages.filter(p => p.category === page.category && p.slug !== page.slug).sort((a, b) => b.added - a.added),
+  ...pages.filter(p => p.category !== page.category).sort((a, b) => b.added - a.added),
+].slice(0, 4);
 ---
-<Base title={`${page.title} · Safis`} description={page.dek} slug={page.slug} kits={page.kits} figures ogImage={page.thumb ? `${base}${page.slug}/thumb.webp` : undefined}>
+<Base title={`${page.title} · Safis`} description={page.dek} slug={page.slug} kits={page.kits} figures ogImage={page.thumb ? `${base}${page.slug}/thumb.webp` : undefined} ogImageAlt={page.title} jsonld={jsonld} published={page.added} modified={modified} section={page.category}>
 <SiteHeader index contained={false} current="examples" />
 <div class="page has-toc">
 <nav class="toc" aria-label="All explainers"><a class="site" href={`${base}examples/`}>All explainers</a>{cats.map(c => <Fragment><h2>{c}</h2><ul>{inCat(c).map(q => <li><a href={`${base}${q.slug}/`} aria-current={q.slug === page.slug ? "page" : undefined}>{q.title}</a></li>)}</ul></Fragment>)}</nav>
 <main id="content">
 <a class="backlink" href={base}>← Safis</a>
 <header>
-  <p class="kicker">{page.category}<span class="meta">{page.minutes} min read · {page.figures} figure{page.figures === 1 ? "" : "s"}</span></p>
+  <p class="kicker">{page.category}<span class="meta">{page.minutes} min read · {page.figures} figure{page.figures === 1 ? "" : "s"} · Updated <time datetime={new Date(modified).toISOString()}>{date(modified)}</time></span></p>
   <h1>{page.title}</h1>
   <p class="dek">{page.dek}</p>
 </header>
 <article set:html={article}></article>
+<nav class="related" aria-labelledby="related-h">
+  <h2 id="related-h">More explainers</h2>
+  <div class="cards-x">{related.map(q => <Card page={q} />)}</div>
+</nav>
 </main>
 </div>
 <SiteFooter />

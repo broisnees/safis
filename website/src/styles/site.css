@@ -388,3 +388,8 @@ main.site .search kbd { border: 0; font: 500 12px/1 var(--font-text); color: var
   .btn:active, .copy:active, .cats button:active { transform: none; }
 }
 .body-text .codebox { margin-top: var(--sp-5); }
+
+/* More explainers, at the end of an article: the same cards as the examples page. */
+.related { margin: var(--sp-9) 0 var(--sp-8); }
+.related h2 { font: 600 12px/1.2 var(--font-text); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 var(--sp-6); }
+.related .cards-x { grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }

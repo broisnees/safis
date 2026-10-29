@@ -30,8 +30,12 @@ const KINDS: Kind[] = [
   { id: "diagrams", title: "Diagrams and code", text: ["Sequence, flow, state, class, and entity diagrams drawn in the page's own colors, highlighted code, and diffs, all rendered ahead of time so the page still makes no requests."], shot: ["diagram", "A diagram from the DNS explainer."], seen: [["dns", "How DNS turns a name into an address"], ["hash-table", "How a hash table finds things"]] },
   { id: "paper", title: "Research furniture", text: ["Everything a serious article needs: an abstract, numbered sections and contents, sidenotes, numbered citations with previews, defined terms, callouts, predictions before surprising figures, collapsible derivations, tables, and light and dark modes."], shot: ["paper", "The opening of the lock explainer."], seen: [["lock", "How a pin tumbler lock knows your key"], ["pendulum", "How a pendulum keeps time"]] },
 ];
+import { guide, breadcrumbs } from "../lib/seo";
+const description = 'Every kind of figure the Safis skill makes: 2D figures, plots, simulations, 3D with real materials, machines from real parts, smoke and flame, maps, optics, sound, effects, diagrams, and research furniture.';
+const origin = new URL(import.meta.env.BASE_URL, Astro.site).href, pageUrl = new URL(Astro.url.pathname, Astro.site).href;
+const jsonld = [guide(origin, pageUrl, 'What the Safis Skill Makes: Every Kind of Figure', description), breadcrumbs([{ name: "Safis", url: origin }, { name: 'What it makes', url: pageUrl }])];
 ---
-<Site figures title="What it makes · Safis" description="Every kind of figure the Safis skill makes: 2D figures, plots, simulations, 3D with real materials, machines from real parts, smoke and flame, maps, optics, sound, effects, diagrams, and research furniture." current="what-it-makes" kits={["iso", "effects", "optics"]}>
+<Site figures title="What the Safis Skill Makes: Every Kind of Figure · Safis" description={description} jsonld={jsonld} current="what-it-makes" kits={["iso", "effects", "optics"]}>
   <header class="phead">
     <div class="wrap">
       <h1>Every idea gets a figure you can move</h1>

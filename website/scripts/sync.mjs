@@ -133,6 +133,16 @@ const added = slug => {
   } catch { return Date.now(); }
 };
 
+// When a page last changed in git (uncommitted changes count as now).
+const modified = slug => {
+  try {
+    const dirty = execFileSync("git", ["status", "--porcelain", "--", `site/${slug}/index.html`], { cwd: root }).toString().trim();
+    if (dirty) return Date.now();
+    const t = execFileSync("git", ["log", "-1", "--format=%ct", "--", `site/${slug}/index.html`], { cwd: root }).toString().trim();
+    return t ? +t * 1000 : Date.now();
+  } catch { return Date.now(); }
+};
+
 // ---------- finishing an article ahead of time ----------
 // What the runtime would otherwise insert after the page paints (and so shift the text): math
 // typeset as MathML, heading ids and anchors, the contents list, sidenote numbers, citation
@@ -221,7 +231,7 @@ for (const entry of await readdir(site, { withFileTypes: true })) {
     slug, title: unesc((html.match(/<title>([^<]*)<\/title>/) || [])[1] ?? slug), dek: meta(html, "description"),
     category: meta(html, "explainer:category") || "Other",
     figures: body.split('<figure class="demo').length - 1, minutes: Math.max(1, Math.round(prose / 230)), words: prose,
-    kits: kitsFor(code), added: added(slug), thumb, thumbDark,
+    kits: kitsFor(code), added: added(slug), modified: modified(slug), thumb, thumbDark,
   });
   await writeFile(path.join(gen, `articles/${slug}.html`), finished + "\n");
 }

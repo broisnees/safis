@@ -3,10 +3,10 @@
 import Base from "./Base.astro";
 import SiteHeader from "../components/SiteHeader.astro";
 import SiteFooter from "../components/SiteFooter.astro";
-interface Props { title: string; description: string; current?: string; kits?: string[]; figures?: boolean; ogImage?: string; slug?: string }
-const { title, description, current, kits = [], figures = false, ogImage, slug = current ?? "page" } = Astro.props;
+interface Props { title: string; description: string; current?: string; kits?: string[]; figures?: boolean; ogImage?: string; slug?: string; jsonld?: object[]; noindex?: boolean }
+const { title, description, current, kits = [], figures = false, ogImage, slug = current ?? "page", jsonld = [], noindex = false } = Astro.props;
 ---
-<Base title={title} description={description} kits={kits} figures={figures} slug={slug} ogImage={ogImage} type="website">
+<Base title={title} description={description} kits={kits} figures={figures} slug={slug} ogImage={ogImage} type="website" jsonld={jsonld} noindex={noindex}>
   <SiteHeader current={current} />
   <main class="site" id="content">
     <slot />
