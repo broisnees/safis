@@ -1,0 +1,1479 @@
+<script>
+// Shared by every figure below. SI units unless a name says otherwise (°C, Å, kJ/mol, ps).
+window.WATER = (() => {
+  const g0 = 9.81;
+  // Density of liquid water at 1 atm, kg/m³. 0–40 °C: Tanaka et al. (2001), the CIPM formula.
+  // 40–100 °C: a smooth (Catmull-Rom) curve through the CRC Handbook's table every 10 °C.
+  const TAB = [995.65, 992.22, 988.04, 983.20, 977.76, 971.79, 965.31, 958.35, 951.0];   // 30, 40, ..., 110 °C
+  function density(T) {
+    if (T <= 40) {
+      const a1 = -3.983035, a2 = 301.797, a3 = 522528.9, a4 = 69.34881, a5 = 999.974950;
+      return a5 * (1 - ((T + a1) ** 2 * (T + a2)) / (a3 * (T + a4)));
+    }
+    const u = Math.min(T, 100) / 10 - 3, i = Math.min(6, Math.floor(u)), f = u - i, [p0, p1, p2, p3] = [TAB[i - 1] ?? TAB[0], TAB[i], TAB[i + 1], TAB[i + 2]];
+    return 0.5 * (2 * p1 + (-p0 + p2) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f * f + (-p0 + 3 * p1 - 3 * p2 + p3) * f ** 3);
+  }
+  const ICE = 916.7;                       // kg/m³ at 0 °C
+  // Surface tension, N/m: IAPWS R1-76(2014), σ = B τ^μ (1 + b τ), τ = 1 − T/Tc.
+  function sigma(T) { const tau = 1 - (T + 273.15) / 647.096; return 0.2358 * tau ** 1.256 * (1 - 0.625 * tau); }
+  // Viscosity, Pa·s: a three-constant Vogel fit, within about 2% of the IAPWS 2008 values from 0 to 100 °C.
+  function viscosity(T) { return 2.414e-5 * 10 ** (247.8 / (T + 273.15 - 140)); }
+  // Specific heats, J/(g·K), at 25 °C (NIST Chemistry WebBook): water 75.3 J/(mol·K) / 18.015 g/mol,
+  // quartz sand 44.6 / 60.08, iron 25.1 / 55.85.
+  const CP = { water: 4.18, sand: 0.74, iron: 0.449 };
+  const N_IOR = 1.333;                     // refractive index at 589 nm, 20 °C (Hale and Querry 1973)
+  // Phase speed (m/s) of a wave of wavelength lam (m) on water of depth h (m): ω² = (g k + σ k³/ρ) tanh(k h).
+  function waveSpeed(lam, h = Infinity, T = 20) {
+    const k = 2 * Math.PI / lam, s = sigma(T) / density(T);
+    return Math.sqrt((g0 / k + s * k) * (h === Infinity ? 1 : Math.tanh(k * h)));
+  }
+  // Pure-water absorption, 1/m, every 20 nm from 380 to 700 nm (Pope and Fry 1997).
+  const ABS_NM = [380, 400, 420, 440, 460, 480, 500, 520, 540, 560, 580, 600, 620, 640, 660, 680, 700];
+  const ABS = [0.01137, 0.00663, 0.00454, 0.00635, 0.00979, 0.0127, 0.0204, 0.0409, 0.0474, 0.0619, 0.0896, 0.2224, 0.2755, 0.3108, 0.41, 0.465, 0.624];
+  const absorb = nm => Num.interp(ABS_NM, ABS, Math.min(700, Math.max(380, nm)));
+  return { g0, density, ICE, sigma, viscosity, CP, N_IOR, waveSpeed, ABS_NM, ABS, absorb };
+})();
+</script>
+
+<div class="abstract">
+  <ul>
+    <li>A water molecule is bent, with its charge pushed to one side, so neighboring molecules stick to each other through hydrogen bonds that form and break about once a picosecond.</li>
+    <li>Those bonds make water boil 150 °C later than its chemical cousins would suggest, soak up four to ten times more heat than rock or metal, and reach its densest at 4 °C, which is why lakes keep liquid water under their ice.</li>
+    <li>At the surface the same bonds pull inward as surface tension, strong enough to float a steel paperclip and to lift water up a thin tube; around a dissolved ion they line up as a shell, which is why water dissolves salt.</li>
+    <li>In motion, water is thin: small things in slow water flow smoothly, but almost any stream is turbulent, and its waves travel at speeds set by gravity, depth, and, for the smallest ripples, surface tension.</li>
+    <li>Water bends light by a third, focusing sunlight into the bright web on a pool floor, and it absorbs red light weakly but steadily, so a few meters of it look blue.</li>
+  </ul>
+</div>
+
+<p class="lede">A glass of tap water is about the least remarkable thing in a kitchen: no color, no smell, no taste. Yet almost every number that describes it is odd. A molecule this small should be a gas at room temperature. Water takes more heat to warm than nearly any other liquid, swells when it freezes, climbs narrow tubes, holds up insects, and dissolves more substances than any other common liquid.</p>
+
+<p>Here is the glass: 8 cm of water at room temperature. Drag the temperature from <span class="scrub" data-key="T"></span> down to <button class="set" data-set="T=-5">below freezing</button> and up to <button class="set" data-set="T=100">boiling</button>, and watch the <span class="c-blue" data-part="level">water level</span> and the plot of the volume beside it:</p>
+<figure class="demo wide" id="glass" aria-label="A drinking glass of water in 3D beside a plot of the volume of one gram of water against temperature. A temperature slider runs from minus 10 to 100 degrees Celsius. The level rises as the water warms, rises further when it freezes into ice, and bubbles and steam appear at 100 degrees."></figure>
+<script>
+window.GLASS = (() => {
+  // A tumbler in cm: inner radius 3.6, wall 0.25, base 0.7, 11 cm tall. 8 cm of water at 20 °C.
+  const R = 3.6, WALL = 0.25, BASE = 0.7, H = 11, H20 = 8;
+  // The water is simulated water (E3.water): it refracts, absorbs, and its surface moves; the glass
+  // around it is a thin-walled container that refracts it in turn. Ice is a frosted solid.
+  E3.define.material("tumbler-ice", { color: "#eaf3f7", metal: 0, roughness: 0.45 });
+  const level = T => (T < 0 ? H20 * WATER.density(20) / WATER.ICE : H20 * WATER.density(20) / WATER.density(T));
+  function build() {
+    const scene = E3.scene({ shadow: true });
+    scene.look = "studio";
+    const cup = E3.mesh.lathe([[0, 0], [R + WALL - 0.15, 0], [R + WALL, 0.15], [R + WALL, H], [R, H], [R, BASE + 0.1], [R - 0.1, BASE], [0, BASE]]);
+    const glass = scene.add(cup, { name: "glass", material: { base: "glass", thickness: WALL } });
+    // The meniscus: water climbs the clean glass lc·sqrt(2(1 − sin θ)) at the wall and falls off over the
+    // capillary length lc = 0.27 cm (contact angle θ = 20°).
+    const LCc = 0.27, h0 = LCc * Math.sqrt(2 * (1 - Math.sin(20 * Math.PI / 180)));
+    // A glass on a table is never quite still: ripples 20 µm high from the room's vibration.
+    const body = scene.add(E3.water({ shape: "round", size: 2 * (R - 0.02), depth: H20, units: "cm", resolution: 64, caustics: false, meniscus: { height: h0, length: LCc }, ripples: 0.002, rippleLength: 1.2 }), { name: "water" });
+    const water = body.surface;
+    const ice = scene.add(E3.mesh.cylinder(R - 0.02, 1), { name: "ice", material: "tumbler-ice" });
+    const steam = scene.add(E3.particles({ matter: "steam", units: "cm", count: 300, seed: 3, size: [0.8, 4.5], opacity: 0.3,
+      emitter: { shape: "disk", radius: R * 0.85, position: [0, BASE + H20 + 0.6, 0], speed: [3, 8], spread: 0.3 } }), { name: "steam" });
+    const bubbles = scene.add(E3.particles({ matter: "bubble", units: "cm", count: 160, seed: 5, size: [0.12, 0.3], life: [0.28, 0.34],
+      emitter: { shape: "disk", radius: R * 0.7, position: [0, BASE + 0.15, 0], speed: [0, 2], spread: 0.4 } }), { name: "bubbles" });
+    function pose(T, t) {
+      const hl = level(T);
+      body.visible = T >= 0;
+      body.depth = hl;
+      body.position = [0, BASE + hl, 0];
+      // A boil breaks the surface: bubbles bursting are drops falling back.
+      body.rain = T >= 99.5 ? 60 : 0;
+      ice.visible = T < 0;
+      ice.scale = [1, hl, 1];
+      ice.position = [0, BASE + hl / 2, 0];
+      const hot = clamp((T - 70) / 30, 0, 1);
+      steam.position = [0, hl - H20, 0];
+      steam.visible = hot > 0.02;
+      steam.density = hot;
+      bubbles.visible = T >= 99.5;
+      scene.time = t;
+      return hl;
+    }
+    return { scene, glass, water, steam, bubbles, pose };
+  }
+  return { R, WALL, BASE, H, H20, level, build };
+})();
+{
+  const G = GLASS.build();
+  let view = null;
+  demo("glass", {
+    aspect: w => (w < 560 ? 0.75 : 1.75),
+    orbit: { yaw: -0.4, pitch: 0.28, minPitch: -0.1, maxPitch: 1.1 },
+    state: () => ({ t: 3 }),
+    controls: [{ key: "T", label: "Temperature", min: -10, max: 100, step: 0.5, value: 20, unit: " °C", color: "orange",
+      marks: [{ value: 0, label: "0 °C" }, { value: 4, label: "" }, { value: 100, label: "100 °C" }] }],
+    step(dt, s) { s.t += dt; },
+    status: (s, v) => v.T < 0 ? `ice, ${(1000 / WATER.ICE).toFixed(3)} cm³ per gram` : `${v.T >= 100 ? "boiling" : "liquid"}, ${(1e6 / WATER.density(v.T) / 1000).toFixed(4)} cm³ per gram`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, b3 = narrow ? [0, 0, g.w, g.h * 0.6] : [0, 0, g.w * 0.52, g.h], bp = narrow ? [8, g.h * 0.6 + 6, g.w - 16, g.h * 0.4 - 10] : [g.w * 0.55, 16, g.w * 0.43, g.h - 36];
+      const hl = G.pose(v.T, s.t);
+      G.water.highlight = g.lit("level") ? "blue" : false;
+      view = g.render3d(G.scene, { ...s.view, fov: 28, target: [0, 5.5, 0], distance: 40 }, { box: b3 });
+      const top = view.project([GLASS.R + GLASS.WALL, GLASS.BASE + hl, 0]);
+      g.callouts([{ at: top, text: v.T < 0 ? "top of the ice" : "water level", color: "blue", side: "left" }]);
+      const P = g.graph({ box: bp, x: [-10, 100], y: [0.996, 1.10], axes: "frame", xLabel: "Temperature (°C)", yLabel: "Volume of 1 g (cm³)", yTicks: [1.0, 1.02, 1.04, 1.06, 1.08], yFormat: y => y.toFixed(2) });
+      P.fn(T => 1000 / WATER.density(T), { color: "blue", domain: [0, 100] });
+      P.segment([-10, 1000 / WATER.ICE], [0, 1000 / WATER.ICE], { color: "purple", width: 2 });
+      P.segment([0, 1000 / WATER.ICE], [0, 1000 / WATER.density(0)], { color: "muted", width: 1, dash: [3, 3] });
+      P.label("ice", [-5, 1000 / WATER.ICE], { dy: -10, color: "purple" });
+      P.label("liquid", [60, 1000 / WATER.density(60)], { dy: -12, color: "blue" });
+      const y = v.T < 0 ? 1000 / WATER.ICE : 1000 / WATER.density(v.T);
+      P.marker(v.T, y, { color: "orange", drop: true });
+    },
+  });
+}
+</script>
+<p>Three things happen that shouldn't. Warming from 20 °C to 100 °C the water swells by about 4%, normal for a liquid, but cooling it toward freezing doesn't shrink it all the way: below 4 °C it starts to swell again. Freezing makes it jump up by 9%, the opposite of almost every other substance. And it stays liquid until 100 °C, far hotter than a molecule this light has any right to.</p>
+<p>The dip near 4 °C is real but only 0.01% deep<span class="sidenote">The plot shows the volume of one gram, which is what the level measures. The level is drawn to scale: 4% of 8 cm is about 3 mm.</span>. Each of these oddities comes from the shape of one molecule and the way it holds its neighbors, so that is where we start. The crystal of ice has <a href="../ice/index.html">its own page</a>; this one follows water as a liquid, out to the waves on a pond.</p>
+
+<h2>A bent molecule</h2>
+
+<p>A water molecule is one oxygen atom holding two hydrogen atoms. Spectroscopy pins its shape down very precisely: each O–H bond is 0.9572 Å long, a little under a tenth of a nanometer, and the two bonds meet at 104.52° <a class="cite" href="#ref-hoy1979"></a>. Turn the molecule, switch between the stick model and one where each atom fills the space it occupies, and show the charges:</p>
+<figure class="demo" id="molecule" aria-label="A turnable 3D water molecule: a red oxygen atom and two white hydrogen atoms at 104.5 degrees. A choice shows it as ball-and-stick or space-filling; a switch shows the partial charges and a purple arrow for the dipole."></figure>
+<script>
+{
+  const deg = Math.PI / 180, r = 0.9572, half = 104.52 / 2 * deg;
+  const atoms = [["O", [0, 0, 0]], ["H", [r * Math.sin(half), -r * Math.cos(half), 0]], ["H", [-r * Math.sin(half), -r * Math.cos(half), 0]]];
+  const scene = E3.scene({ shadow: false });
+  scene.look = "diagram";
+  const ball = scene.add(E3.molecule(atoms, [[0, 1], [0, 2]], { style: "ball" }));
+  const space = scene.add(E3.molecule(atoms, [], { style: "space" }));
+  // The dipole points from the negative end (oxygen) toward the positive end (the hydrogens).
+  const dip = scene.add(E3.mesh.arrow([0, 0.9, 0], [0, -0.95, 0], { radius: 0.05 }), { material: "purple", name: "dipole" });
+  let view;
+  demo("molecule", {
+    aspect: 1.45,
+    orbit: { yaw: 0.25, pitch: 0.2 },
+    controls: [
+      { key: "style", label: "Model", type: "choice", options: [{ value: "ball", label: "Ball and stick" }, { value: "space", label: "Space-filling" }], value: "ball" },
+      { key: "charge", label: "Charges", type: "toggle", value: true, color: "purple" },
+    ],
+    draw(g, s, v) {
+      ball.visible = v.style === "ball"; space.visible = v.style === "space";
+      dip.visible = v.charge && v.style === "ball";
+      view = g.render3d(scene, { ...s.view, fov: 28, target: [0, -0.2, 0], distance: 7.5 });
+      const P = q => view.project(q), O = [0, 0, 0], H1 = atoms[1][1], H2 = atoms[2][1], mid = E3.v3.lerp(O, H1, 0.55);
+      const items = [];
+      if (v.style === "ball") {
+        const a0 = Math.atan2(P(H1)[1] - P(O)[1], P(H1)[0] - P(O)[0]), a1 = Math.atan2(P(H2)[1] - P(O)[1], P(H2)[0] - P(O)[0]);
+        g.angleMark(P(O), Math.min(a0, a1), Math.max(a0, a1), 30, { color: "orange" });
+        items.push({ at: P(mid), text: "O–H bond 0.957 Å", color: "muted", side: "right" });
+        items.push({ at: P(E3.v3.scale(E3.v3.lerp(H1, H2, 0.5), 0.45)), text: "104.5°", color: "orange", side: "left", dy: 30 });
+      }
+      if (v.charge) {
+        items.push({ at: P([0, 0.36, 0]), text: "δ− (oxygen side)", color: "red", side: "left" });
+        items.push({ at: P(H1), text: "δ+", color: "blue", side: "right" });
+        items.push({ at: P(H2), text: "δ+", color: "blue", side: "left" });
+        if (v.style === "ball") items.push({ at: P([0, -0.95, 0]), text: "dipole, 1.85 D", color: "purple", side: "right" });
+      }
+      g.callouts(items);
+    },
+  });
+}
+</script>
+<p>Oxygen pulls on the electrons it shares much harder than hydrogen does, so they spend more of their time near the oxygen. That leaves the oxygen end slightly negative, <span class="c-red">δ−</span>, and each hydrogen slightly positive, <span class="c-blue">δ+</span>. Because the molecule is bent, the charges sit on opposite sides. The <span class="c-purple">purple arrow</span>, drawn from the negative end toward the positive end, is the <dfn data-def="How far apart a molecule's positive and negative charge sit, times how much charge: a measure of how lopsided it is.">dipole</dfn>, 1.85 debye for a single water molecule <a class="cite" href="#ref-clough1973"></a>.<span class="sidenote">A straight molecule like carbon dioxide has no dipole at all: its two bonds point in opposite directions and cancel.</span></p>
+<p>The bend comes from the oxygen's four pairs of outer electrons: two shared with the hydrogens, two kept as lone pairs on the far side. The four pairs push apart toward the corners of a tetrahedron, squeezed a little by the lone pairs to 104.5° instead of 109.5°. The <a href="../ice/index.html">ice page</a> lets you bend the molecule and watch the dipole change. Here I want to show what a dipole does in bulk.</p>
+
+<p>Put water between two charged plates. Each molecule feels a twist toward lining its dipole up with the field, while collisions with its neighbors knock it about at random. Raise the <span class="c-orange">field</span> from <span class="scrub" data-key="E"></span> and watch how many of the <span class="c-purple">dipoles</span> point the way the field pulls:</p>
+<figure class="demo" id="field" aria-label="A grid of water molecules between a positive plate on the left and a negative plate on the right. Each molecule jiggles in orientation; a slider raises the electric field, and the molecules lean toward lining up, with a readout of the average alignment."></figure>
+<script>
+{
+  // Each molecule turns under a torque −μE sinθ and random kicks from its neighbors at 25 °C
+  // (rotational Langevin dynamics). Time is scaled: the real reorientation takes a few ps.
+  const MU = 6.17e-30, KT = 1.380649e-23 * 298.15, NX = 11, NY = 7;
+  const fresh = () => { const r = Num.rng(7); return { th: Array.from({ length: NX * NY }, () => r() * TAU), seed: 11, t: 0 }; };
+  demo("field", {
+    aspect: 1.6,
+    state: fresh,
+    controls: [
+      { key: "E", label: "Field", min: 6, max: 10, step: 0.05, value: 8.5, color: "orange", format: e => `${(10 ** (e - Math.floor(e))).toFixed(1)}×10${Num.sup(String(Math.floor(e)))} V/m`,
+        marks: [{ value: 6.48, label: "air sparks" }] },
+      { key: "liquid", label: "Molecule", type: "choice", options: [{ value: 1, label: "Water" }, { value: 0, label: "Straight (no dipole)" }], value: 1 },
+    ],
+    step(dt, s, v) {
+      const r = Num.rng(s.seed++), x = MU * v.liquid * 10 ** v.E / KT;
+      // Overdamped rotation: dθ = −D x sinθ dt + sqrt(2 D dt) ξ, with D chosen so a molecule turns about a radian per second on screen.
+      const D = 1.2, h = Math.min(dt, 1 / 30);
+      for (let i = 0; i < s.th.length; i++) s.th[i] += -D * x * Math.sin(s.th[i]) * h + Math.sqrt(2 * D * h) * r.gauss(0, 1);
+      s.t += dt;
+    },
+    status: (s, v) => {
+      const x = MU * v.liquid * 10 ** v.E / KT, L = x < 1e-6 ? x / 3 : 1 / Math.tanh(x) - 1 / x;
+      return v.liquid ? `μE/kT = ${Num.fmt(x, { digits: 2 })}; average alignment ${(L * 100).toFixed(L < 0.01 ? 2 : 1)}%` : "no dipole: nothing to turn";
+    },
+    draw(g, s, v) {
+      const pad = 34, w = g.w - 2 * pad, h = g.h - 24, cw = w / NX, ch = h / NY, rr = Math.min(cw, ch) * 0.24;
+      g.rect(6, 8, 10, g.h - 16, { fill: g.rgba("red", 0.25), stroke: "red", width: 1.5 });
+      g.rect(g.w - 16, 8, 10, g.h - 16, { fill: g.rgba("blue", 0.25), stroke: "blue", width: 1.5 });
+      g.text("+", [11, g.h / 2], { color: "red", size: 18, weight: 700, align: "center", baseline: "middle" });
+      g.text("−", [g.w - 11, g.h / 2], { color: "blue", size: 18, weight: 700, align: "center", baseline: "middle" });
+      for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        const c = [pad + (i + 0.5) * cw, 12 + (j + 0.5) * ch], th = s.th[i + j * NX];
+        // θ = 0 means the dipole (which points from the O toward the H side) points along the field, to the right.
+        const d = [Math.cos(th), Math.sin(th)], half = 52.26 * Math.PI / 180;
+        if (v.liquid) {
+          for (const sg of [-1, 1]) {
+            const a = th + sg * half, hp = [c[0] + Math.cos(a) * rr * 1.35, c[1] + Math.sin(a) * rr * 1.35];
+            g.line(c, hp, { stroke: "muted", width: 1.5 });
+            g.circle(hp, rr * 0.55, { fill: "panel", stroke: "ink", width: 1 });
+          }
+          g.circle(c, rr, { fill: g.rgba("red", 0.55), stroke: "ink", width: 1 });
+          g.arrow([c[0] - d[0] * rr * 1.6, c[1] - d[1] * rr * 1.6], [c[0] + d[0] * rr * 2.1, c[1] + d[1] * rr * 2.1], { stroke: "purple", width: 1.5, head: 5, alpha: 0.85 });
+        } else {
+          const p = [Math.cos(th), Math.sin(th)];
+          g.line([c[0] - p[0] * rr * 1.6, c[1] - p[1] * rr * 1.6], [c[0] + p[0] * rr * 1.6, c[1] + p[1] * rr * 1.6], { stroke: "muted", width: 1.5 });
+          g.circle(c, rr * 0.8, { fill: "panel", stroke: "ink", width: 1 });
+          for (const sg of [-1, 1]) g.circle([c[0] + sg * p[0] * rr * 1.6, c[1] + sg * p[1] * rr * 1.6], rr * 0.62, { fill: g.rgba("red", 0.55), stroke: "ink", width: 1 });
+        }
+      }
+    },
+  });
+}
+</script>
+<p>At everyday fields almost nothing happens. Even at a field strong enough to make air spark, <button class="set" data-set="E=6.48">3 million volts per meter</button>, the twist is about 200 times weaker than the jostling, and the average molecule leans the field's way by about 0.15%. Only around a hundred million volts per meter, a hundred times the field that makes air spark, does the lineup become easy to see. The figure follows each molecule's real torque, with the motion slowed from picoseconds to seconds.</p>
+<p>A fraction of a percent sounds like nothing, but a liter holds 3.3 × 10<sup>25</sup> molecules, each leaning its negative end toward the positive plate. Together they cancel most of the plates' field: in water what remains is 78 times weaker than in empty space <a class="cite" href="#ref-fernandez1997"></a>. That factor, the <dfn data-def="How many times a material weakens the electric field between charges, compared with empty space. Water's is 78.4 at 25 °C.">dielectric constant</dfn>, is the largest of any common liquid<span class="sidenote">Neighboring dipoles lean together, held by the hydrogen bonds of the next section, which makes the factor larger than lone molecules would give.</span>. We'll need it to dissolve salt.</p>
+
+<h2>Hydrogen bonds</h2>
+
+<p>Opposite charges attract, so the positive hydrogen of one molecule is drawn toward the negative oxygen of the next. When a hydrogen points straight at a neighbor's oxygen, the pair holds together with about 20 kilojoules per mole, roughly a twentieth of a real chemical bond but eight times the energy of random thermal jostling at room temperature. This link is the <dfn data-def="The attraction between a hydrogen on one water molecule and the oxygen of another, strongest when the three atoms line up. About 20 kJ/mol.">hydrogen bond</dfn>, and it only works when the molecules line up.</p>
+
+<p>To watch many at once I'll use a flattened water, a well-studied model in which each molecule is a disc with three arms that bond only when two arms point straight at each other <a class="cite" href="#ref-silverstein1998"></a><span class="sidenote">Real water has four bonding directions in three dimensions, two hydrogens and two lone pairs; three arms is what fits on a flat page.</span>. The molecules move by Newton's laws with real masses and bond energies, jostled at the <span class="c-orange">temperature</span> you set. <span class="c-blue">Blue dashes</span> are hydrogen bonds. Heat the liquid from <span class="scrub" data-key="T"></span> and watch the network come apart:</p>
+<script>
+// Mercedes-Benz water (Silverstein, Haymet and Dill 1998), run as Langevin dynamics.
+// Reduced units: bond length 1 = 2.8 Å, bond energy 1 = 20 kJ/mol, mass 1 = 18 u, so
+// one time unit is 2.8 Å · sqrt(18 u / 20 kJ/mol) = 0.266 ps. kT/ε at 25 °C is 0.124.
+window.MB = (() => {
+  const EPS_LJ = 0.1, SIG = 0.7, S = 0.085, S2 = 2 * S * S, RC2 = 1.8 * 1.8, RHB = 1.45;
+  const PS = 0.266, I = 0.03, GAMMA = 1, DT = 0.004, KB = 0.0083145 / 20;
+  const ARM = [0, 2 * Math.PI / 3, 4 * Math.PI / 3];
+  const kTof = C => KB * (C + 273.15);
+  function rand(s) { let t = (s.seed = (s.seed + 0x6D2B79F5) >>> 0); t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }
+  function gauss(s) { return Math.sqrt(-2 * Math.log(Math.max(1e-12, rand(s)))) * Math.cos(TAU * rand(s)); }
+  // n molecules in a box Lx × Ly, periodic in x, and in y unless slab (a floor at y = 0 and air above).
+  function create({ n = 64, density = 0.86, Lx, Ly, seed = 1, slab = false, fill = 1 } = {}) {
+    Lx ??= Math.sqrt(n / density); Ly ??= Lx;
+    const s = { n, Lx, Ly, slab, seed: seed * 7919 + 1, t: 0, x: [], y: [], th: [], vx: [], vy: [], w: [], fx: [], fy: [], tq: [], bonds: {}, life: [], pairs: [], E: 0 };
+    const H = slab ? Ly * fill : Ly, cols = Math.ceil(Math.sqrt(n * Lx / H)), rows = Math.ceil(n / cols);
+    for (let i = 0; i < n; i++) {
+      const c = i % cols, r = Math.floor(i / cols);
+      s.x.push((c + 0.5 + (rand(s) - 0.5) * 0.2) * Lx / cols); s.y.push((r + 0.5 + (rand(s) - 0.5) * 0.2) * H / rows);
+      s.th.push(rand(s) * TAU); s.vx.push(0); s.vy.push(0); s.w.push(0); s.fx.push(0); s.fy.push(0); s.tq.push(0);
+    }
+    forces(s);
+    return s;
+  }
+  function forces(s) {
+    const { n, x, y, th, fx, fy, tq, Lx, Ly, slab } = s, pairs = [];
+    fx.fill(0); fy.fill(0); tq.fill(0);
+    const ca = new Float64Array(n * 3), sa = new Float64Array(n * 3);
+    for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) { ca[i * 3 + k] = Math.cos(th[i] + ARM[k]); sa[i * 3 + k] = Math.sin(th[i] + ARM[k]); }
+    let E = 0;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      let dx = x[j] - x[i], dy = y[j] - y[i];
+      dx -= Lx * Math.round(dx / Lx); if (!slab) dy -= Ly * Math.round(dy / Ly);
+      const r2 = dx * dx + dy * dy;
+      if (r2 > RC2) continue;
+      const r = Math.sqrt(r2), nx = dx / r, ny = dy / r, sr6 = (SIG * SIG / r2) ** 3, sr12 = sr6 * sr6;
+      E += 4 * EPS_LJ * (sr12 - sr6);
+      const fl = 24 * EPS_LJ * (2 * sr12 - sr6) / r;
+      let Fx = fl * nx, Fy = fl * ny;   // the force on j
+      if (r < RHB) {
+        // A bond: Gaussians in the distance and in how straight arm k of i and arm l of j point along the line.
+        const Gr = Math.exp(-((r - 1) ** 2) / S2), dGr = -(r - 1) / (S * S) * Gr;
+        let Ep = 0;
+        for (let k = 0; k < 3; k++) {
+          const ax = ca[i * 3 + k], ay = sa[i * 3 + k], xk = ax * nx + ay * ny;
+          if (xk < 0.6) continue;
+          const Gx = Math.exp(-((xk - 1) ** 2) / S2), dGx = -(xk - 1) / (S * S) * Gx;
+          for (let l = 0; l < 3; l++) {
+            const bx = ca[j * 3 + l], by = sa[j * 3 + l], yl = bx * nx + by * ny;
+            if (yl > -0.6) continue;
+            const Gy = Math.exp(-((yl + 1) ** 2) / S2), dGy = -(yl + 1) / (S * S) * Gy;
+            Ep -= Gr * Gx * Gy;
+            Fx += dGr * nx * Gx * Gy + Gr * dGx * (ax - xk * nx) / r * Gy + Gr * Gx * dGy * (bx - yl * nx) / r;
+            Fy += dGr * ny * Gx * Gy + Gr * dGx * (ay - xk * ny) / r * Gy + Gr * Gx * dGy * (by - yl * ny) / r;
+            tq[i] += Gr * Gy * dGx * (-ay * nx + ax * ny);
+            tq[j] += Gr * Gx * dGy * (-by * nx + bx * ny);
+          }
+        }
+        if (Ep < -0.05) pairs.push([i, j, Ep]);
+        E += Ep;
+      }
+      fx[j] += Fx; fy[j] += Fy; fx[i] -= Fx; fy[i] -= Fy;
+    }
+    if (slab) for (let i = 0; i < n; i++) {
+      if (y[i] < 0.6) fy[i] += 0.3 * ((0.6 / Math.max(y[i], 0.05)) ** 4 - 1);
+      if (y[i] > Ly - 0.3) fy[i] -= 5 * (y[i] - (Ly - 0.3));
+    }
+    s.pairs = pairs; s.E = E;
+  }
+  // One Langevin step (BAOAB): the thermostat stands in for the heat bath of the rest of the liquid.
+  function stepOnce(s, kT) {
+    const { n, x, y, th, vx, vy, w, fx, fy, tq } = s, h = DT, c1 = Math.exp(-GAMMA * h), c2 = Math.sqrt((1 - c1 * c1) * kT), c3 = Math.sqrt((1 - c1 * c1) * kT / I);
+    for (let i = 0; i < n; i++) {
+      vx[i] += 0.5 * h * fx[i]; vy[i] += 0.5 * h * fy[i]; w[i] += 0.5 * h * tq[i] / I;
+      x[i] += 0.5 * h * vx[i]; y[i] += 0.5 * h * vy[i]; th[i] += 0.5 * h * w[i];
+      vx[i] = c1 * vx[i] + c2 * gauss(s); vy[i] = c1 * vy[i] + c2 * gauss(s); w[i] = c1 * w[i] + c3 * gauss(s);
+      x[i] += 0.5 * h * vx[i]; y[i] += 0.5 * h * vy[i]; th[i] += 0.5 * h * w[i];
+      x[i] -= s.Lx * Math.floor(x[i] / s.Lx); if (!s.slab) y[i] -= s.Ly * Math.floor(y[i] / s.Ly);
+    }
+    forces(s);
+    for (let i = 0; i < n; i++) { vx[i] += 0.5 * h * fx[i]; vy[i] += 0.5 * h * fy[i]; w[i] += 0.5 * h * tq[i] / I; }
+    s.t += h;
+    // A bond forms when the pair energy drops below −0.5 and counts as broken above −0.2.
+    const now = {};
+    for (const [i, j, e] of s.pairs) { const key = i * 1000 + j; if (e < -0.5 || (s.bonds[key] != null && e < -0.2)) now[key] = s.bonds[key] ?? s.t; }
+    for (const key in s.bonds) if (now[key] == null) { s.life.push(s.t - s.bonds[key]); if (s.life.length > 3000) s.life.shift(); }
+    s.bonds = now;
+  }
+  function advance(s, time, C) { const kT = kTof(C), steps = Math.round(time / DT); for (let k = 0; k < steps; k++) stepOnce(s, kT); }
+  function counts(s) { const c = new Array(s.n).fill(0); for (const key in s.bonds) { c[Math.floor(key / 1000)]++; c[key % 1000]++; } return c; }
+  // Draw the molecules (P maps model units to px) and their bonds as blue dashes.
+  function draw(g, P, s, o = {}) {
+    const rr = P.sx * 0.24, cnt = counts(s);
+    for (const key in s.bonds) {
+      const i = Math.floor(key / 1000), j = key % 1000;
+      let dx = s.x[j] - s.x[i], dy = s.y[j] - s.y[i];
+      dx -= s.Lx * Math.round(dx / s.Lx); if (!s.slab) dy -= s.Ly * Math.round(dy / s.Ly);
+      const lit = o.focus != null && (i === o.focus || j === o.focus);
+      g.line(P([s.x[i], s.y[i]]), P([s.x[i] + dx, s.y[i] + dy]), { stroke: lit ? "orange" : "blue", width: lit ? 2.5 : 1.6, dash: [4, 3] });
+      if (Math.abs(dx - (s.x[j] - s.x[i])) > 1e-9 || Math.abs(dy - (s.y[j] - s.y[i])) > 1e-9) g.line(P([s.x[j], s.y[j]]), P([s.x[j] - dx, s.y[j] - dy]), { stroke: lit ? "orange" : "blue", width: lit ? 2.5 : 1.6, dash: [4, 3] });
+    }
+    for (let i = 0; i < s.n; i++) {
+      const c = P([s.x[i], s.y[i]]);
+      for (const a of ARM) { const t = s.th[i] + a; g.line(c, [c[0] + Math.cos(t) * rr * 1.7, c[1] - Math.sin(t) * rr * 1.7], { stroke: "ink", width: 1.3 }); }
+      const fill = o.shade ? g.mix("panel", "red", 0.15 + 0.22 * cnt[i]) : g.rgba("red", 0.5);
+      g.circle(c, rr, { fill, stroke: "ink", width: 1 });
+      if (i === o.focus) g.circle(c, rr * 1.9, { stroke: "orange", width: 2 });
+    }
+  }
+  return { create, advance, stepOnce, counts, draw, kTof, PS, DT };
+})();
+</script>
+<figure class="demo" id="liquid" aria-label="A box of 64 flat three-armed water molecules moving in a simulation, with blue dashed lines for hydrogen bonds. A temperature slider runs from 0 to 300 degrees Celsius; bars beside the box show how many molecules have 0, 1, 2, or 3 bonds."></figure>
+<script>
+{
+  const fresh = C => { const w = MB.create({ n: 64, density: 0.86, seed: 4 }); MB.advance(w, 6, C); return w; };
+  demo("liquid", {
+    aspect: w => (w < 560 ? 0.8 : 1.7),
+    reset: true,
+    state: () => ({ w: fresh(25), C: 25 }),
+    controls: [{ key: "T", label: "Temperature", min: 0, max: 300, step: 1, value: 25, unit: " °C", color: "orange", marks: [{ value: 0, label: "0 °C" }, { value: 100, label: "100 °C" }] }],
+    step(dt, s, v) { for (let k = 0; k < 12; k++) MB.stepOnce(s.w, MB.kTof(v.T)); },
+    status: s => { const c = MB.counts(s.w), m = c.reduce((a, b) => a + b, 0) / c.length; return `${m.toFixed(2)} bonds per molecule, ${Math.round(m / 3 * 100)}% of the arms`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, side = narrow ? g.w - 16 : g.h - 16, bx = narrow ? [8, 8, side, side] : [8, 8, side, side];
+      const P = g.fit(0, s.w.Lx, 0, s.w.Ly, { box: bx, pad: 4 });
+      g.clip(bx, () => MB.draw(g, P, s.w));
+      g.rect(bx[0] + 4, bx[1] + 4, bx[2] - 8, bx[3] - 8, { stroke: "faint", width: 1 });
+      const c = MB.counts(s.w), hist = [0, 1, 2, 3].map(k => c.filter(x => x === k).length / c.length);
+      const bb = narrow ? [16, side + 22, g.w - 32, g.h - side - 34] : [side + 40, 30, g.w - side - 56, g.h - 60];
+      g.text("share of molecules with", [bb[0], bb[1] - 12], { size: 12, color: "muted" });
+      g.bars(hist, { box: bb, labels: ["0 bonds", "1 bond", "2 bonds", "3 bonds"], range: [0, 1], horizontal: true, values: true, format: x => `${Math.round(x * 100)}%`, color: "blue", highlight: 3 });
+    },
+  });
+}
+</script>
+<p>At room temperature about five arms in six are bonded, in a tangled net of rings. Yet the net is never still. Watch one dash: it breaks as a molecule swings an arm away, and a moment later the arm finds another partner. The liquid flows because bonds are swapped one at a time, not because they are all broken. At <button class="set" data-set="T=300">300 °C</button>, liquid only under pressure, many more arms hang free and the net frays into clusters.</p>
+<p>Real water behaves the same way, with four bonding directions instead of three. At room temperature each molecule has, on average, between three and four hydrogen bonds at any instant.<span class="sidenote">Ice, with exactly four, is only about 15% more bonded than the liquid: melting breaks surprisingly few bonds.</span></p>
+
+<p>How long does one bond last? Here is the same liquid, with one molecule ringed in <span class="c-orange">orange</span> and its bonds drawn in orange. Every time a bond breaks anywhere in the box, the simulation adds its age to the histogram on the right:</p>
+<figure class="demo" id="lifetime" aria-label="The simulated liquid with one molecule ringed in orange and its bonds drawn in orange, beside a histogram of how long hydrogen bonds last before breaking, in picoseconds, with the mean marked."></figure>
+<script>
+{
+  const fresh = C => { const w = MB.create({ n: 64, density: 0.86, seed: 9 }); MB.advance(w, 6, C); w.life = []; MB.advance(w, 10, C); return w; };
+  demo("lifetime", {
+    aspect: w => (w < 560 ? 0.85 : 1.7),
+    reset: true,
+    state: () => ({ w: fresh(25) }),
+    controls: [{ key: "T", label: "Temperature", min: 0, max: 300, step: 1, value: 25, unit: " °C", color: "orange" }],
+    change(key, s) { s.w.life = []; },
+    step(dt, s, v) { for (let k = 0; k < 12; k++) MB.stepOnce(s.w, MB.kTof(v.T)); },
+    status: s => { const L = s.w.life, m = L.length ? Num.mean(L) * MB.PS : 0; return `${L.length} bonds broken; mean life ${m.toFixed(2)} ps`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, side = narrow ? g.w * 0.62 : g.h - 16, bx = [8, 8, side, side];
+      const P = g.fit(0, s.w.Lx, 0, s.w.Ly, { box: bx, pad: 4 });
+      g.clip(bx, () => MB.draw(g, P, s.w, { focus: 20 }));
+      g.rect(bx[0] + 4, bx[1] + 4, bx[2] - 8, bx[3] - 8, { stroke: "faint", width: 1 });
+      const life = s.w.life.map(t => t * MB.PS), gb = narrow ? [8, side + 16, g.w - 16, g.h - side - 22] : [side + 24, 8, g.w - side - 32, g.h - 16];
+      const G = g.graph({ box: gb, x: [0, 4], y: [0, 1.6], axes: "frame", xLabel: "Bond lifetime (ps)", yLabel: "Share per ps", yTicks: [0, 0.5, 1, 1.5] });
+      if (life.length > 5) {
+        G.histogram(life.filter(t => t < 4), { bins: 20, range: [0, 4], density: true, color: "blue" });
+        const m = Num.mean(life);
+        G.vline(m, { color: "orange", label: `mean ${m.toFixed(2)} ps` });
+      }
+    },
+  });
+}
+</script>
+<p>Most bonds last less than a picosecond, a trillionth of a second, and a few last several. In the model the average is close to 0.8 ps at room temperature; ultrafast infrared measurements on real water find the network loses its memory of where its bonds were in about 1.2 ps <a class="cite" href="#ref-fecko2003"></a>. A molecule swaps a partner by a sudden jump, turning an arm from one neighbor to the next in one quick motion <a class="cite" href="#ref-laage2006"></a>. Warm the liquid and the jumps come faster.</p>
+<p>So liquid water is a crowd holding hands, each person letting go and grabbing a new hand a trillion times a second, while staying in contact with nearly everyone around them.</p>
+<details class="deeper">
+  <summary>How the flat-water simulation works <span class="hint">2 min</span></summary>
+  <p>Each molecule is a disc with three arms 120° apart. Two molecules repel when they overlap and attract weakly at a distance (a Lennard-Jones pull, a tenth of a bond's strength), and they form a hydrogen bond when they are about 2.8 Å apart and an arm of each points along the line between them. The bond's energy falls off as a narrow bell curve in the distance and in each arm's angle, which is the Mercedes-Benz model of Silverstein, Haymet and Dill <a class="cite" href="#ref-silverstein1998"></a>.</p>
+  <p>I set its bond energy to 20 kJ/mol, its mass to a water molecule's, and its bond length to 2.8 Å, which fixes the time scale: one model time unit is 0.27 ps. The molecules move by Newton's laws, with a thermostat (Langevin dynamics) standing in for the rest of the liquid: a little friction and random kicks sized to the temperature. A bond counts as formed when the pair's energy drops below half a bond and as broken when it rises above a fifth, so a bond that only wobbles isn't counted as breaking. The model is two-dimensional and has three arms instead of four, so its numbers are a guide to the real liquid, not a measurement of it.</p>
+</details>
+<aside class="callout key"><p>Water's molecules are bent and lopsided in charge, so each one holds three or four neighbors by hydrogen bonds. The bonds are swapped about once a picosecond, but at any moment nearly all of them are in place.</p></aside>
+
+<h2>Late to boil</h2>
+
+<p>The boiling point measures how hard a liquid holds its molecules. Normally that grip grows with size: bigger molecules have more electrons, which slosh into brief lopsided charges that pull on neighbors. So within one column of the periodic table, compounds of hydrogen boil later the heavier they get. Below are the measured boiling points of four such families <a class="cite" href="#ref-crc"></a>. Water is the first member of its <span class="c-blue">family</span>; before you show the others, guess where the trend says it should be:</p>
+<div class="quiz">
+  <p>Hydrogen sulfide boils at −60 °C, hydrogen selenide at −41 °C, hydrogen telluride at −2 °C. Following that trend back to the lightest member, where would water boil?</p>
+  <div class="choices"><button>Around 0 °C</button><button>Around −40 °C</button><button data-correct>Around −90 °C</button></div>
+  <p class="why">The line through its heavier cousins reaches about −90 °C at water's place. Water actually boils 190 °C later than that.</p>
+</div>
+<figure class="demo" id="hydrides" aria-label="A plot of boiling point against the row of the periodic table, for four families of hydrogen compounds. The water family is blue, with a dashed trend line through its three heavier members that reaches about minus 90 degrees at water's row, far below water's real 100 degrees. A switch adds the carbon, nitrogen and fluorine families."></figure>
+<script>
+{
+  const FAM = [
+    { name: "oxygen family", color: "blue", pts: [["H₂O", 100], ["H₂S", -60.3], ["H₂Se", -41.3], ["H₂Te", -2.2]] },
+    { name: "carbon family", color: "muted", pts: [["CH₄", -161.5], ["SiH₄", -111.9], ["GeH₄", -88.1], ["SnH₄", -51.8]] },
+    { name: "nitrogen family", color: "green", pts: [["NH₃", -33.3], ["PH₃", -87.7], ["AsH₃", -62.5], ["SbH₃", -17]] },
+    { name: "fluorine family", color: "purple", pts: [["HF", 19.5], ["HCl", -85], ["HBr", -66.7], ["HI", -35.4]] },
+  ];
+  // Least-squares line through the three heavier members of a family, by row (2 = first).
+  const fit = pts => { const xs = [3, 4, 5], ys = pts.slice(1).map(p => p[1]), mx = 4, my = Num.mean(ys), b = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / 2; return x => my + b * (x - mx); };
+  demo("hydrides", {
+    aspect: 1.5,
+    controls: [
+      { key: "others", label: "Other families", type: "toggle", value: false },
+      { key: "trend", label: "Trend lines", type: "toggle", value: true, color: "blue" },
+    ],
+    status: () => `water: trend says ${Math.round(fit(FAM[0].pts)(2))} °C, measured 100 °C`,
+    draw(g, s, v) {
+      const P = g.graph({ x: [1.6, 5.6], y: [-180, 120], axes: "frame", xTicks: { values: [2, 3, 4, 5], format: r => `row ${r}` }, yLabel: "Boiling point at 1 atm (°C)", yTicks: [-150, -100, -50, 0, 50, 100] });
+      for (const f of FAM) {
+        if (f.color !== "blue" && !v.others) continue;
+        const pts = f.pts.map((p, i) => [i + 2, p[1]]);
+        if (v.trend) { const L = fit(f.pts); P.fn(L, { color: f.color, width: 1.5, dash: [5, 4], domain: [2, 5] }); }
+        P.series(pts, { color: f.color, width: 2, dots: true });
+        f.pts.forEach((p, i) => P.label(p[0], [i + 2, p[1]], { dx: 8, dy: i === 0 ? -6 : 10, color: f.color, align: "left" }));
+      }
+      if (v.trend) { const y = fit(FAM[0].pts)(2); P.marker(2, y, { color: "blue", label: `trend: ${Math.round(y)} °C`, pos: "se" }); }
+      P.hline(20, { color: "faint", label: "room temperature" });
+    },
+  });
+}
+</script>
+<p>The <span class="c-blue">dashed line</span> through hydrogen sulfide, selenide, and telluride reaches about −90 °C at water's row. Instead it boils 190 °C later; by the trend, there would be no oceans. Turn on the <button class="set" data-set="others=true">other families</button> and the pattern is clear: methane and its cousins, which form no hydrogen bonds, rise steadily with size and have no jump at the start. Ammonia and hydrogen fluoride, which also form hydrogen bonds, stick out the same way, but less.</p>
+<p>Water sticks out furthest because each molecule makes four hydrogen bonds, two through its hydrogens and two through its lone pairs<span class="sidenote">Ammonia has only one lone pair to accept a bond with; hydrogen fluoride has only one hydrogen to give.</span>. To boil, a molecule has to break all of them at once, which takes 41 kJ per mole at 100 °C, among the largest costs of any liquid. It is why sweat cools you: each gram that evaporates carries 2.4 kJ away from your skin.</p>
+
+<h2>Slow to warm</h2>
+
+<p>The network costs energy to warm as well as to break.</p>
+<div class="quiz">
+  <p>A kilogram of water and a kilogram of iron get the same amount of heat. Which warms more?</p>
+  <div class="choices"><button>The water: metals spread heat away</button><button>About the same: same mass, same heat</button><button data-correct>The iron, by about nine times</button></div>
+  <p class="why">Each gram of iron needs 0.45 J per degree, each gram of water 4.18 J, so the same heat warms iron about nine times more.</p>
+</div>
+<p>Put one kilogram each of water, dry sand, and iron on identical 500 W heaters and add the same <span class="c-orange">heat</span> to each, from <span class="scrub" data-key="Q"></span>:</p>
+<figure class="demo" id="heating" aria-label="Three equal masses, of water, sand, and iron, each over a heater, colored by temperature, beside a plot of temperature against heat added. Water's line climbs slowest; iron's fastest. A choice switches between equal masses and equal volumes."></figure>
+<script>
+{
+  // Specific heats from WATER.CP (J/(g·K)); densities in g/cm³: water 1.00, quartz 2.65, iron 7.87.
+  const MAT = [{ key: "water", label: "water", color: "blue", rho: 1 }, { key: "sand", label: "sand", color: "brass", rho: 2.65 }, { key: "iron", label: "iron", color: "muted", rho: 7.87 }];
+  demo("heating", {
+    aspect: w => (w < 560 ? 0.9 : 1.75),
+    controls: [
+      { key: "Q", label: "Heat added", min: 0, max: 300, step: 1, value: 120, unit: " kJ", color: "orange" },
+      { key: "basis", label: "Compare", type: "choice", options: [{ value: "mass", label: "1 kg each" }, { value: "vol", label: "1 liter each" }], value: "mass" },
+    ],
+    status: (s, v) => `at 500 W that is ${Math.round(v.Q * 1000 / 500 / 6) / 10} minutes`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, sb = narrow ? [0, 0, g.w, g.h * 0.42] : [0, 0, g.w * 0.42, g.h], pb = narrow ? [0, g.h * 0.44, g.w, g.h * 0.56] : [g.w * 0.45, 0, g.w * 0.55, g.h];
+      const grams = m => (v.basis === "mass" ? 1000 : 1000 * m.rho), temp = (m, Q) => 20 + Q * 1000 / (grams(m) * WATER.CP[m.key]);
+      const P = g.graph({ box: pb, x: [0, 300], y: [0, 400], axes: "frame", xLabel: "Heat added (kJ)", yLabel: "Temperature (°C)" });
+      const AT = { water: 160, sand: 200, iron: 80 };
+      for (const m of MAT) { P.fn(Q => temp(m, Q), { color: m.color, label: m.label, labelAt: AT[m.key] }); P.marker(v.Q, temp(m, v.Q), { color: m.color }); }
+      P.hline(100, { color: "faint", label: "water boils" });
+      MAT.forEach((m, i) => {
+        const w = sb[2] / 3, cx = sb[0] + w * (i + 0.5), T = temp(m, v.Q), hot = clamp((T - 20) / 380, 0, 1);
+        const vol = grams(m) / m.rho / 1000, side = Math.min(w * 0.55, sb[3] * 0.4) * Math.cbrt(vol), base = sb[1] + sb[3] * 0.78;
+        g.rect(cx - w * 0.36, base, w * 0.72, 8, { fill: g.mix("panel", "orange", 0.25 + 0.5 * Math.min(1, v.Q / 300)), stroke: "ink", width: 1 });
+        g.rect(cx - side / 2, base - side, side, side, { fill: g.mix(g.mix("panel", m.color, 0.35), "red", hot * 0.85), stroke: "ink", width: 1.5, r: 2 });
+        g.text(m.label, [cx, base + 24], { align: "center", size: 13, color: m.color === "muted" ? "ink" : m.color });
+        g.text(`${Math.round(T)} °C`, [cx, base - side - 10], { align: "center", size: 13, weight: 600 });
+      });
+    },
+  });
+}
+</script>
+<p>After 120 kJ, four minutes on the heater, the iron is near 290 °C, the sand past 180 °C, and the water at 49 °C. Each gram of water needs 4.18 joules to warm by one degree, five to six times what sand needs and nine times what iron needs <a class="cite" href="#ref-nist"></a>. In water much of the heat goes into the network: bending, stretching, and breaking hydrogen bonds, which soaks up energy without making the molecules move faster.</p>
+<p>The comparison is fairest per gram. Switch to <button class="set" data-set="basis=vol">a liter each</button> and iron, seven times denser, catches up: per liter it holds 85% as much heat per degree as water does. Water's real advantage is that it is light, cheap, liquid, and everywhere. That is why the oceans hold more heat in their top few meters than the whole atmosphere above them, why coastal towns have milder seasons than inland ones, and why car engines and power stations are cooled with water.</p>
+
+<h2>Densest at 4 °C</h2>
+
+<p>The network also explains the dip in the first figure. Most liquids are densest just above freezing: cool them and their molecules jiggle less and settle closer together. Water does that too, but its hydrogen bonds hold molecules at fixed angles that leave gaps, the open arrangement that becomes ice. Here is the measured <span class="c-blue">density</span> of water from 0 to 30 °C <a class="cite" href="#ref-tanaka2001"></a>, with a switch that splits it into <span class="c-green">ordinary thermal expansion</span> and the effect of the <span class="c-purple">open network</span>:</p>
+<figure class="demo" id="density" aria-label="Water's density against temperature from 0 to 30 degrees Celsius, peaking at about 4 degrees. A switch adds a green straight line for ordinary expansion and a purple curve for the extra volume of the open hydrogen-bond network, which grows as the water cools."></figure>
+<script>
+{
+  // The green line continues the shrinking water shows at 30 °C, where the open network matters least, the way
+  // an ordinary liquid would keep shrinking; purple is what's left. A picture of two tendencies, not a measured split.
+  const rho = WATER.density, d = 0.5, s1 = (rho(30 + d) - rho(30 - d)) / (2 * d);
+  const ordinary = T => rho(30) + s1 * (T - 30);
+  let P;
+  demo("density", {
+    aspect: 1.55,
+    controls: [
+      { key: "T", label: "Temperature", min: 0, max: 30, step: 0.1, value: 10, unit: " °C", color: "orange", marks: [{ value: 3.98, label: "3.98 °C" }] },
+      { key: "split", label: "Split into two effects", type: "toggle", value: false, color: "purple" },
+    ],
+    status: (s, v) => `${rho(v.T).toFixed(3)} kg/m³`,
+    draw(g, s, v) {
+      P = g.graph({ x: [0, 30], y: v.split ? [995, 1006] : [995.4, 1000.6], axes: "frame", xLabel: "Temperature (°C)", yLabel: "Density (kg/m³)", yTicks: v.split ? [996, 998, 1000, 1002, 1004, 1006] : [996, 997, 998, 999, 1000] });
+      if (v.split) {
+        P.fn(ordinary, { color: "green", dash: [6, 4], label: "ordinary expansion", labelAt: 6, labelOffset: [0, -10] });
+        P.between(ordinary, rho, 0, 30, { color: "purple", alpha: 0.18 });
+        P.label("open network", [3, (ordinary(3) + rho(3)) / 2], { color: "purple", align: "left" });
+      }
+      P.fn(rho, { color: "blue", width: 2.5 });
+      P.vline(3.98, { color: "faint" });
+      P.marker(v.T, rho(v.T), { color: "orange", drop: true });
+    },
+  });
+}
+</script>
+<p>The <span class="c-blue">curve</span> peaks at 3.98 °C, at 999.97 kg/m³. Above that, the usual expansion with warmth wins; below it, more of the water locks into open, ice-like patches and swells. In the split, the <span class="c-green">green line</span> continues the shrinking water shows at 30 °C, as an ordinary liquid would, and the <span class="c-purple">purple gap</span> is the extra room taken by the open network, growing the colder the water gets<span class="sidenote">The split is a picture of the two tendencies, not a measurement of them; the two-tendency explanation itself is the accepted one.</span>.</p>
+<p>A difference of 0.013% between 4 °C and 0 °C sounds negligible. In a lake it decides everything, because the densest water sinks.</p>
+
+<p>Here is a lake 20 meters deep in a temperate climate, its temperature computed through a year from the air above it, the sun, wind mixing near the surface, and one rule: water denser than the water below it sinks. Scrub through the year from <span class="scrub" data-key="day"></span> and watch the <span class="c-purple">profile</span> on the right:</p>
+<figure class="demo" id="lake" aria-label="A cross-section of a 20 meter lake colored by temperature through a year, with ice on top in winter, beside a plot of temperature against depth with a brass line at 4 degrees. In summer warm water sits on top; in autumn the whole lake mixes; in winter cold water and ice sit on top of 4 degree water."></figure>
+<script>
+{
+  // A one-dimensional lake: 40 layers of 0.5 m. Air temperature 7 ± 15 °C over the year (coldest about 20 January),
+  // daily-mean sunlight 10 to 180 W/m² absorbed within the top meters, heat exchange 20 W/(m²·K) with the air,
+  // wind mixing in the top 2 m, ice that grows and melts by conduction. Run four years; the fourth is shown.
+  const NZ = 40, DZ = 0.5;
+  const YEAR = (() => {
+    const rc = 4.18e6, hAir = 20, kIce = 2.2, Lf = 334e3 * 917, dt = 3600, rho = WATER.density;
+    const air = d => 7 - 15 * Math.cos(TAU * (d - 20) / 365), sun = d => 95 + 85 * Math.cos(TAU * (d - 172) / 365);
+    let T = new Array(NZ).fill(4), ice = 0;
+    const out = [];
+    for (let year = 0; year < 4; year++) for (let hr = 0; hr < 365 * 24; hr++) {
+      const d = hr / 24, Ta = air(d), S = sun(d);
+      if (year === 3 && hr % 24 === 0) out.push({ T: T.slice(), ice, air: Ta });
+      if (ice > 0 || (T[0] <= 0 && Ta < 0)) {
+        const q = Ta / (Math.max(ice, 0.01) / kIce + 1 / hAir) + 0.35 * S;   // the sun melts the ice from above
+        ice = Math.max(0, ice - q * dt / Lf); T[0] = 0;
+      } else {
+        T[0] += hAir * (Ta - T[0]) * dt / (rc * DZ);
+        if (T[0] < 0) { ice += -T[0] * rc * DZ / Lf; T[0] = 0; }
+        for (let k = 0; k < NZ; k++) T[k] += S * (Math.exp(-k * DZ / 1.5) - Math.exp(-(k + 1) * DZ / 1.5)) * dt / (rc * DZ);
+      }
+      const K = k => (ice > 0 ? 1e-6 : k * DZ < 2 ? 2e-4 : 2e-6), Tn = T.slice();
+      for (let k = 0; k < NZ; k++) Tn[k] = T[k] + ((k > 0 ? K(k) * (T[k - 1] - T[k]) : 0) + (k < NZ - 1 ? K(k + 1) * (T[k + 1] - T[k]) : 0)) / DZ * dt / DZ;
+      T = Tn;
+      for (let pass = 0; pass < NZ; pass++) { let moved = false; for (let k = 0; k < NZ - 1; k++) if (rho(T[k]) > rho(T[k + 1]) + 1e-6) { T[k] = T[k + 1] = (T[k] + T[k + 1]) / 2; moved = true; } if (!moved) break; }
+    }
+    return out;
+  })();
+  const MONTH = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const dateOf = d => { const m = Math.min(11, Math.floor(d / 30.42)); return `${MONTH[m]} ${Math.floor(d - m * 30.42) + 1}`; };
+  const at = (d, k) => { const i = Math.floor(d) % 365, f = d - Math.floor(d), a = YEAR[i], b = YEAR[(i + 1) % 365]; return k == null ? lerp(a.ice, b.ice, f) : lerp(a.T[k], b.T[k], f); };
+  // 0 °C deep blue, 4 °C pale blue, warmer through orange to red.
+  const color = (g, T) => T <= 4 ? g.mix(g.mix("panel", "blue", 0.75), g.mix("panel", "blue", 0.3), clamp(T / 4, 0, 1)) : T <= 15 ? g.mix(g.mix("panel", "blue", 0.3), g.mix("panel", "orange", 0.45), (T - 4) / 11) : g.mix(g.mix("panel", "orange", 0.45), g.mix("panel", "red", 0.8), clamp((T - 15) / 15, 0, 1));
+  demo("lake", {
+    aspect: w => (w < 560 ? 0.85 : 1.7),
+    state: () => ({ d: 0 }),
+    controls: [{ key: "day", label: "Day of the year", min: 0, max: 364, step: 1, value: 40, color: "purple", format: d => dateOf(d),
+      marks: [{ value: 0, label: "Jan" }, { value: 90, label: "Apr" }, { value: 181, label: "Jul" }, { value: 273, label: "Oct" }] }],
+    presets: [{ label: "Midwinter", set: { day: 40 } }, { label: "Spring mixing", set: { day: 110 } }, { label: "Midsummer", set: { day: 210 } }, { label: "Autumn mixing", set: { day: 330 } }],
+    status: (s, v) => { const top = at(v.day, 0), bot = at(v.day, NZ - 1), ice = at(v.day); return `${ice > 0.005 ? `ice ${Math.round(ice * 100)} cm, ` : ""}surface ${top.toFixed(1)} °C, bottom ${bot.toFixed(1)} °C`; },
+    draw(g, s, v) {
+      const narrow = g.w < 560, lb = narrow ? [8, 8, g.w - 16, g.h * 0.48] : [8, 8, g.w * 0.5, g.h - 24], pb = narrow ? [8, g.h * 0.52, g.w - 16, g.h * 0.48 - 8] : [g.w * 0.56, 0, g.w * 0.44, g.h];
+      const ice = at(v.day), top = lb[1] + 18, H = lb[3] - 26, zpx = H / 20;
+      // Lake bed: a basin shape; layers drawn as bands across it.
+      const shore = z => lb[0] + lb[2] * (0.5 - 0.48 * Math.sqrt(1 - (z / 20.5) ** 2)), shore2 = z => lb[0] + lb[2] - (shore(z) - lb[0]);
+      g.clip([lb[0], top, lb[2], H], () => {
+        for (let k = 0; k < NZ; k++) { const z0 = k * DZ, y0 = top + z0 * zpx; g.rect(lb[0], y0, lb[2], DZ * zpx + 1, { fill: color(g, at(v.day, k)) }); }
+      });
+      const bed = []; for (let z = 0; z <= 20.5; z += 0.5) bed.push([shore(z), top + z * zpx]); for (let z = 20.5; z >= 0; z -= 0.5) bed.push([shore2(z), top + z * zpx]);
+      g.path([[lb[0], top - 1], ...bed.slice(0, bed.length / 2), [lb[0], top + H + 1]], { fill: "panel", stroke: "ink", width: 1.5, close: true, hatch: g.rgba("muted", 0.4) });
+      g.path([[lb[0] + lb[2], top - 1], ...bed.slice(bed.length / 2).reverse(), [lb[0] + lb[2], top + H + 1]], { fill: "panel", stroke: "ink", width: 1.5, close: true, hatch: g.rgba("muted", 0.4) });
+      if (ice > 0.005) { const t = Math.max(3, ice * zpx * 4); g.rect(shore(0.2), top - t * 0.15, shore2(0.2) - shore(0.2), t, { fill: g.mix("panel", "blue", 0.12), stroke: "blue", width: 1.5 }); g.label(`ice, ${Math.round(ice * 100)} cm (drawn 4× thick)`, [lb[0] + lb[2] / 2, top - 8]); }
+      const P = g.graph({ box: pb, x: [-1, 30], y: [20, 0], axes: "frame", xLabel: "Temperature (°C)", yLabel: "Depth (m)", xTicks: [0, 4, 10, 20, 30] });
+      P.vline(4, { color: "brass", label: "4 °C" });
+      P.series(Array.from({ length: NZ }, (_, k) => [at(v.day, k), (k + 0.5) * DZ]), { color: "purple", width: 2.5 });
+    },
+  });
+}
+</script>
+<p>In <button class="set" data-set="day=210">summer</button> the sun warms the top few meters, and the lighter warm water floats on the cold, with a sharp step between them. In <button class="set" data-set="day=330">autumn</button> the surface cools, sinks, and stirs the lake until all of it nears 4 °C. Then something different happens. Water cooled below 4 °C is lighter than the 4 °C water beneath it, so it stays on top, cools further, and freezes there. In <button class="set" data-set="day=40">midwinter</button> the lake is ice over a thin layer near 0 °C over a deep body at 4 °C, and in spring the order flips again.</p>
+<p>Ice floating on top insulates the water beneath it, so the lake freezes slowly from the top and, in all but the shallowest ponds, never to the bottom. Fish spend the winter in the 4 °C water at the bottom. This model is simple, with one dimension and no inflowing rivers, but its shape, two turnovers a year, matches what is measured in real temperate lakes <a class="cite" href="#ref-wetzel2001"></a>.</p>
+
+<h2>A skin on the surface</h2>
+
+<p>A molecule deep in the liquid is pulled equally from every side. One at the surface has bonding partners only below and beside it. Here is the flat water again, now as a slab with air above, its molecules shaded by how many <span class="c-blue">bonds</span> they hold, from pale for none to dark for all three. The plot on the right averages the bonds per molecule at each height as the simulation runs:</p>
+<figure class="demo" id="surface" aria-label="A simulated slab of flat three-armed water molecules with air above. Molecules are shaded darker the more hydrogen bonds they hold; those at the top surface are paler. A plot beside it shows the average number of bonds per molecule against height, dropping at the surface."></figure>
+<script>
+{
+  const NB = 12;
+  const fresh = () => { const w = MB.create({ n: 90, Lx: 10, Ly: 15, slab: true, fill: 0.56, seed: 3 }); MB.advance(w, 8, 25); return { w, sum: new Array(NB).fill(0), num: new Array(NB).fill(0) }; };
+  demo("surface", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    reset: true,
+    state: fresh,
+    controls: [{ key: "T", label: "Temperature", min: 0, max: 100, step: 1, value: 25, unit: " °C", color: "orange" }],
+    step(dt, s, v) {
+      for (let k = 0; k < 10; k++) MB.stepOnce(s.w, MB.kTof(v.T));
+      const c = MB.counts(s.w);
+      s.w.y.forEach((y, i) => { const b = Math.min(NB - 1, Math.floor(y)); s.sum[b] += c[i]; s.num[b]++; });
+    },
+    draw(g, s, v) {
+      const narrow = g.w < 560, sb = narrow ? [4, 4, g.w * 0.6, g.h - 8] : [4, 4, g.w * 0.48, g.h - 8], pb = [sb[0] + sb[2] + 12, 4, g.w - sb[2] - 20, g.h - 8];
+      const P = g.fit(0, s.w.Lx, 0, 11.5, { box: sb, pad: 4, uniform: false });
+      g.rect(sb[0], P([0, 0])[1], sb[2], 6, { fill: g.rgba("muted", 0.25), hatch: g.rgba("muted", 0.5) });
+      g.clip(sb, () => MB.draw(g, P, s.w, { shade: true }));
+      g.label("air", [sb[0] + sb[2] / 2, sb[1] + 14]);
+      const live = MB.counts(s.w), pts = [];
+      for (let b = 0; b < NB - 1; b++) {
+        let m = s.num[b] > 30 ? s.sum[b] / s.num[b] : null;
+        if (m == null) { const idx = s.w.y.map((y, i) => (Math.floor(y) === b ? i : -1)).filter(i => i >= 0); if (idx.length) m = Num.mean(idx.map(i => live[i])); }
+        if (m != null) pts.push([m, b + 0.5]);
+      }
+      const G = g.graph({ box: pb, x: [0, 3], y: [0, 11.5], axes: "frame", xLabel: "Bonds per molecule", yLabel: "Height (molecules)", yTicks: false, xTicks: [0, 1, 2, 3] });
+      G.series(pts, { color: "blue", width: 2.5, dots: true });
+    },
+  });
+}
+</script>
+<p>In the middle of the slab the molecules hold as many bonds as anywhere. In the top layer they hold fewer: there is no one above to bond with. Each missing bond is energy the liquid would rather not spend, so water pulls molecules inward and keeps its surface as small as it can<span class="sidenote">The bottom layer, against the floor of the box, loses bonds too. How many a real surface takes away decides whether a drop on it spreads or beads up.</span>. That pull is <dfn data-def="The energy it takes to make one more square meter of a liquid's surface, equal to the pull along every meter of its edge. Water's is 0.072 N/m at 25 °C.">surface tension</dfn>. For water at 25 °C it is 0.0720 newtons per meter, or 72 millijoules per square meter of new surface <a class="cite" href="#ref-iapws2014"></a>, more than any common liquid but mercury.</p>
+
+
+<p>Surface tension makes a small drop round, and gravity flattens a big one. Which one wins depends on size. Grow a drop from <span class="scrub" data-key="V"></span> and change the surface it sits on:</p>
+<figure class="demo" id="drop" aria-label="A drop of water in side view sitting on a flat surface, its outline computed from surface tension and gravity. A volume slider grows it from a tenth of a microliter to a few milliliters; a choice changes the surface from clean glass to plastic, candle wax, and a lotus leaf. Small drops are round caps; large ones flatten into puddles."></figure>
+<script>
+{
+  // The outline of a drop resting on a flat surface: the Young–Laplace equation with gravity, in units of the
+  // capillary length lc = sqrt(σ / ρ g) = 2.7 mm. From the apex down: dφ/ds = 2/b + z − sin φ / x.
+  const LC = Math.sqrt(WATER.sigma(20) / (WATER.density(20) * WATER.g0)) * 1000;   // mm
+  function profile(b, theta) {
+    let x = 0, z = 0, phi = 0, V = 0;
+    const pts = [[0, 0]], ds = Math.min(0.01, b / 40);
+    const f = (x, z, phi) => [Math.cos(phi), Math.sin(phi), x < 1e-9 ? 1 / b : 2 / b + z - Math.sin(phi) / x];
+    for (let i = 0; i < 40000 && phi < theta; i++) {
+      const k1 = f(x, z, phi), k2 = f(x + ds / 2 * k1[0], z + ds / 2 * k1[1], phi + ds / 2 * k1[2]), k3 = f(x + ds / 2 * k2[0], z + ds / 2 * k2[1], phi + ds / 2 * k2[2]), k4 = f(x + ds * k3[0], z + ds * k3[1], phi + ds * k3[2]);
+      const nx = x + ds / 6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]), nz = z + ds / 6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+      V += Math.PI * ((x + nx) / 2) ** 2 * (nz - z);
+      x = nx; z = nz; phi += ds / 6 * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
+      if (i % 4 === 0) pts.push([x, z]);
+      if (x < 0) break;
+    }
+    pts.push([x, z]);
+    return { pts, V, height: z, radius: x };
+  }
+  // Find the apex curvature radius b that gives the wanted volume (in lc³) by bisection on log b.
+  const cache = new Map();
+  function drop(Vmm, theta) {
+    const key = `${Vmm.toFixed(4)}|${theta}`;
+    if (cache.has(key)) return cache.get(key);
+    const V = Vmm / LC ** 3;
+    let lo = Math.log(1e-3), hi = Math.log(400);
+    for (let it = 0; it < 50; it++) { const m = (lo + hi) / 2; if (profile(Math.exp(m), theta).V < V) lo = m; else hi = m; }
+    const r = profile(Math.exp((lo + hi) / 2), theta);
+    if (cache.size > 200) cache.clear();
+    cache.set(key, r);
+    return r;
+  }
+  const SURF = [{ value: 20, label: "Clean glass" }, { value: 70, label: "Plastic" }, { value: 110, label: "Candle wax" }, { value: 160, label: "Lotus leaf" }];
+  demo("drop", {
+    aspect: 1.9,
+    controls: [
+      { key: "V", label: "Volume", min: -1, max: 3.5, step: 0.01, value: 1, color: "blue", format: e => { const v = 10 ** e; return v < 1000 ? `${Num.fmt(v, { digits: 2 })} µL` : `${Num.fmt(v / 1000, { digits: 2 })} mL`; } },
+      { key: "theta", label: "Surface", type: "choice", options: SURF, value: 110 },
+    ],
+    status: (s, v) => { const d = drop(10 ** v.V, v.theta * Math.PI / 180); return `height ${(d.height * LC).toFixed(2)} mm; a puddle stops at ${(2 * LC * Math.sin(v.theta * Math.PI / 360)).toFixed(2)} mm`; },
+    draw(g, s, v) {
+      const th = v.theta * Math.PI / 180, d = drop(10 ** v.V, th), pts = d.pts.map(([x, z]) => [x * LC, (d.height - z) * LC]);
+      const span = Math.max(4, d.radius * LC * 1.25, Math.max(...pts.map(p => p[0])) * 1.25), hmax = span * 2 / 1.9 * 0.82;
+      const P = g.fit(-span, span, -hmax * 0.12, hmax * 0.88, { pad: 10 });
+      const outline = [...pts.map(([x, z]) => [-x, z]).reverse(), ...pts].map(P);
+      g.path(outline, { fill: g.rgba("blue", 0.28), stroke: "blue", width: 2, close: true });
+      g.ground(P([-span, 0]), P([span, 0]), {});
+      const edge = pts[pts.length - 1], e = P(edge);
+      g.line(e, [e[0] + 46 * Math.cos(-th), e[1] + 46 * Math.sin(-th)], { stroke: "orange", width: 1.5 });
+      g.angleMark(e, -th, 0, 22, { color: "orange", label: `${v.theta}°` });
+      g.dimension(P([edge[0] + span * 0.06, 0]), P([edge[0] + span * 0.06, d.height * LC]), `${(d.height * LC).toFixed(2)} mm`, { offset: 0 });
+      const bar = Math.pow(10, Math.floor(Math.log10(span))), b0 = P([-span * 0.92, hmax * 0.8]);
+      g.line(b0, [b0[0] + bar * P.sx, b0[1]], { stroke: "ink", width: 2 });
+      g.text(`${bar} mm`, [b0[0] + bar * P.sx / 2, b0[1] - 6], { align: "center", size: 11.5, color: "muted" });
+    },
+  });
+}
+</script>
+<p>A drop of a microliter or less is a near-perfect slice of a sphere, whatever it sits on. Grow it past about <button class="set" data-set="V=1.3">20 µL</button> and its top flattens; by a few milliliters it is a puddle whose height no longer grows at all, about 4.5 mm on wax. The crossover is set by the <dfn data-def="The size below which surface tension beats gravity: the square root of surface tension over density times gravity. 2.7 mm for water.">capillary length</dfn>, the square root of surface tension over density times gravity, 2.7 mm for water <a class="cite" href="#ref-degennes2004"></a>. Smaller than that, surface tension wins; bigger, gravity does.</p>
+<p>The angle where the drop meets the surface, its <span class="c-orange">contact angle</span>, depends on how much the surface attracts water compared with water attracting itself. Glass, covered in oxygen atoms water can bond to, is wetted: the drop spreads. Wax offers nothing to bond with, and the drop beads at about 110°. A <button class="set" data-set="theta=160">lotus leaf</button> adds a forest of waxy bumps that trap air, so the drop sits mostly on air and rolls off.</p>
+
+<p>The same pull can hold up something that should sink. A paperclip is made of steel, nearly eight times as dense as water, yet laid gently on the surface it floats. Here is the wire in cross-section, pressing a dimple into the surface. Thicken the <span class="c-purple">wire</span> from <span class="scrub" data-key="d"></span> until it sinks:</p>
+<figure class="demo" id="clip" aria-label="A cross-section of a steel wire resting on a water surface, which dips into a curved dimple on each side. Orange arrows show the pull of surface tension along each side of the dimple; a diameter slider thickens the wire until the surface can no longer hold it and it sinks."></figure>
+<script>
+{
+  // Per meter of wire: weight π r² ρ g against 2σ sin ψ from the two surfaces (ψ: their slope where they meet the wire)
+  // plus the buoyancy of the water pushed aside down to the dimple's depth z0 = 2 lc sin(ψ/2). Approximate: the
+  // surface is taken to meet the wire at its widest point.
+  const sig = WATER.sigma(20), rw = WATER.density(20), g0 = WATER.g0, LC = Math.sqrt(sig / (rw * g0));
+  const lift = (psi, r) => 2 * sig * Math.sin(psi) + rw * g0 * (2 * r * 2 * LC * Math.sin(psi / 2) + Math.PI * r * r / 2);
+  function solve(r, rho) {
+    const W = Math.PI * r * r * rho * g0;
+    if (lift(Math.PI / 2, r) < W) return { sinks: true, W, max: lift(Math.PI / 2, r) };
+    let lo = 0, hi = Math.PI / 2;
+    for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (lift(m, r) < W) lo = m; else hi = m; }
+    return { sinks: false, psi: lo, W, max: lift(Math.PI / 2, r) };
+  }
+  // The 2D meniscus: horizontal distance from the contact line at depth z (both in lc) for a meniscus of depth z0.
+  const xOf = (z, z0) => { const f = q => Math.acosh(2 / q) - Math.sqrt(4 - q * q); return f(z) - f(z0); };
+  demo("clip", {
+    aspect: 1.9,
+    state: () => ({ sink: 0 }),
+    controls: [
+      { key: "d", label: "Wire diameter", min: 0.2, max: 3.5, step: 0.05, value: 0.9, unit: " mm", color: "purple", marks: [{ value: 0.9, label: "paperclip" }] },
+      { key: "metal", label: "Metal", type: "choice", options: [{ value: 7850, label: "Steel" }, { value: 2700, label: "Aluminum" }], value: 7850 },
+    ],
+    status: (s, v) => { const r = solve(v.d / 2000, v.metal); return `${r.sinks ? "sinks" : "floats"}: weight ${(r.W * 10).toFixed(2)} mN per cm, the surface can hold ${(r.max * 10).toFixed(2)} mN per cm`; },
+    draw(g, s, v) {
+      const r = v.d / 2000, res = solve(r, v.metal), mm = 1000;
+      const P = g.fit(-9, 9, -6.5, 3, { pad: 6 });
+      const R = r * mm;
+      if (res.sinks) {
+        g.rect(...P([-9, 0]), (18) * P.sx, 6.5 * P.sy, { fill: g.rgba("blue", 0.18) });
+        g.line(P([-9, 0]), P([9, 0]), { stroke: "blue", width: 2 });
+        g.circle(P([0, -4.2]), R * P.sx, { fill: g.mix("panel", "purple", 0.5), stroke: "ink", width: 1.5 });
+        g.arrow(P([0, -4.2 + R + 0.4]), P([0, -4.2 + R + 1.6]), { stroke: "muted", width: 1.5 });
+        g.label("too heavy: it breaks through and sinks", P([0, 1.6]));
+        return;
+      }
+      const z0 = 2 * Math.sin(res.psi / 2), Z0 = z0 * LC * mm;
+      const side = sgn => { const pts = []; for (let q = z0; q > 0.02; q *= 0.92) pts.push([sgn * (R + xOf(q, z0) * LC * mm), -q * LC * mm]); pts.push([sgn * 9, 0]); return pts; };
+      const surf = [[-9, 0], ...side(-1).reverse(), [-R, -Z0], [R, -Z0], ...side(1)];
+      g.path([...surf, [9, -6.5], [-9, -6.5]].map(P), { fill: g.rgba("blue", 0.18), close: true });
+      g.path(side(-1).map(P), { stroke: "blue", width: 2 }); g.path(side(1).map(P), { stroke: "blue", width: 2 });
+      g.circle(P([0, -Z0]), R * P.sx, { fill: g.mix("panel", "purple", 0.5), stroke: "ink", width: 1.5 });
+      const L = 2.2;
+      for (const sg of [-1, 1]) { const a = P([sg * R, -Z0]); g.arrow(a, [a[0] + sg * L * P.sx * Math.cos(res.psi), a[1] - L * P.sy * Math.sin(res.psi)], { stroke: "orange", width: 2.5 }); }
+      g.arrow(P([0, -Z0]), P([0, -Z0 - Math.min(4, 0.8 + res.W / res.max * 3)]), { stroke: "muted", width: 2 });
+      g.dimension(P([-4.5, 0]), P([-4.5, -Z0]), `${Z0.toFixed(2)} mm`, { offset: 0 });
+      g.callouts([{ at: P([R + L * 0.6 * Math.cos(res.psi), -Z0 + L * 0.6 * Math.sin(res.psi)]), text: "surface tension", color: "orange" }, { at: P([0.15, -Z0 - 1.6]), text: "weight", color: "muted", side: "left" }]);
+      const b0 = P([-8.5, -6]); g.line(b0, [b0[0] + P.sx, b0[1]], { stroke: "ink", width: 2 }); g.text("1 mm", [b0[0] + P.sx / 2, b0[1] - 6], { align: "center", size: 11.5, color: "muted" });
+    },
+  });
+}
+</script>
+<p>A paperclip wire about 0.9 mm across weighs 0.5 millinewtons per centimeter of length, and the surface can push back with up to about 1.8, so it floats with room to spare, resting in a dimple about three quarters of a millimeter deep. The <span class="c-orange">orange arrows</span> are the surface pulling along each side, 0.072 N per meter of wire; the steeper the dimple, the more of that pull points up. Past about <button class="set" data-set="d=2.05">2 mm</button> no dimple is steep enough, and the wire breaks through <a class="cite" href="#ref-vella2015"></a>.</p>
+<p>The calculation says why the trick only works for small things. Weight grows with the wire's cross-section, the square of its width; the pull grows only with its length. Shrink anything and surface tension gains on gravity, which is why a pond skater can stand on water and a person can't.</p>
+
+<div class="quiz">
+  <p>Two clean glass tubes stand in water, one twice as wide as the other. How do the heights the water climbs compare?</p>
+  <div class="choices"><button>The same: it depends only on the water</button><button>The wide one is higher: there is more glass to pull on</button><button data-correct>The narrow one is twice as high</button></div>
+  <p class="why">The pull along the rim grows with the tube's width, but the weight of the column it must hold grows with the width squared, so halving the width doubles the height.</p>
+</div>
+<p>Where water meets a surface it likes, the edge climbs. In a narrow glass tube the climbing edges meet and lift a whole column. Narrow the <span class="c-green">tube</span> from <span class="scrub" data-key="r"></span> and compare <button class="set" data-set="theta=0">clean glass</button> with <button class="set" data-set="theta=95">a plastic straw</button>:</p>
+<figure class="demo" id="capillary" aria-label="A glass tube standing in a dish of water, with water risen inside it above the outside level, and beside it a plot of the rise against the tube's radius on log scales. A radius slider narrows the tube; a choice switches between clean glass, where water climbs, and plastic, where it doesn't."></figure>
+<script>
+{
+  const sig = WATER.sigma(20), rw = WATER.density(20), g0 = WATER.g0;
+  const rise = (rmm, th) => 2 * sig * Math.cos(th * Math.PI / 180) / (rw * g0 * rmm / 1000) * 1000;   // mm
+  demo("capillary", {
+    aspect: w => (w < 560 ? 0.9 : 1.6),
+    controls: [
+      { key: "r", label: "Tube radius", min: -1.3, max: 0.6, step: 0.01, value: -0.3, color: "green", format: e => `${Num.fmt(10 ** e, { digits: 2 })} mm` },
+      { key: "theta", label: "Tube", type: "choice", options: [{ value: 0, label: "Clean glass (0°)" }, { value: 95, label: "Plastic (95°)" }], value: 0 },
+    ],
+    status: (s, v) => `rises ${Num.fmt(rise(10 ** v.r, v.theta), { digits: 3 })} mm`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, db = narrow ? [0, 0, g.w, g.h * 0.55] : [0, 0, g.w * 0.45, g.h], pb = narrow ? [8, g.h * 0.58, g.w - 16, g.h * 0.42 - 8] : [g.w * 0.5, 4, g.w * 0.5 - 8, g.h - 12];
+      const rmm = 10 ** v.r, h = rise(rmm, v.theta), TOP = 60;
+      const P = g.fit(-14, 14, -10, TOP + 6, { box: db, pad: 10, uniform: false });
+      const rd = Math.max(rmm, 0.35), wall = 0.6;
+      g.rect(...P([-14, 0]), 28 * P.sx, 9 * P.sy, { fill: g.rgba("blue", 0.2) });
+      g.line(P([-14, 0]), P([14, 0]), { stroke: "blue", width: 1.5 });
+      g.ground(P([-14, -9]), P([14, -9]), {});
+      const col = Math.min(h, TOP);
+      g.rect(...P([-rd, col]), 2 * rd * P.sx, (col + 9) * P.sy, { fill: g.mix("panel", "blue", 0.32) });
+      g.path([P([-rd - wall, TOP]), P([-rd - wall, -6]), P([-rd, -6]), P([-rd, TOP])], { fill: g.mix("panel", "green", 0.25), stroke: "ink", width: 1, close: true });
+      g.path([P([rd + wall, TOP]), P([rd + wall, -6]), P([rd, -6]), P([rd, TOP])], { fill: g.mix("panel", "green", 0.25), stroke: "ink", width: 1, close: true });
+      if (h > TOP) g.label(`continues to ${Num.fmt(h, { digits: 3 })} mm`, P([0, TOP + 3.5]));
+      else g.dimension(P([rd + 4, 0]), P([rd + 4, h]), `${Num.fmt(h, { digits: 2 })} mm`, { offset: 0 });
+      g.text("narrow tubes drawn wider than scale", [db[0] + 8, db[1] + 12], { size: 11, color: "muted", align: "left" });
+      const G = g.graph({ box: pb, x: [0.05, 4], y: [0.1, 400], xScale: "log", yScale: "log", axes: "frame", xLabel: "Tube radius (mm)", yLabel: "Rise (mm)" });
+      G.fn(x => rise(x, 0), { color: "green" });
+      if (v.theta === 0) G.marker(rmm, h, { color: "green", drop: true });
+    },
+  });
+}
+</script>
+<p>Halve the radius and the water climbs twice as high: 15 mm in a tube 1 mm across, 30 cm in one a tenth of a millimeter across. The surface tension pulls up along the whole rim of the meniscus, which grows with the radius, while the water it has to hold grows with the radius squared, so thinner tubes win. This is <dfn data-def="The height water rises in a narrow tube: twice the surface tension times the cosine of the contact angle, over density times gravity times the radius.">Jurin's law</dfn>:</p>
+<div class="tex">h = \frac{2\,\gamma\cos\theta}{\rho\, g\, \green{r}}</div>
+<p>In a plastic straw the contact angle is past 90°, the cosine turns negative, and the water inside sits slightly <em>below</em> the outside level. Capillary rise is how a paper towel drinks up a spill and how water wicks through soil. It isn't how trees lift water a hundred meters: their vessels are tens of micrometers across, good for under a meter of rise, and the rest is pulled up by evaporation from the leaves.</p>
+<details class="deeper">
+  <summary>Where Jurin's law comes from <span class="hint">1 min</span></summary>
+  <p>The meniscus meets the glass all round the rim, a length 2π<i>r</i>, pulling with γ per meter of rim, of which the fraction cos θ points up. The column it holds is π<i>r</i>²<i>h</i> of water, weighing ρ<i>g</i>π<i>r</i>²<i>h</i>. Setting the two equal:</p>
+  <div class="tex">2\pi r\,\gamma\cos\theta = \rho g\,\pi r^2 h \quad\Rightarrow\quad h = \frac{2\gamma\cos\theta}{\rho g r}</div>
+  <p>With γ = 0.0727 N/m at 20 °C and a fully wetting tube (θ = 0), <i>h</i> × <i>r</i> = 14.8 mm², so a tube 1 mm across (<i>r</i> = 0.5 mm) lifts water 30 mm. The same balance, with the capillary length in place of the tube radius, sets how high a puddle can stand and how heavy a floating wire can be.</p>
+</details>
+
+
+<h2>The great solvent</h2>
+
+<p>A grain of table salt vanishes in water within a minute; in oil it would sit forever. Salt is a crystal of sodium ions, Na<sup>+</sup>, and chloride ions, Cl<sup>−</sup>, held by the pull between opposite charges. Here is one ion among flat water molecules, now with real charges and shapes, every atom pulling on every other. Switch between <button class="set" data-set="ion=Na">sodium</button> and <button class="set" data-set="ion=Cl">chloride</button> and watch which end of each nearby molecule faces the ion:</p>
+<script>
+// Flat water around one ion: rigid three-site waters (the SPC/E model's charges and shape: O–H 1.0 Å, 109.5°) and one ion, all in a plane,
+// Coulomb + Lennard-Jones, Langevin thermostat at 25 °C. Units: Å, ps, u, kJ/mol (1 kJ/mol = 100 u Å²/ps²).
+window.ION = (() => {
+  const KC = 1389.35, QO = -0.8476, QH = 0.4238, ROH = 1.0, HALF = 109.47 / 2 * Math.PI / 180;
+  const SIGO = 3.166, EPSO = 0.650, MW = 18.015, IW = 2 * 1.008 * ROH * ROH;     // moment of inertia about the O
+  // Ion sizes and well depths of the common Joung–Cheatham kind, rounded.
+  const IONS = { Na: { q: 1, sig: 2.35, eps: 0.544, m: 22.99 }, Cl: { q: -1, sig: 4.40, eps: 0.42, m: 35.45 } };
+  const RC = 9, DT = 0.002, GAMMA = 5, KT = 0.0083145 * 298.15;
+  function rand(s) { let t = (s.seed = (s.seed + 0x6D2B79F5) >>> 0); t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }
+  function gauss(s) { return Math.sqrt(-2 * Math.log(Math.max(1e-12, rand(s)))) * Math.cos(2 * Math.PI * rand(s)); }
+  const sites = (s, i) => {
+    const x = s.x[i], y = s.y[i], th = s.th[i];
+    return [[x, y], [x + ROH * Math.cos(th + HALF), y + ROH * Math.sin(th + HALF)], [x + ROH * Math.cos(th - HALF), y + ROH * Math.sin(th - HALF)]];
+  };
+  function create({ ion = "Na", n = 44, L = 21, seed = 2 } = {}) {
+    const s = { ion, n, L, seed: seed * 7919 + 3, t: 0, x: [], y: [], th: [], vx: [], vy: [], w: [], fx: [], fy: [], tq: [], ix: L / 2, iy: L / 2, ivx: 0, ivy: 0 };
+    const cols = Math.ceil(Math.sqrt(n + 1)), sp = L / cols;
+    let k = 0;
+    for (let a = 0; a < cols && s.x.length < n; a++) for (let b = 0; b < cols && s.x.length < n; b++) {
+      const x = (a + 0.5) * sp, y = (b + 0.5) * sp;
+      if (Math.hypot(x - L / 2, y - L / 2) < sp * 0.7) continue;
+      s.x.push(x); s.y.push(y); s.th.push(rand(s) * 2 * Math.PI); s.vx.push(0); s.vy.push(0); s.w.push(0); s.fx.push(0); s.fy.push(0); s.tq.push(0); k++;
+    }
+    s.n = s.x.length;
+    forces(s);
+    return s;
+  }
+  const mi = (d, L) => d - L * Math.round(d / L);
+  function forces(s) {
+    const { n, L } = s, I = IONS[s.ion], QS = [QO, QH, QH];
+    s.fx.fill(0); s.fy.fill(0); s.tq.fill(0); s.ifx = 0; s.ify = 0;
+    const S = Array.from({ length: n }, (_, i) => sites(s, i));
+    const addTorque = (i, k, Fx, Fy) => { const p = S[i][k], rx = p[0] - s.x[i], ry = p[1] - s.y[i]; s.tq[i] += rx * Fy - ry * Fx; };
+    const lj = (r2, sig, eps) => { const sr6 = (sig * sig / r2) ** 3; return 24 * eps * (2 * sr6 * sr6 - sr6) / r2; };   // F/r
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dxo = mi(s.x[j] - s.x[i], L), dyo = mi(s.y[j] - s.y[i], L);
+        if (dxo * dxo + dyo * dyo > RC * RC) continue;
+        const ox = s.x[j] - s.x[i] - dxo, oy = s.y[j] - s.y[i] - dyo;   // image shift
+        for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) {
+          const dx = S[j][b][0] - ox - S[i][a][0], dy = S[j][b][1] - oy - S[i][a][1], r2 = dx * dx + dy * dy, r = Math.sqrt(r2);
+          let f = KC * QS[a] * QS[b] / (r2 * r);                   // F/r on j
+          if (a === 0 && b === 0) f += lj(r2, SIGO, EPSO);
+          const Fx = f * dx, Fy = f * dy;
+          s.fx[j] += Fx; s.fy[j] += Fy; addTorque(j, b, Fx, Fy);
+          s.fx[i] -= Fx; s.fy[i] -= Fy; addTorque(i, a, -Fx, -Fy);
+        }
+      }
+      // The ion.
+      const dxo = mi(s.x[i] - s.ix, L), dyo = mi(s.y[i] - s.iy, L), ox = s.x[i] - s.ix - dxo, oy = s.y[i] - s.iy - dyo;
+      if (dxo * dxo + dyo * dyo > RC * RC) continue;
+      for (let a = 0; a < 3; a++) {
+        const dx = S[i][a][0] - ox - s.ix, dy = S[i][a][1] - oy - s.iy, r2 = dx * dx + dy * dy, r = Math.sqrt(r2);
+        let f = KC * I.q * QS[a] / (r2 * r);
+        if (a === 0) f += lj(r2, (I.sig + SIGO) / 2, Math.sqrt(I.eps * EPSO));
+        const Fx = f * dx, Fy = f * dy;
+        s.fx[i] += Fx; s.fy[i] += Fy; addTorque(i, a, Fx, Fy); s.ifx -= Fx; s.ify -= Fy;
+      }
+    }
+  }
+  function stepOnce(s) {
+    const h = DT, c1 = Math.exp(-GAMMA * h), n = s.n, I = IONS[s.ion];
+    const kick = m => Math.sqrt((1 - c1 * c1) * KT * 100 / m);
+    const half = () => { for (let i = 0; i < n; i++) { s.vx[i] += 0.5 * h * s.fx[i] * 100 / MW; s.vy[i] += 0.5 * h * s.fy[i] * 100 / MW; s.w[i] += 0.5 * h * s.tq[i] * 100 / IW; } s.ivx += 0.5 * h * s.ifx * 100 / I.m; s.ivy += 0.5 * h * s.ify * 100 / I.m; };
+    half();
+    const kw = kick(MW), kr = Math.sqrt((1 - c1 * c1) * KT * 100 / IW), ki = kick(I.m);
+    for (let i = 0; i < n; i++) {
+      s.x[i] += 0.5 * h * s.vx[i]; s.y[i] += 0.5 * h * s.vy[i]; s.th[i] += 0.5 * h * s.w[i];
+      s.vx[i] = c1 * s.vx[i] + kw * gauss(s); s.vy[i] = c1 * s.vy[i] + kw * gauss(s); s.w[i] = c1 * s.w[i] + kr * gauss(s);
+      s.x[i] += 0.5 * h * s.vx[i]; s.y[i] += 0.5 * h * s.vy[i]; s.th[i] += 0.5 * h * s.w[i];
+      s.x[i] -= s.L * Math.floor(s.x[i] / s.L); s.y[i] -= s.L * Math.floor(s.y[i] / s.L);
+    }
+    // The ion is held loosely at the center by a soft spring, so the figure keeps it in view.
+    s.ifx += -2 * (s.ix - s.L / 2); s.ify += -2 * (s.iy - s.L / 2);
+    s.ix += 0.5 * h * s.ivx; s.iy += 0.5 * h * s.ivy; s.ivx = c1 * s.ivx + ki * gauss(s); s.ivy = c1 * s.ivy + ki * gauss(s); s.ix += 0.5 * h * s.ivx; s.iy += 0.5 * h * s.ivy;
+    forces(s);
+    s.ifx += -2 * (s.ix - s.L / 2); s.ify += -2 * (s.iy - s.L / 2);
+    half();
+    s.t += h;
+  }
+  // The first shell: waters whose oxygen is within `cut` of the ion, and how they face it.
+  function shell(s) {
+    const cut = s.ion === "Na" ? 3.2 : 3.85, out = [];
+    for (let i = 0; i < s.n; i++) {
+      const dx = mi(s.x[i] - s.ix, s.L), dy = mi(s.y[i] - s.iy, s.L), r = Math.hypot(dx, dy);
+      if (r < cut) { const c = Math.cos(s.th[i] - Math.atan2(dy, dx)); out.push({ i, r, facing: c }); }   // c = 1: hydrogens point away from the ion
+    }
+    return out;
+  }
+  return { create, stepOnce, shell, sites, DT, IONS };
+})();
+</script>
+<figure class="demo" id="shell" aria-label="A simulation of one ion surrounded by flat water molecules, each a red oxygen with two white hydrogens. Around sodium, the waters touching it turn their oxygens inward and hydrogens outward; around chloride, they point a hydrogen inward. The first shell of waters is outlined in orange."></figure>
+<script>
+{
+  const fresh = ion => { const w = ION.create({ ion, n: 44, L: 21, seed: 2 }); for (let k = 0; k < 1500; k++) ION.stepOnce(w); return w; };
+  demo("shell", {
+    aspect: w => (w < 560 ? 1 : 1.35),
+    reset: true,
+    state: () => ({ w: fresh("Na") }),
+    controls: [{ key: "ion", label: "Ion", type: "choice", options: [{ value: "Na", label: "Sodium, Na⁺" }, { value: "Cl", label: "Chloride, Cl⁻" }], value: "Na" }],
+    change(key, s, v) { if (key === "ion") s.w = fresh(v.ion); },
+    step(dt, s) { for (let k = 0; k < 10; k++) ION.stepOnce(s.w); },
+    status: s => { const sh = ION.shell(s.w), out = sh.filter(q => q.facing > 0.3).length; return `${sh.length} waters touching; ${s.w.ion === "Na" ? out : sh.length - out} facing it ${s.w.ion === "Na" ? "oxygen first" : "hydrogen first"}`; },
+    draw(g, s, v) {
+      const w = s.w, P = g.fit(0, w.L, 0, w.L, { pad: 6 }), sh = new Set(ION.shell(w).map(q => q.i)), na = w.ion === "Na";
+      const ri = (na ? 1.02 : 1.81) * P.sx, ro = 1.2 * P.sx, rh = 0.55 * P.sx;   // ionic radii; oxygen and hydrogen a little under their contact sizes
+      g.rect(...P([0, w.L]), w.L * P.sx, w.L * P.sy, { stroke: "faint", width: 1 });
+      g.clip([P([0, w.L])[0], P([0, w.L])[1], w.L * P.sx, w.L * P.sy], () => {
+        for (let i = 0; i < w.n; i++) {
+          const S = ION.sites(w, i).map(P), lit = sh.has(i);
+          g.circle(S[0], ro, { fill: g.mix("panel", "red", 0.5), stroke: lit ? "orange" : "ink", width: lit ? 1.8 : 1 });
+          for (const k of [1, 2]) g.circle(S[k], rh, { fill: "panel", stroke: lit ? "orange" : "ink", width: lit ? 1.8 : 1 });
+        }
+        const c = P([w.ix, w.iy]);
+        g.circle(c, ri, { fill: na ? g.rgba("purple", 0.55) : g.rgba("green", 0.55), stroke: "ink", width: 1.5 });
+        g.text(na ? "Na⁺" : "Cl⁻", c, { align: "center", baseline: "middle", size: 13, weight: 600 });
+      });
+    },
+  });
+}
+</script>
+<p>Around <span class="c-purple">sodium</span>, the waters touching it all turn their negative oxygen ends inward and their hydrogens out, at 2.4 Å from the ion's center. Around <span class="c-green">chloride</span>, larger and negative, each touching water points one hydrogen at it instead, a little further out. The <span class="c-orange">ringed</span> molecules are the <dfn data-def="The layer of water molecules touching a dissolved ion, all turned the same way toward it.">hydration shell</dfn>. In real, three-dimensional water, X-ray and neutron measurements find five or six waters around a sodium ion and about six around chloride <a class="cite" href="#ref-ohtaki1993"></a>; on a flat page only four or five fit.</p>
+<p>The shell is how water pays for pulling the ion out of its crystal. Each turned molecule gives back some of the energy the ion lost by leaving its oppositely charged neighbors, and the shells keep the freed ions from finding each other again.</p>
+
+<p>That second job is where the <a class="figref" href="#field"></a> dipoles come back. Pull a sodium and a chloride ion apart, from touching at 2.8 Å to <span class="scrub" data-key="r"></span>, and compare the energy it costs in empty space with the energy it costs in water:</p>
+<figure class="demo" id="coulomb" aria-label="A plot of the energy holding a sodium ion and a chloride ion together against the distance between them, in empty space and in water. In water the curve is 78 times shallower; a band marks the energy of random thermal motion at room temperature, which the water curve sinks into within a few ångströms."></figure>
+<script>
+{
+  // Coulomb energy of a +1/−1 pair, kJ/mol: 1389.35 / (ε r[Å]). Water ε = 78.4 at 25 °C. kT = 2.48 kJ/mol.
+  const U = (r, eps) => -1389.35 / (eps * r), KT = 0.0083145 * 298.15;
+  demo("coulomb", {
+    aspect: 1.6,
+    controls: [
+      { key: "r", label: "Distance", min: 2.8, max: 20, step: 0.1, value: 6, unit: " Å", color: "orange" },
+      { key: "zoom", label: "Zoom in 50×", type: "toggle", value: false, color: "blue" },
+    ],
+    status: (s, v) => `to pull apart from here: ${Math.round(-U(v.r, 1))} kJ/mol in empty space, ${(-U(v.r, 78.4)).toFixed(1)} kJ/mol in water`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, ib = [0, 0, g.w, narrow ? 54 : 64], pb = [0, ib[3] + 4, g.w, g.h - ib[3] - 4];
+      const cx = g.w / 2, sc = Math.min(12, (g.w - 60) / 22), y = ib[3] / 2;
+      g.circle([cx - v.r * sc / 2, y], 1.02 * sc, { fill: g.rgba("purple", 0.55), stroke: "ink", width: 1.2 });
+      g.circle([cx + v.r * sc / 2, y], 1.81 * sc, { fill: g.rgba("green", 0.55), stroke: "ink", width: 1.2 });
+      g.text("Na⁺", [cx - v.r * sc / 2, y], { align: "center", baseline: "middle", size: 11 });
+      g.text("Cl⁻", [cx + v.r * sc / 2, y], { align: "center", baseline: "middle", size: 11 });
+      const P = g.graph({ box: pb, x: [2.5, 20], y: v.zoom ? [-10, 4] : [-520, 40], axes: "frame", xLabel: "Distance between the ions (Å)", yLabel: "Energy (kJ/mol)", yTicks: v.zoom ? [-10, -5, 0] : [-500, -250, 0] });
+      P.band([2.5, 20], [-KT, -KT], [KT, KT], { color: "orange", alpha: 0.18 });
+      P.label("thermal jostling, ±kT", [14, KT], { dy: -8, color: "orange" });
+      P.fn(r => U(r, 1), { color: "ink", label: "empty space", labelAt: 9 });
+      P.fn(r => U(r, 78.4), { color: "blue", width: 2.5, label: "in water", labelAt: 15, labelOffset: [0, 14] });
+      P.marker(v.r, U(v.r, 1), { color: "ink" });
+      P.marker(v.r, U(v.r, 78.4), { color: "orange", drop: true });
+      P.axesOnTop();
+    },
+  });
+}
+</script>
+<p>In empty space the pair at contact is bound by about 500 kJ/mol, two hundred times the 2.5 kJ/mol of thermal jostling: the ions will never part by chance. In water the turned dipoles weaken the pull 78 times, so its curve hugs zero. <button class="set" data-set="zoom=true">Zoom in</button>: at contact it is down to about 6 kJ/mol, and by 7 Å, two layers of water apart, it is no bigger than the jostling itself. The ions wander off independently.<span class="sidenote">Right at contact the water between the ions isn't a smooth medium and the factor of 78 is only a guide; the conclusion survives the full calculation.</span></p>
+<p>The same holds for anything charged or polar: sugars, acids, the salts in blood and sea water, the charged parts of proteins. A liquid that weakens electric attraction 78 times and wraps every charge in a shell dissolves more substances than any other common liquid.<span class="sidenote">Oil and wax, with no charge for water to grab, stay out: the other half of how soap and cell membranes work.</span></p>
+
+<h2>Flow</h2>
+
+<p>For all its stickiness between molecules, water pours easily. The resistance a liquid puts up to flowing, its <dfn data-def="How strongly a fluid resists being sheared: the force per area needed to slide one layer past another, per unit of speed difference across the gap.">viscosity</dfn>, is set by how fast its molecules can trade places, and water's trade every picosecond. Warm it from <span class="scrub" data-key="T"></span> and watch both its viscosity and the speed at which a fine grain of <span class="c-brass">sand</span>, a tenth of a millimeter across, sinks through it:</p>
+<figure class="demo" id="viscosity" aria-label="A plot of water's viscosity against temperature, falling from about 1.8 millipascal-seconds at 0 degrees to 0.28 at 100 degrees, beside a tall column of water in which grains of sand sink at the speed set by the viscosity."></figure>
+<script>
+{
+  // A quartz grain 0.1 mm across sinks at Stokes' speed (ρs − ρ) g d² / (18 μ); its Reynolds number stays near 1.
+  const D = 1e-4, RS = 2650, vs = T => (RS - WATER.density(T)) * WATER.g0 * D * D / (18 * WATER.viscosity(T));
+  demo("viscosity", {
+    aspect: w => (w < 560 ? 1 : 1.75),
+    state: () => ({ y: Array.from({ length: 14 }, (_, i) => (i * 0.37) % 1) }),
+    controls: [{ key: "T", label: "Temperature", min: 0, max: 100, step: 1, value: 20, unit: " °C", color: "orange" }],
+    step(dt, s, v) { const u = vs(v.T) / 0.06; s.y = s.y.map(y => (y + u * dt) % 1); },
+    status: (s, v) => `${(WATER.viscosity(v.T) * 1000).toFixed(2)} mPa·s; the grain sinks ${(vs(v.T) * 1000).toFixed(1)} mm/s`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, cb = narrow ? [g.w - 64, 8, 52, g.h - 16] : [g.w - 100, 8, 80, g.h - 16], pb = [0, 0, cb[0] - 56, g.h];
+      const P = g.graph({ box: pb, x: [0, 100], y: [0, 2], axes: "frame", xLabel: "Temperature (°C)", yLabel: "Viscosity (mPa·s)" });
+      P.fn(T => WATER.viscosity(T) * 1000, { color: "blue" });
+      P.marker(v.T, WATER.viscosity(v.T) * 1000, { color: "orange", drop: true });
+      g.rect(...cb, { fill: g.rgba("blue", 0.14), stroke: "ink", width: 1.2 });
+      s.y.forEach((y, i) => g.circle([cb[0] + cb[2] * (0.15 + 0.7 * ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1), cb[1] + 6 + y * (cb[3] - 12)], 2.6, { fill: "brass", stroke: "ink", width: 0.6 }));
+      g.dimension([cb[0] - 10, cb[1]], [cb[0] - 10, cb[1] + cb[3]], "6 cm", { offset: 0 });
+    },
+  });
+}
+</script>
+<p>At 20 °C water's viscosity is 1.00 millipascal-second <a class="cite" href="#ref-huber2009"></a>, thousands of times less than honey's. Heating to 100 °C cuts it by more than three times, because the bonds that hold molecules in place break faster, and the grain sinks three times faster to match. Cold water is noticeably thicker: near freezing its viscosity is 1.8 mPa·s, which is why sediment settles more slowly in a cold lake.</p>
+<p>Water is 55 times as viscous as air, but it is also 830 times as dense, so it takes much more to stop it once it moves. Divide one by the other and water comes out 15 times "thinner" than air: a stirred cup of water keeps swirling far longer than a stirred cup of air would.</p>
+
+<p>That is why flowing water is almost always turbulent. What decides it is one number, the <dfn data-def="Speed times size divided by the fluid's kinematic viscosity: how much the fluid's momentum outweighs its viscosity. Above about 2,300 in a pipe the flow turns turbulent.">Reynolds number</dfn>: the speed of the flow times the width of the pipe, divided by the viscosity over the density. Below about 2,300 water slides down a pipe in smooth layers; above about 4,000 it tumbles <a class="cite" href="#ref-reynolds1883"></a>. Raise it from <span class="scrub" data-key="lre"></span> and watch the speed across the pipe:</p>
+<figure class="demo" id="pipe" aria-label="Water flowing left to right in a pipe, with arrows across it showing the speed at each distance from the wall. At low Reynolds number the profile is a smooth parabola; above about 4,000 it becomes flat across the middle and steep at the walls. A slider sets the Reynolds number."></figure>
+<script>
+{
+  // Laminar: u/umax = 1 − (r/R)². Turbulent: the power law u/umax = (1 − r/R)^(1/n), with n rising from 6 at
+  // Re 4,000 to 7 at 110,000 and 8.8 at 1.1 million (Schlichting's measurements). In between, either can happen.
+  const nOf = lre => Num.interp([3.6, 5.04, 6.04], [6, 7, 8.8], clamp(lre, 3.6, 6.04));
+  const lam = r => 1 - r * r, tur = (r, n) => (1 - Math.abs(r)) ** (1 / n);
+  demo("pipe", {
+    aspect: 1.9,
+    controls: [{ key: "lre", label: "Reynolds number", min: 2, max: 6, step: 0.01, value: 3, color: "blue", format: e => Num.fmt(10 ** e, { digits: 2 }),
+      marks: [{ value: Math.log10(2300), label: "2,300" }, { value: Math.log10(4000) }] }],
+    presets: [{ label: "Sipping through a straw", set: { lre: 3.26 } }, { label: "Kitchen tap", set: { lre: 4.18 } }, { label: "Water main", set: { lre: 5.6 } }],
+    status: (s, v) => { const Re = 10 ** v.lre; return Re < 2300 ? "laminar: smooth layers" : Re < 4000 ? "transition: either, depending on disturbances" : "turbulent"; },
+    draw(g, s, v) {
+      const Re = 10 ** v.lre, x0 = 40, x1 = g.w - 30, yc = g.h / 2, R = g.h * 0.36, len = (x1 - x0) * 0.42;
+      g.rect(x0, yc - R - 10, x1 - x0, 10, { fill: g.rgba("muted", 0.25), hatch: g.rgba("muted", 0.5) });
+      g.rect(x0, yc + R, x1 - x0, 10, { fill: g.rgba("muted", 0.25), hatch: g.rgba("muted", 0.5) });
+      g.rect(x0, yc - R, x1 - x0, 2 * R, { fill: g.rgba("blue", 0.08) });
+      const ax = x0 + (x1 - x0) * 0.3, prof = [], profL = [];
+      const shape = r => (Re < 2300 ? lam(r) : Re < 4000 ? lam(r) : tur(r, nOf(v.lre)));
+      // Same mean flow in every case: laminar mean is umax/2; power-law mean is 2n²/((n+1)(2n+1)) umax.
+      const mean = Re < 4000 ? 0.5 : (n => 2 * n * n / ((n + 1) * (2 * n + 1)))(nOf(v.lre));
+      for (let k = -12; k <= 12; k++) {
+        const r = k / 12.6, u = shape(r) / mean * 0.5, y = yc + r * R;
+        g.arrow([ax, y], [ax + u * len, y], { stroke: "blue", width: 1.6, head: 6 });
+      }
+      for (let k = -50; k <= 50; k++) { const r = k / 50; prof.push([ax + shape(r) / mean * 0.5 * len, yc + r * R]); profL.push([ax + lam(r) * len, yc + r * R]); }
+      g.line([ax, yc - R], [ax, yc + R], { stroke: "muted", width: 1, dash: [3, 3] });
+      if (Re >= 2300 && Re < 4000) g.path(Array.from({ length: 101 }, (_, k) => { const r = (k - 50) / 50; return [ax + tur(r, 6) / (2 * 36 / 91) * 0.5 * len, yc + r * R]; }), { stroke: "purple", width: 1.5, dash: [5, 4] });
+      g.path(prof, { stroke: "blue", width: 2.5 });
+      g.label(Re < 4000 ? "parabola: fastest in the middle, twice the average" : "flat middle, steep at the walls", [ax + len * 0.55, yc - R - 22]);
+      g.text("flow", [x0 + 8, yc], { size: 12, color: "muted", baseline: "middle" });
+    },
+  });
+}
+</script>
+<p>At low Reynolds number every layer slides over the next and the speed across the pipe is a <span class="c-blue">parabola</span>, fastest in the middle, still at the wall. Past about 2,300 a disturbance can grow into eddies; above 4,000 they always do, and the eddies carry fast water toward the walls, flattening the profile. A straw you sip through is near the line; the water in a kitchen tap is past it, at about 15,000, and a river is in the millions.</p>
+<aside class="callout history"><p>Osborne Reynolds found the rule in 1883 by letting a thin thread of dye into water flowing down a glass tube. At low speed the thread stayed a straight line the length of the tube; past a certain speed it suddenly broke up and colored the whole tube. The switch came at the same value of speed times width over viscosity, whatever the tube <a class="cite" href="#ref-reynolds1883"></a>.</p></aside>
+<p>Because water's kinematic viscosity is so small, a pipe of water has to be very narrow or very slow to stay smooth: a centimeter-wide pipe goes turbulent at just 23 cm/s.</p>
+
+<p>Only small things in slow water feel water as thick and smooth. Put an obstacle in a stream, here a round pebble seen from above, and set the <span class="c-blue">Reynolds number</span>, which for the pebble is its speed times its width over the kinematic viscosity, from <span class="scrub" data-key="re"></span>:</p>
+<figure class="demo" id="rock" aria-label="Water flowing left to right past a round obstacle, simulated. Color shows the spin of the water, blue one way and red the other. At low Reynolds number the flow closes smoothly behind the obstacle; above about 47 it sheds a row of alternating eddies."></figure>
+<script>
+{
+  const sim = Fx.fluid({ domain: [2.4, 0.9], speed: 0.4, re: 120, obstacles: [{ shape: "circle", at: [0.45, 0.45], r: 0.06, fixed: true }], streaks: 0.05, track: true });
+  demo("rock", {
+    aspect: w => w / (w * 0.9 / 2.4 + 50),
+    reset: true,
+    state: () => (sim.warm(10), { t: 10 }),
+    controls: [{ key: "re", label: "Reynolds number", min: 2, max: 220, step: 1, value: 120, color: "blue", marks: [{ value: 47, label: "47" }] }],
+    presets: [{ label: "Silt grain, 40 µm at 5 cm/s", set: { re: 2 } }, { label: "Grain of rice at 1 cm/s", set: { re: 20 } }, { label: "Pencil lead in a gentle current", set: { re: 120 } }],
+    drag: sim.interact,
+    step(dt, s, v) { sim.set({ re: v.re }); s.t += dt; sim.advance(s.t); },
+    status: () => { const q = sim.shedding(); return q.frequency ? `Re ${Math.round(sim.re)}: sheds eddies, St = ${q.strouhal.toFixed(2)}` : `Re ${Math.round(sim.re)}: steady wake`; },
+    draw(g, s, v) {
+      const H = g.w * 0.9 / 2.4, r = g.fx.fluid([0, 0, g.w, H], { sim, show: "vorticity" });
+      if (r.legend) g.fx.colorbar([g.w - 190, H + 26, 170, 8], r.legend);
+    },
+  });
+}
+</script>
+<p>At a Reynolds number of a few, the water parts smoothly in front of the pebble and closes behind it, the way a <button class="set" data-set="re=2">grain of silt</button> sees it. By about 7 two still eddies sit in its lee, and above about 47 they break loose in turn, peeling off one side then the other in a row of <span class="c-red">red</span> and <span class="c-blue">blue</span> whirls. The simulation solves the real equations of flow, but only up to a Reynolds number of a couple of hundred. A pebble 5 cm across in a stream at 50 cm/s is at 25,000, where the wake churns with eddies of every size, as behind every rock in a river.</p>
+
+<h2>Waves</h2>
+
+<p>Drop a pebble in a pond and a ring spreads out, but not as one ring: it breaks into a widening train of ripples. Here is a shallow ripple tank a few millimeters deep, its surface computed from the wave equation. The pebble has just landed. It's slowed to a quarter of real speed, and drops a new pebble every few seconds. Compare the rings <button class="set" data-set="tension=true">with surface tension</button> and <button class="set" data-set="tension=false">without it</button>:</p>
+<figure class="demo" id="pebble" aria-label="A simulated water surface seen from above, with crests in red and troughs in blue. Rings spread from where a pebble was dropped; with surface tension on, short ripples run ahead of the long ones and the ring spreads into a train. Clicking drops another pebble."></figure>
+<script>
+{
+  // A 5 mm deep tray: long waves run at sqrt(g h) = 0.22 m/s; surface tension (σ/ρ = 7.3e-5 m³/s²) makes short ones faster.
+  const sim = Fx.waves({ domain: [0.6, 0.4], depth: 0.005, tension: 7.3e-5, damping: 0.6, sponge: 0.07, cells: 200, cpuCells: 110 });
+  // A pebble is a dent in the surface that springs back (sim.drop). Drops are cleared when the sim restarts,
+  // so the figure drops its own pebble at the start of each run.
+  const PEB = [0.3, 0.2], AMP = { amp: 0.002, r: 0.008 };
+  const fresh = () => { sim.reset(); sim.drop(PEB, AMP); sim.advance(0.3); return { t: 0.3, base: 0 }; };
+  demo("pebble", {
+    aspect: 1.5,
+    reset: true,
+    state: fresh,
+    controls: [
+      { key: "tension", label: "Surface tension", type: "toggle", value: true, color: "purple" },
+      { type: "button", label: "Drop a pebble", action: s => { sim.drop(PEB, AMP); } },
+    ],
+    change(key, s, v) { if (key === "tension") { sim.set({ tension: v.tension ? 7.3e-5 : 0 }); Object.assign(s, fresh()); } },
+    drag: sim.interact,
+    step(dt, s) { s.t += dt * 0.25; if (s.t < sim.time - 1e-6 || s.t > 1.3) Object.assign(s, fresh()); sim.advance(s.t); },   // a new pebble before the rings reach the walls
+    status: (s, v) => `${v.tension ? "with" : "without"} surface tension; a quarter of real speed`,
+    draw(g, s, v) {
+      g.fx.waves(null, { sim, look: "height", range: 0.0012 });
+      const b0 = [16, g.h - 14], px = g.w / 0.6 * 0.05;
+      g.line(b0, [b0[0] + px, b0[1]], { stroke: "ink", width: 2 }); g.text("5 cm", [b0[0] + px / 2, b0[1] - 6], { align: "center", size: 11.5, color: "muted" });
+    },
+  });
+}
+</script>
+<p>Without surface tension, the waves in a shallow tray all travel at one speed, √(<i>gh</i>), and the ring stays a single neat band. With it, the short ripples run ahead of the long ones, so the disturbance sorts itself by wavelength: the shortest ripples in front, the longest at the back. Waves whose speed depends on their wavelength are called <dfn data-def="Waves whose speed depends on their wavelength, so a mixed disturbance spreads into a train sorted by wavelength.">dispersive</dfn>, and on deep water both kinds of wave are.</p>
+
+<p>Two forces pull a bumped surface flat. Gravity pulls the crests down, and surface tension pulls the curved surface straight. For long waves gravity wins and longer is faster; for short ripples surface tension wins and shorter is faster. Drag the <span class="c-blue">wavelength</span> from <span class="scrub" data-key="lam"></span> and change the <span class="c-green">depth</span>:</p>
+<figure class="demo" id="dispersion" aria-label="A plot of the speed of water waves against their wavelength, on logarithmic axes from a millimeter to a kilometer. The curve has a minimum of 23 centimeters per second at 1.7 centimeters; to the left surface tension rules and shorter is faster, to the right gravity rules and longer is faster, until the wavelength exceeds the depth and the speed levels off at the square root of g times depth."></figure>
+<script>
+{
+  demo("dispersion", {
+    aspect: 1.6,
+    controls: [
+      { key: "lam", label: "Wavelength", min: -3, max: 6, step: 0.01, value: -1.77, color: "blue", format: e => { const m = 10 ** e; return m < 0.01 ? `${Num.fmt(m * 1000, { digits: 2 })} mm` : m < 1 ? `${Num.fmt(m * 100, { digits: 2 })} cm` : m < 1000 ? `${Num.fmt(m, { digits: 2 })} m` : `${Num.fmt(m / 1000, { digits: 2 })} km`; } },
+      { key: "h", label: "Depth", min: -1, max: 3.6, step: 0.01, value: 1, color: "green", format: e => { const m = 10 ** e; return m < 1 ? `${Num.fmt(m * 100, { digits: 2 })} cm` : `${Num.fmt(m, { digits: 2 })} m`; } },
+    ],
+    presets: [{ label: "Capillary ripple, 5 mm", set: { lam: -2.3 } }, { label: "Slowest, 1.7 cm", set: { lam: -1.77 } }, { label: "Ocean swell, 150 m", set: { lam: 2.18, h: 3.6 } }, { label: "Tsunami, 200 km long", set: { lam: 5.3, h: 3.6 } }],
+    status: (s, v) => { const L = 10 ** v.lam, c = WATER.waveSpeed(L, 10 ** v.h); return `${Num.fmt(c * 100, { digits: 3 })} cm/s, one crest every ${Num.fmt(L / c, { digits: 2 })} s`; },
+    draw(g, s, v) {
+      const h = 10 ** v.h, L = 10 ** v.lam;
+      const P = g.graph({ x: [1e-3, 1e6], y: [0.1, 300], xScale: "log", yScale: "log", axes: "frame", xLabel: "Wavelength (m)", yLabel: "Speed (m/s)" });
+      P.fn(x => Math.sqrt(9.81 * x / TAU), { color: "muted", dash: [5, 4], width: 1.3, label: "gravity only, deep", labelAt: 300, labelOffset: [-8, -10] });
+      P.fn(x => Math.sqrt(WATER.sigma(20) / WATER.density(20) * TAU / x), { color: "purple", dash: [5, 4], width: 1.3, label: "surface tension only", labelAt: 0.0022, labelOffset: [8, -4] });
+      P.hline(Math.sqrt(9.81 * h), { color: "green", label: "√(g h)" });
+      P.fn(x => WATER.waveSpeed(x, h), { color: "blue", width: 2.5 });
+      P.marker(L, WATER.waveSpeed(L, h), { color: "blue", drop: true });
+      P.marker(0.0171, 0.231, { color: "ink", label: "slowest: 23 cm/s at 1.7 cm", pos: "se" });
+    },
+  });
+}
+</script>
+<p>Every wave on water lies on the <span class="c-blue">blue curve</span>. It has a floor: no wave on clean water can move slower than 23 cm/s, which happens at a wavelength of 1.7 cm <a class="cite" href="#ref-lighthill1978"></a>. Shorter than that, the <span class="c-purple">ripples</span> are ruled by surface tension and get faster as they shrink. Longer, they are ruled by gravity, and in deep water their speed grows with the square root of the wavelength: four times as long, twice as fast. That is why swell from a distant storm reaches the beach before its chop.</p>
+<p>Once the wavelength is many times the <span class="c-green">depth</span>, the bottom gets in the way and the speed stops growing at √(<i>gh</i>), whatever the wavelength. A tsunami, hundreds of kilometers long, is a shallow-water wave even over the 4 km deep ocean, and it crosses it at <button class="set" data-set="lam=5.3 h=3.6">200 m/s</button>, the speed of a jet airliner.</p>
+
+<aside class="callout key"><p>Long water waves are pulled flat by gravity and short ones by surface tension. The two meet at 1.7 cm, where waves are slowest; over shallow water every long wave slows to √(<i>gh</i>).</p></aside>
+<details class="deeper">
+  <summary>The formula behind the curve <span class="hint">2 min</span></summary>
+  <p>For small waves of wavelength λ on water of depth <i>h</i>, gravity <i>g</i>, density ρ and surface tension γ, the speed is <a class="cite" href="#ref-lighthill1978"></a>:</p>
+  <div class="tex">c^2 = \left(\frac{g\lambda}{2\pi} + \frac{2\pi\gamma}{\rho\lambda}\right)\tanh\frac{2\pi h}{\lambda}</div>
+  <p>The first term in the bracket is gravity's, growing with wavelength; the second is surface tension's, growing as the wavelength shrinks. They are equal at λ = 2π√(γ/ρ<i>g</i>), 1.7 cm, where the speed is lowest. The tanh is close to 1 in deep water; when the depth is small compared with the wavelength it becomes 2π<i>h</i>/λ, and the gravity term gives <i>c</i>² = <i>gh</i>. The figure plots this formula with water's values at 20 °C. It holds for waves whose height is small compared with their length; steep waves run a little faster and, near breaking, the formula no longer applies.</p>
+</details>
+<p>Waves bend around obstacles. Send straight waves at a harbor wall with one opening, and widen the <span class="c-orange">gap</span> from <span class="scrub" data-key="gap"></span>, comparing it with the wavelength of 6 cm:</p>
+<figure class="demo" id="gap" aria-label="Simulated straight waves coming from the left onto a wall with one gap. Behind a narrow gap the waves spread out as half circles; behind a wide one they continue as a straight beam with fading edges. A slider sets the gap width."></figure>
+<script>
+{
+  // 1 cm deep: c = 0.31 m/s; waves at 5 Hz are 6.3 cm long.
+  const wall = gap => Fx.waves.slits([0.45, 0], [0.45, 0.8], [[0.4, gap]], 0.02);
+  const sim = Fx.waves({ domain: [1.2, 0.8], depth: 0.01, damping: 0.1, cpuCells: 110, walls: wall(0.06), sources: [{ at: [0.06, 0.04], to: [0.06, 0.76], freq: 5, amp: 0.0006, phase: Math.PI / 2 }] });   // cosine start: no net push
+  demo("gap", {
+    aspect: 1.5,
+    reset: true,
+    state: () => (sim.warm(8), { t: 8 }),
+    controls: [{ key: "gap", label: "Gap", min: 0.02, max: 0.4, step: 0.005, value: 0.06, color: "orange", format: x => `${Math.round(x * 100)} cm`, marks: [{ value: 0.063, label: "1 wavelength" }] }],
+    change(key, s, v) { sim.set({ walls: wall(v.gap) }); },
+    step(dt, s) { s.t += dt; sim.advance(s.t); },
+    status: (s, v) => `gap ${(v.gap / 0.063).toFixed(1)} wavelengths wide`,
+    draw(g, s, v) { g.fx.waves(null, { sim, look: "height", range: 0.0012 }); },
+  });
+}
+</script>
+<p>Through a gap about one wavelength wide, the waves fan out behind the wall in half circles, as if the gap were a new source. Through a <button class="set" data-set="gap=0.38">gap six wavelengths wide</button> they pass mostly straight, as a beam that spreads only at its edges. The rule is the same for light and sound: an opening bends waves strongly when it is about as wide as they are long. This is <dfn data-def="Waves spreading as they pass through an opening or around an edge, strongly when the opening is about one wavelength across.">diffraction</dfn>, the reason ripples reach the corners behind a harbor wall.</p>
+
+<p>Where two sets of waves cross, their heights add. Here are two dippers bobbing in step; move them apart from <span class="scrub" data-key="sep"></span> and watch the pattern where their rings overlap:</p>
+<figure class="demo" id="two" aria-label="Simulated waves from two points bobbing in step, crests red and troughs blue. Along some lines fanning out from between them the water stays almost still; along others the waves are twice as tall. Moving the sources apart adds more lines."></figure>
+<script>
+{
+  const src = sep => [{ at: [0.6, 0.4 - sep / 2], freq: 5, amp: 0.0006, phase: Math.PI / 2 }, { at: [0.6, 0.4 + sep / 2], freq: 5, amp: 0.0006, phase: Math.PI / 2 }];
+  const sim = Fx.waves({ domain: [1.2, 0.8], depth: 0.01, damping: 0.1, cpuCells: 110, sources: src(0.16) });
+  demo("two", {
+    aspect: 1.5,
+    reset: true,
+    state: () => (sim.warm(8), { t: 8 }),
+    controls: [{ key: "sep", label: "Separation", min: 0.03, max: 0.36, step: 0.005, value: 0.16, color: "red", format: x => `${Math.round(x * 100)} cm` }],
+    change(key, s, v) { sim.set({ sources: src(v.sep) }); },
+    step(dt, s) { s.t += dt; sim.advance(s.t); },
+    status: (s, v) => `sources ${(v.sep / 0.063).toFixed(1)} wavelengths apart`,
+    draw(g, s, v) {
+      g.fx.waves(null, { sim, look: "height", range: 0.003 });
+      for (const q of src(v.sep)) g.circle(sim.toScreen(q.at), 4, { fill: "ink", stroke: "panel", width: 1.5 });
+    },
+  });
+}
+</script>
+<p>Wherever a crest from one source meets a trough from the other, they cancel, and the water along that line barely moves. Where crests meet crests, the waves stand twice as tall. The still lines fan out from between the dippers, and each extra wavelength of separation adds another pair. This is <dfn data-def="Two sets of waves adding: crest on crest makes a bigger wave, crest on trough cancels.">interference</dfn>, and the same pattern, made with light through two slits, is how Thomas Young argued in the early 1800s that light is a wave.</p>
+
+<p>Waves rolling onto a beach feel the bottom long before they break. Here is a wave train arriving from deep water over a sloping bed; set the <span class="c-blue">period</span>, the time between crests, from <span class="scrub" data-key="T"></span>:</p>
+<figure class="demo" id="beach" aria-label="A side view of waves arriving from the left over a seabed that slopes up to a beach on the right. As the water gets shallower the crests crowd together and grow taller, until they break near the shore. Height is exaggerated."></figure>
+<script>
+{
+  // Linear waves on a slope: at each point solve ω² = g k tanh(k h) for k, add up the phase, and keep the energy flux
+  // a² c_g constant (shoaling). A wave breaks when its height passes 0.78 of the depth. Heights drawn 3× taller.
+  const X = 300, N = 600, hOf = x => Math.max(0.05, 12 * (1 - x / X) ** 1.2);
+  const kOf = (w, h) => { let k = w * w / 9.81; for (let i = 0; i < 30; i++) { const t = Math.tanh(k * h), f = 9.81 * k * t - w * w, d = 9.81 * (t + k * h * (1 - t * t)); k -= f / d; } return k; };
+  const cache = {};
+  function train(T) {
+    if (cache[T]) return cache[T];
+    const w = TAU / T, xs = [], ph = [], amp = [];
+    let phase = 0, H0 = 0.5, flux0 = null, broken = false;
+    for (let i = 0; i <= N; i++) {
+      const x = X * i / N, h = hOf(x), k = kOf(w, h), c = w / k, cg = 0.5 * c * (1 + 2 * k * h / Math.sinh(Math.min(2 * k * h, 700)));
+      if (i) phase += k * X / N;
+      flux0 ??= cg;
+      let H = H0 * Math.sqrt(flux0 / cg);
+      if (H > 0.78 * h) { broken = true; H = 0.78 * h; }
+      xs.push(x); ph.push(phase); amp.push(H / 2);
+    }
+    return (cache[T] = { xs, ph, amp, w });
+  }
+  demo("beach", {
+    aspect: 1.9,
+    state: () => ({ t: 1 }),
+    controls: [{ key: "T", label: "Period", min: 3, max: 14, step: 0.5, value: 8, unit: " s", color: "blue" }],
+    step(dt, s) { s.t += dt; },
+    status: (s, v) => { const w = TAU / v.T, L0 = TAU / kOf(w, 12), L1 = TAU / kOf(w, 1); return `wavelength ${Math.round(L0)} m where it's 12 m deep, ${Math.round(L1)} m where it's 1 m deep`; },
+    draw(g, s, v) {
+      const tr = train(v.T), P = g.fit(0, X, -13, 4, { pad: 8, uniform: false });
+      const bed = tr.xs.map(x => P([x, -hOf(x)]));
+      const surf = tr.xs.map((x, i) => P([x, 3 * tr.amp[i] * Math.cos(tr.ph[i] - tr.w * s.t)]));
+      g.path([...surf, P([X, -13]), P([0, -13])], { fill: g.rgba("blue", 0.2), close: true });
+      g.path(surf, { stroke: "blue", width: 2 });
+      g.path([...bed, P([X, -13]), P([0, -13])], { fill: g.mix("panel", "brass", 0.3), stroke: "ink", width: 1.5, close: true, hatch: g.rgba("brass", 0.5) });
+      g.label("deep", P([20, -10]));
+      g.label("shallow", P([X * 0.82, -6]));
+      g.text("heights drawn 3× taller", [g.w - 12, 14], { align: "right", size: 11, color: "muted" });
+    },
+  });
+}
+</script>
+<p>Out where the water is deep compared with the wavelength, the crests run at their deep-water speed. As the bed rises they slow toward √(<i>gh</i>): 10 m/s over 10 m of water, 3 m/s over one meter. The crests behind are still fast, so they crowd together; the wavelength shrinks, and the energy squeezed into each shortening wave makes it grow taller until, at a height about four fifths of the depth, its crest outruns its base and it breaks. The same slowing swings waves round to face a beach, whatever direction they came from.</p>
+
+<h2>Water and light</h2>
+
+<p>Light slows down in water to three quarters of its speed in air, which is what a refractive index of 1.333 means <a class="cite" href="#ref-hale1973"></a>, and it bends wherever it crosses the surface at a slant. Look at a coin on the bottom of a pool 2 m deep and drag the <span class="c-orange">eye</span> to look from further off to the side:</p>
+<figure class="demo" id="apparent" aria-label="A side view of a pool 2 meters deep with a coin on the bottom. A ray from the coin bends at the surface toward an eye that can be dragged. Extending the ray in air back down, it seems to come from a ghost coin that sits higher than the real one, higher still as the eye moves off to the side."></figure>
+<script>
+{
+  const n = WATER.N_IOR, D = 2, COIN = [0, -D];
+  // The ray from the coin to the eye crosses the surface at xs, where sin(air angle) = n sin(water angle).
+  function path(eye) {
+    let lo = Math.min(0, eye[0]), hi = Math.max(0, eye[0]);
+    const f = x => { const sw = x / Math.hypot(x, D), sa = (eye[0] - x) / Math.hypot(eye[0] - x, eye[1]); return sa - n * sw; };
+    for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (f(m) * f(lo) > 0) lo = m; else hi = m; }
+    const xs = (lo + hi) / 2, tw = Math.atan2(xs, D), ta = Math.atan2(eye[0] - xs, eye[1]);
+    const dApp = Math.abs(ta) < 1e-4 ? D / n : D * Math.tan(tw) / Math.tan(ta);
+    return { xs, tw, ta, dApp };
+  }
+  let P;
+  demo("apparent", {
+    aspect: 1.5,
+    state: () => ({ eye: [2.2, 1.6] }),
+    controls: [],
+    drag: {
+      hit: (p, s) => P && Math.hypot(p[0] - P(s.eye)[0], p[1] - P(s.eye)[1]) < 26,
+      move: (p, s) => { const q = P.inv(p); s.eye = [clamp(q[0], 0.02, 5.5), clamp(q[1], 0.4, 2.2)]; },
+    },
+    status: s => { const r = path(s.eye); return `${(r.ta * 180 / Math.PI).toFixed(0)}° from straight down: the coin looks ${r.dApp.toFixed(2)} m deep`; },
+    draw(g, s) {
+      P = g.fit(-1.5, 5.8, -2.4, 2.4, { pad: 8 });
+      const r = path(s.eye), ghost = [0, -r.dApp];
+      g.rect(...P([-1.5, 0]), 7.3 * P.sx, 2 * P.sy, { fill: g.rgba("blue", 0.16) });
+      g.line(P([-1.5, 0]), P([5.8, 0]), { stroke: "blue", width: 1.5 });
+      g.ground(P([-1.5, -D]), P([5.8, -D]), {});
+      g.line(P(COIN), P([r.xs, 0]), { stroke: "orange", width: 2 });
+      g.arrow(P([r.xs, 0]), P(s.eye), { stroke: "orange", width: 2 });
+      g.line(P([r.xs, 0]), P(ghost), { stroke: "orange", width: 1.2, dash: [4, 4] });
+      g.line(P([0, 0.15]), P([0, -D - 0.05]), { stroke: "faint", width: 1, dash: [2, 3] });
+      g.rect(P(COIN)[0] - 10, P(COIN)[1] - 4, 20, 4, { fill: "brass", stroke: "ink", width: 1 });
+      g.rect(P(ghost)[0] - 10, P(ghost)[1] - 4, 20, 4, { fill: g.rgba("brass", 0.35), stroke: "brass", width: 1, });
+      g.callouts([{ at: P(COIN), text: "coin, 2 m down", color: "ink", side: "left" }, { at: P(ghost), text: `where it seems, ${r.dApp.toFixed(2)} m down`, color: "brass", side: "left" }]);
+      g.handle(P(s.eye), { color: "orange" });
+      g.label("eye", [P(s.eye)[0] + 18, P(s.eye)[1] - 12]);
+    },
+  });
+}
+</script>
+<p>Your eye assumes light travels in straight lines, so it traces the bent ray straight back and puts the <span class="c-brass">coin</span> where that line ends. Looking straight down, the coin seems 1.5 m deep, three quarters of the real depth, the same factor as the slowing. Looking from the side, the ghost rises further: at 60° from straight down the coin seems only about 1 m deep. Every pool looks shallower than it is, and the far end most of all.</p>
+
+<p>Here is a real pool to try it on. Its tiled floor is 1.5 m down; fill it from empty and keep your eye on the dark lane line and the grid of tiles as the <span class="c-blue">water</span> rises from <span class="scrub" data-key="fill"></span>:</p>
+<figure class="demo" id="pool" aria-label="A turnable 3D corner of a swimming pool with a white tiled floor and a dark lane stripe, glass on its two open sides. A slider fills it with water; as it fills, the floor seen through the water appears raised and the tiles shift and waver, and the deeper water turns blue-green."></figure>
+<script>
+{
+  const W = 2.4, DEP = 1.5, T = 0.25;
+  const tiles = (() => {
+    const c = document.createElement("canvas"); c.width = c.height = 960;
+    const x = c.getContext("2d"), px = 960 / (W / T);
+    x.fillStyle = "#f4f6f6"; x.fillRect(0, 0, 960, 960);
+    x.fillStyle = "#1e2a36"; x.fillRect(960 * 0.5 - px * 0.5, 960 * 0.1, px, 960 * 0.8);
+    x.strokeStyle = "#9aa7ad"; x.lineWidth = 3;
+    for (let i = 0; i <= 960; i += px) { x.beginPath(); x.moveTo(i, 0); x.lineTo(i, 960); x.stroke(); x.beginPath(); x.moveTo(0, i); x.lineTo(960, i); x.stroke(); }
+    return c;
+  })();
+  const scene = E3.scene({ shadow: { opacity: 0.25 }, look: "outdoor", units: "m" });
+  scene.sky = { sun: { elevation: 62, azimuth: 210 } };
+  scene.ink = 0.6;
+  scene.add(E3.mesh.box(W, 0.06, W), { name: "floor", position: [0, -0.03, 0], material: { color: "#ffffff", map: tiles, mapping: "planar", mapBox: [-W / 2, -W / 2, W, W] } });
+  for (const [p, sz] of [[[-W / 2 - 0.05, DEP / 2, 0], [0.1, DEP + 0.06, W + 0.2]], [[0, DEP / 2, -W / 2 - 0.05], [W, DEP + 0.06, 0.1]]]) scene.add(E3.mesh.box(...sz), { name: "wall", position: p, material: "porcelain" });
+  // Glass panes close the two open sides, so the corner is a cutaway you can see into.
+  const pane = (sx, sz, x, z) => E3.mesh.transform(E3.mesh.box(sx, DEP + 0.06, sz), E3.m4.translation([x, DEP / 2, z]));
+  scene.add(E3.mesh.merge(pane(0.02, W + 0.04, W / 2 + 0.01, 0.01), pane(W + 0.02, 0.02, 0.01, W / 2 + 0.01)), { name: "glass", material: { base: "glass", thickness: 0.02 } });
+  // Simulated water with a light breeze's ripples (about half a millimeter high).
+  const water = scene.add(E3.water({ size: W, depth: 1.2, ripples: 0.0005, rippleLength: 0.09, basin: false, seed: 2 }), { name: "water" });
+  demo("pool", {
+    aspect: 1.45,
+    orbit: { yaw: 0.65, pitch: 0.55, minPitch: 0.2, maxPitch: 1.3 },
+    state: () => ({ t: 2 }),
+    controls: [{ key: "fill", label: "Water depth", min: 0, max: 1.5, step: 0.01, value: 1.2, unit: " m", color: "blue" }],
+    step(dt, s) { s.t += dt; },
+    status: (s, v) => v.fill < 0.01 ? "empty" : `the floor looks about ${(1.5 - v.fill + v.fill / 1.333).toFixed(2)} m down from the rim, looking straight down`,
+    draw(g, s, v) {
+      water.visible = v.fill > 0.01;
+      water.depth = Math.max(0.01, v.fill);
+      water.position = [0, water.depth, 0];
+      scene.time = s.t;
+      g.render3d(scene, { ...s.view, fov: 30, target: [0.1, 0.5, 0.1], distance: 6.2 });
+    },
+  });
+}
+</script>
+<p>As the water rises, the floor seen through it lifts and the lane line kinks where the water's edge crosses it. The tiles also waver, because every ripple on the surface is a small slanted pane that bends the light a slightly different way, and the deeper the water, the bluer the floor looks. Those same ripples do something stranger to the light reaching the floor.</p>
+
+<p>Each crest of a wave is a weak lens. It bends the sunlight passing through it toward a line below, and where those lines land the floor is brighter; between them it's dimmer. Here is a simulated pool, its surface rippled by a light breeze, seen from above. Change the <span class="c-blue">depth</span> of the pool from <span class="scrub" data-key="depth"></span>, and click to drop a pebble:</p>
+<figure class="demo" id="caustics" aria-label="A 3D pool seen from above, its surface rippled by a light breeze. On the tiled floor a net of bright curved lines of focused sunlight wanders as the ripples move. A depth slider shows an evenly lit floor in very shallow water, a sharp web of lines at one to two meters, and a finer, tangled net in deep water. Clicking the water drops a pebble."></figure>
+<script>
+{
+  // Wind ripples about 10 cm long and half a millimeter high: each crest is a weak lens that
+  // focuses sunlight a meter or two below it. The caustics are computed from the simulated surface.
+  const W = 3.6, D = 2.4;
+  const tiles = (() => {
+    const c = document.createElement("canvas"), n = 18, px = 56; c.width = n * px; c.height = Math.round(n * px * D / W);
+    const x = c.getContext("2d");
+    x.fillStyle = "#e3e9ea"; x.fillRect(0, 0, c.width, c.height);
+    x.fillStyle = "#1e2a36"; x.fillRect(c.width / 2 - px * 0.5, px, px, c.height - 2 * px);
+    x.fillStyle = "#87949a";
+    for (let i = 0; i <= c.width; i += px) x.fillRect(i - 2, 0, 4, c.height);
+    for (let j = 0; j <= c.height; j += px) x.fillRect(0, j - 2, c.width, 4);
+    return c;
+  })();
+  const scene = E3.scene({ look: "outdoor", units: "m", shadow: { opacity: 0 } });
+  scene.sky = { sun: { elevation: 66, azimuth: 160 } };
+  scene.ink = 0.3;
+  scene.add(E3.mesh.box(W, 0.04, D), { name: "floor", position: [0, -0.02, 0], material: { color: "#ffffff", metal: 0, roughness: 0.4, map: tiles, mapping: "planar", mapBox: [-W / 2, -D / 2, W, D] } });
+  const water = scene.add(E3.water({ size: [W, D], depth: 0.8, ripples: 0.0006, rippleLength: 0.1, basin: false, seed: 4 }), { name: "water" });
+  let view = null;
+  demo("caustics", {
+    aspect: 1.6,
+    reset: () => water.clear(),
+    orbit: { yaw: 0, pitch: 1.4, minPitch: 1.15, maxPitch: 1.55 },
+    state: () => ({ t: 8 }),
+    controls: [{ key: "depth", label: "Pool depth", min: 0.05, max: 3, step: 0.01, value: 0.8, unit: " m", color: "blue" }],
+    drag: {
+      hit: p => { const h = view && view.pick(p); return !!h && h.node.name === "surface"; },
+      start(p, s) { water.drop(view.pick(p).point, { time: s.t, r: 0.025, amp: -0.004 }); },
+    },
+    step(dt, s) { s.t += dt; },
+    draw(g, s, v) {
+      water.depth = v.depth;
+      water.position = [0, v.depth, 0];
+      scene.time = s.t;
+      view = g.render3d(scene, { ...s.view, fov: 30, target: [0, 0, 0], distance: 3.2 + v.depth });
+    },
+  });
+}
+</script>
+<p>In <button class="set" data-set="depth=0.1">ankle-deep water</button> the light hasn't had room to focus, and the floor is evenly lit. By about a meter deep, each crest's light comes to a sharp line on the floor, and the lines join into the shifting bright web called <dfn data-def="Bright lines and patches where a curved surface focuses light, like the net of light on a pool floor.">caustics</dfn>. In <button class="set" data-set="depth=3">deep water</button> light from several crests crosses on the way down and the web tangles into a finer, busier net. The same focusing makes the dancing bright patterns on the hull of a boat and the underside of a bridge.</p>
+
+<aside class="callout mistake"><p>Water isn't blue only because it reflects the sky. A white tile at the bottom of an indoor pool, lit by white lamps, still looks blue: the light reaching your eye has lost its red to the water itself.</p></aside>
+<p>The deeper water also turned blue. Water absorbs a little of every color, but very unevenly: red light is absorbed about a hundred times more strongly than blue <a class="cite" href="#ref-pope1997"></a>. Here is the measured absorption, and the color of a white tile seen through water as you sink it from <span class="scrub" data-key="L"></span>:</p>
+<figure class="demo" id="blue" aria-label="Left: a plot of how strongly pure water absorbs light against wavelength, low in the blue and rising steeply into the red, on a log scale. Right: a column showing the color of a white tile seen through increasing depths of water, turning from white to cyan to deep blue. A slider sets the depth."></figure>
+<script>
+{
+  // White light goes down to the tile and back up: 2L of water. Transmission e^(−a(λ)·2L) per wavelength,
+  // added up into a display color with the same method as the light page (linear RGB of each wavelength).
+  const lin = x => Math.pow(Math.max(0, x), 2.2);
+  function colorAt(L) {
+    const acc = [0, 0, 0], ref = [0, 0, 0];
+    for (let nm = 400; nm <= 700; nm += 5) { const q = Optics.wavelengthRGB(nm).map(lin), w = Math.exp(-WATER.absorb(nm) * 2 * L); for (let k = 0; k < 3; k++) { acc[k] += q[k] * w; ref[k] += q[k]; } }
+    return `rgb(${acc.map((a, k) => Math.round(255 * Math.pow(Math.min(1, a / ref[k]), 1 / 2.2))).join(",")})`;
+  }
+  demo("blue", {
+    aspect: w => (w < 560 ? 1 : 1.75),
+    controls: [{ key: "L", label: "Depth", min: 0, max: 30, step: 0.1, value: 3, unit: " m", color: "blue" }],
+    status: (s, v) => `after ${(2 * v.L).toFixed(1)} m of water: ${Math.round(100 * Math.exp(-WATER.absorb(680) * 2 * v.L))}% of red, ${Math.round(100 * Math.exp(-WATER.absorb(450) * 2 * v.L))}% of blue light left`,
+    draw(g, s, v) {
+      const narrow = g.w < 560, pb = narrow ? [0, 0, g.w, g.h * 0.55] : [0, 0, g.w * 0.62, g.h], cb = narrow ? [16, g.h * 0.62, g.w - 32, g.h * 0.3] : [g.w * 0.7, 10, g.w * 0.22, g.h - 40];
+      const P = g.graph({ box: pb, x: [400, 700], y: [0.003, 1], yScale: "log", axes: "frame", xLabel: "Wavelength (nm)", yLabel: "Absorption (per meter)" });
+      for (let nm = 400; nm < 700; nm += 4) P.clip(() => g.rect(P.xpx(nm), P.box[1] + P.box[3] - 6, Math.max(1, P.sx * 4), 6, { fill: g.wavelengthColor(nm) }));
+      P.series(WATER.ABS_NM.slice(1).map((nm, i) => [nm, WATER.ABS[i + 1]]), { color: "ink", dots: true });
+      P.hline(1 / (2 * Math.max(v.L, 0.01)), { color: "blue", label: "above this line: mostly absorbed" });
+      const n = 60;
+      if (narrow) {
+        for (let i = 0; i < n; i++) g.rect(cb[0] + cb[2] * i / n, cb[1], cb[2] / n + 1, cb[3], { fill: colorAt(30 * i / (n - 1)) });
+        const x = cb[0] + cb[2] * v.L / 30; g.line([x, cb[1] - 6], [x, cb[1] + cb[3] + 6], { stroke: "ink", width: 2 });
+        g.text("0 m", [cb[0], cb[1] + cb[3] + 14], { size: 11, color: "muted" }); g.text("30 m", [cb[0] + cb[2], cb[1] + cb[3] + 14], { size: 11, color: "muted", align: "right" });
+      } else {
+        for (let i = 0; i < n; i++) g.rect(cb[0], cb[1] + cb[3] * i / n, cb[2], cb[3] / n + 1, { fill: colorAt(30 * i / (n - 1)) });
+        const y = cb[1] + cb[3] * v.L / 30; g.line([cb[0] - 8, y], [cb[0] + cb[2] + 8, y], { stroke: "ink", width: 2 }); g.text(`${v.L.toFixed(1)} m`, [cb[0] - 12, y], { align: "right", baseline: "middle", size: 12, weight: 600 });
+        g.text("0 m", [cb[0] + cb[2] + 12, cb[1] + 4], { size: 11, color: "muted", baseline: "middle" }); g.text("30 m", [cb[0] + cb[2] + 12, cb[1] + cb[3], ], { size: 11, color: "muted", baseline: "middle" });
+        g.text("white tile, seen through", [cb[0] + cb[2] / 2, cb[1] + cb[3] + 16], { size: 11, color: "muted", align: "center" });
+      }
+    },
+  });
+}
+</script>
+<p>Water's absorption bottoms out in the blue near 420 nm and climbs a hundredfold into the red. A glass of water is far too thin for this to show. Through a few meters, light from a white tile comes back short of red and looks pale cyan; by 10 m only blue and some green are left. It isn't scattering, as in the sky, nor a dissolved dye: water's own molecules absorb red light by setting their O–H bonds vibrating, a faint echo of their strong absorption in the infrared <a class="cite" href="#ref-braun1993"></a>. Water is, faintly, a blue substance<span class="sidenote">Real lakes add green from algae and brown from dissolved plant matter, and the sea also reflects the sky.</span>.</p>
+
+<h2>Back to the glass</h2>
+
+<p>Back to the glass of water from the start, where we can now name what it does. Pick an oddity below the glass; each sets the <span class="c-orange">temperature</span> where it shows:</p>
+<figure class="demo wide" id="payoff" aria-label="The glass of water from the first figure, with a list of water's oddities. Choosing one sets the temperature and labels where it shows in the glass: the meniscus at the rim, the level, the steam, the ice on top, and the faint blue of the water."></figure>
+<script>
+{
+  const G = GLASS.build();
+  const ITEMS = [
+    { T: 20, title: "It is liquid at all", text: "A molecule this light should boil near −90 °C. Hydrogen bonds hold it in place until 100 °C." },
+    { T: 20, title: "It climbs the wall", text: "At the rim the water curves up the glass, a few millimeters high: glass bonds to water, and surface tension lifts the edge." },
+    { T: 60, title: "It warms slowly", text: "Every degree costs 4.18 J per gram, five times sand's, spent bending and breaking hydrogen bonds." },
+    { T: 4, title: "It is densest at 4 °C", text: "Below 4 °C, open ice-like patches make the water swell again; a lake keeps 4 °C water at its bottom all winter." },
+    { T: -5, title: "Its ice floats", text: "Frozen, it takes 9% more room, so ice floats on its own melt and lakes freeze from the top." },
+    { T: 100, title: "It holds on to boil", text: "Leaving the liquid costs 41 kJ per mole, which is why steam scalds and sweat cools." },
+    { T: 20, title: "It is faintly blue", text: "It absorbs red light about a hundred times more than blue: invisible in a glass, plain in a pool." },
+  ];
+  demo("payoff", {
+    aspect: w => (w < 560 ? 0.75 : 1.75),
+    orbit: { yaw: -0.4, pitch: 0.28, minPitch: -0.1, maxPitch: 1.1 },
+    state: () => ({ t: 3 }),
+    controls: [
+      { key: "k", label: "Oddity", min: 0, max: ITEMS.length - 1, step: 1, value: 1, hidden: true },
+      { key: "T", label: "Temperature", min: -10, max: 100, step: 0.5, value: 20, unit: " °C", color: "orange" },
+    ],
+    presets: ["Liquid", "Climbs", "Slow to warm", "4 °C", "Ice floats", "Boils late", "Blue"].map((label, k) => ({ label, set: { k, T: ITEMS[k].T } })),
+    step(dt, s) { s.t += dt; },
+    status: (s, v) => ITEMS[v.k].title,
+    draw(g, s, v) {
+      const narrow = g.w < 560, b3 = narrow ? [0, 0, g.w, g.h * 0.62] : [0, 0, g.w * 0.55, g.h], tb = narrow ? [16, g.h * 0.64, g.w - 32, g.h * 0.36] : [g.w * 0.58, 30, g.w * 0.4, g.h - 60];
+      const hl = G.pose(v.T, s.t), it = ITEMS[v.k];
+      const view = g.render3d(G.scene, { ...s.view, fov: 28, target: [0, 5.5, 0], distance: 40 }, { box: b3 });
+      const R = GLASS.R, B = GLASS.BASE, at = {
+        0: [0, B + hl * 0.5, 0], 1: [R, B + hl, 0], 2: [0, B + hl * 0.4, 0], 3: [0, B + 0.5, 0], 4: [R * 0.5, B + hl, 0], 5: [0, B + hl + 2.5, 0], 6: [0, B + hl * 0.6, 0],
+      }[v.k];
+      g.callouts([{ at: view.project(at), text: it.title.toLowerCase(), color: "orange", side: "left" }]);
+      g.text(it.title, [tb[0], tb[1] + 10], { size: 17, weight: 600, font: "serif" });
+      const words = it.text.split(" "), lines = [];
+      let line = "";
+      for (const w of words) { const t = line ? line + " " + w : w; if (g.measure(t, { size: 14 }) > tb[2]) { lines.push(line); line = w; } else line = t; }
+      lines.push(line);
+      lines.forEach((l, i) => g.text(l, [tb[0], tb[1] + 40 + i * 21], { size: 14, color: "ink" }));
+    },
+  });
+}
+</script>
+<p>Nearly every item traces back to two facts: the molecule is bent, and its charge sits lopsided across the bend. That gives each molecule four places to hold a neighbor, and liquid water is those holds made and broken a trillion times a second. The heat it soaks up, its boiling point, the 4 °C bottom of a winter lake, the skin that floats a paperclip, the shells around salt: each is the network's price or its pull. The waves and the light are more general physics, but their numbers, the 1.7 cm ripple, the blue, are water's own.</p>
+<p>Plenty is still argued about. Whether supercooled water, below about −40 °C, hides a second critical point between two liquids of different density is an open question <a class="cite" href="#ref-ball2008"></a>, and so is exactly how the network rearranges in the instant a bond breaks.</p>
+
+<h2 class="plain">References</h2>
+<ol class="references">
+  <li id="ref-hoy1979">A. R. Hoy and P. R. Bunker, “A precise solution of the rotation bending Schrödinger equation for a triatomic molecule with application to the water molecule”, <em>Journal of Molecular Spectroscopy</em> 74 (1979), 1–8. doi:10.1016/0022-2852(79)90019-5</li>
+  <li id="ref-clough1973">S. A. Clough, Y. Beers, G. P. Klein and L. S. Rothman, “Dipole moment of water from Stark measurements of H₂O, HDO, and D₂O”, <em>Journal of Chemical Physics</em> 59 (1973), 2254–2259. doi:10.1063/1.1680328</li>
+  <li id="ref-fernandez1997">D. P. Fernández, A. R. H. Goodwin, E. W. Lemmon, J. M. H. Levelt Sengers and R. C. Williams, “A formulation for the static permittivity of water and steam at temperatures from 238 K to 873 K at pressures up to 1200 MPa”, <em>Journal of Physical and Chemical Reference Data</em> 26 (1997), 1125–1166. doi:10.1063/1.555997</li>
+  <li id="ref-silverstein1998">K. A. T. Silverstein, A. D. J. Haymet and K. A. Dill, “A simple model of water and the hydrophobic effect”, <em>Journal of the American Chemical Society</em> 120 (1998), 3166–3175. doi:10.1021/ja973029k</li>
+  <li id="ref-fecko2003">C. J. Fecko, J. D. Eaves, J. J. Loparo, A. Tokmakoff and P. L. Geissler, “Ultrafast hydrogen-bond dynamics in the infrared spectroscopy of water”, <em>Science</em> 301 (2003), 1698–1702. doi:10.1126/science.1087251</li>
+  <li id="ref-laage2006">D. Laage and J. T. Hynes, “A molecular jump mechanism of water reorientation”, <em>Science</em> 311 (2006), 832–835.</li>
+  <li id="ref-crc">W. M. Haynes (ed.), <em>CRC Handbook of Chemistry and Physics</em>, 97th edition, CRC Press (2016): boiling points of inorganic compounds; properties of water from 0 to 100 °C.</li>
+  <li id="ref-nist">P. J. Linstrom and W. G. Mallard (eds.), <em>NIST Chemistry WebBook</em>, NIST Standard Reference Database 69, National Institute of Standards and Technology: heat capacities of liquid water, quartz, and iron at 298 K.</li>
+  <li id="ref-tanaka2001">M. Tanaka, G. Girard, R. Davis, A. Peuto and N. Bignell, “Recommended table for the density of water between 0 °C and 40 °C based on recent experimental reports”, <em>Metrologia</em> 38 (2001), 301–309. doi:10.1088/0026-1394/38/4/3</li>
+  <li id="ref-wetzel2001">R. G. Wetzel, <em>Limnology: Lake and River Ecosystems</em>, 3rd edition, Academic Press (2001), chapters 6 and 7.</li>
+  <li id="ref-iapws2014">International Association for the Properties of Water and Steam, <em>Revised Release on the Surface Tension of Ordinary Water Substance</em>, IAPWS R1-76(2014).</li>
+  <li id="ref-degennes2004">P.-G. de Gennes, F. Brochard-Wyart and D. Quéré, <em>Capillarity and Wetting Phenomena: Drops, Bubbles, Pearls, Waves</em>, Springer (2004).</li>
+  <li id="ref-vella2015">D. Vella, “Floating versus sinking”, <em>Annual Review of Fluid Mechanics</em> 47 (2015), 115–135. doi:10.1146/annurev-fluid-010814-014627</li>
+  <li id="ref-ohtaki1993">H. Ohtaki and T. Radnai, “Structure and dynamics of hydrated ions”, <em>Chemical Reviews</em> 93 (1993), 1157–1204. doi:10.1021/cr00019a014</li>
+  <li id="ref-huber2009">M. L. Huber, R. A. Perkins, A. Laesecke, D. G. Friend, J. V. Sengers, M. J. Assael, I. N. Metaxa, E. Vogel, R. Mareš and K. Miyagawa, “New international formulation for the viscosity of H₂O”, <em>Journal of Physical and Chemical Reference Data</em> 38 (2009), 101–125. doi:10.1063/1.3088050</li>
+  <li id="ref-reynolds1883">O. Reynolds, “An experimental investigation of the circumstances which determine whether the motion of water shall be direct or sinuous, and of the law of resistance in parallel channels”, <em>Philosophical Transactions of the Royal Society of London</em> 174 (1883), 935–982. doi:10.1098/rstl.1883.0029</li>
+  <li id="ref-lighthill1978">J. Lighthill, <em>Waves in Fluids</em>, Cambridge University Press (1978).</li>
+  <li id="ref-hale1973">G. M. Hale and M. R. Querry, “Optical constants of water in the 200-nm to 200-µm wavelength region”, <em>Applied Optics</em> 12 (1973), 555–563. doi:10.1364/AO.12.000555</li>
+  <li id="ref-pope1997">R. M. Pope and E. S. Fry, “Absorption spectrum (380–700 nm) of pure water. II. Integrating cavity measurements”, <em>Applied Optics</em> 36 (1997), 8710–8723. doi:10.1364/AO.36.008710</li>
+  <li id="ref-braun1993">C. L. Braun and S. N. Smirnov, “Why is water blue?”, <em>Journal of Chemical Education</em> 70 (1993), 612. doi:10.1021/ed070p612</li>
+  <li id="ref-ball2008">P. Ball, “Water — an enduring mystery”, <em>Nature</em> 452 (2008), 291–292. doi:10.1038/452291a</li>
+</ol>
