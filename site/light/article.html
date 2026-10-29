@@ -82,90 +82,48 @@ window.LIGHT = (() => {
 
 <p class="lede">Strike a match in a dark room and the room appears. The walls, the chair, your own hand: none of them were missing a moment ago. Something left the flame, crossed the room faster than you could notice, bounced off everything in it, and some of it reached your eyes. This page is about that something: what it is, how fast it goes, what happens when it meets glass and water and other light, and how your eye turns it into color.</p>
 
-<p>We'll start with the plainest facts about light, the ones you can check with a lamp and a box. Drag the <span class="c-orange" data-part="lamp">lamp</span> around the room, and widen it from a pinpoint to a frosted bulb <span class="scrub" data-key="size" data-figure="rays"></span> across. Watch the <span class="c-blue" data-part="shadow">shadow</span> the box throws on the wall:</p>
+<p>We'll start with the plainest facts about light, the ones you can check with a lamp and a box. Slide the <span class="c-orange" data-part="lamp">lamp</span> toward and away from the wall, and widen it from a pinpoint to a frosted bulb <span class="scrub" data-key="size" data-figure="rays"></span> across. Watch the <span class="c-blue" data-part="shadow">shadow</span> the box throws on the wall:</p>
 
-<figure class="demo" id="rays" aria-label="A dark room seen from above: a lamp on the left sends light in straight lines past a box toward a wall on the right. The wall is brightly lit except for the box's shadow, which has a dark core and soft edges when the lamp is wide."></figure>
+<figure class="demo" id="rays" aria-label="A dark room: a round frosted lamp shines past a box onto a wall. The box's shadow on the wall has a dark core and soft gray edges when the lamp is wide, and sharp edges when the lamp shrinks to a point; moving the lamp back from the wall dims the whole wall."></figure>
 <script>
 {
-  // Room in meters, seen from above. The lamp is a short bright line (its width), the box a square.
-  const BOX = { x: 2.7, y: 0.45, w: 0.4, h: 0.4 }, WALL = 4.6;
-  let P;
-  // Does the segment from a to b cross the box?
-  const blocked = (a, b) => {
-    const { x, y, w, h } = BOX;
-    let t0 = 0, t1 = 1;
-    const d = [b[0] - a[0], b[1] - a[1]];
-    for (const [p, q] of [[-d[0], a[0] - x], [d[0], x + w - a[0]], [-d[1], a[1] - y], [d[1], y + h - a[1]]]) {
-      if (Math.abs(p) < 1e-12) { if (q < 0) return false; continue; }
-      const r = q / p;
-      if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
-    }
-    return t0 <= t1;
-  };
-  // Light reaching the wall at height y: the lamp as 15 points across its width, each falling off as cos/r².
-  const lit = (s, v, y) => {
-    let sum = 0;
-    for (let i = 0; i < 15; i++) {
-      const p = [s.lamp[0], s.lamp[1] + (i / 14 - 0.5) * v.size];
-      if (blocked(p, [WALL, y])) continue;
-      const dx = WALL - p[0], dy = y - p[1], r2 = dx * dx + dy * dy;
-      sum += dx / Math.sqrt(r2) / r2;
-    }
-    return sum / 15;
-  };
+  // A dark room in meters, rendered with real light: the lamp is a glowing ball of the chosen
+  // width (60 W), every point of it sends light in straight lines, and E3 traces which points of the
+  // lamp each spot on the floor and wall can see. Brightness falls off as cos/r² from each point.
+  const WALL = 2.2, BOX = { x: 0.9, half: 0.2 }, LAMP_Y = 0.3;
+  const scene = E3.scene({ look: "darkroom", units: "m" });
+  scene.add(E3.mesh.box(3.8, 0.02, 2.6), { name: "floor", position: [0.3, -0.01, 0], color: "#5a5a5a" });
+  scene.add(E3.mesh.box(0.04, 1.4, 2.6), { name: "wall", position: [WALL + 0.02, 0.7, 0] });
+  scene.add(E3.mesh.box(0.4, 0.4, 0.4, { round: 0.004 }), { name: "box", position: [BOX.x, 0.2, 0] });
+  const lamp = { type: "sphere", position: [0, LAMP_Y, 0], radius: 0.12, power: 160, name: "lamp" };
+  scene.lights = [lamp];
   demo("rays", {
-    aspect: w => (w < 560 ? 1.05 : 1.75),
-    state: () => ({ lamp: [0.6, 0.9] }),
-    controls: [{ key: "size", label: "Lamp width", min: 0, max: 1.2, step: 0.01, value: 0.35, unit: " m", color: "orange", marks: [{ value: 0, label: "point" }] }],
-    caption: "A lamp, a box, and a wall, seen from above. Light leaves the lamp in straight lines, so the box throws a shadow; a wide lamp gives the shadow a dark core and gray edges. The bar along the wall shows how brightly each part of it is lit.",
-    status: (s, v) => { const d = WALL - s.lamp[0]; return `lamp ${d.toFixed(1)} m from the wall · light per square meter there 1/${(d * d).toFixed(1)} of what it is 1 m away`; },
+    aspect: w => (w < 560 ? 1.05 : 1.6),
+    orbit: { yaw: 1.2, pitch: 0.22 },
+    controls: [
+      { key: "size", label: "Lamp width", min: 0, max: 0.5, step: 0.01, value: 0.25, unit: " m", color: "orange", marks: [{ value: 0, label: "point" }] },
+      { key: "d", label: "Lamp to wall", min: 1.8, max: 3.2, step: 0.01, value: 2.2, unit: " m", color: "orange" },
+    ],
+    caption: "A frosted lamp, a box, and a wall in a dark room, lit the way light really travels: each spot on the wall is as bright as the share of the lamp it can see, and that light falls off with the square of the distance. Turn the room to look along the shadow.",
+    status: (s, v) => `lamp ${v.d.toFixed(1)} m from the wall · light per square meter there is 1/${(v.d * v.d).toFixed(1)} of what it is 1 m away`,
     draw(g, s, v) {
-      g.rect(0, 0, g.w, g.h, { fill: LIGHT.NIGHT });
-      P = g.fit(-0.1, 5.0, -1.25, 2.55);
-      const sun = "#ffd38a";
-      // Rays: a fan from the lamp's center, cut short where they hit the box or the wall.
-      const c = s.lamp;
-      for (let i = 0; i < 60; i++) {
-        const a = -Math.PI / 2 + (i / 59) * Math.PI;
-        let end = [c[0] + Math.cos(a) * 9, c[1] + Math.sin(a) * 9];
-        if (end[0] > WALL) { const t = (WALL - c[0]) / (end[0] - c[0]); end = [WALL, c[1] + (end[1] - c[1]) * t]; }
-        // walk until blocked
-        let hit = null;
-        for (let k = 1; k <= 60; k++) { const q = [c[0] + (end[0] - c[0]) * k / 60, c[1] + (end[1] - c[1]) * k / 60]; if (blocked(c, q)) { hit = q; break; } }
-        g.line(P(c), P(hit || end), { stroke: sun, width: 1, alpha: 0.22 });
-      }
-      // Wall brightness, drawn as a glowing strip; the shadow region outlined.
-      const peak = lit(s, v, s.lamp[1]) || 1;
-      const y0 = -1.2, y1 = 2.5, n = 120;
-      for (let i = 0; i < n; i++) {
-        const y = y0 + (y1 - y0) * (i + 0.5) / n, b = Math.min(1, lit(s, v, y) / peak);
-        const a = P([WALL, y0 + (y1 - y0) * i / n]), bb = P([WALL + 0.16, y0 + (y1 - y0) * (i + 1) / n]);
-        g.rect(a[0], bb[1], bb[0] - a[0], a[1] - bb[1] + 0.5, { fill: sun, alpha: 0.06 + 0.94 * b });
-      }
-      g.line(P([WALL, y0]), P([WALL, y1]), { stroke: "#8a8f98", width: 1.5 });
-      // The umbra and penumbra edges: lines from the lamp's ends past the box's corners.
-      const lit2 = g.lit("shadow");
-      const ends = [[c[0], c[1] - v.size / 2], [c[0], c[1] + v.size / 2]];
-      const corners = [[BOX.x, BOX.y], [BOX.x, BOX.y + BOX.h], [BOX.x + BOX.w, BOX.y], [BOX.x + BOX.w, BOX.y + BOX.h]];
-      for (const e of ends) for (const k of corners) {
-        if (k[0] <= e[0]) continue;
-        const t = (WALL - e[0]) / (k[0] - e[0]), q = [WALL, e[1] + (k[1] - e[1]) * t];
-        if (blocked([e[0], e[1]], [k[0] - 1e-3 * Math.sign(k[0] - e[0]), k[1]]) ) continue;
-        g.line(P(k), P(q), { stroke: palette.blue, width: lit2 ? 1.6 : 1, alpha: lit2 ? 0.9 : 0.45, dash: [4, 4] });
-      }
-      g.rect(P([BOX.x, BOX.y + BOX.h])[0], P([BOX.x, BOX.y + BOX.h])[1], BOX.w * P.sx, BOX.h * P.sy, { fill: "#2a2e36", stroke: "#9aa0aa", width: 1.5 });
-      g.label("box", P([BOX.x + BOX.w / 2, BOX.y - 0.16]), { color: "#c9ccd2" });
-      g.label("wall", [P([WALL, y1])[0] - 26, P([WALL, y1])[1] + 14], { color: "#c9ccd2" });
-      // The lamp: a glowing bar of its width.
-      const L0 = P(ends[0]), L1 = P(ends[1]);
-      const gbox = [L0[0] - 70, L1[1] - 70, 140, (L0[1] - L1[1]) + 140];
-      if (g.fx && g.fx.glow) g.fx.glow(gbox, v.size > 0.01 ? { path: [L0, L1], width: 5, temp: 2900, spread: 18 } : { at: P(c), r: 4, temp: 2900, spread: 18 });
-      else g.line(L0, L1, { stroke: sun, width: 5 });
-      g.handle(P(c), { color: "orange", r: 8, active: g.lit("lamp") });
-    },
-    drag: {
-      hit: (p, s) => { const q = P(s.lamp); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 26; },
-      move: (p, s) => { const w = P.inv(p); s.lamp = [clamp(w[0], 0.1, BOX.x - 0.25), clamp(w[1], -1.0, 2.3)]; },
+      const xL = WALL - v.d, r = v.size / 2;
+      lamp.position = [xL, LAMP_Y, 0];
+      lamp.type = r > 0.004 ? "sphere" : "point";
+      lamp.radius = r;
+      lamp.visible = r > 0.004 ? undefined : 0.018;
+      const view = g.render3d(scene, { ...s.view, fov: 30, target: [1.2, 0.4, 0], distance: 4.6 });
+      // Where the shadow's core and edges fall on the wall, from lines past the box's edges:
+      // the core ends where a line from the lamp's far side grazes the box's back corner, the gray
+      // edge where a line from the lamp's near side grazes its front corner.
+      const back = BOX.x + BOX.half, front = BOX.x - BOX.half, h = BOX.half;
+      const zu = h + (h - r) * (WALL - back) / (back - xL), zp = h + (h + r) * (WALL - front) / (front - xL);
+      // Name the dark core and the gray edge right where they fall on the wall.
+      const lit = g.lit("shadow"), at = z => view.project([WALL - 0.005, 0.18, z]);
+      const lab = { color: lit ? "blue" : "#c9d6f2", halo: "rgba(0,0,0,0.65)", size: 12 };
+      const seen = z => view.eye[0] < WALL && !view.hidden([WALL - 0.005, 0.18, z]);
+      if (zu > 0.02 && seen(0)) g.label("umbra", at(0), lab);
+      if (zp - Math.max(zu, 0) > 0.03) for (const sgn of [-1, 1]) { const z = sgn * (Math.max(zu, 0) + zp) / 2; if (seen(z)) g.label("penumbra", at(z), lab); }
     },
   });
 }
@@ -1332,35 +1290,26 @@ window.LIGHT = (() => {
   const tau = nm => 0.0088 * Math.pow(nm / 1000, -4.05);       // Rayleigh optical depth of the whole atmosphere, straight up
   const airmass = h => 1 / (Math.sin(h * RAD) + 0.50572 * Math.pow(h + 6.07995, -1.6364));   // Kasten and Young
   const through = (nm, h) => Math.exp(-tau(nm) * airmass(h));
+  const skyScene = E3.scene({ look: "outdoor", shadow: false, sky: { sun: { elevation: 30, azimuth: 0 } } });
+  skyScene.add(E3.mesh.box(6000, 1, 6000), { name: "ground", color: "#2f3326", position: [0, -0.5, 0] });
   demo("sky", {
     aspect: w => (w < 560 ? 1.15 : 1.9),
     controls: [{ key: "h", label: "Sun height", min: 0, max: 60, step: 0.5, value: 30, unit: "°", color: "brass" }],
-    caption: "Sunlight through the air, counting only scattering by air molecules (no dust, haze, or ozone). The plot gives the share of each wavelength that reaches you straight from the sun; the dashed curve is how strongly air scatters each wavelength, relative to violet. The low sun loses its blue to the sky.",
+    caption: "Left, the sky toward the sun, computed from how air scatters sunlight (with a little haze and the ozone layer). Right, counting only scattering by air molecules: the share of each wavelength that reaches you straight from the sun, and dashed, how strongly air scatters each wavelength, relative to violet. The low sun loses its blue to the sky.",
     status: (s, v) => `the sunlight crosses ${airmass(v.h).toFixed(1)}× as much air as from overhead · ${(through(450, v.h) * 100).toFixed(0)}% of its blue and ${(through(650, v.h) * 100).toFixed(0)}% of its red get through`,
     draw(g, s, v) {
       const wide = g.w >= 560;
       const A = wide ? [0, 0, g.w * 0.5, g.h] : [0, 0, g.w, g.h * 0.52];
       const B = wide ? [g.w * 0.57, 12, g.w * 0.43 - 12, g.h - 26] : [10, g.h * 0.57, g.w - 20, g.h * 0.43 - 8];
-      // the sky: scattered light, weighted by 1/lambda^4, dimming and warming near the horizon at low sun
+      // The sky itself, rendered from the physics: sunlight scattered by air (Rayleigh), a little
+      // haze (Mie), and ozone, marched along every line of sight, with the sun dimmed and reddened
+      // by the air its light crosses. Looking toward the sun from 1.7 m above flat ground.
       const T = nm => through(nm, v.h);
-      const zen = LIGHT.colorOf(nm => tau(nm) / tau(450) * Math.exp(-tau(nm) * 0.5) * (0.75 + 0.25 * Math.sqrt(T(nm))), 1.0);
-      const hor = LIGHT.colorOf(nm => (0.55 + 0.45 * tau(nm) / tau(450)) * T(nm) ** 0.35, 0.95);
-      const hy = A[1] + A[3] * 0.8;
-      const grad = g.ctx.createLinearGradient(0, A[1], 0, hy);
-      grad.addColorStop(0, zen); grad.addColorStop(1, hor);
-      g.ctx.fillStyle = grad; g.ctx.fillRect(A[0], A[1], A[2], hy - A[1]);
-      // the sun, colored by what gets through
-      const peak = Math.max(T(700), 1e-6);
-      const sunCol = LIGHT.colorOf(T, 1 / peak);
-      const deg = (hy - A[1]) / 66, sx = A[0] + A[2] * 0.5, sy = hy - v.h * deg;
-      const glow = g.ctx.createRadialGradient(sx, sy, 2, sx, sy, 70);
-      glow.addColorStop(0, sunCol); glow.addColorStop(1, "rgba(255,255,255,0)");
-      g.ctx.save(); g.ctx.beginPath(); g.ctx.rect(A[0], A[1], A[2], hy - A[1]); g.ctx.clip();
-      g.ctx.globalAlpha = 0.55; g.ctx.fillStyle = glow; g.ctx.fillRect(sx - 70, sy - 70, 140, 140); g.ctx.globalAlpha = 1;
-      g.circle([sx, sy], 12, { fill: sunCol });
-      g.ctx.restore();
-      g.rect(A[0], hy, A[2], A[1] + A[3] - hy, { fill: "#2f3326" });
-      g.label("sun", [sx + 20, Math.max(A[1] + 14, sy - 16)], { color: "#1d232c", halo: "rgba(255,255,255,0.6)", align: "left" });
+      skyScene.sky = { sun: { elevation: v.h, azimuth: 0 }, haze: 0.6, stars: 0 };
+      const el = 26 * RAD;
+      const view = g.render3d(skyScene, { yaw: 0, pitch: -el, fov: 64, target: [0, 1.7 + 100 * Math.sin(el), -100 * Math.cos(el)], distance: 100 }, { box: [A[0], A[1], A[2], A[3]] });
+      const sp = view.project([0, 1.7 + 1e4 * Math.sin(v.h * RAD), -1e4 * Math.cos(v.h * RAD)]);
+      if (sp[1] > A[1] + 10) g.label("sun", [Math.min(A[0] + A[2] - 30, sp[0] + 22), Math.max(A[1] + 14, sp[1] - 18)], { color: "#1d232c", halo: "rgba(255,255,255,0.6)", align: "left" });
       // what gets through, and how strongly each wavelength scatters
       const G = g.graph({ box: B, x: [380, 720], y: [0, 1.05], axes: "frame", xLabel: "Wavelength (nm)", yLabel: "Gets through (%)", xTicks: [400, 500, 600, 700], yTicks: [0, 0.5, 1], yFormat: y => (y * 100).toFixed(0) });
       const wpx = Math.max(1.5, G.sx * 4.4);
