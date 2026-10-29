@@ -71,6 +71,7 @@
   --chip-hover: color-mix(in srgb, var(--ink) 10%, transparent);
   --chip-line: color-mix(in srgb, var(--ink) 9%, transparent);
   --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --font-serif: "Safis Serif", "Iowan Old Style", Charter, "Palatino Linotype", Georgia, serif;
   --font-display: "Safis Display", "Safis Serif", "Iowan Old Style", Georgia, serif;
   --font-text: "Safis Sans", "Source Sans 3", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -136,62 +137,68 @@ body {
 }
 ::selection { background: color-mix(in srgb, var(--ink) 18%, transparent); }
 
-/* Layout: optional site index on the left, article in the middle. A site that puts a bar
-   above the page sets --safis-bar to its height, and the index sits below it. */
+/* Layout: the article in the middle. A site that puts a bar above the page sets --safis-bar to
+   its height, and the index opens below it. */
 .page { position: relative; padding: 0 20px; }
 main { max-width: var(--measure); margin: 0 auto; padding: 88px 0 128px; }
-.toc { display: none; }
-@media (min-width: 1240px) {
-  .page.has-toc { display: grid; grid-template-columns: 264px 1fr; }
-  .page.has-toc main { margin: 0 auto; transform: translateX(-70px); }
-  .toc {
-    display: block;
-    position: sticky; top: var(--safis-bar, 0px); align-self: start;
-    max-height: calc(100vh - var(--safis-bar, 0px)); overflow-y: auto;
-    padding: 56px 16px 48px 4px;
-    font: 14.5px/1.4 var(--font-text);
-  }
+/* The site index is a panel over the page's left edge, hidden until the reader asks for it:
+   resting the pointer at the window's left edge peeks it open (it closes again when the pointer
+   leaves), and the index button or Ctrl+B / Cmd+B opens it until the button, Escape, or a click
+   outside closes it. Only transform and opacity move, so opening it never lays out the article;
+   it comes in quickly and leaves a little quicker. */
+.page.has-toc .toc {
+  position: fixed; z-index: 30; inset-block: var(--safis-bar, 0px) 0; inset-inline-start: 0;
+  width: min(300px, 86vw); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+  /* Room above the list for the corner button; a site bar that carries the button sets less. */
+  --toc-pad: 64px;
+  padding: var(--toc-pad) 14px 40px; font: 14.5px/1.4 var(--font-text);
+  background: var(--bg); box-shadow: 1px 0 0 var(--rule), 18px 0 48px -22px rgb(0 0 0 / 0.45);
+  transform: translateX(calc(-100% - 24px)); opacity: 0; visibility: hidden;
+  transition: transform 180ms var(--ease-drawer), opacity 140ms ease, visibility 0s linear 180ms;
 }
-/* The index scrolls on its own with a slim bar that shows while the pointer is over it. */
-.toc { scrollbar-width: thin; scrollbar-color: transparent transparent; scrollbar-gutter: stable; overscroll-behavior: contain; }
-.toc:hover, .toc:focus-within { scrollbar-color: var(--faint) transparent; }
-/* A button in the top-left corner hides the index on wide screens and opens it as a drawer on
-   narrow ones; Ctrl+B / Cmd+B does the same. A site header can carry the button instead. */
+.page.has-toc .toc::-webkit-scrollbar { display: none; }
+.safis-toc-open .page.has-toc .toc { transform: none; opacity: 1; visibility: visible; transition: transform 240ms var(--ease-drawer), opacity 160ms ease, visibility 0s; }
+/* Opened or closed from the keyboard: no motion. */
+.page.has-toc .toc.instant { transition: none; }
+/* The list scrolls without a bar; its ends fade into the panel where there is more to see. */
+.page.has-toc .toc::before, .page.has-toc .toc::after {
+  content: ""; position: sticky; z-index: 1; display: block; height: 28px; pointer-events: none;
+  opacity: 0; transition: opacity 150ms ease;
+}
+.page.has-toc .toc::before { top: calc(-1 * var(--toc-pad)); margin: calc(-1 * var(--toc-pad)) -14px calc(var(--toc-pad) - 28px); background: linear-gradient(var(--bg), transparent); }
+.page.has-toc .toc::after { bottom: -40px; margin: -28px -14px 0; background: linear-gradient(transparent, var(--bg)); }
+.page.has-toc .toc.more-above::before, .page.has-toc .toc.more-below::after { opacity: 1; }
+/* The strip along the window's left edge that peeks the index open; a short handle shows where
+   it is while the pointer rests there. Pointers that can't hover use the button. */
+.toc-edge { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .toc-edge { display: block; position: fixed; z-index: 29; inset-block: var(--safis-bar, 0px) 0; inset-inline-start: 0; width: 12px; }
+  .toc-edge::after { content: ""; position: absolute; top: 50%; inset-inline-start: 3px; width: 3px; height: 44px; margin-top: -22px; border-radius: 3px; background: var(--faint); opacity: 0; transition: opacity 150ms ease; }
+  .toc-edge:hover::after { opacity: 1; }
+}
+/* On narrow screens the open index dims the page behind it. */
+@media (max-width: 1239.98px) {
+  .page.has-toc::after { content: ""; position: fixed; inset: var(--safis-bar, 0px) 0 0; z-index: 29; background: rgb(0 0 0 / 0.32); opacity: 0; pointer-events: none; transition: opacity 180ms ease; }
+  .safis-toc-open .page.has-toc::after { opacity: 1; pointer-events: auto; }
+}
+/* The index button: in the top-left corner, or in a site header that carries it. */
 .toc-toggle {
-  position: fixed; top: 14px; inset-inline-start: 14px; z-index: 16;
+  position: fixed; top: 14px; inset-inline-start: 14px; z-index: 31;
   width: 36px; height: 36px; display: grid; place-items: center; padding: 0;
   border: 1px solid var(--rule); border-radius: 50%; background: color-mix(in srgb, var(--panel) 92%, transparent);
   color: var(--muted); cursor: pointer; box-shadow: var(--shadow);
-  transition: scale 0.15s, color 0.15s, background-color 0.15s;
+  transition: transform 150ms var(--ease-out), color 150ms ease, background-color 150ms ease;
 }
 .toc-toggle svg { width: 16px; height: 16px; }
-.toc-toggle:active { scale: 0.96; }
+.toc-toggle:active { transform: scale(0.96); }
 .toc-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: hover) { .toc-toggle:hover { color: var(--ink); } }
-@media (min-width: 1240px) {
-  .page.has-toc { transition: grid-template-columns 0.4s var(--ease-out); }
-  .page.has-toc main { transition: transform 0.4s var(--ease-out); }
-  .page.has-toc .toc { transition: opacity 0.22s var(--ease-out), translate 0.4s var(--ease-out), visibility 0.4s; }
-  .safis-toc-hidden .page.has-toc { grid-template-columns: 0 1fr; }
-  .safis-toc-hidden .page.has-toc main { transform: none; }
-  .safis-toc-hidden .page.has-toc .toc { opacity: 0; visibility: hidden; translate: -28px 0; overflow: hidden; }
-}
-@media (max-width: 1239.98px) {
-  .safis-toc-open .page.has-toc .toc {
-    display: block; position: fixed; inset: 0 auto 0 0; z-index: 30; width: min(320px, 86vw); overflow-y: auto;
-    padding: 64px 16px 40px 18px; font: 15px/1.45 var(--font-text);
-    background: var(--bg); box-shadow: 0 0 0 1px var(--rule), 0 24px 60px -12px rgb(0 0 0 / 0.45);
-    animation: toc-in 0.32s var(--ease-out);
-  }
-  .safis-toc-open .page.has-toc::after { content: ""; position: fixed; inset: 0; z-index: 29; background: rgb(0 0 0 / 0.32); backdrop-filter: blur(2px); animation: toc-fade 0.3s ease; }
-}
-@keyframes toc-in { from { translate: -100% 0; } }
-@keyframes toc-fade { from { opacity: 0; } }
+.toc-toggle[aria-expanded="true"] { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
-  .safis-toc-open .page.has-toc .toc, .safis-toc-open .page.has-toc::after { animation: none; }
-  .page.has-toc, .page.has-toc main, .page.has-toc .toc { transition: none !important; }
+  .page.has-toc .toc { transform: none; transition: opacity 120ms ease, visibility 0s linear 120ms; }
+  .safis-toc-open .page.has-toc .toc { transition: opacity 120ms ease, visibility 0s; }
 }
-@media print { .toc-toggle { display: none !important; } }
+@media print { .toc-toggle, .toc-edge, .page.has-toc .toc { display: none !important; } }
 .toc a { display: block; padding: 5px 10px; margin: 1px 0; border-radius: 7px; color: var(--muted); text-decoration: none; text-wrap: pretty; transition: background-color 0.15s, color 0.15s; }
 .toc a:hover { color: var(--ink); background: var(--chip); }
 .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -203,7 +210,6 @@ main { max-width: var(--measure); margin: 0 auto; padding: 88px 0 128px; }
 .toc ul { list-style: none; margin: 0; padding: 0; }
 .backlink { display: inline-block; margin-bottom: 36px; font: 15px/1.4 var(--font-serif); font-style: italic; color: var(--muted); text-decoration: none; }
 .backlink:hover { color: var(--ink); }
-@media (min-width: 1240px) { .has-toc .backlink { display: none; } }
 
 .skip { position: absolute; inset-inline-start: 16px; top: -48px; z-index: 20; padding: 8px 14px; border-radius: 6px; background: var(--ink); color: var(--bg); font: 500 15px/1.2 var(--font-text); text-decoration: none; }
 .skip:focus { top: 12px; }
@@ -27031,12 +27037,11 @@ void main() {
     syncThemeButton(b);
     document.body.append(b);
   }
-  // The site index in the sidebar: a button hides it on wide screens (remembered, and
-  // applied before the page paints) and opens it as a drawer on narrow ones.
-  const TOC_KEY = "safis-toc";
-  try { if (!window.__safisHost && localStorage.getItem(TOC_KEY) === "hidden") root.classList.add("safis-toc-hidden"); } catch {}
-  // A page may carry its own index button (a site header does); otherwise one floats in the
-  // corner. Ctrl+B (Cmd+B on a Mac) toggles it too, the way an editor's sidebar does.
+  // The site index: a panel over the page's left edge (styles in src/theme.css), hidden on every
+  // page until the reader asks for it. Resting the pointer at the window's left edge peeks it open
+  // and moving away closes it; the index button or Ctrl+B (Cmd+B on a Mac) opens it until the
+  // button, Escape, or a click outside closes it. A page may carry its own button (a site header
+  // does); otherwise one floats in the corner.
   function addIndexToggle() {
     if (window.__safisHost || !document.querySelector(".page.has-toc .toc")) return;
     let b = document.querySelector(".toc-toggle");
@@ -27051,43 +27056,70 @@ void main() {
     const toc = document.querySelector(".page.has-toc .toc");
     if (!toc.id) toc.id = "safis-index";
     b.setAttribute("aria-controls", toc.id);
-    const wide = matchMedia("(min-width: 1240px)");
     const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
     const keys = mac ? "⌘B" : "Ctrl+B";
-    const open = () => (wide.matches ? !root.classList.contains("safis-toc-hidden") : root.classList.contains("safis-toc-open"));
+    // How it is open: "" (closed), "peek" (from the window's edge), or "pinned" (button or keys).
+    let mode = "", timer = 0;
+    const later = (fn, ms) => { clearTimeout(timer); timer = setTimeout(fn, ms); };
     const sync = () => {
-      const label = open() ? "Hide the index" : "Show the index";
+      const label = mode ? "Hide the index" : "Show the index";
       b.title = `${label} (${keys})`;
       b.setAttribute("aria-label", label);
       b.setAttribute("aria-keyshortcuts", mac ? "Meta+B" : "Control+B");
-      b.setAttribute("aria-expanded", String(open()));
+      b.setAttribute("aria-expanded", String(!!mode));
     };
-    const close = () => { root.classList.remove("safis-toc-open"); sync(); };
-    const toggle = () => {
-      if (wide.matches) {
-        const hidden = root.classList.toggle("safis-toc-hidden");
-        try { if (hidden) localStorage.setItem(TOC_KEY, "hidden"); else localStorage.removeItem(TOC_KEY); } catch {}
-      } else {
-        root.classList.toggle("safis-toc-open");
-        if (open()) toc.querySelector('[aria-current="page"], a')?.focus({ preventScroll: true });
-      }
+    // The list's ends fade where there is more to scroll to.
+    const ends = () => {
+      toc.classList.toggle("more-above", toc.scrollTop > 2);
+      toc.classList.toggle("more-below", toc.scrollTop + toc.clientHeight < toc.scrollHeight - 2);
+    };
+    toc.addEventListener("scroll", ends, { passive: true });
+    // The current page's link is in view whenever the index opens.
+    const reveal = () => {
+      const cur = toc.querySelector('[aria-current="page"]');
+      if (!cur) return;
+      const top = cur.offsetTop, h = toc.clientHeight;
+      if (top < toc.scrollTop + 48 || top + cur.offsetHeight > toc.scrollTop + h - 48) toc.scrollTop = top - h * 0.35;
+    };
+    const set = (next, { instant = false, focus = false } = {}) => {
+      clearTimeout(timer);
+      if (next === mode) return;
+      const was = mode;
+      mode = next;
+      // A keyboard toggle shows its result at once: no motion for something done this often.
+      if (instant) { toc.classList.add("instant"); requestAnimationFrame(() => requestAnimationFrame(() => toc.classList.remove("instant"))); }
+      if (mode && !was) { reveal(); ends(); }
+      root.classList.toggle("safis-toc-open", !!mode);
+      if (mode && focus) (toc.querySelector('[aria-current="page"]') ?? toc.querySelector("a"))?.focus({ preventScroll: true });
+      if (!mode && toc.contains(document.activeElement)) b.focus({ preventScroll: true });
       sync();
     };
-    b.addEventListener("click", toggle);
-    document.addEventListener("click", e => { if (root.classList.contains("safis-toc-open") && !e.target.closest(".toc, .toc-toggle")) close(); });
+    b.addEventListener("click", () => set(mode ? "" : "pinned", { focus: b.matches(":focus-visible") }));
+    document.addEventListener("click", e => { if (mode && !e.target.closest(".toc, .toc-toggle, .toc-edge")) set(""); });
     document.addEventListener("keydown", e => {
-      if (e.key === "Escape" && root.classList.contains("safis-toc-open")) { close(); b.focus(); return; }
+      if (e.key === "Escape" && mode) { set("", { instant: true }); return; }
       if ((e.key === "b" || e.key === "B") && (mac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey) {
         const t = e.target;
         if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
         e.preventDefault();
-        toggle();
+        set(mode ? "" : "pinned", { instant: true, focus: true });
       }
     });
-    wide.addEventListener("change", close);
-    // The current page's link scrolls into view inside the index.
-    const cur = toc.querySelector('[aria-current="page"]');
-    if (cur && cur.offsetTop > toc.clientHeight * 0.6) toc.scrollTop = cur.offsetTop - toc.clientHeight * 0.35;
+    // Peeking: the pointer has to rest at the edge a moment (passing by on the way to another
+    // window doesn't open it), and leaving the panel closes it after a short grace.
+    const fine = matchMedia("(hover: hover) and (pointer: fine)");
+    const edge = node("div", "toc-edge");
+    edge.setAttribute("aria-hidden", "true");
+    document.body.append(edge);
+    edge.addEventListener("pointerenter", () => { if (fine.matches && !mode) later(() => set("peek"), 160); });
+    const away = e => { if (mode === "peek" && !e.relatedTarget?.closest?.(".toc")) later(() => { if (mode === "peek") set(""); }, 300); };
+    edge.addEventListener("pointerleave", e => { if (!mode) clearTimeout(timer); else away(e); });
+    document.documentElement.addEventListener("pointerleave", away);
+    toc.addEventListener("pointerenter", () => { if (mode === "peek") clearTimeout(timer); });
+    toc.addEventListener("pointerleave", e => {
+      if (mode !== "peek" || e.relatedTarget?.closest?.(".toc-edge, .toc-toggle")) return;
+      later(() => { if (mode === "peek") set(""); }, 300);
+    });
     sync();
   }
   // ---------- Article furniture (styles in src/article.css, reference in references/article.md) ----------
