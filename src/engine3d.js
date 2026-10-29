@@ -4290,10 +4290,11 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
 
   // ---------- WebGL renderer ----------
   let R = null;
-  // Both shaders compile and link before anything asks how it went, so the driver can work on
-  // them together instead of finishing each one while the page waits; the status (and the
-  // failing shader's log) is read only once, after the link.
-  function compile(gl, vs, fs, varyings) {
+  // Compiling only holds up the page when something reads a program's status, so a program
+  // starts (compileStart: both shaders and the link, nothing read back) well before its first
+  // frame needs it and finishes then (compileEnd); the status, and the failing shader's log, is
+  // read once, after the link.
+  function compileStart(gl, vs, fs, varyings) {
     const make = (type, src) => {
       const s = gl.createShader(type);
       gl.shaderSource(s, src);
@@ -4305,6 +4306,10 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
     gl.attachShader(p, f);
     if (varyings) gl.transformFeedbackVaryings(p, varyings, gl.SEPARATE_ATTRIBS);
     gl.linkProgram(p);
+    return { p, v, f };
+  }
+  function compile(gl, vs, fs, varyings) { return compileEnd(gl, compileStart(gl, vs, fs, varyings)); }
+  function compileEnd(gl, { p, v, f }) {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
       for (const s of [v, f]) if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader: ${gl.getShaderInfoLog(s)}`);
       throw new Error(`program: ${gl.getProgramInfoLog(p)}`);
@@ -4351,7 +4356,21 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
   // Programs compile the first time a frame needs them, so a page without particles never pays for them.
   // Compiling a program (or allocating a big target) makes a slow frame that says nothing about the
   // device; R.hitch tells the quality tiers to ignore it.
-  const prog = name => R.prog[name] || ((R.hitch = true), (R.prog[name] = compile(R.gl, ...PROGRAMS[name]())));
+  const prog = name => {
+    const P = R.prog[name];
+    if (P && !P.job) return P;
+    R.hitch = true;
+    return (R.prog[name] = P ? compileEnd(R.gl, P.job) : compile(R.gl, ...PROGRAMS[name]()));
+  };
+  // The programs every scene draws with start compiling as soon as the kit loads on a page with
+  // figures, alongside the figure scripts, so the first 3D frame doesn't wait for them.
+  const CORE_PROGRAMS = ["main", "depth", "ground", "composite", "present", "extract", "down", "up", "env", "prefilter"];
+  function startPrograms() {
+    try {
+      renderer();
+      for (const n of CORE_PROGRAMS) if (!R.prog[n] && PROGRAMS[n]) R.prog[n] = { job: compileStart(R.gl, ...PROGRAMS[n]()) };
+    } catch {}
+  }
 
   // One WebGL context serves every figure. It renders into an OffscreenCanvas and each
   // frame is handed over with transferToImageBitmap(), which is exact; reading a shared
@@ -7535,4 +7554,5 @@ void main() {
     // For tests: the pure functions the shaders mirror.
     _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS, buildBVH, traceCPU, bvhSplit, meshTree, bvhNearest, rayTri, walkT: () => walkT, lightRig, sunTransmittance, skyOf, waterOmega, waterIfft1, waterIfft2, waterPoolLine, oceanSetup, oceanHeightField, WATER_BODIES },
   };
+  if (typeof document !== "undefined" && document.createElement) startPrograms();
 })();
