@@ -435,6 +435,99 @@
       g.path([tip, [b[0] - uy * w, b[1] + ux * w], [b[0] + uy * w, b[1] - ux * w]], { fill: color, close: true });
     };
 
+    // ----- motion: g.ease and animated components -----
+    // g.ease(key, target, { dur, from, curve }) returns a value that glides to `target` whenever it
+    // changes (numbers or arrays of numbers), and keeps the figure drawing until it arrives. Keys are
+    // per figure. `from` is where a new key starts (0 for a bar growing in). Readers who asked for
+    // less motion, and the page checker, see the final value at once.
+    const still = () => typeof document === "undefined" || (typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches) || document.documentElement.classList.contains("safis-checking");
+    const curves = { out: t => 1 - (1 - t) ** 3, inOut: t => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2), linear: t => t, spring: t => 1 - Math.exp(-6 * t) * Math.cos(7 * t) };
+    const mixV = (a, b, f) => (Array.isArray(b) ? b.map((v, i) => (a?.[i] ?? v) + (v - (a?.[i] ?? v)) * f) : a + (b - a) * f);
+    const sameV = (a, b) => (Array.isArray(b) ? Array.isArray(a) && a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) < 1e-9) : Math.abs(a - b) < 1e-9);
+    g.ease = (key, target, o = {}) => {
+      const A = g._anim || (g._anim = new Map()), now = (typeof performance !== "undefined" ? performance.now() : Date.now()) / 1000, dur = o.dur ?? 0.55, curve = curves[o.curve ?? "out"] ?? curves.out;
+      let e = A.get(key);
+      const cur = x => mixV(x.from, x.to, curve(Math.min(1, (now - x.t0) / x.dur)));
+      if (!e) { e = { from: o.from ?? target, to: target, t0: now, dur }; A.set(key, e); }
+      else if (!sameV(e.to, target)) { e.from = cur(e); e.to = target; e.t0 = now; e.dur = dur; }
+      if (still()) { e.from = e.to; return target; }
+      const f = Math.min(1, (now - e.t0) / e.dur);
+      if (f < 1) g.wantsFrame = true;
+      return mixV(e.from, e.to, curve(f));
+    };
+    g.easeCurve = curves;
+
+    // g.bars([{ label, value }], o): a ranked list of horizontal bars (next-word probabilities, scores, votes).
+    // Bars grow in, rows glide when the order changes, the leader (or `chosen`) is in color and the
+    // rest quiet. items: [{ label, value, color }]. o: box, max (default the largest, or 1 with
+    // `share: true`), share (values are fractions: % labels), top (rows shown), chosen, format, id.
+    const rankedBars = (items, o = {}) => {
+      const box = o.box ?? [16, 16, g.w - 32, g.h - 32], id = o.id ?? "bars";
+      let list = [...items];
+      if (o.sort !== false) list.sort((a, b) => b.value - a.value);
+      list = list.slice(0, o.top ?? 8);
+      const max = o.max ?? (o.share ? Math.max(1e-9, ...list.map(r => r.value)) : Math.max(1e-9, ...list.map(r => r.value)));
+      const labelW = o.labelWidth ?? Math.min(box[2] * 0.3, Math.max(40, ...list.map(r => g.measure(r.label, { size: 13, font: "mono" }))) + 14);
+      const rowH = Math.min(o.rowHeight ?? 30, box[3] / Math.max(1, list.length)), barH = Math.max(6, rowH * 0.56);
+      const fmt = o.format ?? (o.share ? v => (v >= 0.995 ? ">99%" : v < 0.005 ? "<1%" : `${Math.round(v * 100)}%`) : v => String(+v.toFixed(2)));
+      const valueW = 46, trackW = box[2] - labelW - valueW;
+      const out = [];
+      list.forEach((r, i) => {
+        const y = g.ease(`${id}:y:${r.label}`, box[1] + i * rowH, { dur: 0.5, curve: "inOut" });
+        const w = g.ease(`${id}:w:${r.label}`, (r.value / max) * trackW, { from: 0, dur: 0.6 });
+        const lead = o.chosen != null ? r.label === o.chosen : i === 0;
+        const c = r.color ?? (lead ? o.color ?? "orange" : "ink");
+        const cy = y + rowH / 2;
+        g.text(r.label, [box[0] + labelW - 12, cy], { size: 13, font: "mono", align: "right", color: lead ? "ink" : "muted", weight: lead ? 600 : 500 });
+        g.rect(box[0] + labelW, cy - barH / 2, trackW, barH, { fill: "ink", alpha: 0.045, r: barH / 2 });
+        if (w > 0.5) g.rect(box[0] + labelW, cy - barH / 2, Math.max(barH, w), barH, { fill: c, alpha: lead ? 0.92 : 0.32, r: barH / 2 });
+        g.text(fmt(r.value), [box[0] + labelW + Math.max(barH, w) + 8, cy], { size: 12, align: "left", color: lead ? "ink" : "muted", weight: lead ? 600 : 500 });
+        out.push({ label: r.label, y: cy, x0: box[0] + labelW, x1: box[0] + labelW + w });
+      });
+      return out;
+    };
+
+    // g.matrix(M, o): numbers in a grid the way a math text sets a matrix: brackets, each cell tinted
+    // by its value on a diverging scale (blue negative, orange positive, paper at zero), the numbers
+    // gliding when they change. o: at [x, y] (top left), cell (px), range (|value| at full color),
+    // digits, rows/cols (labels), highlight { row, col } (a row, a column, or one cell), colors
+    // [negative, positive], id. Returns { box, cell(r, c) -> [x, y] center }.
+    g.matrix = (M, o = {}) => {
+      const rows = M.length, cols = M[0]?.length ?? 0, cs = o.cell ?? 34, [x0, y0] = o.at ?? [20, 20], id = o.id ?? "mx";
+      const range = o.range ?? Math.max(1e-9, ...M.flat().map(Math.abs)), [cn, cp] = o.colors ?? ["blue", "orange"];
+      const digits = o.digits ?? 1, hl = o.highlight ?? {};
+      if (o.rowLabels) o.rowLabels.forEach((l, r) => g.text(l, [x0 - 10, y0 + (r + 0.5) * cs], { size: 11.5, align: "right", color: hl.row === r ? "ink" : "muted", font: "mono" }));
+      if (o.colLabels) o.colLabels.forEach((l, c) => g.text(l, [x0 + (c + 0.5) * cs, y0 - 10], { size: 11.5, color: hl.col === c ? "ink" : "muted", font: "mono" }));
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        const v = g.ease(`${id}:${r}:${c}`, M[r][c], { dur: 0.5 }), a = Math.min(1, Math.abs(v) / range);
+        const on = (hl.row == null || hl.row === r) && (hl.col == null || hl.col === c), dim = (hl.row != null || hl.col != null) && !on;
+        const x = x0 + c * cs, y = y0 + r * cs;
+        g.rect(x + 1.5, y + 1.5, cs - 3, cs - 3, { fill: v < 0 ? cn : cp, alpha: (0.1 + 0.78 * a) * (dim ? 0.35 : 1), r: 5 });
+        if (o.values !== false && cs >= 22) g.text(v.toFixed(digits).replace("-", "−"), [x + cs / 2, y + cs / 2 + 0.5], { size: Math.min(13, cs * 0.34), font: "mono", color: dim ? "muted" : "ink", alpha: dim ? 0.6 : 1 });
+      }
+      if (o.brackets !== false) {
+        const H = rows * cs, t = 6;
+        for (const [bx, s] of [[x0 - 4, 1], [x0 + cols * cs + 4, -1]]) g.path([[bx + s * t, y0 - 3], [bx, y0 - 3], [bx, y0 + H + 3], [bx + s * t, y0 + H + 3]], { stroke: "ink", width: 1.6 });
+      }
+      return { box: [x0, y0, cols * cs, rows * cs], cell: (r, c) => [x0 + (c + 0.5) * cs, y0 + (r + 0.5) * cs] };
+    };
+
+    // g.flow(points, o): dots traveling along a path, for data moving through a system (tokens into
+    // a model, values into a sum, a signal along a wire). o: t (time, s; use s.t), n (dots), speed
+    // (px/s), color, r, fade (soften the ends). Deterministic in t.
+    g.flow = (pts, o = {}) => {
+      if (pts.length < 2) return;
+      const L = [0];
+      for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      const total = L[L.length - 1] || 1, n = o.n ?? Math.max(2, Math.round(total / 40)), sp = o.speed ?? 90, r = o.r ?? 3;
+      const at = d => { let i = 1; while (i < L.length - 1 && L[i] < d) i++; const f = (d - L[i - 1]) / (L[i] - L[i - 1] || 1); return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * f, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * f]; };
+      for (let k = 0; k < n; k++) {
+        const d = (((o.t ?? 0) * sp + (k * total) / n) % total + total) % total, u = d / total;
+        const a = o.fade === false ? 1 : Math.min(1, u * 6, (1 - u) * 6);
+        g.circle(at(d), r, { fill: o.color ?? "orange", alpha: a });
+      }
+    };
+
     // ----- g.tree -----
     // A tree laid out tidily: a phylogeny, a family tree, a decision tree, an argument map, a parse
     // tree, an org chart. root = { label, children: [...], color, length, note }. Leaves sit one slot
@@ -1411,6 +1504,9 @@
     // Bars for a list of values in o.box; o.labels, o.highlight (index or list), o.colors, o.range, o.values (show numbers), o.format,
     // o.horizontal (labels on the left, good for ranked probabilities). Returns { bars, hit(p) -> index | -1 }.
     g.bars = (values, o = {}) => {
+      if (values.length && typeof values[0] === "object") return rankedBars(values, o);
+      // Bars glide to new values (and grow in from zero the first time).
+      values = values.map((v, i) => g.ease(`${o.id ?? "bars"}:${i}`, v, { from: o.grow === false ? v : 0, dur: 0.55 }));
       const box = o.box ?? [0, 0, g.w, g.h], [bx, by, bw, bh] = box, n = values.length;
       const lo = o.range?.[0] ?? Math.min(0, ...values), hi = o.range?.[1] ?? Math.max(0, ...values);
       const hl = o.highlight == null ? null : new Set([].concat(o.highlight));
@@ -1425,7 +1521,7 @@
         values.forEach((v, i) => {
           const cy = by + rowH * (i + 0.5), a = X(Math.max(lo, Math.min(0, v))), b = X(Math.min(hi, Math.max(0, v)));
           const on = !hl || hl.has(i), c = colorOf(i);
-          g.rect(a, cy - barH / 2, Math.max(1, b - a), barH, { fill: on ? c : "faint", alpha: on ? (hl ? 0.85 : 0.7) : 1, r: 2 });
+          g.rect(a, cy - barH / 2, Math.max(1, b - a), barH, { fill: on ? c : "faint", alpha: on ? (hl ? 0.88 : 0.72) : 1, r: Math.min(barH / 2, 6) });
           if (o.labels) txt(o.labels[i], [x0 - 8, cy], { size: 12.5, color: on ? "ink" : "muted", align: "right", font: o.labelFont });
           if (o.values) g.text(fmtv(v), [b + 6, cy], { size: 12, color: on ? "ink" : "muted", align: "left" });
           bars.push({ i, x: a, y: cy - barH / 2, w: b - a, h: barH, value: v });
@@ -1535,27 +1631,37 @@
       const hit = p => { for (const col of nodes) for (const nd of col) if (Math.hypot(p[0] - nd.p[0], p[1] - nd.p[1]) <= r + 3) return { layer: nd.layer, i: nd.i }; return null; };
       return { nodes, hit, r };
     };
-    // A row of token chips that wraps inside o.width, starting at o.at (top-left). o.highlight (index), o.colors ("cycle", a palette
-    // name, or a list), o.values (a small number under each chip, like a probability), o.showSpaces (leading spaces as ·).
+    // A row of token chips that wraps inside o.width, starting at o.at (top-left). o.highlight (index or list: a ring),
+    // o.colors ("cycle", a palette name, a list, or "none" for quiet ink chips), o.values (a small number under each chip,
+    // like a probability), o.showSpaces (leading spaces as ·), o.from (tokens from this index on are new: they pop in, in
+    // o.color), o.caret (a blinking cursor after the last token). Soft tinted chips with no outlines; animated.
     g.tokens = (list, o = {}) => {
-      const [x0, y0] = o.at ?? [12, 12], maxW = o.width ?? g.w - 2 * x0, size = o.size ?? 13, padX = 6, gap = o.gap ?? 4;
-      const font = o.font ?? "mono", chipH = size + 10, rowH = chipH + (o.values ? 18 : 0) + gap + 2;
-      const CYCLE = ["blue", "green", "orange", "purple", "red", "brass"];
+      const [x0, y0] = o.at ?? [12, 12], maxW = o.width ?? g.w - 2 * x0, size = o.size ?? 13, padX = Math.round(size * 0.6), gap = o.gap ?? 5;
+      const font = o.font ?? "mono", chipH = Math.round(size * 1.95), rowH = chipH + (o.values ? 18 : 0) + gap + 2;
+      const CYCLE = ["blue", "green", "orange", "purple", "red", "brass"], id = o.id ?? "tok";
       const rects = [];
       let x = x0, y = y0;
       list.forEach((tok, i) => {
         const shown = o.showSpaces === false ? tok : String(tok).replace(/ /g, "·").replace(/\n/g, "↵");
-        const w = Math.max(chipH * 0.8, g.measure(shown, { size, font }) + padX * 2);
+        const w = Math.max(chipH * 0.85, g.measure(shown, { size, font }) + padX * 2);
         if (x + w > x0 + maxW && x > x0) { x = x0; y += rowH; }
-        const c = Array.isArray(o.colors) ? o.colors[i] : o.colors === "cycle" || o.colors == null ? CYCLE[i % CYCLE.length] : o.colors;
-        const on = o.highlight == null || o.highlight === i || (Array.isArray(o.highlight) && o.highlight.includes(i));
-        tinted(s => g.rect(x, y, w, chipH, { ...s, r: 4 }), c, on ? (o.highlight === i ? 0.5 : 0.22) : 0.08);
-        g.rect(x, y, w, chipH, { stroke: o.highlight === i ? "ink" : c, width: o.highlight === i ? 1.8 : 1, r: 4, alpha: on ? 1 : 0.5 });
-        g.text(shown, [x + w / 2, y + chipH / 2 + 0.5], { size, font, color: on ? "ink" : "muted" });
-        if (o.values) g.text((o.format ?? (v => fmt(v, { fixed: 2 })))(o.values[i]), [x + w / 2, y + chipH + 9], { size: 11, color: "muted" });
-        rects.push({ i, x, y, w, h: chipH });
+        const fresh = o.from != null && i >= o.from;
+        const c = fresh ? o.color ?? "orange" : Array.isArray(o.colors) ? o.colors[i] : o.colors === "none" ? null : o.colors === "cycle" || o.colors == null ? CYCLE[i % CYCLE.length] : o.colors;
+        const ring = o.highlight === i || (Array.isArray(o.highlight) && o.highlight.includes(i));
+        const on = o.highlight == null || ring;
+        const k = Math.min(1, g.ease(`${id}:in:${i}:${tok}`, 1, { from: fresh ? 0 : 1, dur: 0.5, curve: "spring" })), dy = (1 - k) * 7;
+        g.rect(x, y + dy, w, chipH, { fill: c ?? "ink", alpha: (c ? (ring ? 0.32 : on ? 0.17 : 0.07) : on ? 0.08 : 0.04) * k, r: Math.min(9, chipH / 2.6) });
+        if (ring) g.rect(x - 2, y + dy - 2, w + 4, chipH + 4, { stroke: c ?? "ink", width: 1.6, r: Math.min(11, chipH / 2.2), alpha: 0.9 * k });
+        g.text(shown, [x + w / 2, y + dy + chipH / 2 + 0.5], { size, font, color: fresh ? c : on ? "ink" : "muted", alpha: k, weight: fresh || ring ? 600 : 500 });
+        if (o.values) g.text((o.format ?? (v => fmt(v, { fixed: 2 })))(o.values[i]), [x + w / 2, y + chipH + 9], { size: 11, color: "muted", alpha: k });
+        rects.push({ i, x, y, w, h: chipH, cx: x + w / 2, cy: y + chipH / 2 });
         x += w + gap;
       });
+      if (o.caret) {
+        const quiet = still(), blink = quiet || Math.floor(performance.now() / 530) % 2 === 0;
+        if (!quiet) g.wantsFrame = true;
+        if (blink) g.rect(x + 1, y + chipH * 0.2, 2, chipH * 0.6, { fill: o.color ?? "orange", r: 1 });
+      }
       const hit = p => { const r = rects.find(q => p[0] >= q.x && p[0] <= q.x + q.w && p[1] >= q.y && p[1] <= q.y + q.h); return r ? r.i : -1; };
       return { rects, hit, height: list.length ? y + rowH - y0 : 0 };
     };
