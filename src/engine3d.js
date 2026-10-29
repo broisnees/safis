@@ -864,8 +864,28 @@
     high: { rank: 2, ss: 3, scale: 1, msaa: 4, shadow: 2048, particles: 1, steps: 48, bloom: true, vsteps: 88, vscale: 0.5 },
   };
   const TIER_NAMES = ["low", "medium", "high"];
-  const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null };
+  // Still frames have their own level, since a weak or software GPU can spend seconds on one at
+  // full quality and as long again on each of the refinement passes after it: 2 is full quality,
+  // 1 drops the supersampling and caps refinement, 0 also renders at 3/4 size with the low tier's
+  // shadows and volumes. The runtime reports how long each still frame blocked (observe), and the
+  // level steps down when they run long and back up when they're quick.
+  const STILL = [
+    { ss: 1, scale: 0.75, samples: 8, lensSamples: 12 },
+    { ss: 1, scale: 1, samples: 24, lensSamples: 36 },
+  ];
+  const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null, still: null, stillEma: 0, stillDownAt: -1e9, stillQuick: 0, hitch: false };
+  function startStill() { return R && R.soft ? 0 : 2; }
+  function observeStill(ms) {
+    if (Q.hitch || !(ms >= 0) || checking()) return;
+    if (Q.still == null) Q.still = startStill();
+    Q.stillEma = Q.stillEma ? Q.stillEma * 0.6 + ms * 0.4 : ms;
+    const now = performance.now();
+    if (Q.stillEma > 90 && Q.still > 0) { Q.still--; Q.stillDownAt = now; Q.stillEma = 0; Q.stillQuick = 0; }
+    else if (Q.stillEma < 22 && Q.still < 2 && now - Q.stillDownAt > 10000) { if (++Q.stillQuick >= 6) { Q.still++; Q.stillEma = 0; Q.stillQuick = 0; } }
+    else Q.stillQuick = 0;
+  }
   function startRank() {
+    if (R && R.soft) return 0;
     try {
       const coarse = matchMedia("(pointer: coarse)").matches;
       const small = Math.min(screen.width, screen.height) < 600;
@@ -890,6 +910,7 @@
     }
     const hitch = typeof R !== "undefined" && R && R.hitch;
     if (hitch) R.hitch = false;
+    Q.hitch = !!hitch;
     if (moving && dt < 250 && !hitch) {
       Q.ema = Q.ema * 0.9 + Math.min(dt, 250) * 0.1;
       if (Q.ema > 30 && Q.rank > 0 && now - Q.downAt > 800) { Q.rank--; Q.downAt = now; Q.ema = 20; Q.quickSince = now; }
@@ -899,6 +920,11 @@
       } else Q.quickSince = 0;
     }
     const name = TIER_NAMES[Q.rank], t = TIERS[name];
+    if (Q.still == null) Q.still = startStill();
+    if (!moving && Q.still < 2) {
+      const lite = STILL[Q.still], hi = Q.still ? TIERS.high : TIERS.low;
+      return { ...t, name, ss: Math.min(ss, lite.ss), scale: lite.scale, shadow: hi.shadow, steps: hi.steps, vsteps: hi.vsteps, vscale: hi.vscale, moving, lite };
+    }
     if (!moving) return { ...t, name, ss, scale: 1, shadow: TIERS.high.shadow, steps: TIERS.high.steps, vsteps: TIERS.high.vsteps, vscale: TIERS.high.vscale, moving };
     return { ...t, name, ss: Math.min(ss, t.ss), moving };
   }
@@ -4308,7 +4334,15 @@ void main() {
     R.sRaw = sampler(false, gl.NEAREST);
     R.dummyDepth = texture(1, 1, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST);
     R.dummyColor = texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
-    if (canvas.addEventListener) canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); R = null; });
+    // A software GL (SwiftShader, llvmpipe) starts at the lightest still and moving quality.
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    R.soft = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER)));
+    // After a lost context (a GPU reset, or the browser reclaiming it) the next frame makes a new
+    // one; every figure redraws then, since the frames they were showing may never have finished.
+    if (canvas.addEventListener) canvas.addEventListener("webglcontextlost", e => {
+      e.preventDefault(); R = null;
+      if (typeof window !== "undefined") setTimeout(() => window.dispatchEvent(new Event("safis:redraw")), 250);
+    });
     return R;
   }
 
@@ -5497,7 +5531,7 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     };
     const unbindSamplers = () => { for (const u of [5, 6, 7]) gl.bindSampler(u, null); };
 
-    const samples = q.moving && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
+    const samples = (q.moving || q.lite) && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
     // What this frame ran at, for the harness and for pages that report it.
     E3stats = { tier: q.name, moving: q.moving, ss, scale: q.scale, samples, size: [W, H], out: [Wo, Ho], triangles: items.reduce((n, it) => n + (it.node.mesh ? it.node.mesh.indices.length / 3 : 0), 0), particles: fxNodes.filter(f => f.node.isParticles).reduce((n, f) => n + (f.node._drawN || 0), 0), plumes: fxNodes.filter(f => f.node.isPlume).length };
     scene.stats = E3stats;
@@ -6021,7 +6055,7 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     const view = makeView(scene, items, C0, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.ch - Ho, sw: Wo, sh: Ho });
     view.quality = q.name;
     // A traced view refines over the next still frames; the runtime asks for them while this is true.
-    view.converging = stochastic && !q.moving && accN + 1 < (scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48));
+    view.converging = stochastic && !q.moving && accN + 1 < Math.min(scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48), q.lite ? (lens ? q.lite.lensSamples : q.lite.samples) : Infinity);
     view.frames = stochastic ? accN + 1 : 1;
     view.trace = (o, d, tmax) => (Tr ? traceCPU(Tr.bvh, o, v3.norm(d), tmax ?? Infinity, false, cut ? cutV : null) : null);
     return view;
@@ -7439,6 +7473,9 @@ void main() {
       get tier() { return TIER_NAMES[Q.rank ?? startRank()]; },
       force(name) { Q.forced = TIERS[name] ? name : null; },
       tiers: TIERS,
+      // The runtime reports how long a still frame blocked the page (ms), to set the still level.
+      observe: observeStill,
+      get still() { return Q.still ?? startStill(); },
     },
     // True when the page is dark (from the palette's background): pick a look by it, in draw.
     get dark() { return pageDark(); },
