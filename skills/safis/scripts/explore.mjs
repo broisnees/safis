@@ -40,7 +40,9 @@ async function main() {
     await b.goto(pathToFileURL(pagePath).href);
     if (!(await b.evaluate("typeof window.__explainer === 'object'"))) throw new Error("the page has no explainer runtime");
     const ids = opt.figure ? [opt.figure] : await b.evaluate("window.__explainer.ids()");
-    await rm(outDir, { recursive: true, force: true });
+    // A full run starts the folder fresh; --figure replaces only that figure's sheet and frames.
+    if (opt.figure) await rm(path.join(outDir, opt.figure), { recursive: true, force: true });
+    else await rm(outDir, { recursive: true, force: true });
     await mkdir(outDir, { recursive: true });
     const sheets = [];
     for (const id of ids) {
