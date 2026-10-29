@@ -1,0 +1,99 @@
+<script>window.LAB = { scenes: {}, handles: {} };</script>
+<h1>Water lab</h1>
+<p class="dek">Simulated water in E3: a pool whose ripples are solved exactly in Fourier space (drops ring outward at the speed the dispersion relation gives each wavelength, the walls reflect them, a floating ball pushes the water aside) with caustics on the tiled floor; the open sea at sunset under the physical sky; and a glass of water with a straw that bends at the surface. Render with <code>node tools/check-3d.mjs --lab tools/lab/water.html</code>.</p>
+
+<h2>A pool in the sun</h2>
+<figure class="demo" id="pool" aria-label="A turnable 3D swimming pool with white tiles and a dark lane line, filled with clear water under a blue sky. Rings spread from drops, a ball floats and bobs, and a net of bright caustic lines wanders over the floor."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "outdoor", units: "m" });
+  scene.sky = { sun: { elevation: 58, azimuth: 35 } };
+  scene.ink = 0.35;
+  const water = scene.add(E3.water({ size: [4, 2.6], depth: 1.4, ripples: 0.0005, seed: 3 }));
+  const ball = scene.add(E3.mesh.sphere(0.13), { name: "ball", material: { color: "#e2533b", metal: 0, roughness: 0.35, clearcoat: 0.5 } });
+  water.objects = [ball];
+  for (const [x, z, t] of [[-0.9, 0.3, 0.25], [0.6, -0.4, 0.9], [1.3, 0.6, 1.6]]) water.drop([x, z], { time: t, r: 0.03, amp: -0.006 });
+  let view = null;
+  LAB.scenes.pool = scene;
+  LAB.handles.pool = demo("pool", {
+    aspect: 1.5, orbit: { yaw: -0.5, pitch: 0.55, minPitch: 0.15, maxPitch: 1.5 },
+    state: () => ({ t: 1.8 }),
+    step(dt, s) { s.t += dt; },
+    drag: {
+      hit: p => { const h = view && view.pick(p); return h && h.node.name === "surface"; },
+      start(p, s) { const h = view.pick(p); water.drop(h.point, { time: s.t, r: 0.03, amp: -0.006 }); },
+    },
+    status: s => `t = ${s.t.toFixed(1)} s`,
+    draw(g, s) {
+      scene.time = s.t;
+      ball.position = [-0.2 + 0.35 * Math.sin(s.t * 0.4), 0.03 * Math.sin(s.t * 2.1), 0.2 * Math.cos(s.t * 0.3)];
+      view = g.render3d(scene, { ...s.view, fov: 32, target: [0, -0.4, 0], distance: 7.2 });
+    },
+  });
+}
+</script>
+
+<h2>Caustics on the floor</h2>
+<figure class="demo" id="caustics" aria-label="Looking almost straight down into the pool: a bright, shifting net of caustic lines on the tiles."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "outdoor", units: "m" });
+  scene.sky = { sun: { elevation: 70, azimuth: 20 } };
+  scene.ink = 0.3;
+  const water = scene.add(E3.water({ size: [2.4, 2.4], depth: 1.2, ripples: 0.0006, rippleLength: 0.12, seed: 5, coping: false }));
+  LAB.scenes.caustics = scene;
+  LAB.handles.caustics = demo("caustics", {
+    aspect: 1.4, orbit: { yaw: 0.2, pitch: 1.3, minPitch: 0.4, maxPitch: 1.55 },
+    state: () => ({ t: 3 }),
+    step(dt, s) { s.t += dt; },
+    draw(g, s) { scene.time = s.t; g.render3d(scene, { ...s.view, fov: 30, target: [0, -1.1, 0], distance: 4.4 }); },
+  });
+}
+</script>
+
+<section class="band dark">
+<h2>The sea at sunset</h2>
+<figure class="demo" id="ocean" aria-label="Open sea at sunset under the physical sky: long swells and choppy wind waves to the horizon, a glittering path of sunlight on the water, a little foam on the crests."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "outdoor", units: "m", shadow: false });
+  scene.sky = { sun: { elevation: 5, azimuth: 0 } };
+  scene.ink = 0;
+  const sea = scene.add(E3.water({ mode: "ocean", size: 600, wind: 9, windDirection: [0.3, 1], seed: 2 }));
+  LAB.scenes.ocean = scene;
+  LAB.handles.ocean = demo("ocean", {
+    aspect: 1.7, orbit: { yaw: 0, pitch: 0.06, minPitch: 0.01, maxPitch: 0.6 },
+    state: () => ({ t: 20 }),
+    controls: [{ key: "wind", label: "Wind", min: 2, max: 20, step: 0.5, value: 9, unit: " m/s" }],
+    step(dt, s) { s.t += dt; },
+    status: (s, v) => `significant wave height ${(0.21 * v.wind * v.wind / 9.81).toFixed(1)} m (fully developed sea)`,
+    draw(g, s, v) {
+      scene.time = s.t; sea.wind = v.wind;
+      g.render3d(scene, { ...s.view, fov: 40, target: [0, 2, 0], distance: 18 });
+    },
+  });
+}
+</script>
+</section>
+
+<h2>A glass of water</h2>
+<figure class="demo" id="tumbler" aria-label="A clear drinking glass of water on a table in front of a striped card. A straw leans in the glass and seems broken where it enters the water; the stripes behind are magnified and bent through the water."></figure>
+<script>
+{
+  const scene = E3.scene({ look: "studio", units: "cm" });
+  const R = 3.6, H = 12, WALL = 0.22, BASE = 0.6, LEVEL = 8.5;
+  const card = (() => { const c = document.createElement("canvas"); c.width = 512; c.height = 512; const x = c.getContext("2d"); x.fillStyle = "#f3f0e8"; x.fillRect(0, 0, 512, 512); x.fillStyle = "#2f5d8a"; for (let i = 0; i < 512; i += 64) x.fillRect(i, 0, 26, 512); x.fillStyle = "#d9800f"; x.fillRect(0, 300, 512, 18); return c; })();
+  scene.add(E3.mesh.box(40, 1, 22), { name: "table", position: [0, -0.5, 2], material: { color: "#b98b5e", metal: 0, roughness: 0.6 } });
+  scene.add(E3.mesh.box(30, 22, 0.3), { name: "card", position: [0, 11, -9], material: { color: "#ffffff", map: card, mapping: "box", mapBox: [0, 0, 30, 30] } });
+  scene.add(E3.mesh.lathe([[0, 0], [R + WALL - 0.15, 0], [R + WALL, 0.15], [R + WALL, H], [R, H], [R, BASE + 0.1], [R - 0.1, BASE], [0, BASE]]), { name: "glass", material: "glass" });
+  scene.add(E3.water({ shape: "round", size: 2 * (R - 0.03), depth: LEVEL - BASE, units: "cm", resolution: 64, caustics: false }), { position: [0, LEVEL, 0] });
+  const straw = scene.add(E3.mesh.cylinder(0.35, 16, { segments: 24 }), { name: "straw", material: { color: "#e04a4a", metal: 0, roughness: 0.4 }, position: [0.6, BASE + 7.6, 0.4], rotation: [0.22, 0, -0.32] });
+  LAB.scenes.tumbler = scene;
+  LAB.handles.tumbler = demo("tumbler", {
+    aspect: 1.3, orbit: { yaw: -0.35, pitch: 0.18, minPitch: -0.1, maxPitch: 1.2 },
+    state: () => ({ t: 0 }),
+    step(dt, s) { s.t += dt; },
+    draw(g, s) { scene.time = s.t; g.render3d(scene, { ...s.view, fov: 28, target: [0, 6, 0], distance: 46 }); },
+  });
+}
+</script>

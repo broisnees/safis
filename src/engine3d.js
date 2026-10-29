@@ -2099,10 +2099,44 @@ vec3 shadeSoft(vec3 N, vec3 V, vec3 wp, float vis) {
   return col;
 }`;
 
+  // What the sky sends along a direction, for rays that leave the scene.
+  const G_SKYRAD = `
+vec3 skyRad(vec3 d) { return uSkyU.w > 1.5 ? atmosphere(d, uSunDir) * uSkyU.rgb : uSkyU.w > 0.5 ? uSkyU.rgb : vec3(0.0); }`;
+
+  // Caustics under a simulated water surface (E3.water, see the water section): the map holds how
+  // much the waves focus sunlight onto the floor, indexed by where that light entered a flat
+  // surface. uCaustA: the map's world corner (x, z) and 1 / size; uCaustB: the water level, the
+  // floor (world y), and the sideways shift of sunlight per unit depth; uCaustC: on, strength, the
+  // Sun's angular radius (its disk blurs the lines more the deeper they fall).
+  const G_CAUSTIC = `
+uniform sampler2D uCaustic; uniform vec4 uCaustA; uniform vec4 uCaustB; uniform vec4 uCaustC;
+uniform vec3 uCaustAbs; // the water's absorption per world unit (0: no water)
+// Light reaching a point under the water has crossed dz / cos(refracted sun) of it on the way
+// down (Beer-Lambert); applied before tone mapping, so a sunlit floor keeps its range.
+vec3 waterTint(vec3 p) {
+  float dz = uCaustB.x - p.y;
+  if (dz <= 0.0 || uCaustAbs.g <= 0.0) return vec3(1.0);
+  vec2 uv = (p.xz - uCaustA.xy) * uCaustA.zw;
+  if (uv.x < -0.01 || uv.y < -0.01 || uv.x > 1.01 || uv.y > 1.01 || (uCaustC.w > 0.5 && length(uv - 0.5) > 0.51)) return vec3(1.0);
+  return exp(-uCaustAbs * dz * sqrt(1.0 + dot(uCaustB.zw, uCaustB.zw)));
+}
+float causticAt(vec3 p) {
+  if (uCaustC.x < 0.5) return 1.0;
+  float dz = uCaustB.x - p.y;
+  if (dz <= 0.0) return 1.0;
+  vec2 uv = (p.xz - uCaustB.zw * dz - uCaustA.xy) * uCaustA.zw;
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 1.0;
+  vec2 b = dz * uCaustC.z * uCaustA.zw;
+  float c = (2.0 * texture(uCaustic, uv).r + texture(uCaustic, uv + vec2(b.x, 0.0)).r + texture(uCaustic, uv - vec2(b.x, 0.0)).r
+           + texture(uCaustic, uv + vec2(0.0, b.y)).r + texture(uCaustic, uv - vec2(0.0, b.y)).r) / 6.0;
+  return mix(1.0, c, sqrt(clamp(dz / max(uCaustB.x - uCaustB.y, 1e-4), 0.0, 1.0)) * uCaustC.y);
+}`;
+
   const FS_MAIN = `#version 300 es
 ${G_COMMON}
 ${G_ENV}
 ${G_SHADOW}
+${G_CAUSTIC}
 ${G_SURFACE}
 ${G_TRACE}
 ${G_LIGHTS}
@@ -2215,7 +2249,7 @@ void main() {
     gBase = c * mix(0.32, 1.0, smoothstep(0.0, 0.55, h));
   }
   vec3 V = normalize(uEye - vWorld);
-  float vis = shadowAt(vWorld, N);
+  float vis = shadowAt(vWorld, N) * causticAt(vWorld);
   vec3 col, glow = vec3(0.0);
   if (uMat.x > 1.5) {
     // A light's own surface: its radiance, so a dim light looks dim and a bright one white.
@@ -2477,6 +2511,9 @@ vec4 shade(vec2 px) {
       float nd = 1.0 - dot(n0.xyz * 2.0 - 1.0, n1.xyz * 2.0 - 1.0);
       e = max(e, smoothstep(0.10, 0.32, nd) * 0.5);
     }
+    // Water (id 255) draws no ink on its own waves or against the sky at the horizon.
+    bool w0 = n0.a > 254.5 / 255.0, w1 = n1.a > 254.5 / 255.0;
+    if ((w0 || bg0) && (w1 || bg1)) e = 0.0;
     if (e > 0.0 && !bg1 && d1 < inkDepth) {
       vec4 c1 = texture(uColor, q);
       inkDepth = d1;
@@ -2499,7 +2536,7 @@ vec3 viewPos(vec2 px, float d) {
 // surfaces don't darken what's in front of them.
 float occlusion(vec2 px) {
   vec4 n0 = texture(uNormal, px * uInvSize);
-  if (n0.a < 0.5 / 255.0) return 1.0;
+  if (n0.a < 0.5 / 255.0 || n0.a > 254.5 / 255.0) return 1.0;
   float d0 = linDepth(texture(uDepth, px * uInvSize).r);
   vec3 P = viewPos(px, d0), N = normalize(uViewRot * (n0.xyz * 2.0 - 1.0));
   float rpx = uOrtho > 0.5 ? uAoR / (2.0 * uTanHalf.y) * uSize.y : uAoR / (2.0 * uTanHalf.y * d0) * uSize.y;
@@ -4828,7 +4865,8 @@ void main() {
     };
     for (const g of glassItems) {
       const [gmin, gmax] = worldBox(g);
-      g.container = items.some(it => it !== g && matOf(it).kind !== "glass" && (() => { const [a, b] = worldBox(it); return [0, 1, 2].every(k => a[k] >= gmin[k] - 1e-6 && b[k] <= gmax[k] + 1e-6); })());
+      // Water in a glass counts as contents too (a tumbler of water, a tank).
+      g.container = items.some(it => it !== g && (matOf(it).kind !== "glass" || (matOf(it).water && !matOf(g).water)) && (() => { const [a, b] = worldBox(it); return [0, 1, 2].every(k => a[k] >= gmin[k] - 1e-6 && b[k] <= gmax[k] + 1e-6); })());
     }
     const ghosts = items.filter(it => matOf(it).kind === "ghost").sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
     opaque.concat(glassItems).forEach((it, i) => { it.id = ((i * 97) % 254) + 1; });
@@ -4867,6 +4905,10 @@ void main() {
       sys._drawN = n;
       stepParticles(sys, n);
     }
+    // Water (E3.water): advance each simulated surface to this frame's time and redraw its caustics.
+    const waterIts = R.hdr ? glassItems.filter(it => it.node._water) : [];
+    for (const it of waterIts) { const wg = it.node._water, t = wg.time ?? scene.time ?? 0; wg._now = t; waterStep(wg, t, L); }
+    const causticU = waterCausticU(waterIts, L);
     const spheres = fxNodes.filter(f => f.node.isParticles && f.node.style === "sphere");
     // Volumetric systems splat into their grids now, before anything reads them.
     for (const f of fxNodes) {
@@ -5000,7 +5042,7 @@ void main() {
       uViewProj: C.vp, uEye: C.eye, uLight: L, uCut: cutV, uSun: scene.lighting === "sun" ? 1 : 0, uHatch: hatch,
       uKeyCol: kc, uFillDir: fillDir, uFillCol: fc, uRimDir: rimDir, uRimCol: rc, uPtPos: ptPos, uPtCol: ptCol, uLook: lookU,
       uNearFar: [C.near, C.far], uOrtho: C.ortho ? 1 : 0,
-      ...envU, ...shadowU,
+      ...envU, ...shadowU, ...traceU, ...causticU,
     };
 
     // Opaque pass: color, normal + part id, depth.
@@ -5016,7 +5058,13 @@ void main() {
     gl.disable(gl.BLEND);
     bindEnv();
     bindShadow();
+    gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, causticU.tex); gl.activeTexture(gl.TEXTURE0);
     const drawSurface = (P, it, m) => {
+      if (waterIts.includes(it)) {
+        drawWater(it, { common, C, L, q, time: it.node._water._now, sceneInv: [1 / R.scene.w, 1 / R.scene.h], sceneSize: [W, H], lit: causticU.node, pageBg: physSky || scene.background ? [0, 0, 0, 0] : [...(parseColor(pal.bg || pal.panel) || (dark ? [0.1, 0.1, 0.1] : [1, 1, 1])).slice(0, 3), 1] });
+        gl.useProgram(P.p);
+        return;
+      }
       const g = upload(it.node.mesh);
       const cutOn = cut && it.node.cut ? 1 : 0;
       if (cutOn || it.node.twoSided) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
@@ -5081,7 +5129,7 @@ void main() {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
-    if (sh && sh.ground !== false && items.length) {
+    if (sh && sh.ground !== false && items.length && !waterIts.some(it => it.node._water.basin || it.node._water.mode === "ocean")) {
       const ext = [(bounds.max[0] - bounds.min[0]) / 2, (bounds.max[2] - bounds.min[2]) / 2];
       const k = sh.scale ?? 1.25;
       const P = prog("ground");
@@ -5102,6 +5150,7 @@ void main() {
       gl.readBuffer(gl.COLOR_ATTACHMENT0);
       gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, R.scene.fb);
       gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      if (waterIts.length) waterDepthCopy(target, W, H);
       gl.bindFramebuffer(gl.FRAMEBUFFER, target);
       gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
       gl.disable(gl.BLEND);
@@ -5110,7 +5159,20 @@ void main() {
       gl.useProgram(P.p);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, R.scene.tex);
       setAll(P, { ...common, uScene: 0, uSceneInv: [1 / R.scene.w, 1 / R.scene.h], uSceneSize: [W, H] });
-      for (const it of glassItems.sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye))) drawSurface(P, it, matOf(it));
+      // Water held in a glass is drawn first; the glass then refracts a fresh copy that includes it,
+      // so a tumbler shows its water instead of only the nearer pane.
+      const held = glassItems.filter(it => matOf(it).water && glassItems.some(g => g !== it && g.container && !matOf(g).water));
+      const rest = glassItems.filter(it => !held.includes(it)).sort((a, b) => v3.dist(b.center, C.eye) - v3.dist(a.center, C.eye));
+      for (const it of held) drawSurface(P, it, matOf(it));
+      if (held.length) {
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, R.scene.fb);
+        gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      }
+      for (const it of rest) drawSurface(P, it, matOf(it));
       gl.disable(gl.CULL_FACE);
       gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
       gl.enable(gl.BLEND);
@@ -5516,6 +5578,1081 @@ void main() {
       source,
     };
   }
+  // ---------- water ----------
+  // E3.water: a simulated water surface (a pool's ripples or the open sea), drawn as a grid
+  // displaced by the simulation and shaded as water: Fresnel (n = 1.333) between reflection (the
+  // sky or studio, plus screen-space reflections of the scene) and refraction of what's below
+  // (marched against the depth buffer, so a submerged part bends at the surface), Beer–Lambert
+  // absorption along the real path through the water (down to the floor and back up), light
+  // scattered back out of the water, sun glints, foam on breaking crests and at the shore, and
+  // caustics on the floor and on anything under the surface.
+  //
+  // Both modes are linear wave fields solved exactly in Fourier space, so each wave travels at the
+  // speed its wavelength gives it, ω² = (g k + (σ/ρ) k³) tanh(k h):
+  // - pool: the field on the pool [0, w] x [0, d] is mirrored to a 2w x 2d period, which makes the
+  //   walls reflect (zero slope at the wall: cosine modes). Every mode is a damped oscillator
+  //   advanced exactly in time (no step-size limit); drops and moving objects add their analytic
+  //   spectra; one inverse FFT per frame gives the height and both slopes. Damping is water's
+  //   viscosity, 2νk² (Lamb), plus `damping` (surface films and the walls).
+  // - ocean: Tessendorf's statistical sea: a Phillips spectrum for the wind, scaled so the
+  //   significant wave height is the fully developed sea's (Pierson–Moskowitz, Hs = 0.21 U²/g),
+  //   random amplitudes and phases from `seed`, each mode turning at ω(k); choppy horizontal
+  //   displacement; a long and a short cascade so near water has detail and far water no repeat.
+  const WG = 9.81, WSIGMA = 0.0728 / 998.2, WNU = 1.0e-6;
+  // Absorption and backscattering per meter in R, G, B. Pure water absorbs red far more than blue
+  // (Pope & Fry 1997: 0.34 /m at 650 nm, 0.064 at 560, 0.0092 at 450); its own scattering is weak
+  // and bluish (Morel 1974, about λ^-4.3). The sea adds a little particle scattering; a pond adds
+  // dissolved plant matter (CDOM, which absorbs blue) and silt.
+  const WATER_BODIES = {
+    clear: { absorb: [0.45, 0.07, 0.015], scatter: [0.0009, 0.0018, 0.0042] },
+    sea: { absorb: [0.46, 0.075, 0.032], scatter: [0.0035, 0.0055, 0.0085] },
+    pond: { absorb: [0.7, 0.32, 0.95], scatter: [0.035, 0.045, 0.03] },
+  };
+  // The dispersion relation of water waves (capillary-gravity, finite depth): ω(k) in rad/s for
+  // k in rad/m and depth in m.
+  function waterOmega(k, depth = Infinity, tension = true) {
+    const th = Number.isFinite(depth) ? Math.tanh(Math.min(k * depth, 20)) : 1;
+    return Math.sqrt(Math.max(0, (WG * k + (tension ? WSIGMA * k * k * k : 0)) * th));
+  }
+  // Inverse FFT, Stockham radix 2 (self-sorting): the same butterflies as FS_WFFT, for tests and the CPU field.
+  function waterIfft1(re, im) {
+    const N = re.length;
+    let ar = Float64Array.from(re), ai = Float64Array.from(im), br = new Float64Array(N), bi = new Float64Array(N);
+    for (let Ns = 1; Ns < N; Ns *= 2) {
+      for (let o = 0; o < N; o++) {
+        const r = o % (2 * Ns), b = Math.floor(o / (2 * Ns)), k = r % Ns, j = b * Ns + k, s = r < Ns ? 1 : -1;
+        const a = (Math.PI * k) / Ns, c = Math.cos(a), sn = Math.sin(a), xr = ar[j + N / 2], xi = ai[j + N / 2];
+        br[o] = ar[j] + s * (c * xr - sn * xi); bi[o] = ai[j] + s * (c * xi + sn * xr);
+      }
+      [ar, br] = [br, ar]; [ai, bi] = [bi, ai];
+    }
+    return [ar, ai];
+  }
+  function waterIfft2(re, im, N) {
+    const R2 = Float64Array.from(re), I2 = Float64Array.from(im);
+    for (let pass = 0; pass < 2; pass++) for (let a = 0; a < N; a++) {
+      const r = new Float64Array(N), i = new Float64Array(N);
+      for (let b = 0; b < N; b++) { const idx = pass ? b * N + a : a * N + b; r[b] = R2[idx]; i[b] = I2[idx]; }
+      const [orr, oi] = waterIfft1(r, i);
+      for (let b = 0; b < N; b++) { const idx = pass ? b * N + a : a * N + b; R2[idx] = orr[b]; I2[idx] = oi[b]; }
+    }
+    return [R2, I2];
+  }
+  // Index layout: element (x, z) of an N x N array is at z * N + x, mode m = x < N/2 ? x : x - N.
+  const wMode = (x, N) => (x < N / 2 ? x : x - N);
+
+  function water(o = {}) {
+    const units = unitsOf(o.units ?? "m");
+    const ocean = o.mode === "ocean";
+    const sz = o.size ?? (ocean ? 400 : 2) * units;
+    const g = new Node(null, { name: o.name ?? "water" });
+    Object.assign(g, {
+      isWater: true, mode: ocean ? "ocean" : "pool", units,
+      size: Array.isArray(sz) ? [sz[0], sz[1]] : [sz, sz],
+      depth: o.depth ?? (ocean ? 1000 : 1.5) * units,
+      shape: o.shape === "round" ? "round" : "square",
+      resolution: o.resolution ?? null,
+      seed: o.seed ?? 1, tension: o.tension !== false,
+      damping: o.damping ?? (ocean ? 0 : 0.12),
+      wind: o.wind ?? 8, windDirection: o.windDirection ?? [1, 0.35], waveHeight: o.waveHeight ?? null,
+      choppy: o.choppy ?? 1, patch: o.patch ?? null,
+      body: o.body ?? (ocean ? "sea" : "clear"), absorb: o.absorb ?? null, scatter: o.scatter ?? null,
+      foam: o.foam ?? (ocean ? 1 : 0), shore: o.shore ?? 0, caustics: o.caustics ?? !ocean, reflections: o.reflections !== false,
+      rain: o.rain ?? 0, objects: o.objects ?? [], time: o.time ?? null,
+      ripples: o.ripples ?? 0, rippleLength: o.rippleLength ?? null,
+      meniscus: o.meniscus === true ? {} : o.meniscus ?? null,
+      drops: [],
+    });
+    const [w, d] = g.size;
+    // The node's mesh is a coarse copy of the surface (and, for a pool, its sides) for bounds and
+    // picking; the drawn grid is finer and follows the quality tier.
+    const surf = g.add(waterGrid(g, ocean ? 48 : 40, false), {
+      name: "surface", material: { base: "water", ...(o.material || {}) }, castShadow: false, trace: false, pickable: o.pickable ?? true,
+    });
+    surf._water = g;
+    g.surface = surf;
+    if (!ocean && o.basin !== false && g.shape === "square") poolBasin(g, o);
+    // A drop: a crater of radius r and depth amp (negative: a dip with a raised rim) at `point`,
+    // [x, z] in the water's own coordinates (its center is 0, 0) or a world point [x, y, z].
+    g.drop = (point, opt = {}) => {
+      let x, z;
+      if (point.length >= 3) { const c = g.toWorld([0, 0, 0]); x = point[0] - c[0]; z = point[2] - c[2]; }
+      else [x, z] = point;
+      g.drops.push({ x, z, r: opt.r ?? 0.02 * units, amp: opt.amp ?? -0.004 * units, t: opt.time ?? g._now ?? 0, shape: opt.shape === "bump" ? 1 : 0 });
+      return g;
+    };
+    g.clear = () => { g.drops.length = 0; if (g._wgpu) g._wgpu.t = null; return g; };
+    // The pool's height (world units) at local x, z and time t, from every drop so far (CPU, for tests and labels).
+    g.heightAt = (x, z, t) => waterPoolLine(g, [[x, z]], t ?? g._now ?? 0)[0];
+    return g;
+  }
+  // The water's drawn surface: an (n+1)² grid (denser near the middle at sea, a disk for a round
+  // glass) and, for a pool, its sides down to the floor, so the water reads as a body from the side.
+  function waterGrid(g, n, far) {
+    const [w, d] = g.size, ocean = g.mode === "ocean", round = g.shape === "round";
+    const P = [], N = [], I = [];
+    const at = (u, v) => {
+      if (round) {
+        // Concentric square-to-disk map (Shirley and Chiu), so cells stay even.
+        let r, a;
+        if (Math.abs(u) > Math.abs(v)) { r = u; a = (Math.PI / 4) * (v / (u || 1)); } else { r = v; a = Math.PI / 2 - (Math.PI / 4) * (u / (v || 1)); }
+        return [r * Math.cos(a) * w / 2, 0, r * Math.sin(a) * d / 2];
+      }
+      if (ocean) return [Math.sign(u) * Math.abs(u) ** 1.6 * w / 2, 0, Math.sign(v) * Math.abs(v) ** 1.6 * d / 2];
+      return [u * w / 2, 0, v * d / 2];
+    };
+    if (far) {
+      // Rings beyond the grid out toward the horizon, matching the grid's edge vertex for vertex.
+      const loop = s => { const out = []; for (let k = 0; k < 4 * n; k++) { const side = Math.floor(k / n), f = (k % n) / n * 2 - 1; const [u, v] = [[f, -1], [1, f], [-f, 1], [-1, -f]][side]; const p = at(u, v); out.push([p[0] * s, 0, p[2] * s]); } return out; };
+      let prev = loop(1).map(p => vert(p, [0, 1, 0]));
+      for (let s = 1.5; s < 400; s *= 1.5) {
+        const cur = loop(s).map(p => vert(p, [0, 1, 0]));
+        for (let k = 0; k < cur.length; k++) { const k1 = (k + 1) % cur.length; tri(prev[k], prev[k1], cur[k1], [0, 1, 0]); tri(prev[k], cur[k1], cur[k], [0, 1, 0]); }
+        prev = cur;
+      }
+      return makeMesh(new Float32Array(P), new Float32Array(N), new Uint32Array(I));
+    }
+    for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) vert(at((i / n) * 2 - 1, (j / n) * 2 - 1), [0, 1, 0]);
+    const id = (i, j) => j * (n + 1) + i;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { tri(id(i, j), id(i, j + 1), id(i + 1, j), [0, 1, 0]); tri(id(i + 1, j), id(i, j + 1), id(i + 1, j + 1), [0, 1, 0]); }
+    if (!ocean) {
+      // The sides: the edge of the grid (top, following the surface) down to the floor.
+      const edge = [];
+      for (let i = 0; i < n; i++) edge.push([i, 0]);
+      for (let j = 0; j < n; j++) edge.push([n, j]);
+      for (let i = n; i > 0; i--) edge.push([i, n]);
+      for (let j = n; j > 0; j--) edge.push([0, j]);
+      const ring = edge.map(([i, j]) => ({ p: at((i / n) * 2 - 1, (j / n) * 2 - 1) }));
+      for (let k = 0; k < ring.length; k++) {
+        const a = ring[k], b = ring[(k + 1) % ring.length];
+        // Each quad gets its own vertices so a square's corners stay sharp.
+        const flat = Math.abs(a.p[0] - b.p[0]) < 1e-9 ? [Math.sign(a.p[0]), 0, 0] : [0, 0, Math.sign(a.p[2])];
+        const na = round ? v3.norm([a.p[0], 0, a.p[2]]) : flat, nb = round ? v3.norm([b.p[0], 0, b.p[2]]) : flat;
+        const t0 = vert(a.p, na), t1 = vert(b.p, nb), b0 = vert([a.p[0], -g.depth, a.p[2]], na), b1 = vert([b.p[0], -g.depth, b.p[2]], nb);
+        const mid = v3.lerp(a.p, b.p, 0.5), outward = round ? v3.norm([mid[0], 0, mid[2]]) : flat;
+        tri(t0, b0, t1, outward); tri(t1, b0, b1, outward);
+      }
+      // The bottom, so a glass of water seen from below is closed.
+      const c0 = vert([0, -g.depth, 0], [0, -1, 0]);
+      for (let k = 0; k < ring.length; k++) {
+        const a = ring[k].p, b = ring[(k + 1) % ring.length].p;
+        tri(c0, vert([a[0], -g.depth, a[2]], [0, -1, 0]), vert([b[0], -g.depth, b[2]], [0, -1, 0]), [0, -1, 0]);
+      }
+    }
+    return makeMesh(new Float32Array(P), new Float32Array(N), new Uint32Array(I));
+  }
+  // A swimming pool's tiled shell: floor and walls of glazed tile with grout lines, a dark lane
+  // line down the floor, and a stone coping around the top, a little above the water.
+  function poolBasin(g, o) {
+    const [w, d] = g.size, D = g.depth, u = g.units, t = 0.12 * u, free = o.freeboard ?? 0.1 * u, tile = o.tile ?? 0.125 * u;
+    const wall = (sx, sz, px, pz, name) => g.add(mesh.transform(mesh.box(sx, H, sz), m4.translation([sx / 2, H / 2, sz / 2])), { name, position: [px - sx / 2, -D, pz - sz / 2], material: tileMat(wallMap, "box", [0, 0, K * tile, K * tile]) });
+    wall(t, d + 2 * t, -w / 2 - t / 2, 0, "pool wall");
+    wall(t, d + 2 * t, w / 2 + t / 2, 0, "pool wall");
+    wall(w, t, 0, -d / 2 - t / 2, "pool wall");
+    wall(w, t, 0, d / 2 + t / 2, "pool wall");
+    if (o.coping !== false) {
+      const cw = 0.3 * u, ch = 0.05 * u, stone = { color: "#d9d3c7", metal: 0, roughness: 0.8 };
+      g.add(mesh.box(w + 2 * cw - 0.06 * u, ch, cw, { round: ch * 0.3 }), { name: "coping", position: [0, free + ch / 2, -(d / 2 + cw / 2 - 0.03 * u)], material: stone });
+      g.add(mesh.box(w + 2 * cw - 0.06 * u, ch, cw, { round: ch * 0.3 }), { name: "coping", position: [0, free + ch / 2, d / 2 + cw / 2 - 0.03 * u], material: stone });
+      g.add(mesh.box(cw, ch, d - 0.06 * u, { round: ch * 0.3 }), { name: "coping", position: [-(w / 2 + cw / 2 - 0.03 * u), free + ch / 2, 0], material: stone });
+      g.add(mesh.box(cw, ch, d - 0.06 * u, { round: ch * 0.3 }), { name: "coping", position: [w / 2 + cw / 2 - 0.03 * u, free + ch / 2, 0], material: stone });
+    }
+    // A paved deck around it, so the pool sits in the ground rather than on it.
+    const deck = o.deck ?? 1.2 * u;
+    if (deck > 0) {
+      const ch = o.coping !== false ? 0.05 * u : 0, top = free + ch - 0.005 * u, bot = -D - t, hh = top - bot, X = w / 2 + t, Z = d / 2 + t;
+      const pave = { color: "#cdc6b8", metal: 0, roughness: 0.85 };
+      g.add(mesh.box(2 * (X + deck), hh, deck), { name: "deck", position: [0, bot + hh / 2, -(Z + deck / 2)], material: pave, pickable: false });
+      g.add(mesh.box(2 * (X + deck), hh, deck), { name: "deck", position: [0, bot + hh / 2, Z + deck / 2], material: pave, pickable: false });
+      g.add(mesh.box(deck, hh, 2 * Z), { name: "deck", position: [-(X + deck / 2), bot + hh / 2, 0], material: pave, pickable: false });
+      g.add(mesh.box(deck, hh, 2 * Z), { name: "deck", position: [X + deck / 2, bot + hh / 2, 0], material: pave, pickable: false });
+    }
+    // The water traces its own basin (refraction shows floor the walls hide from a dry view).
+    g.basin = floorMap ? { floor: floorMap, wall: wallMap, floorBox: [-w / 2, -d / 2, nx * tile, nz * tile], wallPeriod: K * tile, t } : true;
+  }
+
+  // Sim size: the pool's cells across (the FFT is twice that, for the mirror), the sea's FFT size.
+  const waterRes = g => g.resolution ?? (startRank() >= 2 ? 256 : 128);
+  // The pool's drops as spectra, all in meters: drop i at (s, t) from the pool's corner.
+  function waterDropsSI(g, list, tNow) {
+    const u = g.units, [w, d] = g.size;
+    return list.map(dp => ({ s: (dp.x + w / 2) / u, t: (dp.z + d / 2) / u, r: dp.r / u, amp: dp.amp / u, tau: tNow - dp.t, shape: dp.shape }));
+  }
+  // Rain: deterministic drops, slot k falls at (k + jitter) / rate seconds somewhere on the surface.
+  function waterRain(g, t0, t1) {
+    const out = [], rate = g.rain;
+    if (!(rate > 0) || t1 <= t0) return out;
+    const [w, d] = g.size, u = g.units;
+    for (let k = Math.max(0, Math.floor(t0 * rate) - 1); k <= Math.ceil(t1 * rate) && out.length < 512; k++) {
+      const tk = (k + rndU(k, 0, 11, g.seed)) / rate;
+      if (tk <= t0 || tk > t1) continue;
+      const s = 0.4 + 0.6 * rndU(k, 3, 11, g.seed);
+      out.push({ x: (rndU(k, 1, 11, g.seed) - 0.5) * w, z: (rndU(k, 2, 11, g.seed) - 0.5) * d, r: 0.006 * u * s, amp: -0.0015 * u * s, t: tk, shape: 0 });
+    }
+    return out;
+  }
+  // Wind ripples on a pool: rms height `ripples` (world units) spread over waves from about
+  // `rippleLength` x 3 down to 40% of it. Returns [scale, k0, k1] for FS_WPOOL (and the CPU mirror).
+  function waterAmbient(g, N) {
+    const lam = (g.rippleLength ?? 0.08 * g.units) / g.units, k0 = (2 * Math.PI) / (lam * 3), k1 = (2 * Math.PI) / (lam / 2.5);
+    const key = `${N}|${g.size}|${lam}`;
+    if (g._ambKey !== key) {
+      const [w, d] = g.size.map(v => v / g.units);
+      let sum = 0;
+      for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+        const kx = (Math.PI * wMode(x, N)) / w, kz = (Math.PI * wMode(z, N)) / d, k = Math.hypot(kx, kz);
+        if (k > 0) sum += k ** -4 * Math.exp(-((k0 / k) ** 2) - (k / k1) ** 2);
+      }
+      g._ambKey = key; g._ambSum = sum;
+    }
+    return [rms / Math.sqrt(Math.max(g._ambSum, 1e-30)), k0, k1];
+  }
+  // How long a drop matters: after this its waves are below a thousandth of their start.
+  const waterWindow = g => Math.min(120, Math.log(1000) / Math.max(g.damping, 0.02));
+  // CPU mirror of the pool's spectrum and FFT: the height (world units) at points [[x, z], ...]
+  // at time t. For tests; the GPU path keeps the spectrum and advances it every frame instead.
+  function waterPoolLine(g, pts, t) {
+    const R = Math.min(waterRes(g), 128), N = 2 * R, [w0, d0] = g.size, u = g.units, w = w0 / u, d = d0 / u, H = g.depth / u;
+    const drops = waterDropsSI(g, g.drops.concat(waterRain(g, Math.max(0, t - waterWindow(g)), t)).filter(dp => dp.t <= t), t);
+    const re = new Float64Array(N * N), im = new Float64Array(N * N), amb = waterAmbient(g, N);
+    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+      const kx = (Math.PI * wMode(x, N)) / w, kz = (Math.PI * wMode(z, N)) / d, k = Math.hypot(kx, kz);
+      const om = waterOmega(k, H, g.tension), gam = 2 * WNU * k * k + g.damping;
+      let h = 0;
+      if (amb[0] > 0 && k > 0) {
+        const S = k ** -4 * Math.exp(-((amb[1] / k) ** 2) - (k / amb[2]) ** 2);
+        const hh = hashU((Math.imul(Math.abs(wMode(x, N)), 7919) + Math.imul(Math.abs(wMode(z, N)), 104729) + g.seed * 9973) >>> 0);
+        h += amb[0] * Math.sqrt(2 * S) * Math.cos(om * t + ((hh >>> 8) / 16777216) * 2 * Math.PI);
+      }
+      for (const dp of drops) {
+        const rr = dp.r * dp.r, kr = k * k * rr / 4;
+        const D = dp.amp * Math.PI * rr * (dp.shape ? 1 : kr) * Math.exp(-kr) * Math.cos(kx * dp.s) * Math.cos(kz * dp.t) / (w * d);
+        h += D * Math.cos(om * dp.tau) * Math.exp(-gam * dp.tau);
+      }
+      re[z * N + x] = h;
+    }
+    const [fr] = waterIfft2(re, im, N);
+    // Bilinear on the cell grid: sample j sits at s = j * w / R.
+    return pts.map(([x, z]) => {
+      const fx = Math.max(0, Math.min(R, ((x + w0 / 2) / w0) * R)), fz = Math.max(0, Math.min(R, ((z + d0 / 2) / d0) * R));
+      const i0 = Math.min(R - 1, Math.floor(fx)), j0 = Math.min(R - 1, Math.floor(fz)), a = fx - i0, b = fz - j0;
+      const v = (i, j) => fr[j * N + i];
+      return u * ((v(i0, j0) * (1 - a) + v(i0 + 1, j0) * a) * (1 - b) + (v(i0, j0 + 1) * (1 - a) + v(i0 + 1, j0 + 1) * a) * b);
+    });
+  }
+  // The sea: cascades, each a square patch L meters across carrying the band of wavenumbers
+  // [k0, k1). The long one sets the swell, the short one (an irrational fraction of it, so the two
+  // never repeat together) the chop.
+  function oceanSetup(g) {
+    const N = waterRes(g), U = Math.max(0.5, g.wind), Lw = (U * U) / WG;
+    const kp = 0.877 * 0.877 * WG / (U * U);           // Pierson–Moskowitz peak wavenumber
+    const L0 = g.patch ? g.patch / g.units : Math.max(60, 5.5 * (2 * Math.PI / kp));
+    const L1 = L0 / 17.3;
+    const kNy0 = (Math.PI * N) / L0, kNy1 = (Math.PI * N) / L1;
+    const kSplit = kNy0 * 0.45;
+    const cas = [{ L: L0, k0: 0, k1: kSplit }, { L: L1, k0: kSplit, k1: kNy1 * 0.6 }];
+    const wd = v3.norm([g.windDirection[0], 0, g.windDirection[1]]);
+    const small = Lw / 3000;
+    const raw = cas.map((c, ci) => {
+      const h0 = new Float32Array(N * N * 4), amp = new Float64Array(N * N * 2);
+      const dk = (2 * Math.PI) / c.L;
+      // Phillips spectrum P(k) = exp(-1/(kL)²) / k⁴ |k̂·ŵ|², waves against the wind cut down,
+      // the shortest waves rolled off; Gaussian amplitudes (Box–Muller) from the seed.
+      for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+        const kx = wMode(x, N) * dk, kz = wMode(z, N) * dk, k = Math.hypot(kx, kz);
+        let P = 0;
+        if (k > 1e-9 && k >= c.k0 && k < c.k1) {
+          const cw = (kx * wd[0] + kz * wd[2]) / k;
+          P = (Math.exp(-1 / ((k * Lw) ** 2)) / k ** 4) * cw * cw * (cw < 0 ? 0.15 : 1) * Math.exp(-((k * small) ** 2)) * dk * dk;
+        }
+        const i = z * N + x, s = g.seed * 7 + ci * 131;
+        const u1 = Math.max(1e-12, rndU(i, 0, s, 17)), u2 = rndU(i, 1, s, 17), u3 = Math.max(1e-12, rndU(i, 2, s, 17)), u4 = rndU(i, 3, s, 17);
+        const m1 = Math.sqrt(-2 * Math.log(u1)), m2 = Math.sqrt(-2 * Math.log(u3));
+        const a = Math.sqrt(P / 2);
+        amp[i * 2] = a * m1 * Math.cos(2 * Math.PI * u2);
+        amp[i * 2 + 1] = a * m2 * Math.sin(2 * Math.PI * u4);
+      }
+      for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+        const i = z * N + x, j = ((N - z) % N) * N + ((N - x) % N);
+        h0.set([amp[i * 2], amp[i * 2 + 1], amp[j * 2], -amp[j * 2 + 1]], i * 4);
+      }
+      return { ...c, h0, dk };
+    });
+    // Scale every cascade together so the sea's significant height Hs = 4 σ is the fully developed
+    // sea's for this wind, 0.21 U² / g, unless waveHeight says otherwise.
+    let varH = 0, varS = 0;
+    for (const c of raw) for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+      const i = (z * N + x) * 4, e = c.h0[i] ** 2 + c.h0[i + 1] ** 2 + c.h0[i + 2] ** 2 + c.h0[i + 3] ** 2;
+      varH += e; varS += e * ((wMode(x, N) * c.dk) ** 2 + (wMode(z, N) * c.dk) ** 2);
+    }
+    const Hs = g.waveHeight != null ? g.waveHeight / g.units : (0.21 * U * U) / WG;
+    const sc = Hs / 4 / Math.sqrt(Math.max(varH, 1e-30));
+    for (const c of raw) for (let i = 0; i < c.h0.length; i++) c.h0[i] *= sc;
+    // Waves too short for either cascade still tilt the surface: Cox and Munk (1954) measured the
+    // sea's total mean square slope, 0.003 + 0.00512 U; what the cascades don't resolve becomes roughness.
+    const resolved = varS * sc * sc;
+    const cm = 0.003 + 0.00512 * U;
+    return { N, cas: raw, Hs, msSlope: cm, subSlope: Math.max(0.0015, cm - resolved), resolvedSlope: resolved, key: `${N}|${U}|${g.windDirection}|${g.waveHeight}|${g.seed}|${g.patch}|${g.units}` };
+  }
+  // CPU mirror of the ocean's spectrum at time t (FS_WOCEAN), height only, in meters: for tests.
+  function oceanHeightField(g, t, ci = 0) {
+    const S = g._ocean && g._ocean.key === oceanSetup.keyOf(g) ? g._ocean : (g._ocean = oceanSetup(g));
+    const c = S.cas[ci], N = S.N, H = g.depth / g.units;
+    const re = new Float64Array(N * N), im = new Float64Array(N * N);
+    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+      const i = z * N + x, k = Math.hypot(wMode(x, N), wMode(z, N)) * c.dk, om = waterOmega(k, H, g.tension);
+      const cs = Math.cos(om * t), sn = Math.sin(om * t), h = c.h0.subarray(i * 4, i * 4 + 4);
+      re[i] = h[0] * cs - h[1] * sn + h[2] * cs + h[3] * sn;
+      im[i] = h[0] * sn + h[1] * cs - h[2] * sn + h[3] * cs;
+    }
+    return { N, L: c.L, h: waterIfft2(re, im, N)[0], cascade: c, setup: S };
+  }
+  oceanSetup.keyOf = g => `${waterRes(g)}|${Math.max(0.5, g.wind)}|${g.windDirection}|${g.waveHeight}|${g.seed}|${g.patch}|${g.units}`;
+
+  // ---------- water on the GPU ----------
+  const FS_WPOOL = `#version 300 es
+precision highp float; precision highp int;
+uniform sampler2D uState;
+uniform vec4 uP0;  // FFT size, pool width and length (m), time step (s)
+uniform vec4 uP1;  // depth (m), surface tension on, damping (1/s), world units per meter
+uniform vec4 uDrop[32];  // s, t (m from the pool's corner), radius (m), amplitude (m)
+uniform vec4 uDropT[32]; // seconds since the drop, shape (0 crater, 1 bump)
+uniform int uDropN;
+uniform vec4 uAmb; // wind ripples: amplitude scale, long and short cutoff (rad/m), time
+uniform uint uSeed;
+layout(location=0) out vec4 oState;
+layout(location=1) out vec4 oSpec;
+uint hashu(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
+float omegaOf(float k) { float th = uP1.x > 0.0 ? tanh(min(k * uP1.x, 20.0)) : 1.0; return sqrt(max((9.81 * k + uP1.y * 7.293e-5 * k * k * k) * th, 0.0)); }
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  int N = int(uP0.x + 0.5);
+  int mx = p.x < N / 2 ? p.x : p.x - N, mz = p.y < N / 2 ? p.y : p.y - N;
+  float kx = 3.14159265 * float(mx) / uP0.y, kz = 3.14159265 * float(mz) / uP0.z, k = length(vec2(kx, kz));
+  float om = omegaOf(k), gam = 2.0e-6 * k * k + uP1.z;
+  vec4 s = texelFetch(uState, p, 0);
+  float h = s.x, v = s.y, dt = uP0.w;
+  // Each mode is a damped oscillator; advance it exactly.
+  if (dt > 0.0) {
+    float c = cos(om * dt), sn = sin(om * dt), e = exp(-gam * dt);
+    float h2 = om > 1e-6 ? h * c + v / om * sn : h + v * dt;
+    float v2 = v * c - h * om * sn;
+    h = h2 * e; v = v2 * e;
+  }
+  // Drops: the spectrum of a crater (1 - r²/a²) exp(-r²/a²) (or a plain bump) and its mirror images
+  // in the walls, already advanced by the time since it fell.
+  for (int i = 0; i < 32; i++) {
+    if (i >= uDropN) break;
+    vec4 d = uDrop[i], d2 = uDropT[i];
+    float rr = d.z * d.z, kr = k * k * rr * 0.25;
+    float D = d.w * 3.14159265 * rr * (d2.y > 0.5 ? 1.0 : kr) * exp(-kr) * cos(kx * d.x) * cos(kz * d.y) / (uP0.y * uP0.z);
+    float e = exp(-gam * d2.x);
+    h += D * cos(om * d2.x) * e; v -= D * om * sin(om * d2.x) * e;
+  }
+  oState = vec4(h, v, 0.0, 0.0);
+  // Wind ripples: every standing mode in a band of short waves (k^-4 between the cutoffs) at a
+  // fixed amplitude and a hashed phase, turning at its own ω; they never die, and are the same
+  // at the same time.
+  if (uAmb.x > 0.0 && k > 0.0) {
+    float S = pow(k, -4.0) * exp(-pow(uAmb.y / k, 2.0) - pow(k / uAmb.z, 2.0));
+    uint hh = hashu(uint(abs(mx)) * 7919u + uint(abs(mz)) * 104729u + uSeed);
+    h += uAmb.x * sqrt(2.0 * S) * cos(om * uAmb.w + float(hh >> 8) / 16777216.0 * 6.2831853);
+  }
+  // Height and slopes in one complex FFT: (h + i dh/dx, dh/dz); the Nyquist row has no slope.
+  float sx = mx == -N / 2 ? 0.0 : kx, sz = mz == -N / 2 ? 0.0 : kz;
+  oSpec = vec4(h * uP1.w - sx * h, 0.0, 0.0, sz * h);
+}`;
+
+  const FS_WOCEAN = `#version 300 es
+precision highp float; precision highp int;
+uniform sampler2D uH0;
+uniform vec4 uO0; // FFT size, patch (m), time (s), depth (m)
+uniform vec4 uO1; // choppiness, world units per meter, surface tension on
+layout(location=0) out vec4 o0;
+layout(location=1) out vec4 o1;
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+vec2 iz(vec2 a) { return vec2(-a.y, a.x); }
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  int N = int(uO0.x + 0.5);
+  int mx = p.x < N / 2 ? p.x : p.x - N, mz = p.y < N / 2 ? p.y : p.y - N;
+  float dk = 6.28318531 / uO0.y, kx = float(mx) * dk, kz = float(mz) * dk, k = length(vec2(kx, kz));
+  float th = tanh(min(k * uO0.w, 20.0));
+  float om = sqrt(max((9.81 * k + uO1.z * 7.293e-5 * k * k * k) * th, 0.0));
+  vec4 h0 = texelFetch(uH0, p, 0);
+  float ph = mod(om * uO0.z, 6.28318531);
+  vec2 e = vec2(cos(ph), sin(ph));
+  vec2 ht = cmul(h0.xy, e) + cmul(h0.zw, vec2(e.x, -e.y));
+  float ik = k > 1e-8 ? 1.0 / k : 0.0, lam = uO1.x, u = uO1.y;
+  if (mx == -N / 2) kx = 0.0;
+  if (mz == -N / 2) kz = 0.0;
+  vec2 H = ht * u, Dx = iz(ht) * (kx * ik * lam * u), Dz = iz(ht) * (kz * ik * lam * u);
+  vec2 hx = iz(ht) * kx, hz = iz(ht) * kz;
+  vec2 Dxx = -ht * (kx * kx * ik * lam), Dzz = -ht * (kz * kz * ik * lam), Dxz = -ht * (kx * kz * ik * lam);
+  // Two real fields per complex FFT: A + iB transforms to a + ib when A and B are Hermitian.
+  o0 = vec4(H + iz(Dx), Dz + iz(hx));
+  o1 = vec4(hz + iz(Dxx), Dzz + iz(Dxz));
+}`;
+
+  // One pass of an inverse FFT (Stockham radix 2, self-sorting) along x or z, on two complex
+  // numbers per texel (and a second texture when TWO).
+  const fsWfft = two => `#version 300 es
+precision highp float; precision highp int;
+uniform sampler2D uSrc0;${two ? " uniform sampler2D uSrc1;" : ""}
+uniform vec4 uF; // size, half-size of this stage's butterflies, direction (0 x, 1 z)
+layout(location=0) out vec4 o0;${two ? "\nlayout(location=1) out vec4 o1;" : ""}
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  int N = int(uF.x + 0.5), Ns = int(uF.y + 0.5);
+  int o = uF.z < 0.5 ? p.x : p.y;
+  int r = o % (2 * Ns), k = r % Ns, j = (o / (2 * Ns)) * Ns + k;
+  float sg = r < Ns ? 1.0 : -1.0;
+  ivec2 q0 = p, q1 = p;
+  if (uF.z < 0.5) { q0.x = j; q1.x = j + N / 2; } else { q0.y = j; q1.y = j + N / 2; }
+  float a = 3.14159265358979 * float(k) / float(Ns);
+  vec2 w = vec2(cos(a), sin(a));
+  vec4 a0 = texelFetch(uSrc0, q0, 0), a1 = texelFetch(uSrc0, q1, 0);
+  o0 = vec4(a0.xy + sg * cmul(w, a1.xy), a0.zw + sg * cmul(w, a1.zw));${two ? `
+  vec4 b0 = texelFetch(uSrc1, q0, 0), b1 = texelFetch(uSrc1, q1, 0);
+  o1 = vec4(b0.xy + sg * cmul(w, b1.xy), b0.zw + sg * cmul(w, b1.zw));` : ""}
+}`;
+
+  // The FFT's output as the maps the surface reads: A = displacement (x, y, z) and the Jacobian
+  // (below 1 where the sea folds: foam); B = slopes and their squares, mipmapped, so a distant
+  // pixel reads the mean slope and its variance (roughness from the waves it can't resolve).
+  const FS_WFIN = `#version 300 es
+precision highp float; precision highp int;
+uniform sampler2D uF0; uniform sampler2D uF1;
+uniform vec4 uFin; // mode (0 pool, 1 ocean)
+layout(location=0) out vec4 oA;
+layout(location=1) out vec4 oB;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 a = texelFetch(uF0, p, 0);
+  if (uFin.x < 0.5) { oA = vec4(0.0, a.x, 0.0, 1.0); oB = vec4(a.y, a.z, a.y * a.y, a.z * a.z); return; }
+  vec4 b = texelFetch(uF1, p, 0); // a = (h, Dx, Dz, dh/dx), b = (dh/dz, dDx/dx, dDz/dz, dDx/dz)
+  float J = (1.0 + b.y) * (1.0 + b.z) - b.w * b.w;
+  vec2 s = vec2(a.w / max(1.0 + b.y, 0.3), b.x / max(1.0 + b.z, 0.3));
+  oA = vec4(a.y, a.x, a.z, J);
+  oB = vec4(s, s * s);
+}`;
+
+  // Caustics: sunlight refracted through every cell of the simulated surface lands on the floor;
+  // the light a cell carries is spread over the area it lands on, so the brightness there is the
+  // ratio of the cell's area to its image's (energy is conserved). Drawn additively, so where
+  // several cells fold onto one spot their light adds up: the bright lines.
+  const VS_WCAUST = `#version 300 es
+precision highp float; precision highp int;
+uniform sampler2D uWA0; uniform sampler2D uWB0;
+uniform vec4 uWM0; // local x, z to map uv
+uniform vec4 uC0;  // half width, half length, depth (world), cells per side
+uniform vec3 uC1;  // toward the sun
+out vec2 vOld; out vec2 vNew;
+void main() {
+  int n = int(uC0.w + 0.5);
+  int tri = gl_VertexID / 3, c = gl_VertexID % 3, cell = tri / 2;
+  ivec2 o = tri % 2 == 0 ? (c == 0 ? ivec2(0, 0) : c == 1 ? ivec2(1, 0) : ivec2(0, 1)) : (c == 0 ? ivec2(1, 0) : c == 1 ? ivec2(1, 1) : ivec2(0, 1));
+  vec2 gp = (vec2(float(cell % n), float(cell / n)) + vec2(o)) / float(n);
+  vec2 xz = (gp * 2.0 - 1.0) * uC0.xy;
+  vec2 uv = xz * uWM0.xy + uWM0.zw;
+  float h = textureLod(uWA0, uv, 0.0).y;
+  vec2 s = textureLod(uWB0, uv, 0.0).xy;
+  vec3 t = refract(-uC1, normalize(vec3(-s.x, 1.0, -s.y)), 0.75), t0 = refract(-uC1, vec3(0.0, 1.0, 0.0), 0.75);
+  vec2 hit = xz + t.xz * (h + uC0.z) / max(-t.y, 1e-3);
+  vec2 q = hit - t0.xz * uC0.z / max(-t0.y, 1e-3);
+  vOld = xz; vNew = q;
+  gl_Position = vec4(q / uC0.xy, 0.0, 1.0);
+}`;
+  const FS_WCAUST = `#version 300 es
+precision highp float;
+in vec2 vOld; in vec2 vNew;
+out vec4 o;
+void main() {
+  vec2 a = dFdx(vOld), b = dFdy(vOld), c = dFdx(vNew), d = dFdy(vNew);
+  float A0 = abs(a.x * b.y - a.y * b.x), A1 = abs(c.x * d.y - c.y * d.x);
+  o = vec4(min(A0 / max(A1, 1e-20), 24.0), 0.0, 0.0, 1.0);
+}`;
+
+  // The surface: the grid displaced by the maps (both cascades at sea). The far rings fade the
+  // displacement out and are pinned inside the far plane so the sea reaches the horizon.
+  const VS_WATER = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+uniform mat4 uModel, uViewProj;
+uniform sampler2D uWA0; uniform sampler2D uWA1;
+uniform vec4 uWM0; uniform vec4 uWM1; // local x, z to map uv, per cascade
+uniform vec4 uWV; // cascades, fade start, fade end (local distance), far rings
+uniform vec4 uWD; // depth (world; the sides and bottom follow it), meniscus height and length, round radius
+out vec3 vWorld; out vec3 vLocal; out vec2 vUv0; out vec2 vUv1; out float vSide; out vec3 vN;
+void main() {
+  vec3 p = aPos;
+  if (p.y < -1e-5) p.y = -uWD.x;
+  vUv0 = p.xz * uWM0.xy + uWM0.zw;
+  vUv1 = p.xz * uWM1.xy + uWM1.zw;
+  bool side = abs(aNormal.y) < 0.5;
+  float fade = 1.0 - smoothstep(uWV.y, uWV.z, length(p.xz));
+  if (p.y > -1e-5 && aNormal.y > -0.5) {
+    vec3 d = textureLod(uWA0, vUv0, 0.0).xyz;
+    if (uWV.x > 1.5) d += textureLod(uWA1, vUv1, 0.0).xyz;
+    if (side) d.xz = vec2(0.0);
+    p += d * fade;
+    // A meniscus: water climbs a wetted wall, falling off over the capillary length.
+    if (uWD.y > 0.0) p.y += uWD.y * exp(-max(uWD.w - length(p.xz), 0.0) / uWD.z);
+  }
+  vLocal = p;
+  vSide = side ? 1.0 : aNormal.y < -0.5 ? 2.0 : 0.0;
+  vec4 w = uModel * vec4(p, 1.0);
+  vWorld = w.xyz;
+  vN = normalize(mat3(uModel) * aNormal);
+  gl_Position = uViewProj * w;
+  if (uWV.w > 0.5) gl_Position.z = min(gl_Position.z, gl_Position.w * 0.99999);
+}`;
+
+  const FS_WATER = `#version 300 es
+${G_COMMON}
+${G_ENV}
+${G_SHADOW}
+in vec3 vWorld; in vec3 vLocal; in vec2 vUv0; in vec2 vUv1; in float vSide; in vec3 vN;
+uniform vec3 uEye; uniform vec3 uLight; uniform vec3 uKeyCol; uniform vec4 uLook;
+uniform mat4 uViewProj; uniform vec3 uCamF;
+uniform sampler2D uScene; uniform sampler2D uDepthC; uniform vec2 uSceneInv; uniform vec2 uSceneSize;
+uniform sampler2D uWA0; uniform sampler2D uWB0; uniform sampler2D uWA1; uniform sampler2D uWB1;
+uniform vec4 uW0;   // level (world y), depth (world), world units per meter, cascades
+uniform vec4 uW1;   // half width, half length, round, sea
+uniform vec3 uAbs;  // absorption per world unit
+uniform vec3 uSca;  // backscattering per world unit
+uniform vec4 uW2;   // unresolved mean square slope, foam, time, shore foam width (world)
+uniform vec3 uOrigin; // the water's center at its level (world)
+uniform vec3 uSunW; // sunlight's direction under a flat surface (pointing down)
+uniform vec4 uW3;   // reflections on, march steps, highlight, the main shader already dimmed what's under it
+uniform vec4 uWM0; uniform vec4 uWM1; uniform vec4 uWD;
+uniform sampler2D uFloorMap; uniform sampler2D uWallMap; uniform sampler2D uCaust2;
+uniform vec4 uBasin;  // traced basin on, wall tile period, wall thickness, caustics on
+uniform vec4 uBasin2; // floor map box: origin x, z, size x, z
+uniform vec3 uFillDir; uniform vec3 uFillCol;
+uniform vec4 uPageBg; // the page's color behind the figure, on
+layout(location=0) out vec4 oColor;
+layout(location=1) out vec4 oNormal;
+const float ETA = 1.333;
+vec2 pxOf(vec3 p) { vec4 c = uViewProj * vec4(p, 1.0); return (c.xy / c.w * 0.5 + 0.5) * uSceneSize; }
+float viewZ(vec3 p) { return dot(p - uEye, uCamF); }
+float sceneZ(vec2 px) { return linDepth(texture(uDepthC, px * uSceneInv).r); }
+vec4 sceneAt(vec2 px) { return texture(uScene, clamp(px, vec2(0.5), uSceneSize - 0.5) * uSceneInv); }
+// March a ray against the depth buffer of what's already drawn; returns the distance to the first
+// surface it meets (refined by bisection), or -1. Steps grow with distance (fine near the start);
+// passing far behind something (more than a step deep) is not a hit, so a thin part doesn't smear.
+float march(vec3 o, vec3 d, float tmax, int n, float jit) {
+  float t0 = 0.0, tp = 0.0;
+  for (int i = 0; i < 48; i++) {
+    if (i >= n) break;
+    float f = (float(i) + jit) / float(n), t = tmax * f * f;
+    vec3 p = o + d * t;
+    vec2 px = pxOf(p);
+    if (px.x < 0.0 || px.y < 0.0 || px.x > uSceneSize.x || px.y > uSceneSize.y || viewZ(p) < 0.0) return -1.0;
+    float dz = viewZ(p) - sceneZ(px);
+    if (dz > 0.0) {
+      if (dz < (t - tp) * 1.5 + 0.004 * viewZ(p)) {
+        for (int j = 0; j < 6; j++) { float tm = 0.5 * (t0 + t); vec3 q = o + d * tm; if (viewZ(q) > sceneZ(pxOf(q))) t = tm; else t0 = tm; }
+        return t;
+      }
+    } else t0 = t;
+    tp = t;
+  }
+  return -1.0;
+}
+// Where a ray inside the water leaves its volume (local coordinates): the floor or the sides.
+float exitT(vec3 p, vec3 d) {
+  float t = 1e20;
+  if (d.y < -1e-6) t = (-uW0.y - p.y) / d.y;
+  if (uW1.w > 0.5) return t;
+  if (uW1.z > 0.5) {
+    float a = dot(d.xz, d.xz), b = dot(p.xz, d.xz), c = dot(p.xz, p.xz) - uW1.x * uW1.x;
+    if (a > 1e-9) t = min(t, (-b + sqrt(max(b * b - a * c, 0.0))) / a);
+  } else {
+    if (abs(d.x) > 1e-6) t = min(t, ((d.x > 0.0 ? uW1.x : -uW1.x) - p.x) / d.x);
+    if (abs(d.z) > 1e-6) t = min(t, ((d.z > 0.0 ? uW1.y : -uW1.y) - p.z) / d.z);
+  }
+  return max(t, 0.0);
+}
+vec2 slopeAt(vec2 uv0, vec2 uv1, out float var) {
+  vec4 b = texture(uWB0, uv0);
+  vec2 s = b.xy;
+  var = max(b.z - b.x * b.x, 0.0) + max(b.w - b.y * b.y, 0.0);
+  if (uW0.w > 1.5) { vec4 c = texture(uWB1, uv1); s += c.xy; var += max(c.z - c.x * c.x, 0.0) + max(c.w - c.y * c.y, 0.0); }
+  return s;
+}
+// Light inside the water: what the sun and sky put in just under the surface.
+vec3 downwell() { return uKeyCol * max(uLight.y, 0.0) * 0.97 + envDiff(vec3(0.0, 1.0, 0.0)) * uLook.x; }
+// Backscattered light along a view path of length L inside the water (linear, before exposure):
+// light at depth z has come down through z / cos(sun) of water, so the deeper the dimmer.
+vec3 inscatter(float L, float dy) {
+  vec3 ext = uAbs + uSca + uAbs * (abs(dy) / max(-uSunW.y, 0.25));
+  return uSca / max(ext, vec3(1e-6)) * (1.0 - exp(-ext * L)) * downwell() / PI;
+}
+vec3 disp(vec3 lin) { return tonemap(lin * uLook.z); }
+// The pool's own tiled basin at local point p (on its floor or a wall), lit as the main shader
+// lights it: the Sun through the water (its shadows, the caustics on the floor, the water it came
+// down through) and the sky. Returns display-linear color.
+vec3 basinAt(vec3 p) {
+  vec3 Nb; vec2 uv; bool floorHit = p.y < -uW0.y + 1e-3 * uW0.z;
+  vec3 tx;
+  if (floorHit) { Nb = vec3(0.0, 1.0, 0.0); uv = (p.xz - uBasin2.xy) / uBasin2.zw; tx = texture(uFloorMap, uv).rgb; }
+  else if (abs(abs(p.x) - uW1.x) < abs(abs(p.z) - uW1.y)) { Nb = vec3(-sign(p.x), 0.0, 0.0); uv = vec2(p.z + uW1.y + uBasin.z, p.y + uW0.y) / uBasin.y; tx = texture(uWallMap, uv).rgb; }
+  else { Nb = vec3(0.0, 0.0, -sign(p.z)); uv = vec2(p.x + uW1.x, p.y + uW0.y) / uBasin.y; tx = texture(uWallMap, uv).rgb; }
+  vec3 alb = toLin(tx);
+  vec3 wp = uOrigin + p;
+  float dz = max(-p.y, 0.0);
+  float cosI = max(dot(Nb, -uSunW), 0.0);
+  float sh = shadowAt(wp, Nb);
+  float ca = 1.0;
+  if (uBasin.w > 0.5) {
+    vec2 q = (p.xz - uSunW.xz / max(-uSunW.y, 1e-3) * dz + uW1.xy) / (2.0 * uW1.xy);
+    if (q.x >= 0.0 && q.y >= 0.0 && q.x <= 1.0 && q.y <= 1.0) ca = mix(1.0, texture(uCaust2, q).r, sqrt(clamp(dz / uW0.y, 0.0, 1.0)));
+  }
+  vec3 down = exp(-uAbs * dz / max(-uSunW.y, 0.25));
+  // Under the water the beam is narrower by cos(incidence) / cos(refraction), so a wall facing it
+  // gets that much more per area; the floor gets exactly what it would dry (L.y).
+  vec3 lin = alb / PI * uKeyCol * cosI * sh * ca * max(uLight.y, 0.0) / max(-uSunW.y, 0.05);
+  lin += alb * envDiff(Nb) * uLook.x + alb / PI * uFillCol * max(dot(Nb, uFillDir), 0.0);
+  return disp(lin * down);
+}
+void main() {
+  vec3 V = normalize(uEye - vWorld);
+  float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  int steps = int(uW3.y + 0.5);
+  vec3 lp = vWorld - uOrigin; // local (the water is never turned)
+  float var = 0.0;
+  vec3 N;
+  if (vSide > 0.5) N = normalize(vN);
+  else {
+    vec2 s = slopeAt(vUv0, vUv1, var);
+    if (uWD.y > 0.0) { float r = length(lp.xz); s += lp.xz / max(r, 1e-6) * uWD.y / uWD.z * exp(-max(uWD.w - r, 0.0) / uWD.z); }
+    N = normalize(vec3(-s.x, 1.0, -s.y));
+  }
+  bool under = vSide < 0.5 && uEye.y < vWorld.y && !gl_FrontFacing;
+  // Rough where the waves are too small to draw: the unresolved slopes plus what a pixel averages.
+  float a2 = clamp(uW2.x + var, 1e-5, 0.5), alpha = sqrt(a2);
+  vec3 colL; float alphaOut; float foam = 0.0;
+  vec3 Lsun = uLight;
+  float vis = shadowAt(vWorld, vec3(0.0, 1.0, 0.0));
+  if (under) {
+    // From below: light from the air comes through inside Snell's window; outside it the surface
+    // is a mirror (total internal reflection) showing the water below.
+    N = -N;
+    float c = dot(N, V);
+    vec3 T = refract(-V, N, ETA);
+    vec3 deep = disp(inscatter(1e4, 1.0));
+    if (dot(T, T) < 1e-6) { colL = deep; }
+    else {
+      float F = 0.02 + 0.98 * pow(1.0 - abs(dot(T, N)), 5.0);
+      colL = mix(disp(envSpec(T, alpha) * uLook.y), deep, F);
+    }
+    alphaOut = 1.0;
+  } else {
+    float NoV = dot(N, V);
+    if (NoV < 0.02) { N = normalize(N + V * (0.02 - NoV)); NoV = 0.02; }
+    float F = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
+    // Reflection: the sky or studio, with the scene where a reflected ray finds it on screen.
+    vec3 Rd = reflect(-V, N);
+    if (vSide < 0.5 && Rd.y < 0.01) Rd = normalize(vec3(Rd.x, 0.01 + (0.01 - Rd.y) * 0.5, Rd.z));
+    // A blurred lookup is a cone around Rd; keep it above the horizon, which is where the light
+    // reflected by the sea comes from (below it is more sea).
+    float er = clamp(sqrt(alpha) * 1.2, 0.0, 1.0);
+    vec3 Re = vSide < 0.5 ? normalize(vec3(Rd.x, max(Rd.y, er * 0.35), Rd.z)) : Rd;
+    vec3 refl = disp(envSpec(Re, er) * uLook.y);
+    if (uW3.x > 0.5) {
+      float tr = march(vWorld + N * 1e-3 * uW0.z, Rd, length(uEye - vWorld) * 1.5, steps, jit);
+      if (tr > 0.0) {
+        vec2 px = pxOf(vWorld + Rd * tr);
+        vec4 sc = sceneAt(px);
+        vec2 e = min(px, uSceneSize - px) / (uSceneSize * 0.08);
+        float k = sc.a * clamp(min(e.x, e.y), 0.0, 1.0);
+        refl = mix(refl, toLin(sc.rgb / max(sc.a, 1e-3)), k);
+      }
+    }
+    // Refraction: march the bent ray through the water to what it meets, and absorb along the
+    // whole path the light took: down from the surface to that point, then up to the eye.
+    vec3 T = refract(-V, N, 1.0 / ETA);
+    vec3 refr; float refrA;
+    float tOut = exitT(lp, T), Lw;
+    vec3 P;
+    vec4 bh;
+    bool fromBelow = false;
+    if (vSide > 0.5 && T.y > 1e-4 && (-lp.y) / T.y < tOut) {
+      // Seen through a side: the ray rises to the surface. Inside Snell's window it leaves into the
+      // air; outside, the surface reflects it back down, silver from below.
+      float tt = -lp.y / T.y;
+      vec3 ps = lp + T * tt;
+      float v2;
+      vec2 s2 = slopeAt(ps.xz * uWM0.xy + uWM0.zw, ps.xz * uWM1.xy + uWM1.zw, v2);
+      vec3 Ns = -normalize(vec3(-s2.x, 1.0, -s2.y));
+      vec3 To = refract(T, Ns, ETA);
+      fromBelow = true;
+      if (dot(To, To) < 1e-6) {
+        vec3 T2 = reflect(T, Ns);
+        float t2 = exitT(ps, T2);
+        float th = march(uOrigin + ps, T2, t2, steps, jit);
+        float tl = th > 0.0 ? th : t2;
+        P = uOrigin + ps + T2 * tl;
+        bh = sceneAt(pxOf(P));
+        Lw = tt + tl;
+      } else {
+        P = uOrigin + ps;
+        bh = vec4(toSrgb(disp(envSpec(To, 0.05) * uLook.y)), 1.0);
+        Lw = tt;
+      }
+    } else {
+      float th = march(vWorld, T, min(tOut, 1e5) * 1.05, steps, jit);
+      Lw = th > 0.0 ? min(th, tOut) : tOut;
+      P = vWorld + T * Lw;
+      if (uBasin.x > 0.5 && (th <= 0.0 || th > tOut * 0.97)) {
+        // The ray reaches the basin: trace it there instead of reading the screen.
+        bh = vec4(toSrgb(basinAt(lp + T * tOut)), 1.0);
+        fromBelow = true; // basinAt already dimmed the light on its way down
+      } else {
+        vec2 pp = pxOf(P);
+        // If where the ray ends is hidden on screen by something nearer, read what lies straight
+        // behind this pixel instead (screen-space refraction can't see behind things).
+        if (th <= 0.0 && Lw < 1e4 && sceneZ(pp) < viewZ(P) - 0.05 * Lw) pp = gl_FragCoord.xy;
+        bh = Lw < 1e4 ? sceneAt(pp) : vec4(0.0);
+      }
+    }
+    float below = max(uOrigin.y - P.y, 0.0);
+    float Ld = fromBelow || uW3.w > 0.5 ? 0.0 : below / max(-uSunW.y, 0.25);
+    vec3 Tr = exp(-uAbs * (Lw + Ld));
+    vec3 S = disp(inscatter(Lw, T.y));
+    float tA = dot(Tr, vec3(0.3333));
+    vec3 bl = toLin(bh.rgb / max(bh.a, 1e-3));
+    // Where nothing is drawn behind (a glass on an empty page), what the reader sees behind the
+    // water is the page: refract the page itself, so the glass around it bends a white (or dark)
+    // backdrop instead of dimming a transparent one. Past the critical angle where the ray leaves,
+    // it reflects back inside instead, and that edge goes dark, as in a real glass.
+    if (bh.a < 0.999 && uW1.w < 0.5 && Lw < 1e4 && uPageBg.w > 0.5) {
+      vec3 pl = P - uOrigin, Ne;
+      if (pl.y < -uW0.y + 1e-3 * uW0.z) Ne = vec3(0.0, -1.0, 0.0);
+      else if (uW1.z > 0.5) Ne = normalize(vec3(pl.x, 0.0, pl.z));
+      else Ne = abs(abs(pl.x) - uW1.x) < abs(abs(pl.z) - uW1.y) ? vec3(sign(pl.x), 0.0, 0.0) : vec3(0.0, 0.0, sign(pl.z));
+      vec3 Tx = refract(T, -Ne, ETA);
+      vec3 page = toLin(uPageBg.rgb);
+      vec3 room = dot(Tx, Tx) < 1e-6 ? page * 0.55 : page;
+      bl = bh.a > 0.0 ? mix(room, bl, bh.a) : room;
+      bh.a = 1.0;
+    }
+    refr = bl * bh.a * Tr + S;
+    refrA = bh.a * tA + (1.0 - tA);
+    // Foam: where the sea nearly folds over (the Jacobian of the choppy displacement drops toward
+    // 0.7: crests steep enough to break) and where the water thins at a shore, broken up by noise.
+    if (uW2.y > 0.0 && uW1.w > 0.5) {
+      float J = texture(uWA0, vUv0).w + (uW0.w > 1.5 ? texture(uWA1, vUv1).w - 1.0 : 0.0);
+      float nz = vnoise(vec3(lp.xz * (2.5 / uW0.z), uW2.z * 0.15)) * 0.6 + vnoise(vec3(lp.xz * (9.0 / uW0.z), uW2.z * 0.3)) * 0.4;
+      foam = clamp((0.78 - J) * 4.0 * uW2.y + nz * 0.6 - 0.2, 0.0, 1.0) * step(J, 0.95);
+      // Foam is a lace of bubbles, not a sheet: thin it with finer noise.
+      float lace = vnoise(vec3(lp.xz * (22.0 / uW0.z), uW2.z * 0.5)) * 0.5 + 0.5;
+      foam *= mix(0.25, 1.0, smoothstep(0.25, 0.75, lace));
+    }
+    if (uW2.w > 0.0) {
+      float th = below;
+      float nz = vnoise(vec3(lp.xz * (4.0 / uW0.z), uW2.z * 0.4));
+      foam = max(foam, clamp((1.0 - th / uW2.w) * (0.7 + 0.6 * nz) - 0.25, 0.0, 1.0));
+    }
+    // Glints: the sun's own reflection, a sharp GGX lobe at the roughness of the small waves
+    // (never sharper than the Sun's disk, 0.27° across), hidden where something shades the water.
+    vec3 H = normalize(V + Lsun);
+    float NoL = dot(N, Lsun), NoH = max(dot(N, H), 0.0);
+    float ag = max(alpha, 0.006), ag2 = ag * ag;
+    float Dg = ag2 / (PI * pow(NoH * NoH * (ag2 - 1.0) + 1.0, 2.0));
+    float Gv = 0.5 / max(NoV * sqrt(ag2 + (1.0 - ag2) * NoL * NoL) + max(NoL, 0.0) * sqrt(ag2 + (1.0 - ag2) * NoV * NoV), 1e-4);
+    float Fh = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
+    vec3 glint = NoL > 0.0 ? uKeyCol * Dg * Gv * Fh * NoL * vis : vec3(0.0);
+    colL = refr * (1.0 - F) + refl * F;
+    alphaOut = refrA * (1.0 - F) + F;
+    vec3 foamC = disp((uKeyCol * max(dot(N, Lsun), 0.0) * vis + envDiff(N) * uLook.x) * 0.85 / PI * 1.6);
+    colL = mix(colL, foamC, foam);
+    alphaOut = mix(alphaOut, 1.0, foam);
+    colL += disp(glint) * (1.0 - foam);
+  }
+  vec3 c = toSrgb(colL / max(alphaOut, 1e-3)) * alphaOut;
+  if (uW3.z > 0.5) c = mix(c, vec3(0.85, 0.5, 0.1) * alphaOut, 0.3);
+  oColor = vec4(min(c, vec3(alphaOut)), alphaOut);
+  oNormal = vec4((under ? -N : N) * 0.5 + 0.5, 1.0);
+}`;
+  Object.assign(PROGRAMS, {
+    wpool: () => [VS_FULL, FS_WPOOL], wocean: () => [VS_FULL, FS_WOCEAN], wfft1: () => [VS_FULL, fsWfft(false)], wfft2: () => [VS_FULL, fsWfft(true)],
+    wfin: () => [VS_FULL, FS_WFIN], wcaust: () => [VS_WCAUST, FS_WCAUST], water: () => [VS_WATER, FS_WATER],
+  });
+
+  // GPU state for one water node: the spectrum (pool), the FFT's ping-pong targets, the maps the
+  // surface reads, and the caustic map. Rebuilt when the resolution or the sea's spectrum changes.
+  function waterGPU(g) {
+    const { gl } = R;
+    const ocean = g.mode === "ocean", res = waterRes(g), N = ocean ? res : 2 * res;
+    const key = `${g.mode}|${res}`;
+    let G = g._wgpu;
+    if (G && G.gl === gl && G.key === key) return G;
+    if (G && G.gl === gl) waterFree(G);
+    const F32 = filter => texture(N, N, gl.RGBA32F, gl.RGBA, gl.FLOAT, filter ?? gl.NEAREST);
+    const levels = Math.floor(Math.log2(N)) + 1;
+    const map = () => { const t = texture(N, N, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR, levels); if (ocean) { gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT); } return t; };
+    const two = ocean;
+    const ping = () => { const t = two ? [F32(), F32()] : [F32()]; return { t, fb: framebuffer(t) }; };
+    G = { gl, key, N, res, ocean, two, t: null, applied: new Set(), rainT: null, objPrev: new Map() };
+    G.fft = [ping(), ping()];
+    G.spec = ping();
+    const nc = ocean ? 2 : 1;
+    G.cas = [];
+    for (let c = 0; c < nc; c++) {
+      const A = map(), B = map();
+      G.cas.push({ A, B, fb: framebuffer([{ tex: A }, { tex: B }]) });
+    }
+    if (!ocean) {
+      const s0 = F32(), s1 = F32();
+      G.state = [{ t: s0, fb: framebuffer([s0, G.spec.t[0]]) }, { t: s1, fb: framebuffer([s1, G.spec.t[0]]) }];
+      G.cur = 0;
+      const C = Math.min(1024, res * 2);
+      G.caust = { size: C, tex: texture(C, C, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR) };
+      G.caust.fb = framebuffer([G.caust.tex]);
+    } else G.h0 = [F32(), F32()].map(t => ({ t, fb: null }));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    g._wgpu = G;
+    return G;
+  }
+  function waterFree(G) {
+    const { gl } = R;
+    const tex = [];
+    for (const p of [...G.fft, G.spec]) { gl.deleteFramebuffer(p.fb); tex.push(...p.t); }
+    for (const c of G.cas) { gl.deleteFramebuffer(c.fb); tex.push(c.A, c.B); }
+    if (G.state) for (const s of G.state) { gl.deleteFramebuffer(s.fb); tex.push(s.t); }
+    if (G.caust) { gl.deleteFramebuffer(G.caust.fb); tex.push(G.caust.tex); }
+    if (G.h0) for (const h of G.h0) tex.push(h.t);
+    tex.forEach(t => gl.deleteTexture(t));
+  }
+  // A full-screen pass into fb (size n), sampling `tex` on units 0, 1, ...
+  function wPass(name, fb, n, uniforms, tex = []) {
+    const { gl } = R;
+    const P = prog(name);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.viewport(0, 0, n, n);
+    gl.useProgram(P.p);
+    tex.forEach((t, i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); });
+    setAll(P, uniforms);
+    gl.bindVertexArray(R.empty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  // Inverse 2D FFT of G.spec (one or two textures) through the ping-pong targets; returns the result.
+  function waterFFT(G) {
+    const N = G.N;
+    let src = G.spec.t, k = 0;
+    for (let dir = 0; dir < 2; dir++) for (let Ns = 1; Ns < N; Ns *= 2) {
+      const dst = G.fft[k++ & 1];
+      wPass(G.two ? "wfft2" : "wfft1", dst.fb, N, { uSrc0: 0, uSrc1: 1, uF: [N, Ns, dir, 0] }, src);
+      src = dst.t;
+    }
+    return src;
+  }
+  // Advance the water to time t on the GPU. Returns true when the maps changed.
+  function waterStep(g, t, L) {
+    const { gl } = R;
+    const G = waterGPU(g);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE); gl.depthMask(false);
+    let changed = false;
+    if (G.ocean) {
+      const S = g._ocean && g._ocean.key === oceanSetup.keyOf(g) ? g._ocean : (g._ocean = oceanSetup(g));
+      if (G.h0key !== S.key) {
+        S.cas.forEach((c, i) => { gl.bindTexture(gl.TEXTURE_2D, G.h0[i].t); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, G.N, G.N, gl.RGBA, gl.FLOAT, c.h0); });
+        G.h0key = S.key; G.t = null;
+      }
+      const ck = `${g.choppy}|${g.depth}|${g.tension}`;
+      if (G.t !== t || G.ck !== ck) {
+        S.cas.forEach((c, i) => {
+          wPass("wocean", G.spec.fb, G.N, { uH0: 0, uO0: [G.N, c.L, t, g.depth / g.units], uO1: [g.choppy, g.units, g.tension ? 1 : 0, 0] }, [G.h0[i].t]);
+          const out = waterFFT(G);
+          wPass("wfin", G.cas[i].fb, G.N, { uF0: 0, uF1: 1, uFin: [1, 0, 0, 0] }, out);
+          gl.bindTexture(gl.TEXTURE_2D, G.cas[i].A); gl.generateMipmap(gl.TEXTURE_2D);
+          gl.bindTexture(gl.TEXTURE_2D, G.cas[i].B); gl.generateMipmap(gl.TEXTURE_2D);
+        });
+        G.t = t; G.ck = ck; changed = true;
+      }
+    } else {
+      // Rewinding (or the first frame) starts over from still water a little before t and replays
+      // the drops since: the field is a sum of exactly advanced modes, so the result is the same.
+      if (G.t == null || t < G.t - 1e-9) {
+        for (const s of G.state) { gl.bindFramebuffer(gl.FRAMEBUFFER, s.fb); gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]); gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]); }
+        G.t = Math.max(0, t - waterWindow(g)); G.applied.clear(); G.rainT = G.t; G.objPrev.clear(); G.fresh = true;
+        if (G.t === t) G.t = t - 1e-6;
+      }
+      const win = t - waterWindow(g);
+      const src = g.drops.filter(dp => dp.t <= t && dp.t >= win && !G.applied.has(dp));
+      src.forEach(dp => G.applied.add(dp));
+      src.push(...waterRain(g, G.rainT ?? G.t, t));
+      G.rainT = t;
+      // Objects in the water push it aside: each frame the change in the volume each one holds
+      // below the level leaves as waves (and the level rises by what they displace).
+      for (const ob of g.objects || []) {
+        const node = ob.node || ob;
+        if (!node.mesh) continue;
+        const wm = node.world(), c = m4.apply(wm, node.mesh.bounds.center), sc = Math.hypot(wm[0], wm[1], wm[2]);
+        const r = ob.radius ?? node.mesh.bounds.radius * sc;
+        const o = g.toWorld([0, 0, 0]), lx = c[0] - o[0], ly = c[1] - o[1], lz = c[2] - o[2];
+        const hc = Math.max(0, Math.min(2 * r, r - ly));
+        const V = (Math.PI * hc * hc * (3 * r - hc)) / 3;
+        const a = Math.max(Math.sqrt(Math.max(r * r - ly * ly, 0)), 0.45 * r);
+        const now = { x: lx, z: lz, r: a, amp: V > 0 ? V / (Math.PI * a * a) : 0 };
+        const prev = G.objPrev.get(node);
+        if (prev && (Math.abs(prev.x - now.x) + Math.abs(prev.z - now.z) + Math.abs(prev.amp - now.amp) + Math.abs(prev.r - now.r) > 1e-7 * g.units)) {
+          if (prev.amp) src.push({ ...prev, amp: prev.amp, t, shape: 1 });
+          if (now.amp) src.push({ ...now, amp: -now.amp, t, shape: 1 });
+        }
+        G.objPrev.set(node, now);
+      }
+      if (G.t !== t || src.length || G.fresh || G.ak !== `${g.ripples}|${g.rippleLength}`) {
+        G.ak = `${g.ripples}|${g.rippleLength}`;
+        const [w, d] = g.size, u = g.units;
+        const si = waterDropsSI(g, src, t);
+        const P1 = [g.depth / u, g.tension ? 1 : 0, g.damping, u];
+        const amb = waterAmbient(g, G.N);
+        let dt = t - G.t;
+        for (let b = 0; b === 0 || b < si.length; b += 32) {
+          const batch = si.slice(b, b + 32), D = new Float32Array(128), DT = new Float32Array(128);
+          batch.forEach((q, i) => { D.set([q.s, q.t, q.r, q.amp], i * 4); DT.set([Math.max(0, q.tau), q.shape, 0, 0], i * 4); });
+          const from = G.state[G.cur], to = G.state[1 - G.cur];
+          wPass("wpool", to.fb, G.N, { uState: 0, uP0: [G.N, w / u, d / u, dt], uP1: P1, uDrop: D, uDropT: DT, uDropN: batch.length, uAmb: [...amb, t], uSeed: g.seed * 9973 }, [from.t]);
+          G.cur = 1 - G.cur; dt = 0;
+        }
+        const out = waterFFT(G);
+        wPass("wfin", G.cas[0].fb, G.N, { uF0: 0, uF1: 1, uFin: [0, 0, 0, 0] }, [out[0], out[0]]);
+        gl.bindTexture(gl.TEXTURE_2D, G.cas[0].B); gl.generateMipmap(gl.TEXTURE_2D);
+        G.t = t; G.fresh = false; changed = true;
+      }
+    }
+    // Caustics from this surface and this sun.
+    const lk = L.map(v => v.toFixed(4)).join(",");
+    if (G.caust && g.caustics && (changed || G.lk !== lk) && L[1] > 0.05) {
+      const [w, d] = g.size, n = Math.min(G.res, 384);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, G.caust.fb);
+      gl.viewport(0, 0, G.caust.size, G.caust.size);
+      gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+      const P = prog("wcaust");
+      gl.useProgram(P.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, G.cas[0].A);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, G.cas[0].B);
+      setAll(P, { uWA0: 0, uWB0: 1, uWM0: waterMapU(g, G, 0), uC0: [w / 2, d / 2, g.depth, n], uC1: L });
+      gl.bindVertexArray(R.empty);
+      gl.drawArrays(gl.TRIANGLES, 0, n * n * 6);
+      gl.disable(gl.BLEND);
+      G.lk = lk; G.caustOn = true;
+    } else if (G.caust && !(L[1] > 0.05)) G.caustOn = false;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+    return changed;
+  }
+  // Local x, z to map uv: the pool's cell j sits at x = -w/2 + j w/R (texel center (j + 0.5)/N);
+  // the sea's patch tiles (REPEAT).
+  function waterMapU(g, G, c) {
+    const [w, d] = g.size;
+    if (!G.ocean) { const N = G.N, R0 = G.res; return [R0 / (w * N), R0 / (d * N), (R0 / 2 + 0.5) / N, (R0 / 2 + 0.5) / N]; }
+    const S = g._ocean, L = S.cas[c].L * g.units;
+    return [1 / L, 1 / L, 0.5 / G.N, 0.5 / G.N];
+  }
+  // Uniforms for light under the water in the main shader: the first water body dims and tints
+  // what lies under it by the water the light came down through, and a pool lights its floor
+  // with its caustics.
+  function waterCausticU(list, L) {
+    const off = { uCaustic: 9, uCaustA: [0, 0, 1, 1], uCaustB: [0, 0, 0, 0], uCaustC: [0, 0, 0, 0], uCaustAbs: [0, 0, 0], tex: R.dummyColor, node: null };
+    const it = list[0];
+    if (!it) return off;
+    const g = it.node._water, [w, d] = g.size, o = m4.apply(it.world, [0, 0, 0]), G = g._wgpu;
+    const t0 = refractV(v3.scale(L[1] > 0.05 ? L : [0, 1, 0], -1), [0, 1, 0], 0.75);
+    const on = !!(G && G.caust && G.caustOn && g.caustics);
+    return {
+      uCaustic: 9, uCaustA: [o[0] - w / 2, o[2] - d / 2, 1 / w, 1 / d],
+      uCaustB: [o[1], o[1] - g.depth, t0[0] / Math.max(-t0[1], 1e-3), t0[2] / Math.max(-t0[1], 1e-3)],
+      uCaustC: [on ? 1 : 0, typeof g.caustics === "number" ? g.caustics : 1, 0.0047, g.shape === "round" ? 1 : 0],
+      uCaustAbs: waterAbsorb(g),
+      tex: on ? G.caust.tex : R.dummyColor, node: g,
+    };
+  }
+  const waterAbsorb = g => ((g.absorb || (WATER_BODIES[g.body] || WATER_BODIES.clear).absorb)).map(v => v / g.units);
+  function refractV(I, N, eta) {
+    const c = v3.dot(N, I), k = 1 - eta * eta * (1 - c * c);
+    return k < 0 ? [0, 0, 0] : v3.sub(v3.scale(I, eta), v3.scale(N, eta * c + Math.sqrt(k)));
+  }
+  // Draws one water surface in the glass pass (the opaque picture and its depth are on units 0 and 1).
+  function drawWater(it, ctx) {
+    const { gl } = R;
+    const g = it.node._water, G = g._wgpu, ocean = g.mode === "ocean";
+    const q = ctx.q;
+    // The drawn grid follows the quality tier.
+    const n = ocean ? (q.name === "low" ? 96 : q.name === "medium" ? 160 : 256) : Math.max(32, Math.min(G.res, q.name === "low" ? G.res / 4 : q.name === "medium" ? G.res / 2 : G.res));
+    g._grids = g._grids || {};
+    const grid = g._grids[n] || (g._grids[n] = waterGrid(g, n, false));
+    const P = prog("water");
+    gl.useProgram(P.p);
+    const body = WATER_BODIES[g.body] || WATER_BODIES.clear, u = g.units;
+    const ab = waterAbsorb(g), sc = (g.scatter || body.scatter).map(v => v / u);
+    const o = m4.apply(it.world, [0, 0, 0]);
+    const S = ocean ? g._ocean : null;
+    const t0 = refractV(v3.scale(ctx.L, -1), [0, 1, 0], 0.75);
+    G.cas.forEach((c, i) => {
+      gl.activeTexture(gl.TEXTURE8 + i * 2); gl.bindTexture(gl.TEXTURE_2D, c.A);
+      gl.activeTexture(gl.TEXTURE9 + i * 2); gl.bindTexture(gl.TEXTURE_2D, c.B);
+    });
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, R.wdepth.tex);
+    const bs = typeof g.basin === "object" && g.shape === "square" ? g.basin : null;
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, bs ? mapTexture(bs.floor) : R.dummyColor);
+    gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, bs ? mapTexture(bs.wall) : R.dummyColor);
+    // The pool (one cascade) has units 10 and 11 free; its caustic map goes on 10.
+    const cOn = !!(G.caust && G.caustOn && g.caustics);
+    if (G.cas.length === 1) { gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, cOn ? G.caust.tex : R.dummyColor); }
+    gl.activeTexture(gl.TEXTURE0);
+    const nc = G.cas.length;
+    const wm0 = waterMapU(g, G, 0), wm1 = nc > 1 ? waterMapU(g, G, 1) : wm0;
+    const half = [g.size[0] / 2, g.size[1] / 2];
+    setAll(P, {
+      ...ctx.common, uScene: 0, uDepthC: 1, uSceneInv: ctx.sceneInv, uSceneSize: ctx.sceneSize, uCamF: ctx.C.forward,
+      uWA0: 8, uWB0: 9, uWA1: nc > 1 ? 10 : 8, uWB1: nc > 1 ? 11 : 9, uWM0: wm0, uWM1: wm1,
+      uFloorMap: 2, uWallMap: 15, uCaust2: nc > 1 ? 2 : 10,
+      uBasin: [bs ? 1 : 0, bs ? bs.wallPeriod : 1, bs ? bs.t : 0, cOn ? 1 : 0], uBasin2: bs ? bs.floorBox : [0, 0, 1, 1],
+      uModel: it.world,
+      uW0: [o[1], g.depth, u, nc], uW1: [half[0], half[1], g.shape === "round" ? 1 : 0, ocean ? 1 : 0],
+      uAbs: ab, uSca: sc,
+      uW2: [ocean ? S.subSlope : 2e-5 * (g.rain > 0 ? 4 : 1), g.foam, ctx.time, g.shore ? g.shore : 0],
+      uOrigin: o, uSunW: t0,
+      uPageBg: ctx.pageBg,
+      uWD: [g.depth, g.meniscus ? g.meniscus.height ?? 0.0031 * u : 0, g.meniscus ? g.meniscus.length ?? 0.0027 * u : 1, half[0]],
+      uW3: [g.reflections ? 1 : 0, q.moving ? (q.name === "low" ? 8 : q.name === "medium" ? 12 : 14) : 24, it.node.highlight ? 1 : 0, ctx.lit === g ? 1 : 0],
+      uWV: [nc, ocean ? half[0] * 0.7 : 1e30, ocean ? half[0] * 2.5 : 2e30, 0],
+    });
+    gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+    // A pool's top is seen from both sides (from under water), its sides only from outside.
+    const draw = (m, far) => {
+      const gg = upload(m);
+      setU(P, "uWV", [nc, ocean ? half[0] * 0.7 : 1e30, ocean ? half[0] * 2.5 : 2e30, far ? 1 : 0]);
+      gl.bindVertexArray(gg.vao);
+      gl.drawElements(gl.TRIANGLES, gg.count, gl.UNSIGNED_INT, 0);
+    };
+    if (!ocean && ctx.C.eye[1] < o[1]) gl.disable(gl.CULL_FACE);
+    draw(grid, false);
+    if (ocean && g.horizon !== false) { g._fars = g._fars || {}; draw(g._fars[n] || (g._fars[n] = waterGrid(g, n, true)), true); }
+    gl.disable(gl.CULL_FACE);
+    gl.bindVertexArray(null);
+  }
+  // A depth copy of the opaque picture, which the water marches its rays against.
+  function waterDepthCopy(src, W, H) {
+    const { gl } = R;
+    let D = R.wdepth;
+    if (!D || D.w < R.main.w || D.h < R.main.h) {
+      if (D) { gl.deleteFramebuffer(D.fb); gl.deleteTexture(D.tex); }
+      D = R.wdepth = { w: R.main.w, h: R.main.h, tex: texture(R.main.w, R.main.h, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST) };
+      D.fb = framebuffer([], D.tex);
+    }
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, src);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, D.fb);
+    gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+  }
+
   // ---------- chemistry ----------
   // Covalent radius (Å) for bond lengths and ball sizes, van der Waals radius for space-filling,
   // and a color that reads well in the porcelain style.
@@ -5723,6 +6860,20 @@ void main() {
     particles: o => new Particles(o),
     // The matter presets E3.particles({ matter }) draws on, for reading their numbers.
     matter: MATTER,
+    // Add a material or a particle matter from a page: E3.define.material("ice", { base: "glass", ior: 1.31 }).
+    define: { material: defineMaterial, matter: defineMatter },
+    // Light: the Earth, a lawn, photons from a light traced through a scene, the Sun's color.
+    earth, earthMap, moon, grass, photons,
+    // Water: a simulated pool or sea (see the water section); E3.water.omega(k, depth) is the dispersion relation.
+    water: Object.assign(water, { omega: waterOmega, bodies: WATER_BODIES }),
+    trace(scene, origin, dir, tmax) {
+      const items = collect(scene), mats = new Map();
+      const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node, scene.look))); return m; };
+      return traceCPU(traceOf(scene, items, matOf).bvh, origin, v3.norm(dir), tmax ?? Infinity);
+    },
+    sunlight: dir => toHex(sunTransmittance(dir).map(v => Math.min(1, v) ** (1 / 2.2))),
+    solidAngle,
+    units: UNITS,
     plume: o => new Plume(o),
     Node, Scene, Particles, Plume,
     flow,
@@ -5746,6 +6897,6 @@ void main() {
     get stats() { return E3stats; },
     available() { try { renderer(); return true; } catch { return false; } },
     // For tests: the pure functions the shaders mirror.
-    _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS },
+    _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS, buildBVH, traceCPU, lightRig, sunTransmittance, skyOf, waterOmega, waterIfft1, waterIfft2, waterPoolLine, oceanSetup, oceanHeightField, WATER_BODIES },
   };
 })();
