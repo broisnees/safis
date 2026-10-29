@@ -1154,6 +1154,39 @@
     motes: { vt: 0.004, style: "dot", eddy: [0.03, 0.35, 0.12], life: [30, 60], size: [0.0018, 0.0018], color: "#f4ecdc", bounce: 0, friction: 1 },
     pollen: { vt: 0.025, style: "dot", eddy: [0.15, 0.5, 0.2], life: [12, 24], size: [0.0025, 0.0025], color: "#f0d36a", bounce: 0, friction: 1 },
   };
+  // New presets from a page script, checked so a typo fails loudly instead of drawing nothing.
+  const MATERIAL_KEYS = ["base", "color", "metal", "roughness", "f0", "clearcoat", "anisotropy", "brush", "brushAxis", "emissive", "emissiveIntensity", "temperature", "opacity", "glass", "ior", "dispersion", "thickness", "water", "ripples", "wavelength", "depthColor", "sss", "sssColor", "wet", "sheen", "fibers", "weave", "heatShift", "map", "mapping", "mapBox", "mapRoughness", "foliage"];
+  const MATTER_KEYS = ["base", "gas", "vt", "rise", "lift", "drag", "temperature", "eddy", "life", "size", "opacity", "color", "fade", "intensity", "style", "bounce", "friction"];
+  const STYLES = ["smoke", "fire", "spark", "streak", "sphere", "dot"];
+  function checkKeys(what, name, spec, keys) {
+    if (typeof name !== "string" || !/^[a-z][a-zA-Z0-9-]*$/.test(name)) throw new Error(`${what}: name must be a lowercase word, got ${JSON.stringify(name)}`);
+    if (!spec || typeof spec !== "object") throw new Error(`${what}("${name}"): the spec must be an object`);
+    for (const k of Object.keys(spec)) if (!keys.includes(k)) throw new Error(`${what}("${name}"): unknown key "${k}"; allowed: ${keys.join(", ")}`);
+  }
+  function defineMaterial(name, spec) {
+    checkKeys("E3.define.material", name, spec, MATERIAL_KEYS);
+    if (spec.base && !MATERIALS[spec.base]) throw new Error(`E3.define.material("${name}"): unknown base "${spec.base}"; one of ${Object.keys(MATERIALS).join(", ")}`);
+    for (const k of ["metal", "roughness", "clearcoat", "anisotropy", "opacity", "sss", "wet", "sheen"]) if (spec[k] != null && typeof spec[k] !== "boolean" && !(spec[k] >= 0 && spec[k] <= 1)) throw new Error(`E3.define.material("${name}"): ${k} must be between 0 and 1`);
+    if (spec.ior != null && !(spec.ior >= 1 && spec.ior <= 3)) throw new Error(`E3.define.material("${name}"): ior must be between 1 and 3 (glass 1.5, water 1.333, diamond 2.42)`);
+    const { base, ...rest } = spec;
+    MATERIALS[name] = { ...(base ? MATERIALS[base] : {}), ...rest };
+    if (MATERIALS[name].color == null) MATERIALS[name].color = MATERIALS.porcelain.color;
+    return name;
+  }
+  function defineMatter(name, spec) {
+    checkKeys("E3.define.matter", name, spec, MATTER_KEYS);
+    const m = { ...(spec.base ? MATTER[spec.base] : {}), ...spec };
+    if (spec.base && !MATTER[spec.base]) throw new Error(`E3.define.matter("${name}"): unknown base "${spec.base}"; one of ${Object.keys(MATTER).join(", ")}`);
+    delete m.base;
+    if (!STYLES.includes(m.style)) throw new Error(`E3.define.matter("${name}"): style must be one of ${STYLES.join(", ")}`);
+    const motion = [m.gas ? "gas" : null, m.vt != null ? "vt" : null, m.rise != null ? "rise" : null].filter(Boolean);
+    if (motion.length !== 1 && m.drag == null) throw new Error(`E3.define.matter("${name}"): say how it moves: vt (terminal fall speed, m/s), rise (steady rise speed, m/s), or gas: true with temperature [birth, end] K and drag (1/s)`);
+    if (m.gas && !(Array.isArray(m.temperature) && m.temperature.length === 2)) throw new Error(`E3.define.matter("${name}"): a gas needs temperature: [birth K, end K]`);
+    for (const k of ["life", "size"]) if (!(Array.isArray(m[k]) && m[k].length === 2 && m[k].every(x => x > 0))) throw new Error(`E3.define.matter("${name}"): ${k} must be [min, max], positive (life in s, size in m)`);
+    m.bounce ??= 0; m.friction ??= 0.5;
+    MATTER[name] = m;
+    return name;
+  }
   function matterPreset(o) {
     const P = MATTER[o.matter];
     if (!P) throw new Error("E3.particles: unknown matter " + JSON.stringify(o.matter) + "; one of " + Object.keys(MATTER).join(", "));
@@ -3926,6 +3959,50 @@ void main() {
   // for drawing it: the light's outline projected onto a hemisphere of `radius` around the point,
   // and that patch flattened onto the hemisphere's base (where its area / (pi r²) is the share of
   // light the point gets).
+  function solidAngle(point, normal, light, o = {}) {
+    const n = v3.norm(normal), r = o.radius ?? 1, units = 1;
+    const L = lightRig({ lights: [{ power: 1, ...light }], units })[0];
+    const ring = [];
+    const K = 48;
+    if (L.t <= 1) {
+      const d = v3.sub(L.position, point), dl = v3.len(d), w = v3.scale(d, 1 / dl), sa = Math.min(1, (L.radius || dl * 0.01) / dl), ca = Math.sqrt(1 - sa * sa);
+      const t1 = v3.norm(v3.cross(Math.abs(w[0]) > 0.5 ? [0, 1, 0] : [1, 0, 0], w)), t2 = v3.cross(w, t1);
+      for (let i = 0; i < K; i++) { const a = (i / K) * Math.PI * 2; ring.push(v3.norm(v3.add(v3.scale(w, ca), v3.add(v3.scale(t1, sa * Math.cos(a)), v3.scale(t2, sa * Math.sin(a)))))); }
+    } else {
+      for (let i = 0; i < K; i++) {
+        let u, v;
+        if (L.t === 2) { const a = (i / K) * Math.PI * 2; u = Math.cos(a); v = Math.sin(a); }
+        else { const s = (i / K) * 4, e = Math.floor(s), f = s - e; [u, v] = [[-1 + 2 * f, -1], [1, -1 + 2 * f], [1 - 2 * f, 1], [-1, 1 - 2 * f]][e]; }
+        ring.push(v3.norm(v3.sub(v3.add(L.position, v3.add(v3.scale(L.U, u), v3.scale(L.V, v))), point)));
+      }
+    }
+    // Clip to the hemisphere above the surface: a direction below the horizon is pushed onto it.
+    const up = d => { const h = v3.dot(d, n); return h >= 0 ? d : v3.norm(v3.sub(d, v3.scale(n, h))); };
+    const dirs = ring.map(up);
+    const c = v3.norm(dirs.reduce((a, d) => v3.add(a, d), [0, 0, 0]));
+    // Integrate over the patch as a fan of thin spherical triangles (subdivided), for both measures.
+    let omega = 0, proj = 0;
+  function photons(scene, light, o = {}) {
+    const items = collect(scene), mats = new Map();
+    const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node, scene.look))); return m; };
+    const Tr = traceOf(scene, items, matOf);
+    const n = o.count ?? 200, seed = o.seed ?? 1, far = o.length ?? sceneBounds(items).radius * 4;
+    const pos = light.position ?? [0, 0, 0], out = [];
+    const dir0 = o.direction ? v3.norm(o.direction) : null, cone = o.cone ?? Math.PI;
+    for (let i = 0; i < n; i++) {
+      // Evenly spread directions (a Fibonacci sphere), or within a cone around `direction`.
+      const u = (i + 0.5) / n, phi = i * 2.399963229728653 + seed;
+      const cz = dir0 ? 1 - u * (1 - Math.cos(cone)) : 1 - 2 * u, sz = Math.sqrt(Math.max(0, 1 - cz * cz));
+      let d = [Math.cos(phi) * sz, Math.sin(phi) * sz, cz];
+      if (dir0) { const t1 = v3.norm(v3.cross(Math.abs(dir0[0]) > 0.5 ? [0, 1, 0] : [1, 0, 0], dir0)), t2 = v3.cross(dir0, t1); d = v3.add(v3.add(v3.scale(t1, d[0]), v3.scale(t2, d[1])), v3.scale(dir0, d[2])); }
+      let from = pos;
+      if (light.radius && !o.fromCenter) from = v3.add(pos, v3.scale(d, light.radius));
+      const h = traceCPU(Tr.bvh, from, d, far);
+      out.push({ from, to: h ? h.point : v3.add(from, v3.scale(d, far)), dir: d, hit: h });
+    }
+    return out;
+  }
+
   // ---------- WebGL renderer ----------
   let R = null;
   function compile(gl, vs, fs, varyings) {
