@@ -1133,7 +1133,7 @@
   // Hot gas gets Archimedes' lift on a parcel at its birth temperature in air at 293 K,
   // g (T - Ta) / T, fading as it mixes and cools, against an entrainment drag (1/s). Eddies are
   // the air's own swirl [speed m/s, size m, change rate], so a stiff tracer like dust rides them.
-  const UNITS = { m: 1, cm: 100, mm: 1000, km: 0.001 };
+  const UNITS = { m: 1, cm: 100, mm: 1000, km: 0.001, in: 39.37, ft: 3.281 };
   const MATTER = {
     smoke: { gas: true, style: "smoke", temperature: [600, 300], drag: 1.6, eddy: [0.9, 0.8, 0.35], life: [5, 9], size: [0.3, 2.4], opacity: 0.3, bounce: 0, friction: 0.05 },
     exhaust: { gas: true, style: "smoke", temperature: [1100, 320], drag: 0.9, eddy: [2.2, 3, 0.25], life: [6, 12], size: [1, 8], opacity: 0.26, bounce: 0, friction: 0.05 },
@@ -1199,7 +1199,8 @@
     const T = o.temperature ?? P.temperature, T0 = Array.isArray(T) ? T[0] : T;
     if (P.gas && T0) forces.buoyancy = G * u * Math.max(0, (T0 - (o.ambient ?? 293)) / T0);
     if (P.lift) forces.buoyancy = G * u * P.lift;
-    if (P.eddy) forces.turbulence = { strength: P.eddy[0] * u * Math.max(1, forces.drag), scale: P.eddy[1] * u, speed: P.eddy[2] };
+    // Air's own swirl, except for tracers in a given flow: they show that flow's streamlines exactly.
+    if (P.eddy && !(o.flow && o.matter === "air")) forces.turbulence = { strength: P.eddy[0] * u * Math.max(1, forces.drag), scale: P.eddy[1] * u, speed: P.eddy[2] };
     return { opts, forces, bounce: P.bounce ?? 0.2, friction: P.friction ?? 0.5 };
   }
   const PDEF = {
@@ -3728,10 +3729,119 @@ void main() {
     for (let i = 0; i < nt; i++) idx[i] = i;
     const nodes = new Float32Array(Math.max(2, 2 * nt) * 8);
     let count = 1;
+    const box = (s, e, arr0, arr1) => {
+      const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+      for (let i = s; i < e; i++) { const j = idx[i] * 3; for (let d = 0; d < 3; d++) { if (arr0[j + d] < mn[d]) mn[d] = arr0[j + d]; if (arr1[j + d] > mx[d]) mx[d] = arr1[j + d]; } }
+      return [mn, mx];
+    };
+    const area = (mn, mx) => { const x = mx[0] - mn[0], y = mx[1] - mn[1], z = mx[2] - mn[2]; return x > -1 ? 2 * (x * y + y * z + z * x) : 0; };
+    const stack = nt ? [[0, 0, nt]] : [];
+    if (!nt) nodes.set([0, 0, 0, 0, 0, 0, 0, 0]);
+    const BINS = 12;
+    while (stack.length) {
+      const [ni, s, e] = stack.pop();
+      const [mn, mx] = box(s, e, lo, hi);
+      nodes.set([mn[0], mn[1], mn[2], s, mx[0], mx[1], mx[2], e - s], ni * 8);
+      const n = e - s;
+      if (n <= 2) continue;
+      const [cmn, cmx] = box(s, e, cen, cen);
+      let axis = 0;
+      for (let d = 1; d < 3; d++) if (cmx[d] - cmn[d] > cmx[axis] - cmn[axis]) axis = d;
+      const ext = cmx[axis] - cmn[axis];
+      let mid = -1;
+      if (ext > 1e-12) {
+        const cnt = new Array(BINS).fill(0), bmn = [], bmx = [];
+        for (let b = 0; b < BINS; b++) { bmn.push([Infinity, Infinity, Infinity]); bmx.push([-Infinity, -Infinity, -Infinity]); }
+        const binOf = j => Math.min(BINS - 1, Math.floor(((cen[j * 3 + axis] - cmn[axis]) / ext) * BINS));
+        for (let i = s; i < e; i++) {
+          const j = idx[i], b = binOf(j);
+          cnt[b]++;
+          for (let d = 0; d < 3; d++) { bmn[b][d] = Math.min(bmn[b][d], lo[j * 3 + d]); bmx[b][d] = Math.max(bmx[b][d], hi[j * 3 + d]); }
+        }
+        let best = Infinity, split = -1;
+        for (let k = 1; k < BINS; k++) {
+          const a0 = [Infinity, Infinity, Infinity], a1 = [-Infinity, -Infinity, -Infinity], b0 = [Infinity, Infinity, Infinity], b1 = [-Infinity, -Infinity, -Infinity];
+          let nl = 0, nr = 0;
+          for (let b = 0; b < BINS; b++) {
+            const L = b < k, t0 = L ? a0 : b0, t1 = L ? a1 : b1;
+            if (!cnt[b]) continue;
+            if (L) nl += cnt[b]; else nr += cnt[b];
+            for (let d = 0; d < 3; d++) { t0[d] = Math.min(t0[d], bmn[b][d]); t1[d] = Math.max(t1[d], bmx[b][d]); }
+          }
+          if (!nl || !nr) continue;
+          const cost = nl * area(a0, a1) + nr * area(b0, b1);
+          if (cost < best) { best = cost; split = k; }
+        }
+        const leafCost = n * area(mn, mx);
+        if (split > 0 && (best < leafCost || n > 16)) {
+          let i = s, j = e - 1;
+          while (i <= j) { if (binOf(idx[i]) < split) i++; else { const tmp = idx[i]; idx[i] = idx[j]; idx[j] = tmp; j--; } }
+          mid = i;
+        } else if (n <= 16) continue;
+      } else if (n <= 16) continue;
+      if (mid <= s || mid >= e) mid = (s + e) >> 1;
+      const l = count;
+      count += 2;
+      nodes[ni * 8 + 3] = l; nodes[ni * 8 + 7] = 0;
+      stack.push([l, s, mid], [l + 1, mid, e]);
+    }
+    const tris = new Float32Array(Math.max(1, nt) * 12);
+    const triItem = new Int32Array(nt);
+    for (let k = 0; k < nt; k++) {
+      const j = idx[k];
+      tris.set([V0[j * 3], V0[j * 3 + 1], V0[j * 3 + 2], matI[j], E1[j * 3], E1[j * 3 + 1], E1[j * 3 + 2], cutF[j], E2[j * 3], E2[j * 3 + 1], E2[j * 3 + 2], 0], k * 12);
+      triItem[k] = itemI[j];
+    }
+    return { nodes: nodes.subarray(0, count * 8), tris, mats: new Float32Array(mats.length ? mats : [0, 0, 0, 0]), nNodes: count, nTris: nt, triItem, list };
+  }
+  // The same walk as the shader's trace(), on the CPU: { t, point, normal, node } or null.
   function traceCPU(B, o, d, tmax = Infinity, any = false, cut = null) {
     if (!B || !B.nTris) return null;
     const N = B.nodes, T = B.tris;
     const inv = d.map(x => 1 / (Math.abs(x) < 1e-12 ? 1e-12 : x));
+    const boxT = (i, best) => {
+      let t0 = 0, t1 = best;
+      for (let k = 0; k < 3; k++) {
+        const a = (N[i * 8 + k] - o[k]) * inv[k], b = (N[i * 8 + 4 + k] - o[k]) * inv[k];
+        t0 = Math.max(t0, Math.min(a, b)); t1 = Math.min(t1, Math.max(a, b));
+      }
+      return t0 <= t1 ? t0 : Infinity;
+    };
+    let best = tmax, hit = -1;
+    if (boxT(0, best) === Infinity) return null;
+    const stack = [0];
+    while (stack.length) {
+      const ni = stack.pop(), cnt = N[ni * 8 + 7];
+      if (cnt > 0) {
+        const first = N[ni * 8 + 3];
+        for (let j = first; j < first + cnt; j++) {
+          const q = j * 12, e1 = [T[q + 4], T[q + 5], T[q + 6]], e2 = [T[q + 8], T[q + 9], T[q + 10]];
+          const pv = v3.cross(d, e2), det = v3.dot(e1, pv);
+          if (Math.abs(det) < 1e-14) continue;
+          const tv = [o[0] - T[q], o[1] - T[q + 1], o[2] - T[q + 2]], u = v3.dot(tv, pv) / det;
+          if (u < 0 || u > 1) continue;
+          const qv = v3.cross(tv, e1), v = v3.dot(d, qv) / det;
+          if (v < 0 || u + v > 1) continue;
+          const t = v3.dot(e2, qv) / det;
+          if (t <= 1e-9 || t >= best) continue;
+          if (cut && T[q + 7] > 0.5 && v3.dot(v3.add(o, v3.scale(d, t)), cut) > cut[3]) continue;
+          best = t; hit = j;
+          if (any) break;
+        }
+        if (any && hit >= 0) break;
+      } else {
+        const l = N[ni * 8 + 3], r = l + 1, tl = boxT(l, best), tr = boxT(r, best);
+        if (tl <= tr) { if (tr < Infinity) stack.push(r); if (tl < Infinity) stack.push(l); }
+        else { if (tl < Infinity) stack.push(l); if (tr < Infinity) stack.push(r); }
+      }
+    }
+    if (hit < 0) return null;
+    const q = hit * 12;
+    let n = v3.norm(v3.cross([T[q + 4], T[q + 5], T[q + 6]], [T[q + 8], T[q + 9], T[q + 10]]));
+    if (v3.dot(n, d) > 0) n = v3.scale(n, -1);
+    return { t: best, point: v3.add(o, v3.scale(d, best)), normal: n, node: B.list[B.triItem[hit]]?.node ?? null };
+  }
+  // The scene's BVH, rebuilt only when a traced part moves, changes, or comes and goes.
   function traceOf(scene, items, matOf) {
     const list = items.filter(it => it.node.trace !== false && it.node.castShadow !== false && !it.node._light && matOf(it).kind === "opaque");
     let key = "";
@@ -3923,6 +4033,43 @@ void main() {
       [-13, 8, 3.5, 0.6], [-25, -40, 5, 0.75], [-15, 35, 4, 0.75], [10, 2, 4, 0.7], [45, 3, 4, 0.6], [56, 0, 4, 0.55],
       [30, -35, 8, 0.85], [12, -30, 7, 0.85], [-5, -25, 6, 0.75], [18, 10, 4, 0.8], [2, 20, 5, 0.85], [-2, 40, 4, 0.75], [40, -50, 6, 0.75], [-30, -20, 3.5, 0.6]];
     const RAYS = [[-43.3, -11.4, 1.0, 35], [9.6, -20.1, 0.65, 18], [8.1, -38, 0.45, 12], [-8.9, 61.1, 0.3, 10], [23.7, -47.4, 0.4, 10]];
+    const unit = (la, lo) => { const a = la * Math.PI / 180, b = lo * Math.PI / 180; return [Math.cos(a) * Math.sin(b), Math.sin(a), Math.cos(a) * Math.cos(b)]; };
+    const MU = MARIA.map(m => unit(m[0], m[1])), RU = RAYS.map(m => unit(m[0], m[1]));
+    const angU = (P, U) => Math.acos(Math.min(1, Math.max(-1, P[0] * U[0] + P[1] * U[1] + P[2] * U[2]))) * 180 / Math.PI;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const lat = 90 - (y + 0.5) / H * 180, lon = (x + 0.5) / W * 360 - 180;
+      const P = unit(lat, lon);
+      // Warp the maria's edges with noise, so they're ragged lowlands, not discs.
+      const wv = noised(P[0] * 4, P[1] * 4, P[2] * 4)[0] * 1.6 + noised(P[0] * 11, P[1] * 11, P[2] * 11)[0] * 0.8;
+      let mare = 0;
+      for (let m = 0; m < MARIA.length; m++) { const [, , r, k] = MARIA[m], dd = angU(P, MU[m]) + wv * r * 0.4; mare = Math.max(mare, k * (1 - Math.min(1, Math.max(0, (dd - r * 0.7) / (r * 0.6))))); }
+      const fine = noised(P[0] * 40, P[1] * 40, P[2] * 40)[0], mid = noised(P[0] * 12, P[1] * 12, P[2] * 12)[0];
+      let v = (0.74 + 0.07 * mid + 0.05 * fine) * (1 - mare) + (0.36 + 0.05 * mid + 0.03 * fine) * mare;
+      // Rays: thin bright streaks thrown out from young craters, patchy along their length.
+      for (let m = 0; m < RAYS.length; m++) {
+        const [, , k, len] = RAYS[m], dd = angU(P, RU[m]);
+        if (dd > len * 1.3) continue;
+        const U = RU[m], t1 = v3.norm(v3.cross(Math.abs(U[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0], U)), t2 = v3.cross(U, t1);
+        const az = Math.atan2(v3.dot(P, t2), v3.dot(P, t1));
+        const lane = (az / (Math.PI * 2) + 0.5) * 70, li = Math.floor(lane), f = lane - li;
+        const w = rndU(li, m, 3, 5), w2 = rndU(li + 1, m, 3, 5);
+        const streak = Math.pow(Math.max(0, (w * (1 - f) + w2 * f) - 0.55) * 2.2, 2) * (0.6 + 0.4 * noised(P[0] * 25, P[1] * 25, P[2] * 25 + m)[0]);
+        v += k * (0.45 * Math.exp(-dd / 1.2) + 0.32 * streak * Math.exp(-dd / (len * 0.45)) * Math.min(1, dd / 1.5));
+      }
+      const q = (y * W + x) * 4;
+      d[q] = d[q + 1] = d[q + 2] = Math.min(255, Math.max(0, v * 235)); d[q + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    // Craters: many small, few large; a slightly darker floor and a bright rim, faint at full Moon.
+    for (let i = 0; i < 1400; i++) {
+      const la = Math.asin(2 * rndU(i, 2, 0, 9) - 1) * 180 / Math.PI, lo = rndU(i, 3, 0, 9) * 360 - 180, r = 0.15 + 2.4 * Math.pow(rndU(i, 1, 0, 9), 4);
+      const cx = (lo + 180) / 360 * W, cy = (90 - la) / 180 * H, rx = r / 360 * W / Math.max(0.25, Math.cos(la * Math.PI / 180)), ry = r / 180 * H;
+      ctx.fillStyle = `rgba(0,0,0,${0.06 + 0.05 * rndU(i, 4, 0, 9)})`; ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = `rgba(255,255,255,${0.1 + 0.12 * rndU(i, 5, 0, 9)})`; ctx.lineWidth = Math.max(0.5, ry * 0.22); ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    moonCanvas = cv;
+    return cv;
+  }
   function moon(o = {}) {
     const r = o.radius ?? 1;
     const g = new Node(null, { name: o.name ?? "moon" });
@@ -4019,6 +4166,36 @@ void main() {
     const c = v3.norm(dirs.reduce((a, d) => v3.add(a, d), [0, 0, 0]));
     // Integrate over the patch as a fan of thin spherical triangles (subdivided), for both measures.
     let omega = 0, proj = 0;
+    const tri = (a, b, cc) => { const ab = v3.cross(a, b), num = v3.dot(ab, cc), den = 1 + v3.dot(a, b) + v3.dot(b, cc) + v3.dot(cc, a); return 2 * Math.atan2(Math.abs(num), den); };
+    for (let i = 0; i < K; i++) {
+      const a = dirs[i], b = dirs[(i + 1) % K];
+      for (let j = 0; j < 8; j++) {
+        const p0 = v3.norm(v3.lerp(c, a, j / 8)), p1 = v3.norm(v3.lerp(c, a, (j + 1) / 8)), q0 = v3.norm(v3.lerp(c, b, j / 8)), q1 = v3.norm(v3.lerp(c, b, (j + 1) / 8));
+        for (const [x, y, z] of [[p0, p1, q1], [p0, q1, q0]]) {
+          const w = tri(x, y, z), m = v3.norm(v3.add(v3.add(x, y), z));
+          omega += w; proj += w * Math.max(0, v3.dot(m, n));
+        }
+      }
+    }
+    // The patch as a mesh: rings from the center direction out to the outline, on the sphere
+    // ("cap") or dropped onto the base ("flat").
+    const fan = mode => {
+      const RINGS = 8, P = [], N = [], I = [];
+      const at = d => { const q = mode === "flat" ? v3.sub(d, v3.scale(n, v3.dot(d, n))) : d; return v3.add(point, v3.scale(q, r)); };
+      P.push(...at(c)); N.push(...n);
+      for (let j = 1; j <= RINGS; j++) for (let i = 0; i < K; i++) { const d = v3.norm(v3.lerp(c, dirs[i], j / RINGS)); P.push(...at(d)); N.push(...(mode === "flat" ? n : d)); }
+      const id = (j, i) => (j === 0 ? 0 : 1 + (j - 1) * K + (i % K));
+      for (let j = 0; j < RINGS; j++) for (let i = 0; i < K; i++) {
+        if (j === 0) I.push(0, id(1, i), id(1, i + 1), 0, id(1, i + 1), id(1, i));
+        else I.push(id(j, i), id(j + 1, i), id(j + 1, i + 1), id(j, i), id(j + 1, i + 1), id(j, i + 1), id(j, i), id(j + 1, i + 1), id(j + 1, i), id(j, i), id(j, i + 1), id(j + 1, i + 1));
+      }
+      return makeMesh(new Float32Array(P), new Float32Array(N), new Uint32Array(I));
+    };
+    return { omega, projected: proj, share: proj / Math.PI, cap: fan("cap"), disk: fan("flat"), outline: dirs.map(d => v3.add(point, v3.scale(d, r))), flat: dirs.map(d => v3.add(point, v3.scale(v3.sub(d, v3.scale(n, v3.dot(d, n))), r))) };
+  }
+
+  // Rays from a light, traced through the scene: [{ from, to, hit: { point, normal, node } | null }].
+  // For drawing photons as lines and marking where they land (view.project each end).
   function photons(scene, light, o = {}) {
     const items = collect(scene), mats = new Map();
     const matOf = it => { let m = mats.get(it.node); if (!m) mats.set(it.node, (m = resolveMaterial(it.node, scene.look))); return m; };
@@ -4605,8 +4782,9 @@ void main() {
   function particleSource(sys) {
     if (sys._mode === "cpu") {
       const G = particleCPUBuffer(sys), { gl } = R;
-      gl.bindBuffer(gl.ARRAY_BUFFER, G.buffer);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, sys._state);
+      // Upload only a state that changed since the last draw (a frame draws a system several times).
+      const key = `${sys._t}|${sys._n}|${sys._count}|${sys._sig}`;
+      if (G.src !== sys._state || G.key !== key) { gl.bindBuffer(gl.ARRAY_BUFFER, G.buffer); gl.bufferSubData(gl.ARRAY_BUFFER, 0, sys._state); G.src = sys._state; G.key = key; }
       return G.draw;
     }
     return sys._gpu.sets[sys._gpu.cur].draw;
@@ -4921,6 +5099,17 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     if (!X || X.d !== d || X.count !== sys.count) { if (X) X.destroy(); X = sys._x = xParticles(sys, d); X.n = null; }
     // The clock's bookkeeping (steps taken, settings, count, time) is the WebGPU state's own, so
     // transform feedback can keep its own and draw the frames before the first copy is back.
+    const swap = () => { for (const k of ["_n", "_sig", "_count", "_t"]) { const v = sys[k]; sys[k] = X[k]; X[k] = v; } };
+    let stepped = false;
+    swap();
+    try { sys.advanceWith(t, n, () => { X.pend = []; X.reset = true; }, tEnd => { X.pend.push(tEnd); stepped = true; }); } finally { swap(); }
+    if (stepped || X.reset) { X.flush(n); X.mirror(X._t, n); }
+    else if (!X.shown && !X.busy) X.mirror(X._t, n);
+    if (!X.shown) return false;
+    sys._state = X.shown; sys._t = X.shownT; sys._count = X.shownN;
+    return true;
+  }
+
   // ---------- volumetric media on the GPU ----------
   // `volume: true` (or options) on a "smoke" or "fire" system draws it as a medium (see the shaders).
   //   density   extinction scale [1]             erosion  how much billow noise eats the edges [0.6]
@@ -5714,7 +5903,8 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
       }
     }
 
-    // Composite with ink outlines into the canvas.
+    // Composite with ink outlines into the canvas, or, while a traced view refines, into its
+    // running average (each new frame weighted 1/(n+1)), which is then copied to the canvas.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, R.cw, R.ch);
     gl.clearColor(0, 0, 0, 0);
@@ -5871,10 +6061,13 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
       cut: cut ? [...v3.norm(cut.slice(0, 3)), cut[3] / v3.len(cut.slice(0, 3))] : null,
       // False for a point the section cut removed.
       kept: p => !cut || v3.dot(cut.slice(0, 3), p) <= cut[3],
-      // True when something opaque sits between the camera and p.
-      hidden(p) {
+      // True when something opaque sits between the camera and p. `self` (a node, or its name) is
+      // what the point belongs to: a label anchored inside a solid part isn't hidden by that part.
+      hidden(p, self = null) {
         const s = project(p), hit = pick([s[0], s[1]]);
-        return !!hit && hit.distance < v3.dist(ray([s[0], s[1]]).origin, p) - 1e-3 * C.distance;
+        if (!hit) return false;
+        if (self) for (let n = hit.node; n; n = n.parent) if (n === self || n.name === self) return false;
+        return hit.distance < v3.dist(ray([s[0], s[1]]).origin, p) - 1e-3 * C.distance;
       },
       eye: C.eye,
       target: C.target,
@@ -5996,6 +6189,12 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
   function waterGrid(g, n, far) {
     const [w, d] = g.size, ocean = g.mode === "ocean", round = g.shape === "round";
     const P = [], N = [], I = [];
+    const vert = (p, nn) => { P.push(...p); N.push(...nn); return P.length / 3 - 1; };
+    const tri = (a, b, c, up) => {
+      const A = P.slice(a * 3, a * 3 + 3), B = P.slice(b * 3, b * 3 + 3), C = P.slice(c * 3, c * 3 + 3);
+      const nn = v3.cross(v3.sub(B, A), v3.sub(C, A));
+      if (v3.dot(nn, up) < 0) I.push(a, c, b); else I.push(a, b, c);
+    };
     const at = (u, v) => {
       if (round) {
         // Concentric square-to-disk map (Shirley and Chiu), so cells stay even.
@@ -6050,6 +6249,29 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
   // line down the floor, and a stone coping around the top, a little above the water.
   function poolBasin(g, o) {
     const [w, d] = g.size, D = g.depth, u = g.units, t = 0.12 * u, free = o.freeboard ?? 0.1 * u, tile = o.tile ?? 0.125 * u;
+    const tiles = (cols, rows, lane) => {
+      if (typeof document === "undefined") return null;
+      const px = Math.max(8, Math.min(64, Math.floor(1536 / Math.max(cols, rows))));
+      const c = document.createElement("canvas"); c.width = cols * px; c.height = rows * px;
+      const x = c.getContext("2d");
+      for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+        const r = rndU(i + 1, j + 1, 7, 3), v = Math.round(206 + r * 14);
+        x.fillStyle = `rgb(${v - 6},${v},${v + 2})`; x.fillRect(i * px, j * px, px, px);
+      }
+      if (lane) { x.fillStyle = "#1f3046"; const lw = Math.max(2, Math.round(0.25 * u / tile)) * px; x.fillRect(Math.round(cols / 2) * px - lw / 2, px * 2, lw, (rows - 4) * px); }
+      x.fillStyle = "#7d8a91";
+      const gw = Math.max(1, px * 0.09);
+      for (let i = 0; i <= cols; i++) x.fillRect(i * px - gw / 2, 0, gw, rows * px);
+      for (let j = 0; j <= rows; j++) x.fillRect(0, j * px - gw / 2, cols * px, gw);
+      return c;
+    };
+    const tileMat = (map, mapping, box) => ({ color: "#ffffff", metal: 0, roughness: 0.22, clearcoat: 0.6, ...(map ? { map, mapping, mapBox: box } : {}) });
+    const nx = Math.ceil(w / tile), nz = Math.ceil(d / tile);
+    const floorMap = tiles(nx, nz, true);
+    g.add(mesh.box(w, t, d), { name: "pool floor", position: [0, -D - t / 2, 0], material: tileMat(floorMap, "planar", [-w / 2, -d / 2, nx * tile, nz * tile]) });
+    // Walls: meshes shifted so their local coordinates start at 0, which "box" mapping tiles from.
+    const H = D + free, span = Math.max(w, d) + 2 * t, K = Math.ceil(Math.max(span, H) / tile) + 1;
+    const wallMap = tiles(K, K, false);
     const wall = (sx, sz, px, pz, name) => g.add(mesh.transform(mesh.box(sx, H, sz), m4.translation([sx / 2, H / 2, sz / 2])), { name, position: [px - sx / 2, -D, pz - sz / 2], material: tileMat(wallMap, "box", [0, 0, K * tile, K * tile]) });
     wall(t, d + 2 * t, -w / 2 - t / 2, 0, "pool wall");
     wall(t, d + 2 * t, w / 2 + t / 2, 0, "pool wall");
@@ -6099,6 +6321,8 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
   // Wind ripples on a pool: rms height `ripples` (world units) spread over waves from about
   // `rippleLength` x 3 down to 40% of it. Returns [scale, k0, k1] for FS_WPOOL (and the CPU mirror).
   function waterAmbient(g, N) {
+    const rms = (g.ripples ?? 0) / g.units;
+    if (!(rms > 0)) return [0, 1, 1];
     const lam = (g.rippleLength ?? 0.08 * g.units) / g.units, k0 = (2 * Math.PI) / (lam * 3), k1 = (2 * Math.PI) / (lam / 2.5);
     const key = `${N}|${g.size}|${lam}`;
     if (g._ambKey !== key) {
