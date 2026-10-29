@@ -57,13 +57,39 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 </script>
 {kitUrls.map(u => <script is:inline defer src={u}></script>)}
 {kitUrls.length > 0 && <script is:inline>
-  // The kits load deferred (the page paints first); when they're in, the figure scripts run in page order.
+  // The kits load deferred (the page paints first); when they're in, the figure scripts run in page
+  // order, but only as far as the reader can see: the ones on and just below the first screen run
+  // at once, and the rest one at a time while the page is idle, or straight away (with everything
+  // before them) when the reader scrolls within a screen and a half of their figure. A long page
+  // then loads as fast as a short one. window.__safisRunFigures() runs the rest now (the checker).
   document.addEventListener("DOMContentLoaded", () => {
-    for (const old of document.querySelectorAll('script[type="text/safis-figure"]')) {
-      const s = document.createElement("script");
-      s.textContent = old.textContent;
-      old.replaceWith(s);
-    }
+    const queue = [...document.querySelectorAll('script[type="text/safis-figure"]')];
+    let next = 0;
+    const runTo = i => {
+      for (; next <= i && next < queue.length; next++) {
+        const old = queue[next], s = document.createElement("script");
+        s.textContent = old.textContent;
+        old.replaceWith(s);
+      }
+    };
+    window.__safisRunFigures = () => runTo(queue.length - 1);
+    // A script has no box; its figure (the element before it) or its parent stands in for it.
+    const anchor = s => s.previousElementSibling ?? s.parentElement;
+    const reach = innerHeight * 2;
+    let first = -1;
+    queue.forEach((s, i) => { if (anchor(s).getBoundingClientRect().top < reach) first = i; });
+    runTo(first);
+    if (next >= queue.length) return;
+    const near = new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) runTo(queue.findIndex(s => anchor(s) === e.target));
+    }, { rootMargin: "150% 0px" });
+    for (const s of queue.slice(next)) near.observe(anchor(s));
+    const idle = window.requestIdleCallback ?? (f => setTimeout(() => f({ timeRemaining: () => 10 }), 30));
+    const drip = d => {
+      do runTo(next); while (next < queue.length && d.timeRemaining() > 8);
+      if (next < queue.length) idle(drip, { timeout: 1500 }); else near.disconnect();
+    };
+    idle(drip, { timeout: 1500 });
   });
 </script>}
 <slot name="head" />

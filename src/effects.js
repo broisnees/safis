@@ -1473,8 +1473,23 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
   // `behind` until it gets there. A frame's ordinary steps (under 0.1 s of sim time) always run in
   // full, so a playing sim never drifts. Called from anywhere else, or while the page checker
   // runs, advance(t) gets all the way to t at once.
-  const STEP_BUDGET = 10;
+  const STEP_BUDGET = 8;
   let budgetFrom = -1e9;
+  // Sims that are behind keep catching up a slice a frame on their own, drawn or not, and the
+  // figures redraw when one gets there.
+  const lagging = new Set();
+  let pumping = false;
+  const pump = () => {
+    pumping = false;
+    const outer = window.__safisFrame;
+    window.__safisFrame = true;
+    let done = false;
+    try { for (const S of lagging) { S.advance(S.target); if (!S.behind) { lagging.delete(S); done = true; } } }
+    finally { window.__safisFrame = outer; }
+    if (done) window.dispatchEvent(new Event("safis:redraw"));
+    if (lagging.size) { pumping = true; requestAnimationFrame(pump); }
+  };
+  const lag = S => { lagging.add(S); if (!pumping && typeof requestAnimationFrame === "function") { pumping = true; requestAnimationFrame(pump); } };
   const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   const stepDeadline = () => {
     if (typeof window === "undefined" || !window.__safisFrame || document.documentElement.classList.contains("safis-checking")) return Infinity;
@@ -1502,6 +1517,7 @@ fn surf(c0: vec4<f32>, c1: vec4<f32>, x: f32, y: f32) -> vec3<f32> {
         }
         mark();
         S.behind = S.time + S.dt <= t + 1e-9;
+        if (S.behind) lag(S);
         return S;
       },
       warm(t) {

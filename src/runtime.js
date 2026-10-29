@@ -561,8 +561,12 @@
     try { fn(); return true; } catch (e) { fail(d, phase, e); return false; }
   }
 
+  // A figure's own code (its state, a control's change, its frame) runs "in a frame": simulations it
+  // steps keep to the per-frame budget (Fx), so a warm-up written into state() spreads over frames
+  // instead of holding up the page's load.
+  const inFrame = fn => { const outer = window.__safisFrame; window.__safisFrame = true; try { return fn(); } finally { window.__safisFrame = outer; } };
   const initialState = spec =>
-    typeof spec.state === "function" ? spec.state() : clone(spec.state ?? {});
+    typeof spec.state === "function" ? inFrame(() => spec.state()) : clone(spec.state ?? {});
 
   const node = (tag, cls, text) => {
     const e = document.createElement(tag);
@@ -1009,7 +1013,7 @@
     d.v[key] = v;
     entry.sync();
     syncProse(d, key);
-    if (d.spec.change) guard(d, "change", () => d.spec.change(key, d.s, d.v, d.handle));
+    if (d.spec.change) guard(d, "change", () => inFrame(() => d.spec.change(key, d.s, d.v, d.handle)));
     d.dirty = true;
   }
 
@@ -1470,7 +1474,10 @@
     d.canvas.style.height = `${h}px`;
     d.canvas.width = Math.round(w * dpr);
     d.canvas.height = Math.round(h * dpr);
-    render(d);
+    // A figure far from the screen draws when it comes near (the frame loop), not now: a page's
+    // load doesn't pay for 3D scenes nobody can see yet. The checker draws everything.
+    if (d.near || d.visible || document.documentElement.classList.contains("safis-checking")) render(d);
+    else d.dirty = true;
   }
 
   // A figure inside a <section class="band dark"> (or "band light") draws with that band's colors:
@@ -1485,11 +1492,11 @@
     return (d.band = out);
   }
   function render(d) {
-    const band = bandPalette(d), outer = window.__safisFrame;
-    const saved = band && { ...palette };
-    if (band) Object.assign(palette, band);
-    window.__safisFrame = true;
-    try { renderInner(d); } finally { window.__safisFrame = outer; if (band) Object.assign(palette, saved); }
+    const band = bandPalette(d);
+    if (!band) return inFrame(() => renderInner(d));
+    const saved = { ...palette };
+    Object.assign(palette, band);
+    try { inFrame(() => renderInner(d)); } finally { Object.assign(palette, saved); }
   }
   function renderInner(d) {
     d.dirty = false;
@@ -1567,8 +1574,7 @@
   function frame(now) {
     const dt = clamp((now - lastTime) / 1000, 0, 1 / 30);
     lastTime = now;
-    window.__safisFrame = true;
-    try { frameDemos(now, dt); } finally { window.__safisFrame = false; }
+    inFrame(() => frameDemos(now, dt));
     requestAnimationFrame(frame);
   }
   // Simulations stepped while this runs keep to a per-frame time budget (Fx), so a long warm-up
@@ -2070,5 +2076,7 @@
 
   const Safis = { demo, mount: demo, enhance, setTheme, version: 3, get palette() { return palette; }, typeset: root => window.SafisTeX?.typeset(root) };
   Object.assign(window, { demo, palette, rgba, clamp, lerp, smoothstep, TAU, Safis });
-  window.__explainer = { check, describe, drive, ids: () => demos.map(d => d.id), version: 3 };
+  // A page that runs its figure scripts lazily (the website) runs the rest first, so the checker sees every figure.
+  const all = fn => (...a) => { window.__safisRunFigures?.(); return fn(...a); };
+  window.__explainer = { check: all(check), describe: all(describe), drive: all(drive), ids: () => demos.map(d => d.id), version: 3 };
 })();
