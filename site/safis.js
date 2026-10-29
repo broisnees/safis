@@ -5303,8 +5303,29 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     }
     return view;
   }
+  // GPU memory held for one scene (its refinement buffer, its BVH textures) goes back when the
+  // scene hasn't drawn for a while: a long page keeps only what's on screen. They're rebuilt
+  // on the scene's next frame.
+  const live = new Set();
+  function trimIdle(now) {
+    if (now - (R.lastTrim ?? 0) < 4000) return;
+    R.lastTrim = now;
+    const { gl } = R;
+    for (const sc of live) {
+      if (now - (sc._usedAt ?? 0) < 20000) continue;
+      const A = sc._acc;
+      if (A && A.tex && A.gl === gl) { gl.deleteFramebuffer(A.fb); gl.deleteTexture(A.tex); A.tex = A.fb = null; A.n = 0; A.sig = null; }
+      const Tr = sc._trace;
+      if (Tr && Tr.gpu && Tr.gpu.gl === gl) { for (const t of [Tr.gpu.nodes, Tr.gpu.tris, Tr.gpu.mats]) gl.deleteTexture(t); Tr.gpu = null; }
+      live.delete(sc);
+    }
+  }
   function renderFrame(scene, cam = {}, cssW, cssH, outScale = 1, ss = 2) {
     renderer();
+    {
+      const t = typeof performance !== "undefined" ? performance.now() : Date.now();
+      scene._usedAt = t; live.add(scene); trimIdle(t);
+    }
     const { gl } = R;
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     const q = qualityFor(scene, cam, Math.max(1, Math.min(3, Math.round(ss))), now);
@@ -24566,6 +24587,8 @@ void main() {
     demos.push(d);
     byEl.set(el, d);
     visibility.observe(el);
+    nearby.observe(el);
+    keep.observe(el);
     reveal?.observe(el);
     // Resize on the next frame, not inside the observer: changing the canvas
     // height there would re-trigger the observer and log a loop error.
@@ -25337,7 +25360,10 @@ void main() {
       aspect = typeof d.spec.aspect === "function" ? d.spec.aspect(w) : d.spec.aspect ?? 1.6;
     })) return;
     const h = Math.round(w / aspect);
-    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    // Two device pixels per CSS pixel is as sharp as the eye resolves at reading distance, and
+    // a third would cost more than twice the memory.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (d.released) return;
     if (w === d.w && h === d.h && dpr === d.dpr) return;
     Object.assign(d, { w, h, dpr });
     d.canvas.style.height = `${h}px`;
@@ -25394,6 +25420,28 @@ void main() {
     }
   }, { rootMargin: "200px 0px" });
 
+  // Figures draw about a screen before they scroll into view, so they're ready when they arrive
+  // (no blank frame while a 3D scene builds); figures more than three screens away give back their
+  // canvas memory, and get it again (and a fresh frame) as the reader comes back.
+  const nearby = new IntersectionObserver(entries => {
+    for (const e of entries) { const d = byEl.get(e.target); if (d) { d.near = e.isIntersecting; if (d.near) d.dirty = true; } }
+  }, { rootMargin: "120% 0px" });
+  const keep = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      const d = byEl.get(e.target);
+      if (!d || d.broken) continue;
+      // The page checker drives every figure wherever it is, so nothing is released while it runs.
+      if (!e.isIntersecting && !d.released && d.w && !document.documentElement.classList.contains("safis-checking")) {
+        d.released = true;
+        d.canvas.width = d.canvas.height = 1;
+      } else if (e.isIntersecting && d.released) {
+        d.released = false;
+        d.w = 0;
+        resize(d);
+      }
+    }
+  }, { rootMargin: "300% 0px" });
+
   // Figures settle in the first time they scroll into view (theme.css, .safis-reveal).
   // Apps that host figures (window.__safisHost) keep their own motion.
   const reveal = window.__safisHost ? null : new IntersectionObserver(entries => {
@@ -25401,7 +25449,13 @@ void main() {
   }, { threshold: 0.12 });
   if (reveal) document.documentElement.classList.add("safis-reveal");
   // The checker and screenshot tools drive the page; show every figure at rest for them.
-  const checking = () => document.documentElement.classList.add("safis-checking");
+  const checking = () => {
+    const r = document.documentElement;
+    if (r.classList.contains("safis-checking")) return;
+    r.classList.add("safis-checking");
+    // Give released canvases back their memory: the checker reads every figure.
+    for (const d of demos) if (d.released) { d.released = false; d.w = 0; resize(d); }
+  };
 
   let lastTime = performance.now();
   function frame(now) {
@@ -25429,7 +25483,7 @@ void main() {
         if (guard(d, "step", () => d.spec.step(dt * d.speed, d.s, d.v, d.handle))) d.dirty = true;
       }
       if (d.pulse && d.visible) d.dirty = true;
-      if (d.dirty && (d.visible || !d.w)) render(d);
+      if (d.dirty && !d.released && (d.visible || d.near || !d.w)) render(d);
     }
     requestAnimationFrame(frame);
   }
