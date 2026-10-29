@@ -27,10 +27,15 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 <meta property="og:site_name" content="Safis">
 {ogImage && <meta property="og:image" content={new URL(ogImage, Astro.site)}>}
 <meta name="twitter:card" content={ogImage ? "summary_large_image" : "summary"}>
-<meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#000000">
 <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml">
 <link rel="sitemap" href={`${base}sitemap-index.xml`}>
+<style is:inline>
+  /* The page's color from the first frame, before the stylesheet arrives: no light flash, no gray. */
+  html { background: #000; color-scheme: dark; }
+  html[data-theme="light"] { background: #fcfcfc; color-scheme: light; }
+  @media (prefers-color-scheme: light) { html[data-theme-mode="auto"] { background: #fcfcfc; color-scheme: light; } }
+</style>
 <link rel="preload" href={fonts["serif-text.woff2"]} as="font" type="font/woff2" crossorigin>
 <link rel="preload" href={fonts["sans.woff2"]} as="font" type="font/woff2" crossorigin>
 <script is:inline>
@@ -46,9 +51,21 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     } catch {}
     if (mode !== "auto") r.setAttribute("data-theme", mode);
     r.dataset.themeMode = mode;
+    const light = mode === "light" || (mode === "auto" && matchMedia("(prefers-color-scheme: light)").matches);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", light ? "#fcfcfc" : "#000000");
   })();
 </script>
-{kitUrls.map(u => <script is:inline src={u}></script>)}
+{kitUrls.map(u => <script is:inline defer src={u}></script>)}
+{kitUrls.length > 0 && <script is:inline>
+  // The kits load deferred (the page paints first); when they're in, the figure scripts run in page order.
+  document.addEventListener("DOMContentLoaded", () => {
+    for (const old of document.querySelectorAll('script[type="text/safis-figure"]')) {
+      const s = document.createElement("script");
+      s.textContent = old.textContent;
+      old.replaceWith(s);
+    }
+  });
+</script>}
 <slot name="head" />
 </head>
 <body>

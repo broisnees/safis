@@ -5,7 +5,10 @@ import Site from "../layouts/Site.astro";
 import Card from "../components/Card.astro";
 import Cmd from "../components/Cmd.astro";
 import pages from "../generated/pages.json";
-import hero from "../figures/hero.html?raw";
+import heroRaw from "../figures/hero.html?raw";
+import { inertFigures } from "../lib/figures";
+const hero = inertFigures(heroRaw);
+
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 const newest = [...pages].sort((a, b) => b.added - a.added).slice(0, 3);
@@ -24,6 +27,8 @@ const install = "npx skills add broisnees/safis -g";
         <a class="btn" href={`${base}usage/`}>Install</a>
       </div>
     </div>
+    <div class="wrap hero-fig"><Fragment set:html={hero} /></div>
+    <p class="wrap hero-cap"><span>Live figure</span> A kerosene rocket engine, firing. Drag to turn it, or cut it open to see the flame inside.</p>
   </section>
 
   <section class="sec">

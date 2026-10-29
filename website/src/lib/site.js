@@ -22,7 +22,9 @@ function setTheme(mode) {
   if (mode === "light" || mode === "dark") root.dataset.theme = mode; else delete root.dataset.theme;
   void getComputedStyle(document.body).opacity;
   requestAnimationFrame(() => still.remove());
-  try { if (mode === "auto") localStorage.removeItem(KEY); else localStorage.setItem(KEY, mode); } catch {}
+  try { if (mode === "dark") localStorage.removeItem(KEY); else localStorage.setItem(KEY, mode); } catch {}
+  const light = mode === "light" || (mode === "auto" && matchMedia("(prefers-color-scheme: light)").matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", light ? "#fcfcfc" : "#000000");
   syncTheme();
 }
 for (const b of document.querySelectorAll(".sbar .theme-toggle")) {

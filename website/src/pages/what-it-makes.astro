@@ -3,9 +3,14 @@
 // explainer, or (where no explainer uses it yet) a live figure from the references.
 import Site from "../layouts/Site.astro";
 import Shot from "../components/Shot.astro";
-import axis from "../figures/axis.html?raw";
-import burner from "../figures/burner.html?raw";
-import bend from "../figures/bend.html?raw";
+import axisRaw from "../figures/axis.html?raw";
+import burnerRaw from "../figures/burner.html?raw";
+import bendRaw from "../figures/bend.html?raw";
+import { inertFigures } from "../lib/figures";
+const axis = inertFigures(axisRaw);
+const burner = inertFigures(burnerRaw);
+const bend = inertFigures(bendRaw);
+
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 type Kind = { id: string; title: string; text: string[]; list?: string[]; shot?: [string, string]; live?: string; cap?: string; seen: [string, string][] };
 const KINDS: Kind[] = [
@@ -29,29 +34,37 @@ const KINDS: Kind[] = [
 <Site figures title="What it makes · Safis" description="Every kind of figure the Safis skill makes: 2D figures, plots, simulations, 3D with real materials, machines from real parts, smoke and flame, maps, optics, sound, effects, diagrams, and research furniture." current="what-it-makes" kits={["iso", "effects", "optics"]}>
   <header class="phead">
     <div class="wrap">
-      <p class="eyebrow">What it makes</p>
-      <h1>Every idea gets a figure you can <em>move</em>.</h1>
-      <p class="lede-x">A page has an abstract, numbered sections, and about 25 figures woven into the prose. These are the kinds of figures it draws them from. Every picture here is a real figure: captured from an explainer, or running live.</p>
-      <nav class="kinds-nav" aria-label="Kinds of figures">{KINDS.map(k => <a href={`#${k.id}`}>{k.title}</a>)}</nav>
+      <h1>Every idea gets a figure you can move</h1>
+      <p class="lede-x">A page has an abstract, numbered sections, and about 25 figures woven into the prose. These are the kinds of figures it draws on. Every picture here is a real figure, captured from an explainer or running live.</p>
     </div>
   </header>
-  <div class="wrap">
-    {KINDS.map((k, i) => (
-      <section class="kind-x" id={k.id}>
-        <div>
-          <p class="k-n">{String(i + 1).padStart(2, "0")}</p>
-          <h2>{k.title}</h2>
-          {k.text.map(t => <p>{t}</p>)}
-          {k.list && <ul class="checks">{k.list.map(l => <li>{l}</li>)}</ul>}
-          {k.seen.length > 0 && <p class="seen">Seen in {k.seen.map(([s, t], j) => <Fragment>{j > 0 && (j === k.seen.length - 1 ? " and " : ", ")}<a href={`${base}${s}/`}>{t}</a></Fragment>)}.</p>}
-          {k.live && <p class="seen">A live figure from the skill's references.</p>}
-        </div>
-        <div class="kind-media">
-          {k.shot && <Fragment><a href={`${base}${k.seen[0][0]}/`} aria-label={`Open ${k.seen[0][1]}`}><Shot name={k.shot[0]} alt={k.shot[1]} eager={i < 2} /></a><p class="cap">{k.shot[1]}</p></Fragment>}
-          {k.live && <div class="live"><Fragment set:html={k.live} /></div>}
-        </div>
-      </section>
-    ))}
-    <div class="ctas" style="margin-top: 56px"><a class="btn solid" href={`${base}usage/`}>Ask for one <span class="arr">→</span></a><a class="btn" href={`${base}examples/`}>Read the explainers</a></div>
+  <div class="wrap kinds-x">
+    <nav class="kinds-nav" aria-label="Kinds of figures">{KINDS.map(k => <a href={`#${k.id}`} data-kind={k.id}>{k.title}</a>)}</nav>
+    <div>
+      {KINDS.map((k, i) => (
+        <section class="kind-x" id={k.id}>
+          <div class="kt">
+            <h2>{k.title}</h2>
+            <div>
+              {k.text.map(t => <p>{t}</p>)}
+              {k.list && <ul class="checks">{k.list.map(l => <li>{l}</li>)}</ul>}
+              {k.seen.length > 0 && <p class="seen">Seen in {k.seen.map(([s, t], j) => <Fragment>{j > 0 && (j === k.seen.length - 1 ? " and " : ", ")}<a href={`${base}${s}/`}>{t}</a></Fragment>)}.</p>}
+              {k.live && <p class="seen">A live figure from the skill's references.</p>}
+            </div>
+          </div>
+          <div class="kind-media">
+            {k.shot && <Fragment><a href={`${base}${k.seen[0][0]}/`} aria-label={`Open ${k.seen[0][1]}`}><Shot name={k.shot[0]} alt={k.shot[1]} eager={i < 2} /></a><p class="cap">{k.shot[1]}</p></Fragment>}
+            {k.live && <div class="live"><Fragment set:html={k.live} /></div>}
+          </div>
+        </section>
+      ))}
+    </div>
   </div>
+  <section class="sec">
+    <div class="wrap cta-x">
+      <h2>Ask for one</h2>
+      <p>Name what you want to understand; the skill picks the figures.</p>
+      <div class="ctas"><a class="btn solid" href={`${base}usage/`}>How to use it</a><a class="btn" href={`${base}examples/`}>Read the explainers</a></div>
+    </div>
+  </section>
 </Site>

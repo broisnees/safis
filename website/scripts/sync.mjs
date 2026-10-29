@@ -99,8 +99,10 @@ const KIT_TESTS = {
 };
 export function kitsFor(code) {
   const k = Object.keys(KIT_TESTS).filter(n => KIT_TESTS[n].test(code));
-  if ((k.includes("parts3d") || k.includes("bio3d")) && !k.includes("engine3d")) k.unshift("engine3d");
-  return k;
+  // bio3d builds on parts3d (its assemblies are E3.parts assemblies), and both on engine3d.
+  if (k.includes("bio3d") && !k.includes("parts3d")) k.push("parts3d");
+  if ((k.includes("parts3d") || k.includes("bio3d")) && !k.includes("engine3d")) k.push("engine3d");
+  return Object.keys(KIT_TESTS).filter(n => k.includes(n));
 }
 
 // Each figure's aspect ratio at a phone and a desktop width, read from its spec's
@@ -208,7 +210,9 @@ for (const entry of await readdir(site, { withFileTypes: true })) {
     .replace(/href="\.\.\/index\.html"/g, `href="${base}"`)
     .trim();
   const prose = body.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
-  const finished = finishArticle(body);
+  // Figure scripts wait as inert blocks; the layout runs them in order once the deferred kits are in,
+  // so the article's text paints at once instead of after every kit has downloaded.
+  const finished = finishArticle(body).replace(/<script>([\s\S]*?)<\/script>/g, (m, js) => `<script type="text/safis-figure">${js}</script>`);
   const thumb = existsSync(path.join(site, slug, "thumb.webp")), thumbDark = existsSync(path.join(site, slug, "thumb-dark.webp"));
   if (thumb || thumbDark) await mkdir(path.join(web, "public", slug), { recursive: true });
   if (thumb) await copyFile(path.join(site, slug, "thumb.webp"), path.join(web, "public", slug, "thumb.webp"));
