@@ -115,12 +115,34 @@
     const font = (o, fallback = fontText) => `${o.italic ? "italic " : ""}${o.weight ?? 500} ${o.size ?? 14}px ${o.font === "mono" ? fontMono : o.font === "serif" ? fontSerif : o.font ?? fallback}`;
     const textWidth = (str, o) => { ctx.save(); ctx.font = font(o); if ("letterSpacing" in ctx && o.tracking) ctx.letterSpacing = `${o.tracking}px`; const w = ctx.measureText(String(str)).width; ctx.restore(); return w; };
 
+    // Straight lines, box edges and text baselines land on whole device pixels, the way the
+    // browser places borders and text. Unsnapped, a 1 px line at 125% zoom covers 1.25 device
+    // pixels at a fractional offset and smears across two or three rows of gray.
+    const grid = () => {
+      const m = ctx.getTransform();
+      return m.b || m.c || !m.a || !m.d ? null : m;
+    };
+    // A coordinate on axis (scale k, offset e): the centre of a stroke `dev` device pixels wide
+    // sits on a pixel centre when dev is odd and on a pixel edge when it is even. dev 0 snaps an edge.
+    const snapTo = (v, k, e, dev) => {
+      const p = v * k + e;
+      return ((dev % 2 ? Math.floor(p) + 0.5 : Math.round(p)) - e) / k;
+    };
     const g = {
       ctx, w: 0, h: 0, dpr: 1, color, rgba, mix,
       // True on a dark page (or in a dark band). Its black is then every figure's backdrop:
       // paint a scene's own dark sky only when this is false.
       get dark() { return util.dark; },
       line(a, b, o = {}) {
+        const m = grid();
+        if (m && (a[0] === b[0] || a[1] === b[1])) {
+          const along = a[1] === b[1];
+          const k = along ? m.d : m.a;
+          const dev = Math.max(1, Math.round((o.width ?? 2) * k));
+          if (along) { const y = snapTo(a[1], m.d, m.f, dev); a = [a[0], y]; b = [b[0], y]; }
+          else { const x = snapTo(a[0], m.a, m.e, dev); a = [x, a[1]]; b = [x, b[1]]; }
+          o = { ...o, width: dev / k };
+        }
         shape({ stroke: "ink", ...o }, () => { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); });
       },
       // A list of points, or a list of rings (shapes with holes: pair with fillRule: "evenodd").
@@ -146,6 +168,16 @@
         shape(o.fill || o.stroke || o.hatch ? o : { ...o, fill: "ink" }, () => ctx.arc(c[0], c[1], Math.max(0, r), 0, TAU));
       },
       rect(x, y, w, h, o = {}) {
+        const m = grid();
+        if (m && w > 0 && h > 0) {
+          // Edges on pixel boundaries for a fill; on the stroke's own centre line for an outline.
+          const devX = o.stroke ? Math.max(1, Math.round((o.width ?? 2) * m.a)) : 0;
+          const devY = o.stroke ? Math.max(1, Math.round((o.width ?? 2) * m.d)) : 0;
+          const x0 = snapTo(x, m.a, m.e, devX), x1 = snapTo(x + w, m.a, m.e, devX);
+          const y0 = snapTo(y, m.d, m.f, devY), y1 = snapTo(y + h, m.d, m.f, devY);
+          if (x1 > x0 && y1 > y0) { x = x0; y = y0; w = x1 - x0; h = y1 - y0; }
+          if (o.stroke) o = { ...o, width: devX / m.a };
+        }
         shape(o.fill || o.stroke || o.hatch ? o : { ...o, fill: "ink" }, () => {
           if (o.r && ctx.roundRect) ctx.roundRect(x, y, w, h, o.r); else ctx.rect(x, y, w, h);
         });
@@ -182,6 +214,8 @@
         ctx.textAlign = o.align ?? "center";
         ctx.textBaseline = o.baseline ?? "middle";
         const s = o.caps ? String(str).toUpperCase() : String(str);
+        const m = grid();
+        if (m) p = [snapTo(p[0], m.a, m.e, 0), snapTo(p[1], m.d, m.f, 0)];
         if (o.halo) {
           ctx.lineWidth = o.haloWidth ?? 4;
           ctx.lineJoin = "round";
