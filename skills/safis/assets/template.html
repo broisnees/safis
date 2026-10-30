@@ -26134,8 +26134,16 @@ void main() {
     reveal?.observe(el);
     // Resize on the next frame, not inside the observer: changing the canvas
     // height there would re-trigger the observer and log a loop error.
-    d.resizer = new ResizeObserver(() => { d.needsResize = true; });
+    d.resizer = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const box = e.target === d.canvas && e.devicePixelContentBoxSize?.[0];
+        if (box) d.devicePx = [box.inlineSize, box.blockSize];
+      }
+      d.needsResize = true;
+    });
     d.resizer.observe(stage);
+    // Also fires when only the zoom changes, which leaves the stage's CSS size alone.
+    try { d.resizer.observe(d.canvas, { box: "device-pixel-content-box" }); } catch { /* Safari: estimate instead */ }
     if (document.readyState !== "loading") queueMicrotask(() => enhance(document));
     return d.handle;
   }
@@ -26926,22 +26934,32 @@ void main() {
 
   // ---------- Drawing loop ----------
   function resize(d) {
-    const w = Math.round(d.canvas.parentElement.clientWidth);
+    // Unrounded: a column sized in rem is often a fraction of a pixel wide, and a backing store
+    // sized from a rounded width gets stretched by that fraction, which blurs every frame.
+    const w = d.canvas.parentElement.getBoundingClientRect().width;
     if (!w || d.broken) return;
     let aspect = 1.6;
     if (!guard(d, "aspect", () => {
       aspect = typeof d.spec.aspect === "function" ? d.spec.aspect(w) : d.spec.aspect ?? 1.6;
     })) return;
     const h = Math.round(w / aspect);
-    // Two device pixels per CSS pixel is as sharp as the eye resolves at reading distance, and
-    // a third would cost more than twice the memory.
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // Up to three device pixels per CSS pixel: phones are 3x, and below that their text and lines
+    // come out soft.
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
     if (d.released) return;
-    if (w === d.w && h === d.h && dpr === d.dpr) return;
-    Object.assign(d, { w, h, dpr });
+    // The browser's own count of the device pixels the canvas covers (Chrome, Firefox) is exact at
+    // any zoom; w × dpr is off by a fraction at 110% or 125%, and the browser then resamples the
+    // whole canvas to fit. Use it while it still describes this size (it lags a height change).
+    const dev = d.devicePx;
+    const fresh = dev && dpr <= (window.devicePixelRatio || 1) && Math.abs(dev[0] - w * dpr) < 2 && Math.abs(dev[1] - h * dpr) < 2;
+    const bw = fresh ? dev[0] : Math.round(w * dpr);
+    const bh = fresh ? dev[1] : Math.round(h * dpr);
+    if (w === d.w && h === d.h && bw === d.canvas.width && bh === d.canvas.height) return;
+    // dpr and dprY are the exact scales from CSS pixels to backing pixels on each axis.
+    Object.assign(d, { w, h, dpr: bw / w, dprY: bh / h });
     d.canvas.style.height = `${h}px`;
-    d.canvas.width = Math.round(w * dpr);
-    d.canvas.height = Math.round(h * dpr);
+    d.canvas.width = bw;
+    d.canvas.height = bh;
     // A figure far from the screen draws when it comes near (the frame loop), not now: a page's
     // load doesn't pay for 3D scenes nobody can see yet. The checker draws everything.
     if (d.near || d.visible || document.documentElement.classList.contains("safis-checking")) render(d);
@@ -26978,7 +26996,7 @@ void main() {
     ctx.fillStyle = color(d.spec.background ?? "panel");
     ctx.fillRect(0, 0, d.canvas.width, d.canvas.height);
     ctx.globalCompositeOperation = "source-over";
-    ctx.setTransform(d.dpr, 0, 0, d.dpr, 0, 0);
+    ctx.setTransform(d.dpr, 0, 0, d.dprY ?? d.dpr, 0, 0);
     const interacting = !!(d.orbiting || d.dragging || d.spin || d.zoomEase || d.tweens.size || (d.playing && d.spec.step));
     Object.assign(d.g, { w: d.w, h: d.h, dpr: d.dpr, time: performance.now() / 1000, touched: d.touched, highlight: d.highlight, interacting, quality: d.spec.quality, wantsFrame: false, busy: false, views3d: [] });
     guard(d, "draw", () => d.spec.draw(d.g, d.s, d.v, d.handle));
