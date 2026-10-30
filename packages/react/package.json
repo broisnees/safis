@@ -1,6 +1,6 @@
 {
   "name": "@safis/react",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "React components for safis interactive figures.",
   "type": "module",
   "main": "./index.js",
@@ -22,7 +22,7 @@
     "react": ">=18"
   },
   "dependencies": {
-    "@safis/core": "^0.4.0"
+    "@safis/core": "^0.4.1"
   },
   "license": "MIT",
   "repository": {

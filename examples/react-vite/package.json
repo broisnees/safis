@@ -9,10 +9,10 @@
     "deploy": "npm run build && npx -y wrangler@4 deploy"
   },
   "dependencies": {
-    "@safis/react": "^0.4.0",
+    "@safis/react": "^0.4.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "@safis/core": "^0.4.0"
+    "@safis/core": "^0.4.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.1.2",

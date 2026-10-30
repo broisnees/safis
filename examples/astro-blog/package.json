@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "@astrojs/mdx": "^8.1.1",
-    "@safis/astro": "^0.4.0",
+    "@safis/astro": "^0.4.1",
     "astro": "^7.4.2",
-    "@safis/core": "^0.4.0"
+    "@safis/core": "^0.4.1"
   }
 }

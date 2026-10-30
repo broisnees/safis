@@ -1,6 +1,6 @@
 {
   "name": "@safis/core",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Interactive explainer figures: a 2D canvas runtime with instrument-like controls, a small WebGL engine, TeX math, and a plotting kit, styled like a science book.",
   "type": "module",
   "main": "./dist/safis.js",

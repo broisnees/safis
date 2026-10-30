@@ -1,6 +1,6 @@
 {
   "name": "@safis/vue",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Vue 3 components for safis interactive figures.",
   "type": "module",
   "main": "./index.js",
@@ -22,7 +22,7 @@
     "vue": ">=3.3"
   },
   "dependencies": {
-    "@safis/core": "^0.4.0"
+    "@safis/core": "^0.4.1"
   },
   "license": "MIT",
   "repository": {
