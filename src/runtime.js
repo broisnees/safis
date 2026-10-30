@@ -1901,7 +1901,9 @@
   }
 
   function enhanceArticle() {
-    const article = document.querySelector("article");
+    // Inside an app the host's own <article> is not ours to touch: adding anchors to its headings
+    // before the framework hydrates is a hydration mismatch. Only an <Explainer> article is.
+    const article = document.querySelector(window.__safisHost ? "article.safis" : "article");
     if (!article || article.dataset.enhanced) return;
     article.dataset.enhanced = "1";
     // Section anchors
