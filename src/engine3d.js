@@ -858,50 +858,167 @@
   // Still frames (and the page checker) always get the full shadow and volume quality;
   // particle counts follow the tier so a paused figure doesn't change its smoke. Systems
   // that measure, run on the CPU, or hold a fixed population (gas molecules) keep every slot.
+  // `trace` scales how many still frames a traced scene refines over; `budget` is the most
+  // device pixels a still frame renders (the runtime drops its supersampling above it).
   const TIERS = {
-    low: { rank: 0, ss: 1, scale: 0.75, msaa: 4, shadow: 1024, particles: 0.35, steps: 22, bloom: true, vsteps: 36, vscale: 0.33 },
-    medium: { rank: 1, ss: 2, scale: 1, msaa: 4, shadow: 1536, particles: 0.6, steps: 32, bloom: true, vsteps: 56, vscale: 0.5 },
-    high: { rank: 2, ss: 3, scale: 1, msaa: 4, shadow: 2048, particles: 1, steps: 48, bloom: true, vsteps: 88, vscale: 0.5 },
+    low: { rank: 0, ss: 1, scale: 0.75, msaa: 4, shadow: 1024, particles: 0.35, steps: 22, bloom: true, vsteps: 36, vscale: 0.33, trace: 0.17, budget: 3.2e6 },
+    medium: { rank: 1, ss: 2, scale: 1, msaa: 4, shadow: 1536, particles: 0.6, steps: 32, bloom: true, vsteps: 56, vscale: 0.5, trace: 0.5, budget: 6e6 },
+    high: { rank: 2, ss: 3, scale: 1, msaa: 4, shadow: 2048, particles: 1, steps: 48, bloom: true, vsteps: 88, vscale: 0.5, trace: 1, budget: 1.05e7 },
+    // A software renderer (SwiftShader, llvmpipe: the GPU is blocklisted or acceleration is off),
+    // or a GPU that just ran a frame long enough to risk a reset. Every frame here is CPU time in
+    // the browser's one GPU process, which every tab shares, so this draws as little as it can.
+    soft: { rank: 0, ss: 1, scale: 0.5, msaa: 0, shadow: 512, particles: 0.2, steps: 12, bloom: false, vsteps: 16, vscale: 0.25, trace: 0.08, budget: 4e5 },
   };
   const TIER_NAMES = ["low", "medium", "high"];
-  const Q = { rank: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null };
+  // rank: the tier while the view moves, from the time between frames. still: the tier for settled
+  // frames, from the GPU's own time per frame (fences, below). soft: a software renderer. gpuMs: the
+  // last measured frame. panic: a frame ran long enough to risk the driver resetting the GPU (which
+  // takes every tab down with it), so even a forced tier renders low until frames prove quick again.
+  const Q = { rank: null, still: null, ema: 16.7, last: 0, quickSince: 0, downAt: -1e9, forced: null, soft: false, gpu: "", gpuMs: 0, panic: false, stillQuick: 0, stillDownAt: -1e9, fences: [], log: [], frames: 0 };
+  // What the GPU's name says about it: a software renderer or a mobile or thin integrated chip
+  // starts low, a desktop integrated chip (or one this code doesn't know) in the middle, a discrete
+  // card or Apple silicon high. Frame timing moves it from there.
+  function gpuRank(gl) {
+    let name = "";
+    try {
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      name = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) ?? "");
+    } catch {}
+    Q.gpu = name;
+    const n = name.toLowerCase();
+    if (/swiftshader|llvmpipe|softpipe|software|basic render/.test(n)) { Q.soft = true; return 0; }
+    if (/mali|adreno|powervr|videocore|apple a\d\b/.test(n)) return 0;
+    if (/intel/.test(n)) return /\barc\b|iris(\(r\))? xe/.test(n) ? 1 : 0;
+    if (/geforce mx|geforce gt \d|quadro [kp]\d{3}\b/.test(n)) return 1;
+    if (/nvidia|geforce|quadro|rtx/.test(n)) return 2;
+    if (/radeon (rx|pro|vii)|rx \d{3,4}/.test(n)) return 2;
+    if (/radeon|vega|amd/.test(n)) return 1;
+    if (/apple m\d|apple gpu/.test(n)) return 2;
+    return 1;
+  }
   function startRank() {
+    let rank = 2;
     try {
       const coarse = matchMedia("(pointer: coarse)").matches;
       const small = Math.min(screen.width, screen.height) < 600;
-      return coarse ? (small ? 0 : 1) : 2;
-    } catch { return 2; }
+      if (coarse) rank = small ? 0 : 1;
+      if (R) rank = Math.min(rank, gpuRank(R.gl));
+      if (navigator.deviceMemory <= 4) rank = Math.min(rank, 1);
+    } catch {}
+    return rank;
   }
   const checking = () => typeof document !== "undefined" && document.documentElement.classList.contains("safis-checking");
   // Picks the tier for this frame. `moving` frames come in a stream (< 250 ms apart) or at
   // ss 1, which the page asks for while the reader drags on a dense screen. A caller that
   // knows better passes `cam.still` (the runtime does: true for the frame after a drag),
-  // so the settled frame always comes back at full quality.
+  // so the settled frame comes back at the still tier: full quality unless this GPU has
+  // measured slow.
   function qualityFor(scene, cam, ss, now) {
     const force = cam.quality ?? scene.quality ?? Q.forced;
     const dt = now - (scene._lastFrame ?? -1e9);
     scene._lastFrame = now;
     const moving = cam.still != null ? !cam.still : dt < 250 || ss < 2;
-    if (Q.rank == null) Q.rank = startRank();
+    if (Q.rank == null) Q.rank = Q.still = startRank();
+    const hitch = typeof R !== "undefined" && R && R.hitch;
+    if (hitch) R.hitch = false;
     if (checking()) return { ...TIERS.high, name: "high", ss, moving: false };
+    if (Q.panic || Q.soft) return { ...TIERS.soft, name: "low", ss: 1, moving };
     if (TIERS[force]) {
       const t = TIERS[force];
       return { ...t, name: force, ss: moving ? Math.min(ss, t.ss) : ss, scale: moving ? t.scale : 1, moving };
     }
-    const hitch = typeof R !== "undefined" && R && R.hitch;
-    if (hitch) R.hitch = false;
     if (moving && dt < 250 && !hitch) {
       Q.ema = Q.ema * 0.9 + Math.min(dt, 250) * 0.1;
-      if (Q.ema > 30 && Q.rank > 0 && now - Q.downAt > 800) { Q.rank--; Q.downAt = now; Q.ema = 20; Q.quickSince = now; }
+      // Slow frames with a GPU that measures quick are the page's own work (building a scene,
+      // typesetting), not the device's limit: no step down on those.
+      const gpuQuick = R && R.timer && Q.gpuMs > 0 && Q.gpuMs < 8;
+      if (Q.ema > 30 && Q.rank > 0 && now - Q.downAt > 800 && !gpuQuick) { Q.rank--; Q.downAt = now; Q.ema = 20; Q.quickSince = now; }
       else if (Q.ema < 18) {
         if (!Q.quickSince) Q.quickSince = now;
         if (Q.rank < 2 && now - Q.quickSince > 3000 && now - Q.downAt > 10000) { Q.rank++; Q.quickSince = now; }
       } else Q.quickSince = 0;
     }
-    const name = TIER_NAMES[Q.rank], t = TIERS[name];
-    if (!moving) return { ...t, name, ss, scale: 1, shadow: TIERS.high.shadow, steps: TIERS.high.steps, vsteps: TIERS.high.vsteps, vscale: TIERS.high.vscale, moving };
+    const name = TIER_NAMES[moving ? Q.rank : Q.still], t = TIERS[name];
     return { ...t, name, ss: Math.min(ss, t.ss), moving };
   }
+  // The GPU's own time per frame. With EXT_disjoint_timer_query_webgl2 (Chrome) it's the frame's
+  // elapsed GPU time; elsewhere a fence after the frame's commands gives a lower bound (the last
+  // poll that found it unsignaled), so a busy main thread never inflates it. Polling runs on a
+  // timer, not animation frames, which a backed-up GPU holds back. A still frame over 150 ms steps
+  // the still tier down a notch; one over 600 ms is within sight of the driver's reset limit (2 s
+  // on Windows, and a reset kills every tab), so everything renders low until still frames stay
+  // under 40 ms for a while. Frames that compiled a program or grew a target (R.hitch) say nothing
+  // about the device and don't count. Measures pending when the tab is hidden are dropped.
+  const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  function measureStart() {
+    if (typeof setTimeout !== "function") return;
+    const { gl } = R;
+    if (R.timer === undefined) R.timer = gl.getExtension("EXT_disjoint_timer_query_webgl2") || null;
+    if (!R.timer) return;
+    // A query left open by a frame that threw (shaders still compiling) says nothing: drop it.
+    if (R.query) { try { gl.endQuery(R.timer.TIME_ELAPSED_EXT); gl.deleteQuery(R.query); } catch {} R.query = null; }
+    try { const q = gl.createQuery(); gl.beginQuery(R.timer.TIME_ELAPSED_EXT, q); R.query = q; } catch { R.query = null; }
+  }
+  function measureEnd(moving) {
+    if (typeof setTimeout !== "function") return;
+    const { gl } = R, m = { gl, timer: R.timer, at: nowMs(), seen: null, moving, hitch: !!R.hitch };
+    try {
+      if (R.query) { gl.endQuery(R.timer.TIME_ELAPSED_EXT); m.query = R.query; R.query = null; }
+      else { m.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); gl.flush(); }
+    } catch { return; }
+    if (!m.query && !m.sync) return;
+    Q.fences.push(m);
+    if (Q.fences.length === 1) setTimeout(pollMeasures, 16);
+  }
+  function pollMeasures() {
+    const now = nowMs();
+    Q.fences = Q.fences.filter(m => {
+      const { gl } = m;
+      let done = true, ms = null;
+      try {
+        if (gl.isContextLost()) done = true;
+        else if (m.query) {
+          done = gl.getQueryParameter(m.query, gl.QUERY_RESULT_AVAILABLE);
+          if (done && !gl.getParameter(m.timer.GPU_DISJOINT_EXT)) ms = gl.getQueryParameter(m.query, gl.QUERY_RESULT) / 1e6;
+        } else {
+          done = gl.getSyncParameter(m.sync, gl.SYNC_STATUS) === gl.SIGNALED;
+          if (done) ms = (m.seen ?? m.at) - m.at; else m.seen = now;
+        }
+      } catch {}
+      if (!done && now - m.at < 5000) return true;
+      try { if (m.query) gl.deleteQuery(m.query); else gl.deleteSync(m.sync); } catch {}
+      if (ms != null && !m.hitch) noteGpu(ms, m.moving);
+      return false;
+    });
+    if (Q.fences.length) setTimeout(pollMeasures, 16);
+  }
+  function dropMeasures() {
+    for (const m of Q.fences) { try { if (m.query) m.gl.deleteQuery(m.query); else m.gl.deleteSync(m.sync); } catch {} }
+    Q.fences = [];
+  }
+  function noteGpu(ms, moving) {
+    const now = nowMs();
+    Q.gpuMs = ms;
+    // The last 256 measures, for the harness and for a page that reports its own frame times.
+    if (Q.log.push([Math.round(ms * 100) / 100, moving ? 1 : 0]) > 256) Q.log.shift();
+    if (ms > 600) { Q.panic = true; Q.rank = Q.still = 0; Q.stillDownAt = now; Q.stillQuick = 0; return; }
+    if (moving) {
+      if (ms > 100 && Q.rank > 0 && now - Q.downAt > 800) { Q.rank--; Q.downAt = now; Q.ema = 20; Q.quickSince = 0; }
+      return;
+    }
+    if (ms > 150) {
+      if (Q.still > 0 && now - Q.stillDownAt > 500) { Q.still--; Q.stillDownAt = now; }
+      Q.rank = Math.min(Q.rank, Q.still);
+      Q.stillQuick = 0;
+    } else if (ms < 40) {
+      if (++Q.stillQuick >= 8 && now - Q.stillDownAt > 15000) {
+        Q.stillQuick = 0;
+        if (Q.panic) Q.panic = false;
+        else if (Q.still < 2) Q.still++;
+      }
+    } else Q.stillQuick = 0;
+  }
+  if (typeof document !== "undefined" && document.addEventListener) document.addEventListener("visibilitychange", () => { if (document.hidden) dropMeasures(); });
 
   // ---------- scene graph ----------
   class Node {
@@ -4371,11 +4488,19 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
   // Programs compile the first time a frame needs them, so a page without particles never pays for them.
   // Compiling a program (or allocating a big target) makes a slow frame that says nothing about the
   // device; R.hitch tells the quality tiers to ignore it.
+  // Programs link on the GPU process's worker threads where the browser allows it
+  // (KHR_parallel_shader_compile). A frame that needs one still linking waits for a later frame
+  // (a transient error: the figure shows its spinner and asks again in 100 ms) instead of
+  // stalling the page, and on Windows every other tab, while the driver compiles. The page
+  // checker waits for the link, since it drives frames one after another.
   const prog = name => {
     const P = R.prog[name];
     if (P && !P.job) return P;
+    const { gl } = R;
+    const job = P ? P.job : (R.prog[name] = { job: compileStart(gl, ...PROGRAMS[name]()) }).job;
+    if (R.parallel && !checking() && !gl.getProgramParameter(job.p, R.parallel.COMPLETION_STATUS_KHR)) throw Object.assign(transient("compiling shaders"), { retry: 100 });
     R.hitch = true;
-    return (R.prog[name] = P ? compileEnd(R.gl, P.job) : compile(R.gl, ...PROGRAMS[name]()));
+    return (R.prog[name] = compileEnd(gl, job));
   };
   // The programs every scene draws with start compiling as soon as the kit loads on a page with
   // figures, alongside the figure scripts, so the first 3D frame doesn't wait for them.
@@ -4420,8 +4545,9 @@ onmessage = e => { const t = tree(e.data.P, e.data.I, split); postMessage({ id: 
     if (!gl) throw new Error("this figure needs WebGL 2, which this browser doesn't provide");
     LOSS.had = true;
     const hdr = !!gl.getExtension("EXT_color_buffer_float");
+    const parallel = gl.getExtension("KHR_parallel_shader_compile");
     R = {
-      canvas, gl, offscreen, hdr, prog: {}, env: new Map(), cw: 0, ch: 0,
+      canvas, gl, offscreen, hdr, parallel, prog: {}, env: new Map(), cw: 0, ch: 0,
       maxSamples: Math.min(4, gl.getParameter(gl.MAX_SAMPLES) || 0),
       ptMax: (gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE) || [1, 64])[1],
       empty: gl.createVertexArray(),
@@ -5479,6 +5605,11 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     const q = qualityFor(scene, cam, Math.max(1, Math.min(3, Math.round(ss))), now);
     ss = q.ss;
+    // A program still linking from an earlier frame: wait here, before any pass runs, rather
+    // than redoing the frame's first passes on every retry.
+    if (R.parallel && !checking()) for (const P of Object.values(R.prog)) if (P.job && !gl.getProgramParameter(P.job.p, R.parallel.COMPLETION_STATUS_KHR)) throw Object.assign(transient("compiling shaders"), { retry: 100 });
+    Q.frames++;
+    if (!checking()) measureStart();
     const Wo = Math.max(1, Math.round(cssW * outScale)), Ho = Math.max(1, Math.round(cssH * outScale));
     const W = Math.max(1, Math.round(Wo * ss * q.scale)), H = Math.max(1, Math.round(Ho * ss * q.scale));
     const scale = (W / Wo) * outScale;
@@ -5649,7 +5780,7 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
 
     const samples = q.moving && ss === 1 && q.scale >= 1 && R.maxSamples > 1 ? Math.min(q.msaa, R.maxSamples) : 0;
     // What this frame ran at, for the harness and for pages that report it.
-    E3stats = { tier: q.name, moving: q.moving, ss, scale: q.scale, samples, size: [W, H], out: [Wo, Ho], triangles: items.reduce((n, it) => n + (it.node.mesh ? it.node.mesh.indices.length / 3 : 0), 0), particles: fxNodes.filter(f => f.node.isParticles).reduce((n, f) => n + (f.node._drawN || 0), 0), plumes: fxNodes.filter(f => f.node.isPlume).length };
+    E3stats = { tier: q.name, moving: q.moving, ss, scale: q.scale, samples, size: [W, H], out: [Wo, Ho], gpuMs: Q.gpuMs, triangles: items.reduce((n, it) => n + (it.node.mesh ? it.node.mesh.indices.length / 3 : 0), 0), particles: fxNodes.filter(f => f.node.isParticles).reduce((n, f) => n + (f.node._drawN || 0), 0), plumes: fxNodes.filter(f => f.node.isPlume).length };
     scene.stats = E3stats;
     targets(W, H, Wo, Ho, samples, glassItems.length > 0);
     const target = samples ? R.msaa.fb : R.main.fb;
@@ -6167,11 +6298,13 @@ fn emit(i: i32, k: f32, po: ptr<function, vec3<f32>>, vo: ptr<function, vec3<f32
     gl.bindVertexArray(null);
     gl.activeTexture(gl.TEXTURE0);
 
+    if (!checkNow) measureEnd(q.moving);
     const image = R.offscreen ? R.canvas.transferToImageBitmap() : R.canvas;
     const view = makeView(scene, items, C0, cssW, cssH, cut ? cutV : null, { image, sx: 0, sy: R.ch - Ho, sw: Wo, sh: Ho });
     view.quality = q.name;
-    // A traced view refines over the next still frames; the runtime asks for them while this is true.
-    view.converging = stochastic && !q.moving && accN + 1 < (scene.samples ?? (checkNow ? (lens ? 40 : 16) : lens ? 72 : 48));
+    // A traced view refines over the next still frames (fewer on a slower tier); the runtime asks
+    // for them while this is true.
+    view.converging = stochastic && !q.moving && accN + 1 < (scene.samples ?? (checkNow ? (lens ? 40 : 16) : Math.max(4, Math.round((lens ? 72 : 48) * q.trace))));
     view.frames = stochastic ? accN + 1 : 1;
     view.trace = (o, d, tmax) => (Tr ? traceCPU(Tr.bvh, o, v3.norm(d), tmax ?? Infinity, false, cut ? cutV : null) : null);
     return view;
@@ -7586,9 +7719,22 @@ void main() {
     blackbody: T => toHex(blackbody(T).map(v => v ** (1 / 2.2))),
     glow: glowOf,
     heatTint: (T, shift = 0) => { const h = heatTint(T, shift); return { color: toHex(h.color), amount: h.amount }; },
-    // Adaptive quality: E3.quality.tier is the current tier; E3.quality.force("low" | "medium" | "high" | null).
+    // Adaptive quality: E3.quality.tier is the tier while the view moves, E3.quality.still the one
+    // settled frames render at; E3.quality.force("low" | "medium" | "high" | null). slow: this GPU
+    // has measured slow (the runtime then draws one 3D figure per frame); gpu: the GPU's name;
+    // gpuMs: the last measured frame; budget: the most device pixels a still frame should render.
     quality: {
       get tier() { return TIER_NAMES[Q.rank ?? startRank()]; },
+      get still() { return TIER_NAMES[Q.panic ? 0 : Q.still ?? startRank()]; },
+      get slow() { return Q.soft || Q.panic || (Q.still ?? startRank()) < 2; },
+      // software: WebGL runs on the CPU here (the runtime then pauses 3D animations after their
+      // first frame). throttled: software, or a GPU that ran a frame near the reset limit (3D
+      // figures draw at most 5 times a second).
+      get software() { return Q.soft; },
+      get throttled() { return Q.soft || Q.panic; },
+      get gpu() { return Q.gpu; },
+      get gpuMs() { return Q.gpuMs; },
+      get budget() { return Q.soft || Q.panic ? TIERS.soft.budget : TIERS[this.still].budget; },
       force(name) { Q.forced = TIERS[name] ? name : null; },
       tiers: TIERS,
     },
@@ -7604,7 +7750,7 @@ void main() {
     // The WebGPU device ({ state, name, soft, error, errors, ready }) and sync(system): resolves once a system's copy back has landed.
     get webgpu() { return { state: GPUX.state, name: GPUX.name, soft: GPUX.soft, error: GPUX.error, errors: GPUX.errors, ready: GPUX.ready, sync: sys => (sys && sys._x ? sys._x.sync() : Promise.resolve()) }; },
     // For tests: the pure functions the shaders mirror.
-    _: { resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS, buildBVH, traceCPU, bvhSplit, meshTree, bvhNearest, rayTri, walkT: () => walkT, lightRig, sunTransmittance, skyOf, waterOmega, waterIfft1, waterIfft2, waterPoolLine, oceanSetup, oceanHeightField, WATER_BODIES },
+    _: { get R() { return R; }, resolveMaterial, hashU, rndU, noised, curl, flowAt, flowSpec, blackbody, glowOf, heatTint, tempAt, tempField, qualityFor, Q, TIERS, parseColor, pageDark, LOOKS, buildBVH, traceCPU, bvhSplit, meshTree, bvhNearest, rayTri, walkT: () => walkT, lightRig, sunTransmittance, skyOf, waterOmega, waterIfft1, waterIfft2, waterPoolLine, oceanSetup, oceanHeightField, WATER_BODIES },
   };
   if (typeof document !== "undefined" && document.createElement) startPrograms();
 })();
