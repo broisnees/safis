@@ -506,8 +506,9 @@
         const [bx, by, bw, bh] = box;
         // Supersample 2x for smooth edges. While the reader turns or drags the view, or
         // an animation runs, dense screens drop to 1x so motion stays fluid; the still
-        // frame afterwards comes back at full quality.
-        const out = g.dpr, budget = 1.05e7;
+        // frame afterwards comes back at full quality. The engine's pixel budget shrinks
+        // on a GPU that has measured slow.
+        const out = g.dpr, budget = E3.quality.budget;
         let ss = out >= 1.5 && g.interacting ? 1 : 2;
         if (bw * bh * (out * ss) ** 2 > budget) ss = 1;
         // The figure's `quality` ("low" | "medium" | "high") forces a tier; `still` tells the
@@ -583,7 +584,7 @@
     if (e && e.transient) {
       d.loading = true;
       d.stage?.classList.add("loading");
-      d.retryAt = performance.now() + 500;
+      d.retryAt = performance.now() + (e.retry ?? 500);
       return;
     }
     d.broken = true;
@@ -1664,6 +1665,8 @@
     r.classList.add("safis-checking");
     // Give released canvases back their memory: the checker reads every figure.
     for (const d of demos) if (d.released) { d.released = false; d.w = 0; resize(d); }
+    // Animations paused for a software renderer run for the checker (it renders on one).
+    for (const d of demos) if (d.softPaused) { d.softPaused = false; d.playing = true; syncPlay(d); }
   };
 
   let lastTime = performance.now();
@@ -1676,6 +1679,10 @@
   // Simulations stepped while this runs keep to a per-frame time budget (Fx), so a long warm-up
   // spreads over frames; called from anywhere else they finish at once.
   function frameDemos(now, dt) {
+    // On a GPU that has measured slow, one 3D figure draws per frame and the rest keep their
+    // dirty flag for the next: several scenes queued in one frame is what runs the GPU long
+    // enough for the driver to reset it (and a reset takes every tab down).
+    let gpuBusy = false;
     for (const d of demos) {
       if (d.needsResize) { d.needsResize = false; resize(d); }
       if (d.tweens.size && !d.broken) runTweens(d, now);
@@ -1698,9 +1705,24 @@
       if (d.spec.step && d.playing && d.visible && (!d.dragging || d.spec.drag?.live) && !d.broken) {
         if (guard(d, "step", () => d.spec.step(dt * d.speed, d.s, d.v, d.handle))) d.dirty = true;
       }
-      if (d.pulse && d.visible) d.dirty = true;
+      // A figure that asks for frames (a breathing handle hint, a refining traced view) gets
+      // them, except a 3D figure with WebGL on the CPU: there a frame is only drawn for a reason.
+      if (d.pulse && d.visible && !(d.views3d?.length && window.E3?.quality.software)) d.dirty = true;
       if (d.retryAt && now >= d.retryAt) { d.retryAt = 0; d.dirty = true; }
-      if (d.dirty && !d.released && (d.visible || d.near || !d.w)) render(d);
+      if (d.dirty && !d.released && (d.visible || d.near || !d.w)) {
+        const q = d.views3d?.length ? window.E3?.quality : null;
+        if (q && gpuBusy) continue;
+        // A throttled GPU (software rendering, or one that just ran a frame near its reset
+        // limit) draws a 3D figure at most five times a second.
+        if (q && q.throttled && now - (d.renderedAt ?? -1e9) < 200) continue;
+        render(d);
+        d.renderedAt = now;
+        if (q && q.slow) gpuBusy = true;
+        // With WebGL on the CPU, an animation that never stops would keep every tab's graphics
+        // busy for as long as the page is open: the figure shows its first frame and waits for
+        // play. Dragging and the controls still work. The page checker resumes them.
+        if (q && q.software && d.playing && d.spec.step && !d.softPaused && !document.documentElement.classList.contains("safis-checking")) { d.softPaused = true; d.playing = false; syncPlay(d); }
+      }
     }
   }
   requestAnimationFrame(frame);
